@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Co-op Zombie Survival (Mobile & PC)</title>
+    <title>Co-op Zombie Survival (Balanced Speed)</title>
     <style>
         /* --- GLOBAL & RESET --- */
         body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background: #111; color: #fff; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -53,7 +53,7 @@
         #touch-zone-move { position: absolute; bottom: 20px; left: 20px; width: 150px; height: 150px; background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto; }
         #stick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         
-        #touch-zone-look { position: absolute; top: 0; right: 0; width: 50%; height: 100%; pointer-events: auto; z-index: 19; } /* Invisible right half */
+        #touch-zone-look { position: absolute; top: 0; right: 0; width: 50%; height: 100%; pointer-events: auto; z-index: 19; } 
 
         #btn-fire { bottom: 60px; right: 40px; width: 80px; height: 80px; background: rgba(255, 0, 0, 0.3); border-color: #f00; z-index: 21; }
         #btn-jump { bottom: 160px; right: 20px; width: 60px; height: 60px; z-index: 21; }
@@ -135,15 +135,21 @@
         <div id="touch-zone-move">
             <div id="stick-nub"></div>
         </div>
-        
         <div id="touch-zone-look"></div>
-
         <div id="btn-fire" class="mobile-btn">FIRE</div>
         <div id="btn-jump" class="mobile-btn">JUMP</div>
         <div id="btn-tab" class="mobile-btn" onclick="toggleScoreboard()">SCORE</div>
     </div>
 
     <script>
+        // --- CONSTANTS ---
+        const PLAYER_SPEED = 60.0;   // Force applied for movement
+        const PLAYER_FRICTION = 10.0; // Damping
+        const PLAYER_JUMP = 12.0;    // Jump force (realistic ~2m jump)
+        const GRAVITY = 30.0;        // Gravity force
+
+        const ZOMBIE_BASE_SPEED = 4.0; // Units per second (Players walk at approx 6-8)
+
         // --- DETECTION ---
         const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1);
 
@@ -152,9 +158,10 @@
             spawners: [{x: 20, z: 20}, {x: -20, z: -20}, {x: 20, z: -20}, {x: -20, z: 20}],
             playerSpawns: [{x: 0, z: 0}],
             waves: [
-                { count: 5, health: 100, speed: 0.05, damage: 10 },
-                { count: 10, health: 150, speed: 0.06, damage: 15 },
-                { count: 20, health: 200, speed: 0.08, damage: 20 }
+                { count: 5, health: 100, speedMod: 1.0 },
+                { count: 10, health: 150, speedMod: 1.1 },
+                { count: 15, health: 200, speedMod: 1.2 },
+                { count: 25, health: 250, speedMod: 1.3 }
             ]
         };
 
@@ -176,16 +183,16 @@
         let myName = "Survivor";
         let wave = 1;
         let zombiesToSpawn = 0;
+        let lastTime = performance.now();
         
         // --- THREE.JS GLOBALS ---
         let scene, camera, renderer;
-        let controlsObject; // The object we move (Camera wrapper)
-        let controlsPC; // PointerLockControls instance (PC only)
+        let controlsObject; 
+        let controlsPC; 
         
-        // Input State
         const inputState = {
             f: false, b: false, l: false, r: false, jump: false,
-            yaw: 0, pitch: 0 // For mobile manual camera control
+            yaw: 0, pitch: 0
         };
         let velocity = new THREE.Vector3();
         let direction = new THREE.Vector3();
@@ -305,22 +312,16 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Lighting
             scene.add(new THREE.AmbientLight(0x404040));
             const dl = new THREE.DirectionalLight(0xffffff, 0.8);
             dl.position.set(50, 100, 50);
             scene.add(dl);
 
-            // Ground
-            const floor = new THREE.Mesh(
-                new THREE.PlaneGeometry(200, 200),
-                new THREE.MeshLambertMaterial({ color: 0x222222 })
-            );
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ color: 0x222222 }));
             floor.rotation.x = -Math.PI / 2;
             scene.add(floor);
             scene.add(new THREE.GridHelper(200, 50, 0x000000, 0x444444));
 
-            // Obstacles
             const boxGeo = new THREE.BoxGeometry(4, 4, 4);
             const boxMat = new THREE.MeshLambertMaterial({ color: 0x554433 });
             for(let i=0; i<15; i++) {
@@ -329,43 +330,36 @@
                 scene.add(box);
             }
 
-            // CONTROLS SETUP
             if (isMobile) {
-                // Mobile: Camera wrapper is just a group we manually rotate
                 controlsObject = new THREE.Group();
                 controlsObject.add(camera);
                 scene.add(controlsObject);
                 setupMobileControls();
                 document.getElementById('mobile-controls').style.display = 'block';
             } else {
-                // PC: PointerLock
                 controlsPC = new THREE.PointerLockControls(camera, document.body);
                 controlsObject = controlsPC.getObject();
                 scene.add(controlsObject);
                 setupPCControls();
             }
 
+            lastTime = performance.now();
             requestAnimationFrame(animate);
         }
 
-        // --- INPUT HANDLING ---
-
+        // --- INPUT ---
         function setupPCControls() {
             document.body.addEventListener('click', () => {
                 if(gameState === 'PLAYING' && !controlsPC.isLocked) controlsPC.lock();
             });
-
             document.addEventListener('keydown', (e) => {
                 switch (e.code) {
                     case 'KeyW': inputState.f = true; break;
                     case 'KeyA': inputState.l = true; break;
                     case 'KeyS': inputState.b = true; break;
                     case 'KeyD': inputState.r = true; break;
-                    case 'Space': if(canJump) { velocity.y += 20; canJump = false; } break;
-                    case 'Tab': 
-                        e.preventDefault(); 
-                        toggleScoreboard();
-                        break;
+                    case 'Space': if(canJump) { velocity.y = PLAYER_JUMP; canJump = false; } break;
+                    case 'Tab': e.preventDefault(); toggleScoreboard(); break;
                 }
             });
             document.addEventListener('keyup', (e) => {
@@ -382,7 +376,6 @@
         }
 
         function setupMobileControls() {
-            // MOVEMENT (Joystick)
             const stickZone = document.getElementById('touch-zone-move');
             const stickNub = document.getElementById('stick-nub');
             let stickId = null;
@@ -402,8 +395,6 @@
                         const touch = e.changedTouches[i];
                         let dx = touch.clientX - stickOrigin.x;
                         let dy = touch.clientY - stickOrigin.y;
-                        
-                        // Clamp visual
                         const dist = Math.sqrt(dx*dx + dy*dy);
                         const maxDist = 40;
                         if(dist > maxDist) {
@@ -411,8 +402,6 @@
                             dy = (dy/dist) * maxDist;
                         }
                         stickNub.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
-
-                        // Map to Input
                         inputState.f = dy < -10;
                         inputState.b = dy > 10;
                         inputState.l = dx < -10;
@@ -422,7 +411,6 @@
             }, {passive:false});
 
             const resetStick = (e) => {
-                // Only reset if specific touch ended
                 for(let i=0; i<e.changedTouches.length; i++) {
                     if(e.changedTouches[i].identifier === stickId) {
                         stickId = null;
@@ -434,7 +422,6 @@
             stickZone.addEventListener('touchend', resetStick);
             stickZone.addEventListener('touchcancel', resetStick);
 
-            // LOOK (Touch Drag)
             const lookZone = document.getElementById('touch-zone-look');
             let lastLookX = 0, lastLookY = 0;
             
@@ -444,36 +431,24 @@
             });
             
             lookZone.addEventListener('touchmove', (e) => {
-                e.preventDefault(); // prevent scroll
+                e.preventDefault(); 
                 const touch = e.touches[0];
                 const deltaX = touch.clientX - lastLookX;
                 const deltaY = touch.clientY - lastLookY;
-                
-                // Rotate Logic
                 inputState.yaw -= deltaX * 0.005;
                 inputState.pitch -= deltaY * 0.005;
-                
-                // Clamp Pitch
                 inputState.pitch = Math.max(-1.5, Math.min(1.5, inputState.pitch));
-
                 lastLookX = touch.clientX;
                 lastLookY = touch.clientY;
             }, {passive:false});
 
-            // BUTTONS
-            document.getElementById('btn-fire').addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                tryShoot();
-            });
-            
-            document.getElementById('btn-jump').addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                if(canJump) { velocity.y += 20; canJump = false; }
+            document.getElementById('btn-fire').addEventListener('touchstart', (e) => { e.preventDefault(); tryShoot(); });
+            document.getElementById('btn-jump').addEventListener('touchstart', (e) => { 
+                e.preventDefault(); if(canJump) { velocity.y = PLAYER_JUMP; canJump = false; }
             });
         }
 
         // --- HOST LOGIC ---
-
         function startGame() {
             if(!isHost) return;
             broadcast({ type: 'START_GAME', config: CONFIG });
@@ -486,8 +461,6 @@
             document.getElementById('game-ui').style.display = 'block';
             gameState = 'PLAYING';
             initThree();
-            
-            // Spawn
             const spawn = config.playerSpawns[0];
             controlsObject.position.set(spawn.x, 5, spawn.z);
         }
@@ -496,7 +469,6 @@
             wave = n;
             const wConfig = CONFIG.waves[Math.min(n-1, CONFIG.waves.length-1)];
             zombiesToSpawn = wConfig.count;
-            
             for(let id in players) {
                 players[id].dead = false;
                 players[id].hp = players[id].maxHp;
@@ -504,16 +476,18 @@
             broadcast({ type: 'CHAT', sender: 'SYSTEM', msg: `Wave ${n} Started!` });
         }
 
-        function updateHostLogic() {
+        function updateHostLogic(delta) {
             if(gameState !== 'PLAYING') return;
 
             // Spawn
             if(zombiesToSpawn > 0 && Math.random() < 0.03) {
                 const id = 'z_' + Date.now() + Math.random();
                 const spawner = CONFIG.spawners[Math.floor(Math.random() * CONFIG.spawners.length)];
+                const wConfig = CONFIG.waves[Math.min(wave-1, CONFIG.waves.length-1)];
                 zombies[id] = {
                     id: id, x: spawner.x, y: 1.5, z: spawner.z,
-                    hp: 50 + (wave * 10), speed: 0.05 + (wave * 0.01)
+                    hp: wConfig.health, 
+                    speed: ZOMBIE_BASE_SPEED * wConfig.speedMod
                 };
                 zombiesToSpawn--;
             }
@@ -535,11 +509,12 @@
                 if(targetId) {
                     let p = players[targetId];
                     let angle = Math.atan2(p.x - z.x, p.z - z.z);
-                    z.x += Math.sin(angle) * z.speed * 16;
-                    z.z += Math.cos(angle) * z.speed * 16;
+                    // FIXED: Zombie speed now uses delta time
+                    z.x += Math.sin(angle) * z.speed * delta;
+                    z.z += Math.cos(angle) * z.speed * delta;
                     
                     if(closestDist < 2.0) {
-                        players[targetId].hp -= 0.5; // Dmg
+                        players[targetId].hp -= 0.5; 
                         if(players[targetId].hp <= 0) {
                             players[targetId].dead = true;
                             players[targetId].deaths++;
@@ -555,14 +530,11 @@
                 openShop();
             }
 
-            // Sync My Position
             if(controlsObject) {
                 let pos = controlsObject.position;
                 players[myId].x = pos.x;
                 players[myId].y = pos.y;
                 players[myId].z = pos.z;
-                
-                // Rotation sync
                 if(isMobile) players[myId].rotation = inputState.yaw;
                 else players[myId].rotation = camera.rotation.y;
             }
@@ -582,7 +554,6 @@
         function tryShoot() {
             if(isHost) handleShoot(myId);
             else {
-                // Get rotation
                 let rot = isMobile ? inputState.yaw : camera.rotation.y;
                 peers[hostId].send({ type: 'INPUT', shoot: true, rotation: rot });
             }
@@ -590,9 +561,7 @@
 
         function handleShoot(pid) {
             let p = players[pid];
-            // Simple distance check (Host authority)
             let rot = p.rotation || 0;
-            // Vector from rotation
             let dirX = -Math.sin(rot);
             let dirZ = -Math.cos(rot);
             
@@ -601,8 +570,6 @@
                 let z = zombies[zid];
                 let dx = z.x - p.x;
                 let dz = z.z - p.z;
-                
-                // Dot product to see if in front
                 let dist = Math.sqrt(dx*dx + dz*dz);
                 let dot = (dx/dist)*dirX + (dz/dist)*dirZ;
 
@@ -619,12 +586,11 @@
             }
         }
 
-        // --- RENDER & ANIMATION ---
-        
+        // --- RENDER ---
         const meshes = {};
         const zGeo = new THREE.BoxGeometry(1, 2, 1);
-        const zMat = new THREE.MeshLambertMaterial({ color: 0x00ff00 }); // Zombies Green
-        const pMat = new THREE.MeshLambertMaterial({ color: 0x0000ff }); // Players Blue
+        const zMat = new THREE.MeshLambertMaterial({ color: 0x00ff00 }); 
+        const pMat = new THREE.MeshLambertMaterial({ color: 0x0000ff }); 
 
         function syncWorldState(data) {
             players = data.state.players;
@@ -637,8 +603,7 @@
                 document.getElementById('money-display').innerText = "$" + me.money;
                 document.getElementById('wave-num').innerText = wave;
                 document.getElementById('ammo-display').innerText = me.weapon.toUpperCase();
-                
-                if(me.dead) document.getElementById('health-display').innerText = "DEAD (SPECTATING)";
+                if(me.dead) document.getElementById('health-display').innerText = "DEAD";
             }
             updateScoreboard();
         }
@@ -647,10 +612,13 @@
             requestAnimationFrame(animate);
             if(gameState === 'LOBBY' || !renderer) return;
 
-            const delta = 0.016; 
-            if(isHost) updateHostLogic();
+            // FIXED: Calculate Delta Time
+            const time = performance.now();
+            const delta = Math.min((time - lastTime) / 1000, 0.1); // Cap at 0.1 to prevent physics explosions on lag
+            lastTime = time;
+
+            if(isHost) updateHostLogic(delta);
             else if(controlsObject && gameState === 'PLAYING') {
-                // Send inputs to host
                 let rot = isMobile ? inputState.yaw : camera.rotation.y;
                 peers[hostId].send({ 
                     type: 'INPUT', 
@@ -659,26 +627,26 @@
                 });
             }
 
-            // PHYSICS (Local Prediction)
+            // PHYSICS (Local Prediction with fixed Time Step)
             if (controlsObject && !players[myId]?.dead) {
-                // Mobile Manual Camera Update
                 if(isMobile) {
                     controlsObject.rotation.y = inputState.yaw;
                     camera.rotation.x = inputState.pitch;
                 }
 
-                velocity.x -= velocity.x * 10.0 * delta;
-                velocity.z -= velocity.z * 10.0 * delta;
-                velocity.y -= 9.8 * 10.0 * delta; 
+                // Apply Friction
+                velocity.x -= velocity.x * PLAYER_FRICTION * delta;
+                velocity.z -= velocity.z * PLAYER_FRICTION * delta;
+                velocity.y -= GRAVITY * delta; 
 
+                // Apply Input
                 direction.z = Number(inputState.f) - Number(inputState.b);
                 direction.x = Number(inputState.r) - Number(inputState.l);
                 direction.normalize();
 
-                if (inputState.f || inputState.b) velocity.z -= direction.z * 400.0 * delta;
-                if (inputState.l || inputState.r) velocity.x -= direction.x * 400.0 * delta;
+                if (inputState.f || inputState.b) velocity.z -= direction.z * PLAYER_SPEED * delta;
+                if (inputState.l || inputState.r) velocity.x -= direction.x * PLAYER_SPEED * delta;
 
-                // Move Object
                 controlsObject.translateX(-velocity.x * delta);
                 controlsObject.translateZ(-velocity.z * delta);
                 controlsObject.position.y += (velocity.y * delta);
@@ -690,15 +658,13 @@
                 }
             }
 
-            // ENTITY RENDER
-            // Zombies
+            // RENDER ENTITIES
             for(let id in zombies) {
                 let z = zombies[id];
                 if(!meshes[id]) { meshes[id] = new THREE.Mesh(zGeo, zMat); scene.add(meshes[id]); }
                 meshes[id].position.set(z.x, z.y, z.z);
-                meshes[id].lookAt(controlsObject.position); // Always face me
+                meshes[id].lookAt(controlsObject.position); 
             }
-            // Players
             for(let id in players) {
                 if(id === myId) continue;
                 let p = players[id];
@@ -710,7 +676,6 @@
                     if(meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
                 }
             }
-            // Cleanup Zombies
             for(let id in meshes) {
                 if(id.startsWith('z_') && !zombies[id]) { scene.remove(meshes[id]); delete meshes[id]; }
             }
@@ -719,7 +684,6 @@
         }
 
         // --- UI UTILS ---
-
         function copyInvite() {
             const link = window.location.href.split('?')[0] + "?join=" + myId;
             navigator.clipboard.writeText(link).then(() => alert("Copied!"));
@@ -743,13 +707,8 @@
             const show = el.style.display !== 'block';
             el.style.display = show ? 'block' : 'none';
             chat.style.display = show ? 'block' : 'none';
-            
-            if(show && !isMobile) {
-                 if(controlsPC) controlsPC.unlock();
-                 chat.focus();
-            } else if(!show && !isMobile) {
-                if(controlsPC) controlsPC.lock();
-            }
+            if(show && !isMobile && controlsPC) { controlsPC.unlock(); chat.focus(); }
+            else if(!show && !isMobile && controlsPC) controlsPC.lock();
         }
 
         function updateScoreboard() {
@@ -760,13 +719,11 @@
             });
         }
 
-        // SHOP
         function openShop() {
             document.getElementById('mobile-controls').style.display = 'none';
             document.getElementById('shop-menu').classList.remove('hidden');
             document.getElementById('shop-menu').style.display = 'flex';
             if(!isMobile && controlsPC) controlsPC.unlock();
-            
             const c = document.getElementById('shop-items');
             c.innerHTML = '';
             SHOP_ITEMS.forEach(i => {
@@ -784,8 +741,6 @@
                     if(item.type === 'heal') players[myId].hp = 100;
                     if(item.type === 'gun') players[myId].weapon = item.id;
                 }
-            } else {
-               // Client shop logic omitted for brevity, host auth preferred
             }
             syncWorldState({state: {players, zombies, wave}});
         }
@@ -808,12 +763,10 @@
                 document.getElementById('shop-menu').style.display = 'none';
                 if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
                 else if(controlsPC) controlsPC.lock();
-                
                 startWave(wave + 1);
             }
         }
 
-        // Resize
         window.addEventListener('resize', () => {
             if(camera) {
                 camera.aspect = window.innerWidth / window.innerHeight;
