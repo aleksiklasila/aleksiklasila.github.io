@@ -2,46 +2,69 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Co-op Zombie Survival</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Co-op Zombie Survival (Mobile & PC)</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background: #111; color: #fff; }
+        /* --- GLOBAL & RESET --- */
+        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background: #111; color: #fff; touch-action: none; user-select: none; -webkit-user-select: none; }
+        
+        /* --- GAME LAYERS --- */
         #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
         
-        /* Menus */
-        .menu-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; z-index: 10; }
+        /* --- MENUS --- */
+        .menu-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; z-index: 50; }
         .hidden { display: none !important; }
-        h1 { color: #d00; font-size: 3rem; text-shadow: 2px 2px 0 #000; margin-bottom: 20px; }
+        h1 { color: #d00; font-size: 8vw; text-shadow: 2px 2px 0 #000; margin-bottom: 20px; text-align: center; }
+        @media(min-width: 800px) { h1 { font-size: 3rem; } }
         
-        /* Inputs & Buttons */
-        input[type=text], button, input[type=file] { padding: 10px; margin: 5px; background: #333; border: 1px solid #555; color: white; font-family: inherit; }
+        /* INPUTS */
+        input[type=text], button, input[type=file] { padding: 12px; margin: 5px; background: #333; border: 1px solid #555; color: white; font-family: inherit; font-size: 16px; }
         button:hover { background: #d00; cursor: pointer; }
-        .row { display: flex; gap: 10px; align-items: center; }
+        button:active { background: #900; }
+        .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
         
-        /* HUD */
-        #hud-bottom-left { position: absolute; bottom: 20px; left: 20px; text-align: left; }
-        #chat-box { max-height: 100px; overflow: hidden; width: 300px; background: rgba(0,0,0,0.5); padding: 5px; margin-bottom: 5px; }
-        .chat-msg { font-size: 12px; margin: 2px 0; }
+        /* --- HUD ELEMENTS --- */
+        #hud-bottom-left { position: absolute; bottom: 20px; left: 20px; text-align: left; pointer-events: none; z-index: 5; }
+        #chat-box { max-height: 100px; overflow-y: auto; width: 250px; background: rgba(0,0,0,0.5); padding: 5px; margin-bottom: 5px; pointer-events: auto; }
+        .chat-msg { font-size: 12px; margin: 2px 0; text-shadow: 1px 1px 0 #000; }
         #chat-input { width: 100%; pointer-events: auto; display: none; }
         
-        #hud-bottom-right { position: absolute; bottom: 20px; right: 20px; text-align: right; }
-        #ammo-display { font-size: 2rem; color: #ff0; }
-        #health-display { font-size: 2rem; color: #f00; }
+        #hud-top-right { position: absolute; top: 10px; right: 10px; text-align: right; z-index: 5; }
+        #hud-bottom-right { position: absolute; bottom: 20px; right: 20px; text-align: right; z-index: 5; }
         
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 2px solid rgba(255,255,255,0.8); border-radius: 50%; transform: translate(-50%, -50%); }
+        .hud-text { font-size: 1.2rem; font-weight: bold; text-shadow: 1px 1px 0 #000; margin: 2px 0; }
+        #ammo-display { color: #ff0; }
+        #health-display { color: #f00; }
+        #wave-info { color: #fff; font-size: 1.5rem; }
+
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 2px solid rgba(255,255,255,0.8); border-radius: 50%; transform: translate(-50%, -50%); z-index: 4; }
         
-        /* Scoreboard */
-        #scoreboard { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 20px; border: 2px solid #555; display: none; }
-        table { border-collapse: collapse; width: 400px; }
+        /* --- SCOREBOARD --- */
+        #scoreboard { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 10px; border: 2px solid #555; display: none; z-index: 60; max-height: 80vh; overflow: auto; }
+        table { border-collapse: collapse; width: 100%; min-width: 300px; }
         th, td { border: 1px solid #444; padding: 8px; text-align: center; }
         
-        /* Shop */
-        #shop-menu { display: none; }
-        .shop-item { border: 1px solid #444; padding: 10px; margin: 5px; display: flex; justify-content: space-between; width: 400px; background: #222; }
-        .shop-item:hover { background: #333; }
+        /* --- MOBILE CONTROLS --- */
+        #mobile-controls { display: none; width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 20; pointer-events: none; }
+        .mobile-btn { position: absolute; background: rgba(255, 255, 255, 0.2); border: 2px solid rgba(255,255,255,0.4); border-radius: 50%; pointer-events: auto; touch-action: none; display: flex; align-items: center; justify-content: center; font-weight: bold; user-select: none; }
+        .mobile-btn:active { background: rgba(255, 255, 255, 0.4); }
+
+        /* Zones */
+        #touch-zone-move { position: absolute; bottom: 20px; left: 20px; width: 150px; height: 150px; background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto; }
+        #stick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         
-        /* Lobby List */
-        #player-list { margin-top: 20px; border: 1px solid #333; padding: 10px; width: 300px; min-height: 100px; }
+        #touch-zone-look { position: absolute; top: 0; right: 0; width: 50%; height: 100%; pointer-events: auto; z-index: 19; } /* Invisible right half */
+
+        #btn-fire { bottom: 60px; right: 40px; width: 80px; height: 80px; background: rgba(255, 0, 0, 0.3); border-color: #f00; z-index: 21; }
+        #btn-jump { bottom: 160px; right: 20px; width: 60px; height: 60px; z-index: 21; }
+        #btn-tab { top: 10px; left: 10px; width: 50px; height: 50px; border-radius: 10px; z-index: 21; font-size: 12px; }
+        
+        /* --- SHOP --- */
+        #shop-menu { z-index: 55; }
+        .shop-item { border: 1px solid #444; padding: 10px; margin: 5px; display: flex; justify-content: space-between; width: 90%; max-width: 400px; background: #222; align-items: center; }
+        .shop-item button { padding: 5px 10px; font-size: 14px; margin: 0; }
+        
+        #player-list { margin-top: 20px; border: 1px solid #333; padding: 10px; width: 80%; max-width: 400px; min-height: 100px; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
@@ -49,7 +72,7 @@
 <body>
 
     <div id="main-menu" class="menu-overlay">
-        <h1>ZOMBIE SURVIVAL</h1>
+        <h1>ZOMBIE CO-OP</h1>
         <div class="row">
             <label>Name:</label>
             <input type="text" id="player-name" value="Survivor">
@@ -58,54 +81,73 @@
         <div id="host-controls">
             <h3>HOST GAME</h3>
             <div class="row">
-                <button onclick="copyInvite()">Copy Invite Link</button>
+                <button onclick="copyInvite()">Copy Invite</button>
             </div>
-            <div class="row" style="margin-top:10px; flex-direction:column; align-items:flex-start;">
-                <label>Map Model (.obj/gltf): <input type="file" id="file-map" disabled title="Coming soon"></label>
+            <div class="row" style="margin-top:10px;">
                 <label>Config JSON: <input type="file" id="file-config" onchange="loadConfig(this)"></label>
             </div>
             <div id="player-list">Waiting for players...</div>
-            <button onclick="startGame()" style="margin-top: 20px; font-size: 1.2rem; padding: 15px 30px;">START GAME</button>
+            <button onclick="startGame()" style="margin-top: 20px; padding: 15px 30px; font-weight:bold; color: #f00;">START GAME</button>
         </div>
 
         <div id="client-controls" class="hidden">
             <h3>JOINING GAME...</h3>
-            <p>Waiting for host to start...</p>
+            <p>Waiting for host...</p>
             <div id="client-status">Connecting...</div>
         </div>
     </div>
 
     <div id="shop-menu" class="menu-overlay hidden">
         <h1>MERCHANT</h1>
-        <div id="shop-items"></div>
-        <button onclick="readyUpShop()">READY FOR NEXT WAVE</button>
+        <div id="shop-items" style="display:flex; flex-direction:column; align-items:center; width:100%;"></div>
+        <button onclick="readyUpShop()" style="margin-top:20px; padding:15px; background:#0d0;">READY FOR NEXT WAVE</button>
     </div>
 
     <div id="game-ui">
         <div id="crosshair"></div>
+        
         <div id="scoreboard">
+            <button onclick="toggleScoreboard()" style="float:right; padding:5px; background:#d00;">X</button>
             <h2>SCOREBOARD</h2>
             <table id="score-table">
-                <thead><tr><th>Name</th><th>Kills</th><th>Deaths</th><th>Money</th></tr></thead>
+                <thead><tr><th>Name</th><th>K</th><th>D</th><th>$</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
         
         <div id="hud-bottom-left">
             <div id="chat-box"></div>
-            <input type="text" id="chat-input" placeholder="Press Enter to send...">
+            <input type="text" id="chat-input" placeholder="Type here...">
+        </div>
+
+        <div id="hud-top-right">
+            <div id="wave-info" class="hud-text">Wave <span id="wave-num">1</span></div>
         </div>
 
         <div id="hud-bottom-right">
-            <div id="wave-info">Wave: <span id="wave-num">1</span></div>
-            <div id="health-display">HP: 100</div>
-            <div id="ammo-display">30 / 120</div>
-            <div id="money-display">$0</div>
+            <div id="health-display" class="hud-text">HP: 100</div>
+            <div id="ammo-display" class="hud-text">30 / 120</div>
+            <div id="money-display" class="hud-text">$0</div>
         </div>
     </div>
 
+    <div id="mobile-controls">
+        <div id="touch-zone-move">
+            <div id="stick-nub"></div>
+        </div>
+        
+        <div id="touch-zone-look"></div>
+
+        <div id="btn-fire" class="mobile-btn">FIRE</div>
+        <div id="btn-jump" class="mobile-btn">JUMP</div>
+        <div id="btn-tab" class="mobile-btn" onclick="toggleScoreboard()">SCORE</div>
+    </div>
+
     <script>
-        // --- CONFIGURATION & STATE ---
+        // --- DETECTION ---
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1);
+
+        // --- CONFIG ---
         const CONFIG = {
             spawners: [{x: 20, z: 20}, {x: -20, z: -20}, {x: 20, z: -20}, {x: -20, z: 20}],
             playerSpawns: [{x: 0, z: 0}],
@@ -117,42 +159,44 @@
         };
 
         const SHOP_ITEMS = [
-            { id: 'ammo', name: 'Ammo Refill', cost: 100, type: 'ammo' },
-            { id: 'rifle', name: 'Assault Rifle', cost: 500, type: 'gun', damage: 25, fireRate: 100 },
-            { id: 'shotgun', name: 'Shotgun', cost: 1000, type: 'gun', damage: 100, fireRate: 800 },
-            { id: 'speed', name: 'Speed Boost', cost: 800, type: 'perk' }
+            { id: 'ammo', name: 'Ammo', cost: 100, type: 'ammo' },
+            { id: 'rifle', name: 'Rifle', cost: 500, type: 'gun', damage: 25 },
+            { id: 'shotgun', name: 'Shotgun', cost: 1000, type: 'gun', damage: 100 },
+            { id: 'heal', name: 'Medkit', cost: 200, type: 'heal' }
         ];
 
+        // --- STATE ---
         let isHost = true;
         let myId = null;
         let hostId = null;
-        let peers = {}; // Connection objects
-        let players = {}; // Game state of players
-        let zombies = {}; // Game state of zombies
-        let bullets = [];
-        let gameState = 'LOBBY'; // LOBBY, PLAYING, SHOP, GAMEOVER
+        let peers = {}; 
+        let players = {}; 
+        let zombies = {}; 
+        let gameState = 'LOBBY'; 
         let myName = "Survivor";
         let wave = 1;
-        let zombiesRemaining = 0;
         let zombiesToSpawn = 0;
         
-        // Three.js Globals
+        // --- THREE.JS GLOBALS ---
         let scene, camera, renderer;
-        let controls;
-        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-        let canJump = false;
+        let controlsObject; // The object we move (Camera wrapper)
+        let controlsPC; // PointerLockControls instance (PC only)
+        
+        // Input State
+        const inputState = {
+            f: false, b: false, l: false, r: false, jump: false,
+            yaw: 0, pitch: 0 // For mobile manual camera control
+        };
         let velocity = new THREE.Vector3();
         let direction = new THREE.Vector3();
-        let raycaster;
-        
-        // --- NETWORKING (PEERJS) ---
-        const peer = new Peer(null, { debug: 2 }); 
+        let canJump = false;
+
+        // --- PEERJS ---
+        const peer = new Peer(null, { debug: 1 }); 
 
         peer.on('open', (id) => {
             myId = id;
-            console.log('My ID is: ' + id);
-            
-            // Parse URL to check if joining
+            console.log("My ID: " + id);
             const urlParams = new URLSearchParams(window.location.search);
             const joinId = urlParams.get('join');
             
@@ -163,7 +207,6 @@
                 document.getElementById('client-controls').classList.remove('hidden');
                 connectToHost(joinId);
             } else {
-                // We are host
                 hostId = myId;
                 players[myId] = createPlayerState(myId, myName);
                 updateLobbyUI();
@@ -171,26 +214,24 @@
         });
 
         peer.on('connection', (conn) => {
-            // Incoming connection
             conn.on('data', (data) => handleData(data, conn.peer));
             conn.on('open', () => {
                 if(isHost) {
                     peers[conn.peer] = conn;
-                    // Ask for name
                     conn.send({ type: 'REQUEST_INFO' });
                 }
             });
+            conn.on('close', () => { if(isHost) delete players[conn.peer]; });
         });
 
         function connectToHost(id) {
             const conn = peer.connect(id);
             conn.on('open', () => {
-                document.getElementById('client-status').innerText = "Connected! Sending info...";
+                document.getElementById('client-status').innerText = "Connected!";
                 peers[id] = conn;
                 conn.send({ type: 'JOIN', name: document.getElementById('player-name').value });
             });
             conn.on('data', (data) => handleData(data, id));
-            conn.on('close', () => alert("Host disconnected"));
         }
 
         function handleData(data, senderId) {
@@ -204,19 +245,16 @@
                 updateLobbyUI();
             }
             else if (data.type === 'START_GAME') {
-                // Load assets if sent here, then start
                 startGameClient(data.config);
             }
             else if (data.type === 'INPUT') {
-                // Host receiving player input
                 if(isHost && players[senderId]) {
                     players[senderId].input = data.input;
-                    players[senderId].rotation = data.rotation; // Head rotation
+                    players[senderId].rotation = data.rotation; 
                     if(data.shoot) handleShoot(senderId);
                 }
             }
             else if (data.type === 'STATE_UPDATE') {
-                // Client receiving world state
                 if(!isHost) syncWorldState(data);
             }
             else if (data.type === 'CHAT') {
@@ -231,12 +269,14 @@
                     checkAllReady();
                 }
             }
+            else if (data.type === 'GAME_OVER') {
+                alert("GAME OVER! Host is restarting.");
+                location.reload();
+            }
         }
 
         function broadcast(data) {
-            for(let id in peers) {
-                peers[id].send(data);
-            }
+            for(let id in peers) peers[id].send(data);
         }
 
         // --- GAME LOGIC ---
@@ -244,7 +284,7 @@
         function createPlayerState(id, name) {
             return {
                 id: id, name: name,
-                x: 0, y: 2, z: 0,
+                x: 0, y: 10, z: 0,
                 hp: 100, maxHp: 100,
                 dead: false,
                 kills: 0, deaths: 0, money: 0,
@@ -256,8 +296,8 @@
 
         function initThree() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x222222);
-            scene.fog = new THREE.Fog(0x222222, 0, 100);
+            scene.background = new THREE.Color(0x111111);
+            scene.fog = new THREE.Fog(0x111111, 0, 80);
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
@@ -265,105 +305,177 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Light
-            const ambientLight = new THREE.AmbientLight(0x404040);
-            scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(50, 100, 50);
-            scene.add(dirLight);
+            // Lighting
+            scene.add(new THREE.AmbientLight(0x404040));
+            const dl = new THREE.DirectionalLight(0xffffff, 0.8);
+            dl.position.set(50, 100, 50);
+            scene.add(dl);
 
-            // Floor (Procedural Map)
-            const floorGeo = new THREE.PlaneGeometry(200, 200);
-            const floorMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-            const floor = new THREE.Mesh(floorGeo, floorMat);
+            // Ground
+            const floor = new THREE.Mesh(
+                new THREE.PlaneGeometry(200, 200),
+                new THREE.MeshLambertMaterial({ color: 0x222222 })
+            );
             floor.rotation.x = -Math.PI / 2;
             scene.add(floor);
-            
-            // Grid helper
-            const grid = new THREE.GridHelper(200, 50, 0x000000, 0x555555);
-            scene.add(grid);
+            scene.add(new THREE.GridHelper(200, 50, 0x000000, 0x444444));
 
-            // Random Obstacles (Map)
+            // Obstacles
             const boxGeo = new THREE.BoxGeometry(4, 4, 4);
             const boxMat = new THREE.MeshLambertMaterial({ color: 0x554433 });
-            for(let i=0; i<20; i++) {
+            for(let i=0; i<15; i++) {
                 const box = new THREE.Mesh(boxGeo, boxMat);
                 box.position.set((Math.random()-0.5)*100, 2, (Math.random()-0.5)*100);
                 scene.add(box);
             }
 
-            // Controls
-            controls = new THREE.PointerLockControls(camera, document.body);
-            document.body.addEventListener('click', () => {
-                if(gameState === 'PLAYING' && !controls.isLocked) controls.lock();
-            });
-            
-            scene.add(controls.getObject());
+            // CONTROLS SETUP
+            if (isMobile) {
+                // Mobile: Camera wrapper is just a group we manually rotate
+                controlsObject = new THREE.Group();
+                controlsObject.add(camera);
+                scene.add(controlsObject);
+                setupMobileControls();
+                document.getElementById('mobile-controls').style.display = 'block';
+            } else {
+                // PC: PointerLock
+                controlsPC = new THREE.PointerLockControls(camera, document.body);
+                controlsObject = controlsPC.getObject();
+                scene.add(controlsObject);
+                setupPCControls();
+            }
 
-            // Input Listeners
-            const onKeyDown = (event) => {
-                switch (event.code) {
-                    case 'ArrowUp': case 'KeyW': moveForward = true; break;
-                    case 'ArrowLeft': case 'KeyA': moveLeft = true; break;
-                    case 'ArrowDown': case 'KeyS': moveBackward = true; break;
-                    case 'ArrowRight': case 'KeyD': moveRight = true; break;
-                    case 'Space': if (canJump) velocity.y += 30; canJump = false; break;
+            requestAnimationFrame(animate);
+        }
+
+        // --- INPUT HANDLING ---
+
+        function setupPCControls() {
+            document.body.addEventListener('click', () => {
+                if(gameState === 'PLAYING' && !controlsPC.isLocked) controlsPC.lock();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                switch (e.code) {
+                    case 'KeyW': inputState.f = true; break;
+                    case 'KeyA': inputState.l = true; break;
+                    case 'KeyS': inputState.b = true; break;
+                    case 'KeyD': inputState.r = true; break;
+                    case 'Space': if(canJump) { velocity.y += 20; canJump = false; } break;
                     case 'Tab': 
-                        event.preventDefault();
-                        document.getElementById('scoreboard').style.display = 'block'; 
-                        document.getElementById('chat-input').style.display = 'block';
-                        document.getElementById('chat-input').focus();
-                        controls.unlock();
+                        e.preventDefault(); 
+                        toggleScoreboard();
                         break;
                 }
-            };
-            const onKeyUp = (event) => {
-                switch (event.code) {
-                    case 'ArrowUp': case 'KeyW': moveForward = false; break;
-                    case 'ArrowLeft': case 'KeyA': moveLeft = false; break;
-                    case 'ArrowDown': case 'KeyS': moveBackward = false; break;
-                    case 'ArrowRight': case 'KeyD': moveRight = false; break;
-                }
-            };
-            document.addEventListener('keydown', onKeyDown);
-            document.addEventListener('keyup', onKeyUp);
-            
-            // Shoot Listener
-            document.addEventListener('mousedown', (e) => {
-                if(controls.isLocked && e.button === 0) {
-                    // Send Shoot Event
-                    if(isHost) handleShoot(myId);
-                    else peers[hostId].send({ type: 'INPUT', shoot: true, rotation: camera.rotation.y });
+            });
+            document.addEventListener('keyup', (e) => {
+                switch (e.code) {
+                    case 'KeyW': inputState.f = false; break;
+                    case 'KeyA': inputState.l = false; break;
+                    case 'KeyS': inputState.b = false; break;
+                    case 'KeyD': inputState.r = false; break;
                 }
             });
+            document.addEventListener('mousedown', (e) => {
+                if(controlsPC.isLocked && e.button === 0) tryShoot();
+            });
+        }
 
-            // Chat Listener
-            document.getElementById('chat-input').addEventListener('keydown', (e) => {
-                if(e.key === 'Enter') {
-                    const msg = e.target.value;
-                    if(msg.trim() !== "") {
-                        if(isHost) {
-                            addChatMessage(myName, msg);
-                            broadcast({type:'CHAT', sender: myName, msg: msg});
-                        } else {
-                            peers[hostId].send({type:'CHAT', sender: myName, msg: msg});
+        function setupMobileControls() {
+            // MOVEMENT (Joystick)
+            const stickZone = document.getElementById('touch-zone-move');
+            const stickNub = document.getElementById('stick-nub');
+            let stickId = null;
+            let stickOrigin = {x:0, y:0};
+
+            stickZone.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                stickId = touch.identifier;
+                stickOrigin = { x: touch.clientX, y: touch.clientY };
+            }, {passive:false});
+
+            stickZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for(let i=0; i<e.changedTouches.length; i++) {
+                    if(e.changedTouches[i].identifier === stickId) {
+                        const touch = e.changedTouches[i];
+                        let dx = touch.clientX - stickOrigin.x;
+                        let dy = touch.clientY - stickOrigin.y;
+                        
+                        // Clamp visual
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        const maxDist = 40;
+                        if(dist > maxDist) {
+                            dx = (dx/dist) * maxDist;
+                            dy = (dy/dist) * maxDist;
                         }
-                        e.target.value = '';
-                        document.getElementById('chat-input').style.display = 'none';
-                        document.getElementById('scoreboard').style.display = 'none';
-                        controls.lock();
+                        stickNub.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
+
+                        // Map to Input
+                        inputState.f = dy < -10;
+                        inputState.b = dy > 10;
+                        inputState.l = dx < -10;
+                        inputState.r = dx > 10;
                     }
                 }
+            }, {passive:false});
+
+            const resetStick = (e) => {
+                // Only reset if specific touch ended
+                for(let i=0; i<e.changedTouches.length; i++) {
+                    if(e.changedTouches[i].identifier === stickId) {
+                        stickId = null;
+                        stickNub.style.transform = `translate(-50%, -50%)`;
+                        inputState.f = inputState.b = inputState.l = inputState.r = false;
+                    }
+                }
+            };
+            stickZone.addEventListener('touchend', resetStick);
+            stickZone.addEventListener('touchcancel', resetStick);
+
+            // LOOK (Touch Drag)
+            const lookZone = document.getElementById('touch-zone-look');
+            let lastLookX = 0, lastLookY = 0;
+            
+            lookZone.addEventListener('touchstart', (e) => {
+                lastLookX = e.touches[0].clientX;
+                lastLookY = e.touches[0].clientY;
             });
             
-            requestAnimationFrame(animate);
+            lookZone.addEventListener('touchmove', (e) => {
+                e.preventDefault(); // prevent scroll
+                const touch = e.touches[0];
+                const deltaX = touch.clientX - lastLookX;
+                const deltaY = touch.clientY - lastLookY;
+                
+                // Rotate Logic
+                inputState.yaw -= deltaX * 0.005;
+                inputState.pitch -= deltaY * 0.005;
+                
+                // Clamp Pitch
+                inputState.pitch = Math.max(-1.5, Math.min(1.5, inputState.pitch));
+
+                lastLookX = touch.clientX;
+                lastLookY = touch.clientY;
+            }, {passive:false});
+
+            // BUTTONS
+            document.getElementById('btn-fire').addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                tryShoot();
+            });
+            
+            document.getElementById('btn-jump').addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                if(canJump) { velocity.y += 20; canJump = false; }
+            });
         }
 
         // --- HOST LOGIC ---
 
         function startGame() {
             if(!isHost) return;
-            // Send Start signal + Config to all
             broadcast({ type: 'START_GAME', config: CONFIG });
             startGameClient(CONFIG);
             startWave(1);
@@ -375,310 +487,269 @@
             gameState = 'PLAYING';
             initThree();
             
-            // Spawn myself
-            const spawn = config.playerSpawns[Math.floor(Math.random() * config.playerSpawns.length)];
-            controls.getObject().position.set(spawn.x, 10, spawn.z); // Start high to drop in
+            // Spawn
+            const spawn = config.playerSpawns[0];
+            controlsObject.position.set(spawn.x, 5, spawn.z);
         }
 
         function startWave(n) {
             wave = n;
             const wConfig = CONFIG.waves[Math.min(n-1, CONFIG.waves.length-1)];
-            zombiesToSpawn = wConfig.count; // Simplification
-            zombiesRemaining = zombiesToSpawn;
+            zombiesToSpawn = wConfig.count;
             
-            // Respawn Dead Players
             for(let id in players) {
                 players[id].dead = false;
                 players[id].hp = players[id].maxHp;
             }
-            
             broadcast({ type: 'CHAT', sender: 'SYSTEM', msg: `Wave ${n} Started!` });
-        }
-
-        function spawnZombie() {
-            const id = 'z_' + Date.now() + Math.random();
-            const spawner = CONFIG.spawners[Math.floor(Math.random() * CONFIG.spawners.length)];
-            zombies[id] = {
-                id: id,
-                x: spawner.x, y: 1, z: spawner.z,
-                hp: 50 + (wave * 10),
-                speed: 0.05 + (wave * 0.01)
-            };
         }
 
         function updateHostLogic() {
             if(gameState !== 'PLAYING') return;
 
-            // Spawning Logic
-            if(zombiesToSpawn > 0 && Math.random() < 0.02) {
-                spawnZombie();
+            // Spawn
+            if(zombiesToSpawn > 0 && Math.random() < 0.03) {
+                const id = 'z_' + Date.now() + Math.random();
+                const spawner = CONFIG.spawners[Math.floor(Math.random() * CONFIG.spawners.length)];
+                zombies[id] = {
+                    id: id, x: spawner.x, y: 1.5, z: spawner.z,
+                    hp: 50 + (wave * 10), speed: 0.05 + (wave * 0.01)
+                };
                 zombiesToSpawn--;
             }
 
-            // Zombie Logic
+            // Zombie AI
             for(let zid in zombies) {
                 let z = zombies[zid];
-                let closestDist = 9999;
-                let targetId = null;
+                let closestDist = 9999, targetId = null;
 
-                // Find closest living player
                 for(let pid in players) {
                     if(players[pid].dead) continue;
                     let p = players[pid];
                     let dx = p.x - z.x;
                     let dz = p.z - z.z;
                     let dist = Math.sqrt(dx*dx + dz*dz);
-                    if(dist < closestDist) {
-                        closestDist = dist;
-                        targetId = pid;
-                    }
+                    if(dist < closestDist) { closestDist = dist; targetId = pid; }
                 }
 
                 if(targetId) {
                     let p = players[targetId];
                     let angle = Math.atan2(p.x - z.x, p.z - z.z);
-                    z.x += Math.sin(angle) * z.speed * 16; // *16 for delta approx
+                    z.x += Math.sin(angle) * z.speed * 16;
                     z.z += Math.cos(angle) * z.speed * 16;
                     
-                    // Attack
-                    if(closestDist < 1.5) {
-                        players[targetId].hp -= 1;
+                    if(closestDist < 2.0) {
+                        players[targetId].hp -= 0.5; // Dmg
                         if(players[targetId].hp <= 0) {
                             players[targetId].dead = true;
                             players[targetId].deaths++;
-                            broadcast({type:'CHAT', sender:'SYSTEM', msg: players[targetId].name + ' died!'});
                             checkGameOver();
                         }
                     }
                 }
             }
 
-            // Check Wave End
             if(zombiesToSpawn <= 0 && Object.keys(zombies).length === 0) {
-                endWave();
+                gameState = 'SHOP';
+                broadcast({ type: 'SHOP_OPEN' });
+                openShop();
             }
 
-            // Update my own position in state
-            if(controls) {
-                let pos = controls.getObject().position;
+            // Sync My Position
+            if(controlsObject) {
+                let pos = controlsObject.position;
                 players[myId].x = pos.x;
                 players[myId].y = pos.y;
                 players[myId].z = pos.z;
+                
+                // Rotation sync
+                if(isMobile) players[myId].rotation = inputState.yaw;
+                else players[myId].rotation = camera.rotation.y;
             }
 
-            // Send State
-            const state = { players, zombies, wave };
-            broadcast({ type: 'STATE_UPDATE', state });
+            broadcast({ type: 'STATE_UPDATE', state: { players, zombies, wave } });
+        }
+
+        function checkGameOver() {
+            let allDead = true;
+            for(let id in players) if(!players[id].dead) allDead = false;
+            if(allDead) {
+                broadcast({type:'GAME_OVER'});
+                setTimeout(() => location.reload(), 3000);
+            }
+        }
+
+        function tryShoot() {
+            if(isHost) handleShoot(myId);
+            else {
+                // Get rotation
+                let rot = isMobile ? inputState.yaw : camera.rotation.y;
+                peers[hostId].send({ type: 'INPUT', shoot: true, rotation: rot });
+            }
         }
 
         function handleShoot(pid) {
-            // Raycasting logic simplifed
-            // In a real game, use Three.js Raycaster against zombie meshes.
-            // Since host holds truth, we calculate hit based on player rotation & pos.
-            
-            // For simplicity in this non-engine environment, we just deal damage to closest zombie in front (Fake Raycast)
-            // Or rely on Client visual hit. Let's do a simple distance check for now.
-            
-            // Simple Logic: If closest zombie is < 20 units and within angle... hit.
             let p = players[pid];
-            let rot = (pid === myId) ? camera.rotation.y : (p.rotation || 0);
-            
-            // Visual Recoil/Flash can be sent later
+            // Simple distance check (Host authority)
+            let rot = p.rotation || 0;
+            // Vector from rotation
+            let dirX = -Math.sin(rot);
+            let dirZ = -Math.cos(rot);
             
             let hit = false;
             for(let zid in zombies) {
                 let z = zombies[zid];
                 let dx = z.x - p.x;
                 let dz = z.z - p.z;
-                let dist = Math.sqrt(dx*dx + dz*dz);
                 
-                if(dist < 50) {
-                    // Check angle
-                    let angleToZombie = Math.atan2(dx, dz); // -PI to PI
-                    // Normalize rotation
-                    // Simplified: just check distance for this prototype
-                    z.hp -= 25; // Weapon damage
+                // Dot product to see if in front
+                let dist = Math.sqrt(dx*dx + dz*dz);
+                let dot = (dx/dist)*dirX + (dz/dist)*dirZ;
+
+                if(dist < 50 && dot > 0.9) {
+                    z.hp -= (p.weapon === 'shotgun' ? 100 : 25);
                     if(z.hp <= 0) {
                         delete zombies[zid];
                         players[pid].kills++;
                         players[pid].money += 50;
                     }
                     hit = true;
-                    break; // Single hit
+                    break;
                 }
             }
         }
 
-        function endWave() {
-            gameState = 'SHOP';
-            controls.unlock();
-            openShop();
-            broadcast({ type: 'SHOP_OPEN' });
-        }
+        // --- RENDER & ANIMATION ---
         
-        function openShop() {
-            document.getElementById('shop-menu').style.display = 'flex';
-            renderShop();
-        }
-
-        function checkGameOver() {
-            let allDead = true;
-            for(let id in players) {
-                if(!players[id].dead) allDead = false;
-            }
-            if(allDead) {
-                // Reset Game
-                broadcast({type:'CHAT', sender:'SYSTEM', msg: 'GAME OVER'});
-                setTimeout(() => location.reload(), 5000);
-            }
-        }
-
-        // --- CLIENT / RENDER LOGIC ---
-
-        const meshes = {}; // ID -> Three.Mesh
-        const zmats = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-        const pmats = new THREE.MeshLambertMaterial({ color: 0x0000ff });
-        const geo = new THREE.BoxGeometry(1, 2, 1);
+        const meshes = {};
+        const zGeo = new THREE.BoxGeometry(1, 2, 1);
+        const zMat = new THREE.MeshLambertMaterial({ color: 0x00ff00 }); // Zombies Green
+        const pMat = new THREE.MeshLambertMaterial({ color: 0x0000ff }); // Players Blue
 
         function syncWorldState(data) {
-            // Update local copies
             players = data.state.players;
             zombies = data.state.zombies;
             wave = data.state.wave;
             
-            // UI
-            if(players[myId]) {
-                document.getElementById('health-display').innerText = "HP: " + Math.floor(players[myId].hp);
-                document.getElementById('money-display').innerText = "$" + players[myId].money;
+            const me = players[myId];
+            if(me) {
+                document.getElementById('health-display').innerText = "HP: " + Math.floor(me.hp);
+                document.getElementById('money-display').innerText = "$" + me.money;
                 document.getElementById('wave-num').innerText = wave;
+                document.getElementById('ammo-display').innerText = me.weapon.toUpperCase();
                 
-                if(players[myId].dead && gameState === 'PLAYING') {
-                    // Spectator Mode / Death Screen
-                     document.getElementById('health-display').innerText = "DEAD";
-                }
+                if(me.dead) document.getElementById('health-display').innerText = "DEAD (SPECTATING)";
             }
             updateScoreboard();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            
-            const time = performance.now();
-            const delta = (time - prevTime) / 1000;
+            if(gameState === 'LOBBY' || !renderer) return;
 
+            const delta = 0.016; 
             if(isHost) updateHostLogic();
-            else {
-                // Client Input Send (Rate limited)
-                if(controls && controls.isLocked) {
-                    const input = {
-                        moveForward, moveBackward, moveLeft, moveRight
-                    };
-                    peers[hostId].send({ 
-                        type: 'INPUT', 
-                        input: input,
-                        rotation: camera.rotation.y 
-                    });
-                }
+            else if(controlsObject && gameState === 'PLAYING') {
+                // Send inputs to host
+                let rot = isMobile ? inputState.yaw : camera.rotation.y;
+                peers[hostId].send({ 
+                    type: 'INPUT', 
+                    input: { f:inputState.f, b:inputState.b, l:inputState.l, r:inputState.r },
+                    rotation: rot 
+                });
             }
 
-            // Movement Physics (Local Player)
-            if (controls && controls.isLocked) {
+            // PHYSICS (Local Prediction)
+            if (controlsObject && !players[myId]?.dead) {
+                // Mobile Manual Camera Update
+                if(isMobile) {
+                    controlsObject.rotation.y = inputState.yaw;
+                    camera.rotation.x = inputState.pitch;
+                }
+
                 velocity.x -= velocity.x * 10.0 * delta;
                 velocity.z -= velocity.z * 10.0 * delta;
-                velocity.y -= 9.8 * 10.0 * delta; // Gravity
+                velocity.y -= 9.8 * 10.0 * delta; 
 
-                direction.z = Number(moveForward) - Number(moveBackward);
-                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.z = Number(inputState.f) - Number(inputState.b);
+                direction.x = Number(inputState.r) - Number(inputState.l);
                 direction.normalize();
 
-                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+                if (inputState.f || inputState.b) velocity.z -= direction.z * 400.0 * delta;
+                if (inputState.l || inputState.r) velocity.x -= direction.x * 400.0 * delta;
 
-                controls.moveRight(-velocity.x * delta);
-                controls.moveForward(-velocity.z * delta);
-                controls.getObject().position.y += (velocity.y * delta);
+                // Move Object
+                controlsObject.translateX(-velocity.x * delta);
+                controlsObject.translateZ(-velocity.z * delta);
+                controlsObject.position.y += (velocity.y * delta);
 
-                if (controls.getObject().position.y < 2) {
+                if (controlsObject.position.y < 2) {
                     velocity.y = 0;
-                    controls.getObject().position.y = 2;
+                    controlsObject.position.y = 2;
                     canJump = true;
                 }
             }
 
-            // Rendering Entities
+            // ENTITY RENDER
             // Zombies
             for(let id in zombies) {
                 let z = zombies[id];
-                if(!meshes[id]) {
-                    meshes[id] = new THREE.Mesh(geo, zmats);
-                    scene.add(meshes[id]);
-                }
-                // Lerp would go here
+                if(!meshes[id]) { meshes[id] = new THREE.Mesh(zGeo, zMat); scene.add(meshes[id]); }
                 meshes[id].position.set(z.x, z.y, z.z);
+                meshes[id].lookAt(controlsObject.position); // Always face me
             }
-            // Cleanup dead zombies meshes
-            for(let id in meshes) {
-                if(id.startsWith('z_') && !zombies[id]) {
-                    scene.remove(meshes[id]);
-                    delete meshes[id];
-                }
-            }
-
-            // Other Players
+            // Players
             for(let id in players) {
                 if(id === myId) continue;
                 let p = players[id];
                 if(!p.dead) {
-                    if(!meshes[id]) {
-                        meshes[id] = new THREE.Mesh(geo, pmats);
-                        scene.add(meshes[id]);
-                    }
+                    if(!meshes[id]) { meshes[id] = new THREE.Mesh(zGeo, pMat); scene.add(meshes[id]); }
                     meshes[id].position.set(p.x, p.y, p.z);
+                    meshes[id].rotation.y = p.rotation || 0;
                 } else {
                     if(meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
                 }
             }
+            // Cleanup Zombies
+            for(let id in meshes) {
+                if(id.startsWith('z_') && !zombies[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+            }
 
             renderer.render(scene, camera);
-            prevTime = time;
         }
-        let prevTime = performance.now();
 
-        // --- UI & UTILS ---
+        // --- UI UTILS ---
 
         function copyInvite() {
             const link = window.location.href.split('?')[0] + "?join=" + myId;
-            navigator.clipboard.writeText(link).then(() => alert("Copied: " + link));
-        }
-
-        function loadConfig(input) {
-            const file = input.files[0];
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                // In a real app, parse this. For now we use default.
-                alert("Config loaded (Mock)"); 
-            };
-            reader.readAsText(file);
+            navigator.clipboard.writeText(link).then(() => alert("Copied!"));
         }
 
         function updateLobbyUI() {
             const list = document.getElementById('player-list');
-            list.innerHTML = "<h3>Connected:</h3>" + Object.values(players).map(p => `<div>${p.name} ${p.id === hostId ? '(Host)':''}</div>`).join('');
-            
-            // Update name in local state if not set
+            list.innerHTML = "<h3>Connected:</h3>" + Object.values(players).map(p => `<div>${p.name}</div>`).join('');
             if(players[myId]) players[myId].name = document.getElementById('player-name').value;
         }
         
         function addChatMessage(sender, msg) {
             const box = document.getElementById('chat-box');
-            const div = document.createElement('div');
-            div.className = 'chat-msg';
-            div.innerHTML = `<span style="color:#aaa">${sender}:</span> ${msg}`;
-            box.appendChild(div);
+            box.innerHTML += `<div class="chat-msg"><span style="color:#aaa">${sender}:</span> ${msg}</div>`;
             box.scrollTop = box.scrollHeight;
+        }
+
+        function toggleScoreboard() {
+            const el = document.getElementById('scoreboard');
+            const chat = document.getElementById('chat-input');
+            const show = el.style.display !== 'block';
+            el.style.display = show ? 'block' : 'none';
+            chat.style.display = show ? 'block' : 'none';
             
-            // Remove old messages
-            if(box.children.length > 5) box.removeChild(box.firstChild);
+            if(show && !isMobile) {
+                 if(controlsPC) controlsPC.unlock();
+                 chat.focus();
+            } else if(!show && !isMobile) {
+                if(controlsPC) controlsPC.lock();
+            }
         }
 
         function updateScoreboard() {
@@ -689,34 +760,34 @@
             });
         }
 
-        // Shop Functions
-        function renderShop() {
-            const container = document.getElementById('shop-items');
-            container.innerHTML = '';
-            SHOP_ITEMS.forEach(item => {
-                const div = document.createElement('div');
-                div.className = 'shop-item';
-                div.innerHTML = `<span>${item.name}</span> <button onclick="buyItem('${item.id}')">$${item.cost}</button>`;
-                container.appendChild(div);
+        // SHOP
+        function openShop() {
+            document.getElementById('mobile-controls').style.display = 'none';
+            document.getElementById('shop-menu').classList.remove('hidden');
+            document.getElementById('shop-menu').style.display = 'flex';
+            if(!isMobile && controlsPC) controlsPC.unlock();
+            
+            const c = document.getElementById('shop-items');
+            c.innerHTML = '';
+            SHOP_ITEMS.forEach(i => {
+                const btn = document.createElement('button');
+                btn.innerHTML = `<b>${i.name}</b> ($${i.cost})`;
+                btn.onclick = () => buyItem(i);
+                c.appendChild(btn);
             });
         }
 
-        function buyItem(itemId) {
-            const item = SHOP_ITEMS.find(i => i.id === itemId);
+        function buyItem(item) {
             if(isHost) {
-                processBuy(myId, item);
+                if(players[myId].money >= item.cost) {
+                    players[myId].money -= item.cost;
+                    if(item.type === 'heal') players[myId].hp = 100;
+                    if(item.type === 'gun') players[myId].weapon = item.id;
+                }
             } else {
-                // Send buy request (Not implemented in this simple version, assume client authority for shop for simplicity or add request type)
-                // For security, Client should ask Host. For this demo, we assume trust.
+               // Client shop logic omitted for brevity, host auth preferred
             }
-        }
-        
-        function processBuy(pid, item) {
-            if(players[pid].money >= item.cost) {
-                players[pid].money -= item.cost;
-                if(item.type === 'ammo') players[pid].ammo += 50;
-                // Add gun logic here
-            }
+            syncWorldState({state: {players, zombies, wave}});
         }
 
         function readyUpShop() {
@@ -730,27 +801,26 @@
         }
 
         function checkAllReady() {
-            let allReady = true;
-            for(let id in players) if(!players[id].ready) allReady = false;
-            
-            if(allReady) {
+            let all = true;
+            for(let id in players) if(!players[id].ready) all = false;
+            if(all) {
                 for(let id in players) players[id].ready = false;
                 document.getElementById('shop-menu').style.display = 'none';
-                controls.lock();
-                broadcast({ type: 'CHAT', sender: 'SYSTEM', msg: 'Shop Closed.' });
+                if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
+                else if(controlsPC) controlsPC.lock();
+                
                 startWave(wave + 1);
             }
         }
 
-        // Resize handler
+        // Resize
         window.addEventListener('resize', () => {
-            if(camera && renderer) {
+            if(camera) {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
                 renderer.setSize(window.innerWidth, window.innerHeight);
             }
         });
-
     </script>
 </body>
 </html>
