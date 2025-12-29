@@ -1,48 +1,271 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zombie Tactics: Weapon Slots</title>
+    <title>Zombie Tactics: 60Hz Refactor</title>
     <style>
         /* --- CORE --- */
-        body { margin: 0; overflow: hidden; background: #111; font-family: 'Courier New', monospace; touch-action: none; user-select: none; -webkit-user-select: none; }
-        canvas { display: block; width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; outline: none; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #111;
+            font-family: 'Courier New', monospace;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+            outline: none;
+        }
 
         /* --- UI LAYERS --- */
-        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; color: white; }
-        .hidden { display: none !important; }
-        
-        h1 { color: #d00; font-size: 3rem; margin-bottom: 10px; text-shadow: 2px 2px 0 #000; text-align: center; }
-        input, button { padding: 15px; margin: 5px; background: #222; border: 2px solid #555; color: white; font-size: 1.2rem; font-family: inherit; cursor: pointer; }
-        button:hover { border-color: #d00; color: #d00; }
-        button:active { background: #500; }
-        input { cursor: text; text-align: center;}
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            color: white;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            color: #d00;
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 0 #000;
+            text-align: center;
+        }
+
+        input,
+        button {
+            padding: 15px;
+            margin: 5px;
+            background: #222;
+            border: 2px solid #555;
+            color: white;
+            font-size: 1.2rem;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        button:hover {
+            border-color: #d00;
+            color: #d00;
+        }
+
+        button:active {
+            background: #500;
+        }
+
+        input {
+            cursor: text;
+            text-align: center;
+        }
 
         /* --- HUD --- */
-        #hud-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: #0f0; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 4px #0f0; }
-        #hud-top-right { position: absolute; top: 20px; right: 20px; text-align: right; font-size: 1.5rem; color: #fff; text-shadow: 2px 2px 0 #000; font-weight: bold; }
-        #hud-bottom-right { position: absolute; bottom: 20px; right: 20px; text-align: right; font-size: 1.2rem; color: #ff0; text-shadow: 2px 2px 0 #000; font-weight: bold; }
-        
-        /* --- MOBILE CONTROLS --- */
-        #mobile-controls { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50; pointer-events: none; display: none; }
-        .stick-zone { position: absolute; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
-        .stick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 255, 255, 0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
-        #stick-left { bottom: 30px; left: 30px; }
-        #stick-right { bottom: 30px; right: 30px; }
-        .action-btn { position: absolute; width: 80px; height: 80px; background: rgba(255, 0, 0, 0.2); border: 3px solid #f00; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; pointer-events: auto; user-select: none; }
-        .action-btn:active { background: rgba(255, 0, 0, 0.5); }
-        #btn-fire { bottom: 180px; right: 30px; width: 90px; height: 90px; } 
-        #btn-jump { bottom: 50px; right: 140px; border-color: #00f; } 
-        #btn-shop { bottom: 180px; left: 30px; width: 60px; height: 60px; border-color: #ff0; font-size: 12px; }
+        #hud-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 200;
+        }
 
-        /* Dynamic Shop Container */
-        #shop-items-container { display: flex; flex-direction: column; margin-bottom: 20px; }
-        
-        /* Weapon Slot Indicator */
-        .slot-indicator { font-size: 0.8rem; color: #aaa; margin-top: 5px;}
-        .slot-active { color: #0f0; font-weight: bold; border: 1px solid #0f0; padding: 2px 5px; background: rgba(0, 50, 0, 0.5); }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 6px;
+            height: 6px;
+            background: #0f0;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 4px #0f0;
+        }
+
+        #hud-top-right {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            text-align: right;
+            font-size: 1.5rem;
+            color: #fff;
+            text-shadow: 2px 2px 0 #000;
+            font-weight: bold;
+        }
+
+        #hud-bottom-right {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            text-align: right;
+            font-size: 1.2rem;
+            color: #ff0;
+            text-shadow: 2px 2px 0 #000;
+            font-weight: bold;
+        }
+
+        /* --- MOBILE CONTROLS --- */
+        #mobile-controls {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 50;
+            pointer-events: none;
+            display: none;
+        }
+
+        .stick-zone {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            pointer-events: auto;
+        }
+
+        .stick-nub {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        #stick-left {
+            bottom: 30px;
+            left: 30px;
+        }
+
+        #stick-right {
+            bottom: 30px;
+            right: 30px;
+        }
+
+        .action-btn {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 0, 0, 0.2);
+            border: 3px solid #f00;
+            border-radius: 50%;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            pointer-events: auto;
+            user-select: none;
+        }
+
+        .action-btn:active {
+            background: rgba(255, 0, 0, 0.5);
+        }
+
+        #btn-fire {
+            bottom: 180px;
+            right: 30px;
+            width: 90px;
+            height: 90px;
+        }
+
+        #btn-jump {
+            bottom: 50px;
+            right: 140px;
+            border-color: #00f;
+        }
+
+        #btn-shop {
+            bottom: 180px;
+            left: 30px;
+            width: 60px;
+            height: 60px;
+            border-color: #ff0;
+            font-size: 12px;
+        }
+
+        /* Shop & Slots */
+        #shop-items-container {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 20px;
+        }
+
+        .slot-indicator {
+            font-size: 0.8rem;
+            color: #aaa;
+            margin-top: 5px;
+        }
+
+        .slot-active {
+            color: #0f0;
+            font-weight: bold;
+            border: 1px solid #0f0;
+            padding: 2px 5px;
+            background: rgba(0, 50, 0, 0.5);
+        }
+
+        #net-stats {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            color: #555;
+            font-size: 10px;
+            z-index: 1000;
+        }
+
+        /* --- HOST HUD --- */
+        #host-hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+            display: none;
+        }
+
+        #host-stats {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            font-size: 1.2rem;
+            text-shadow: 1px 1px 0 #000;
+        }
     </style>
 
     <script type="importmap">
@@ -56,10 +279,13 @@
     </script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 </head>
+
 <body>
 
+    <div id="net-stats">PING: <span id="ping-disp">0</span>ms</div>
+
     <div id="main-menu" class="overlay">
-        <h1>ZOMBIE TACTICS</h1>
+        <h1>ZOMBIE TACTICS <span style="font-size:0.5em; vertical-align:middle; color: #fff;">(60Hz)</span></h1>
         <input type="text" id="player-name" value="Survivor" placeholder="Enter Name">
         <div id="host-panel">
             <button id="btn-copy">Copy Invite Link</button>
@@ -74,19 +300,22 @@
     <div id="shop-menu" class="overlay hidden">
         <h1 style="color:#0f0">TRADER</h1>
         <div style="color:#aaa; margin-bottom:20px;">Safe Zone - Prepare for Next Wave</div>
-        
         <div id="shop-items-container"></div>
-
         <button id="btn-ready" style="margin-top:20px; width:200px; background:#444;">READY</button>
     </div>
 
     <div id="game-over-screen" class="overlay hidden">
         <h1 style="color:#d00">GAME OVER</h1>
         <div style="color:#fff; margin-bottom:20px;">All Survivors have fallen.</div>
-        <button id="btn-return-lobby">Return to Lobby</button>
+        <h1 style="color:#d00">GAME OVER</h1>
+        <div style="color:#fff; margin-bottom:20px;">All Survivors have fallen.</div>
+        <div>
+            <button id="btn-retry" style="background:#0a0; margin-right:10px; display:none;">TRY AGAIN</button>
+            <button id="btn-return-lobby">Return to Lobby</button>
+        </div>
     </div>
 
-    <div id="hud-layer">
+    <div id="hud-layer" style="display:none;">
         <div id="crosshair"></div>
         <div id="hud-top-right">
             <div>WAVE <span id="wave-disp">1</span></div>
@@ -94,10 +323,10 @@
         </div>
         <div id="hud-bottom-right">
             <div style="color:#f44">HP: <span id="hp-disp">100</span></div>
-            <div id="weapon-name-disp" style="color:#fff; font-size: 0.8em; margin-top:5px;">PISTOL</div>
-            <div style="color:#ff0">AMMO: <span id="ammo-disp">30</span></div>
+            <div id="ui-weapon" style="color:#fff; font-size: 0.8em; margin-top:5px;">PISTOL</div>
+            <div id="ui-ammo" style="color:#ff0">AMMO: <span id="ammo-disp">30</span></div>
             <div style="color:#0f0">$<span id="money-disp">0</span></div>
-            <div id="slots-disp" class="slot-indicator">
+            <div id="ui-slots" class="slot-indicator">
                 <span id="slot-1" class="slot-active">1</span>
                 <span id="slot-2">2</span>
                 <span id="slot-3">3</span>
@@ -106,9 +335,22 @@
         </div>
     </div>
 
+    <div id="host-hud">
+        <div id="host-stats">
+            <div>HOST SPECTATOR</div>
+            <div>WAVE: <span id="h-wave">1</span></div>
+            <div>ZOMBIES: <span id="h-zombies">0</span></div>
+            <div>PLAYERS: <span id="h-players">0</span></div>
+        </div>
+    </div>
+
     <div id="mobile-controls">
-        <div id="stick-left" class="stick-zone"><div class="stick-nub"></div></div>
-        <div id="stick-right" class="stick-zone"><div class="stick-nub"></div></div>
+        <div id="stick-left" class="stick-zone">
+            <div class="stick-nub"></div>
+        </div>
+        <div id="stick-right" class="stick-zone">
+            <div class="stick-nub"></div>
+        </div>
         <div id="btn-fire" class="action-btn">FIRE</div>
         <div id="btn-jump" class="action-btn">JUMP</div>
         <div id="btn-shop" class="action-btn">SHOP</div>
@@ -119,904 +361,80 @@
         import * as CANNON from 'cannon-es';
 
         // ==========================================
-        // 1. CONFIG & WEAPON REGISTRY
+        // 1. CONSTANTS & CONFIG
         // ==========================================
-        
-        // Weapon Definitions
+        const TICK_RATE = 60;
+        const TICK_MS = 1000 / TICK_RATE;
+
         const WEAPON_REGISTRY = {
-            'pistol': { 
-                name: "Pistol", 
-                type: 'projectile', 
-                damage: 35, 
-                range: 100, 
-                fireRateMs: 250, 
-                speed: 80, 
-                maxAmmo: 60,
-                color: 0xffff00 
-            },
-            'knife': { 
-                name: "Combat Knife", 
-                type: 'melee', 
-                damage: 45, 
-                range: 2.5, 
-                fireRateMs: 500, 
-                maxAmmo: Infinity 
-            }
-            // Slots 3 and 4 can be populated later
+            'pistol': { name: "Pistol", type: 'projectile', damage: 35, range: 100, fireRateMs: 250, speed: 80, maxAmmo: 60 },
+            'knife': { name: "Combat Knife", type: 'melee', damage: 45, range: 2.5, fireRateMs: 500, maxAmmo: -1 }
         };
 
         const SHOP_ITEMS = [
             {
-                name: "Refill Pistol",
-                cost: 50,
-                action: (player) => { 
-                    // Find pistol in inventory
-                    const slot = player.weapons.findIndex(w => w && w.id === 'pistol');
-                    if(slot !== -1) {
-                        player.weapons[slot].ammo = Math.min(player.weapons[slot].ammo + 30, WEAPON_REGISTRY['pistol'].maxAmmo);
-                    }
+                name: "Refill Pistol", cost: 50, action: (p) => {
+                    const s = p.weapons.findIndex(w => w && w.id === 'pistol');
+                    if (s !== -1) p.weapons[s].ammo = Math.min(p.weapons[s].ammo + 30, WEAPON_REGISTRY['pistol'].maxAmmo);
                 }
             },
-            {
-                name: "Buy Health (+50)",
-                cost: 100,
-                action: (player) => { player.hp = Math.min(100, player.hp + 50); }
-            },
-            {
-                name: "Buy Max Health (+10 Max)",
-                cost: 200,
-                action: (player) => { player.maxHp = (player.maxHp || 100) + 10; player.hp += 10; }
-            }
+            { name: "Buy Health (+50)", cost: 100, action: (p) => { p.hp = Math.min(100, p.hp + 50); } },
+            { name: "Buy Max Health (+10)", cost: 200, action: (p) => { p.maxHp = (p.maxHp || 100) + 10; p.hp += 10; } }
         ];
 
-        const GRID_SIZE = 10; 
-        const CELL_SIZE = 5; 
+        const GRID_SIZE = 10;
+        const CELL_SIZE = 5;
         const MAP_OFFSET = (GRID_SIZE * CELL_SIZE) / 2;
-        const WALL_HEIGHT = 4;
-        
         const PLAYER_SPEED = 15.0;
-        const ZOMBIE_SPEED = 8.0; 
+        const ZOMBIE_SPEED = 8.0;
         const JUMP_FORCE = 12.0;
 
-        let isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
-        
-        // Network
+        // ==========================================
+        // 2. STATE & NETWORKING VARS
+        // ==========================================
         let myId = null;
         let isHost = true;
         let hostId = null;
         let peer;
-        let conns = {};
+        let conns = {}; // Stores { conn: Connection, lastPing: time }
 
-        // State
-        let gameState = 'LOBBY'; 
-        let players = {}; 
-        let zombies = {}; 
-        let bullets = []; 
+        // Game State
+        let gameState = 'LOBBY';
+        let players = {};
+        let zombies = {};
+        let bullets = [];
         let mapGrid = [];
         let wave = 1;
         let zombiesToSpawn = 0;
+        let lastWaveTime = 0;
 
-        // Physics (Host Only)
-        let world; 
-        let physicsBodies = {}; 
-        let zombieBodies = {};  
-        let defaultMaterial;
-
-        // Visuals
-        let scene, camera, renderer;
-        let meshes = {}; 
+        // Visuals & Physics
+        let scene, camera, renderer, world;
+        let physicsBodies = {};
+        let zombieBodies = {};
+        let meshes = {};
         let bulletMeshes = [];
         const clock = new THREE.Clock();
 
         // Input
-        // Added 'slot' to input state for weapon switching
         let input = { x: 0, y: 0, fire: false, jump: false, slot: 0 };
         let camYaw = 0;
         let camPitch = 0;
 
-        // ==========================================
-        // 2. INITIALIZATION FLOW
-        // ==========================================
-
-        function init() {
-            document.getElementById('btn-copy').onclick = copyInvite;
-            document.getElementById('btn-start').onclick = hostStartGame;
-            document.getElementById('btn-ready').onclick = toggleReady;
-            document.getElementById('btn-shop').onclick = openShopMobile;
-            document.getElementById('btn-return-lobby').onclick = resetToLobby;
-            
-            initShopUI();
-
-            if(isMobile) setupMobileControls();
-            else setupPCControls();
-
-            initNetwork();
-        }
-
-        function initShopUI() {
-            const container = document.getElementById('shop-items-container');
-            container.innerHTML = ''; 
-
-            SHOP_ITEMS.forEach((item, index) => {
-                const btn = document.createElement('button');
-                btn.innerText = `${item.name} ($${item.cost})`;
-                btn.style.width = "250px";
-                btn.style.borderColor = "#ff0";
-                btn.onclick = () => { buyItem(index); };
-                container.appendChild(btn);
-            });
-        }
+        // Interpolation Buffers (Client Only)
+        let snapshots = [];
+        const INTERP_DELAY = 50; // ms to buffer
 
         // ==========================================
-        // 3. PHYSICS (HOST)
+        // 3. INITIALIZATION
         // ==========================================
-
-        function initPhysics() {
-            if(world) return; 
-
-            world = new CANNON.World();
-            world.gravity.set(0, -25, 0); 
-            world.broadphase = new CANNON.NaiveBroadphase();
-            world.solver.iterations = 10;
-
-            defaultMaterial = new CANNON.Material('default');
-            const defaultContactMaterial = new CANNON.ContactMaterial(defaultMaterial, defaultMaterial, {
-                friction: 0.0,
-                restitution: 0.0 
-            });
-            world.addContactMaterial(defaultContactMaterial);
-            
-            // Floor
-            const floorShape = new CANNON.Plane();
-            const floorBody = new CANNON.Body({ mass: 0, material: defaultMaterial });
-            floorBody.addShape(floorShape);
-            floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-            world.addBody(floorBody);
-        }
-
-        function createPlayerPhysics(id, x, z) {
-            if(!world) return; 
-            const shape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5)); 
-            const body = new CANNON.Body({
-                mass: 60,
-                fixedRotation: true,
-                position: new CANNON.Vec3(x, 5, z), 
-                material: defaultMaterial,
-                linearDamping: 0.9 
-            });
-            body.addShape(shape);
-            world.addBody(body);
-            physicsBodies[id] = body;
-        }
-
-        function createZombiePhysics(id, x, z) {
-            if(!world) return; 
-            const shape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5));
-            const body = new CANNON.Body({
-                mass: 40,
-                fixedRotation: true,
-                position: new CANNON.Vec3(x, 5, z),
-                material: defaultMaterial,
-                linearDamping: 0.5
-            });
-            body.addShape(shape);
-            world.addBody(body);
-            zombieBodies[id] = body;
-        }
-
-        function rebuildMapPhysics() {
-            if(!world) return;
-            const halfExtents = new CANNON.Vec3(CELL_SIZE/2, WALL_HEIGHT/2, CELL_SIZE/2);
-            const wallShape = new CANNON.Box(halfExtents);
-            for(let x=0; x<GRID_SIZE; x++) {
-                for(let z=0; z<GRID_SIZE; z++) {
-                    if(mapGrid[x][z] === 1) {
-                        const body = new CANNON.Body({ mass: 0, material: defaultMaterial });
-                        body.addShape(wallShape);
-                        body.position.set(
-                            (x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
-                            WALL_HEIGHT/2,
-                            (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2
-                        );
-                        world.addBody(body);
-                    }
-                }
-            }
-        }
-
-        // ==========================================
-        // 4. VISUALS (THREE.JS)
-        // ==========================================
-
-        function initThree() {
-            if(scene) return;
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x111111);
-            scene.fog = new THREE.Fog(0x111111, 10, 80);
-
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-            camera.rotation.order = 'YXZ'; 
-
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.domElement.style.touchAction = 'none'; 
-            document.body.appendChild(renderer.domElement);
-
-            const amb = new THREE.AmbientLight(0xffffff, 0.4);
-            scene.add(amb);
-            const dir = new THREE.DirectionalLight(0xffffff, 0.8);
-            dir.position.set(50, 100, 50);
-            dir.castShadow = true;
-            scene.add(dir);
-
-            requestAnimationFrame(animate);
-
-            window.addEventListener('resize', () => {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            });
-        }
-
-        function rebuildMapMesh() {
-            if(!scene || mapGrid.length === 0) return;
-            const fGeo = new THREE.PlaneGeometry(GRID_SIZE*CELL_SIZE, GRID_SIZE*CELL_SIZE);
-            const fMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-            const floor = new THREE.Mesh(fGeo, fMat);
-            floor.rotation.x = -Math.PI/2;
-            scene.add(floor);
-
-            const wGeo = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
-            const wMat = new THREE.MeshLambertMaterial({ color: 0x554433 });
-            for(let x=0; x<GRID_SIZE; x++) {
-                for(let z=0; z<GRID_SIZE; z++) {
-                    if(mapGrid[x][z] === 1) {
-                        const w = new THREE.Mesh(wGeo, wMat);
-                        w.position.set(
-                            (x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
-                            WALL_HEIGHT/2,
-                            (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2
-                        );
-                        scene.add(w);
-                    }
-                }
-            }
-        }
-
-        // ==========================================
-        // 5. GAME LOGIC & NETWORK
-        // ==========================================
-
-        function initNetwork() {
-            peer = new Peer(null, { debug: 1 });
-            peer.on('open', (id) => {
-                myId = id;
-                const p = new URLSearchParams(window.location.search);
-                if(p.get('join')) {
-                    isHost = false;
-                    hostId = p.get('join');
-                    document.getElementById('host-panel').classList.add('hidden');
-                    document.getElementById('client-panel').classList.remove('hidden');
-                    initThree(); 
-                    connectToHost(hostId);
-                } else {
-                    document.getElementById('lobby-status').innerText = "Waiting for players...";
-                    isHost = true;
-                    initPhysics(); 
-                    generateMap(); 
-                    rebuildMapPhysics(); 
-                    players[myId] = createPlayer(myId, document.getElementById('player-name').value);
-                    initThree(); 
-                    rebuildMapMesh(); 
-                    updateLobbyUI();
-                }
-            });
-
-            peer.on('connection', (conn) => {
-                conns[conn.peer] = conn;
-                conn.on('data', data => handleData(data, conn.peer));
-                conn.on('open', () => {
-                    if(isHost) conn.send({ type: 'MAP_DATA', map: mapGrid });
-                });
-                conn.on('close', () => { 
-                    if(isHost) {
-                        delete players[conn.peer]; 
-                        if(physicsBodies[conn.peer]) {
-                            world.removeBody(physicsBodies[conn.peer]);
-                            delete physicsBodies[conn.peer];
-                        }
-                    }
-                });
-            });
-        }
-
-        function connectToHost(id) {
-            let conn = peer.connect(id);
-            conns[id] = conn;
-            conn.on('open', () => {
-                conn.send({ type: 'JOIN', name: document.getElementById('player-name').value });
-            });
-            conn.on('data', data => handleData(data, id));
-        }
-
-        function createPlayer(id, name) {
-            const p = { 
-                id, name, 
-                x: 0, y: 1, z: 0, 
-                hp: 100, maxHp: 100, money: 0, 
-                // NEW: Weapons Array (4 slots)
-                weapons: [
-                    { id: 'pistol', ammo: 30 }, // Slot 1
-                    { id: 'knife', ammo: Infinity }, // Slot 2
-                    null, // Slot 3
-                    null  // Slot 4
-                ],
-                currentSlot: 0, // 0-indexed
-                lastFire: 0,
-                yaw: 0, pitch: 0, 
-                dead: false, ready: false, 
-                input: {x:0, y:0, fire: false, jump: false, slot: 0} 
-            };
-            if(isHost) createPlayerPhysics(id, 0, 0); 
-            return p;
-        }
-
-        function handleData(data, sender) {
-            if(data.type === 'JOIN' && isHost) {
-                players[sender] = createPlayer(sender, data.name);
-                broadcast({ type: 'LOBBY_UPDATE', players: players });
-                updateLobbyUI();
-            }
-            else if(data.type === 'MAP_DATA') {
-                mapGrid = data.map;
-                if(scene) rebuildMapMesh();
-            }
-            else if(data.type === 'LOBBY_UPDATE') {
-                players = data.players;
-                updateLobbyUI();
-            }
-            else if(data.type === 'START_GAME') {
-                document.getElementById('main-menu').classList.add('hidden');
-                document.getElementById('game-over-screen').classList.add('hidden');
-                gameState = 'PLAYING';
-                if(!isMobile) document.body.requestPointerLock(); 
-                if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
-            }
-            else if(data.type === 'INPUT' && isHost) {
-                if(players[sender]) {
-                    players[sender].input = data.input;
-                    players[sender].yaw = data.yaw;
-                    players[sender].pitch = data.pitch;
-                }
-            }
-            else if(data.type === 'BUY_ITEM' && isHost) {
-                if(players[sender]) {
-                    const item = SHOP_ITEMS[data.index];
-                    if(item && players[sender].money >= item.cost) {
-                        players[sender].money -= item.cost;
-                        item.action(players[sender]);
-                        // Broadcast immediately to update UI
-                        broadcast({ type: 'WORLD_STATE', state: { players, zombies, bullets, wave } });
-                    }
-                }
-            }
-            else if(data.type === 'WORLD_STATE') {
-                if(!isHost) syncLocalVisuals(data.state);
-            }
-            else if(data.type === 'SHOP_OPEN') {
-                gameState = 'SHOP';
-                document.getElementById('shop-menu').classList.remove('hidden');
-                if(!isMobile) document.exitPointerLock();
-                document.getElementById('mobile-controls').style.display = 'none';
-            }
-            else if(data.type === 'READY_STATE' && isHost) {
-                if(players[sender]) {
-                    players[sender].ready = data.ready;
-                    checkAllReady();
-                }
-            }
-            else if(data.type === 'RESET_LOBBY') {
-                window.location.reload(); 
-            }
-        }
-
-        function generateMap() {
-            mapGrid = [];
-            for(let x=0; x<GRID_SIZE; x++) {
-                let row = [];
-                for(let z=0; z<GRID_SIZE; z++) {
-                    if (x===0 || x===GRID_SIZE-1 || z===0 || z===GRID_SIZE-1) row.push(1);
-                    else if (Math.random() < 0.15 && (Math.abs(x - GRID_SIZE/2) > 3 || Math.abs(z - GRID_SIZE/2) > 3)) row.push(1);
-                    else row.push(0);
-                }
-                mapGrid.push(row);
-            }
-        }
-
-        // ==========================================
-        // 6. GAME LOOP
-        // ==========================================
-
-        function animate() {
-            requestAnimationFrame(animate);
-            if(gameState === 'LOBBY' || !renderer) return;
-
-            let dt = clock.getDelta();
-            if(dt > 0.1) dt = 0.1;
-
-            if(isHost) hostUpdate(dt);
-            else clientUpdate();
-
-            renderScene();
-        }
-
-        function hostUpdate(dt) {
-            if(gameState !== 'PLAYING') return;
-            if(checkGameOver()) return;
-
-            if(players[myId]) {
-                players[myId].input.x = input.x;
-                players[myId].input.y = input.y;
-                players[myId].input.fire = input.fire;
-                players[myId].input.jump = input.jump;
-                players[myId].input.slot = input.slot; // Sync local slot
-                players[myId].yaw = camYaw;
-                players[myId].pitch = camPitch;
-            }
-
-            for(let pid in players) {
-                const p = players[pid];
-                if(p.dead || !physicsBodies[pid]) continue;
-                const body = physicsBodies[pid];
-
-                // Weapon Switching Logic
-                // Ensure the slot is valid (0-3)
-                if(p.input.slot >= 0 && p.input.slot <= 3) {
-                    p.currentSlot = p.input.slot;
-                }
-
-                // Movement
-                const moveVec = new THREE.Vector3();
-                const camDir = new THREE.Vector3(-Math.sin(p.yaw), 0, -Math.cos(p.yaw)).normalize();
-                const camRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), camDir).normalize();
-                
-                moveVec.addScaledVector(camDir, p.input.y);
-                moveVec.addScaledVector(camRight, p.input.x);
-                moveVec.normalize().multiplyScalar(PLAYER_SPEED);
-
-                body.velocity.x = moveVec.x;
-                body.velocity.z = moveVec.z;
-                
-                if(p.input.jump && Math.abs(body.velocity.y) < 0.1 && body.position.y < 1.5) {
-                    body.velocity.y = JUMP_FORCE;
-                }
-                body.wakeUp();
-
-                p.x = body.position.x;
-                p.y = body.position.y;
-                p.z = body.position.z;
-
-                // COMBAT
-                if(p.input.fire) {
-                   performAttack(pid);
-                }
-            }
-            
-            world.step(1/60, dt, 3);
-            handleZombies(dt);
-            handleBullets(dt);
-
-            const state = { players, zombies, bullets, wave };
-            broadcast({ type: 'WORLD_STATE', state });
-            syncLocalVisuals(state); 
-        }
-
-        // ==========================================
-        // NEW: UNIFIED ATTACK FUNCTION
-        // ==========================================
-        function performAttack(pid) {
-            const p = players[pid];
-            if(!p) return;
-
-            // Get currently equipped weapon object
-            const equipped = p.weapons[p.currentSlot];
-            
-            // If slot is empty, do nothing
-            if (!equipped) return;
-
-            // Get Static Weapon Data (Damage, Type, etc)
-            const weaponStats = WEAPON_REGISTRY[equipped.id];
-            if(!weaponStats) return;
-
-            const now = Date.now();
-            if (now - p.lastFire < weaponStats.fireRateMs) return;
-
-            // Check Ammo
-            if (equipped.ammo > 0) {
-                // Perform Action based on Type
-                if (weaponStats.type === 'projectile') {
-                    spawnBullet(pid, weaponStats);
-                } else if (weaponStats.type === 'melee') {
-                    performMeleeAttack(pid, weaponStats);
-                }
-
-                // Decrement Ammo (if not infinite)
-                if (equipped.ammo !== Infinity) {
-                    equipped.ammo--;
-                }
-                
-                p.lastFire = now;
-            }
-        }
-
-        function performMeleeAttack(pid, stats) {
-            const p = players[pid];
-            const fx = -Math.sin(p.yaw);
-            const fz = -Math.cos(p.yaw);
-
-            for (let zid in zombies) {
-                let z = zombies[zid];
-                let dx = z.x - p.x;
-                let dz = z.z - p.z;
-                let dist = Math.sqrt(dx*dx + dz*dz);
-
-                if (dist < stats.range) {
-                    let dirX = dx / dist;
-                    let dirZ = dz / dist;
-                    let dot = (fx * dirX) + (fz * dirZ);
-                    
-                    if (dot > 0.5) {
-                        z.hp -= stats.damage;
-                        if (z.hp <= 0) killZombie(zid, pid);
-                    }
-                }
-            }
-        }
-
-        function spawnBullet(pid, stats) {
-            let p = players[pid];
-            let speed = stats.speed;
-            let vx = -Math.sin(p.yaw) * Math.cos(p.pitch) * speed;
-            let vy = Math.sin(p.pitch) * speed;
-            let vz = -Math.cos(p.yaw) * Math.cos(p.pitch) * speed;
-
-            bullets.push({
-                x: p.x, y: p.y + 0.5, z: p.z,
-                vx: vx, vy: vy, vz: vz,
-                life: 2.0,
-                owner: pid,
-                damage: stats.damage
-            });
-        }
-
-        // ==========================================
-        // GAME LOGIC CONTINUED
-        // ==========================================
-
-        function checkGameOver() {
-            let allDead = true;
-            let count = 0;
-            for(let id in players) {
-                count++;
-                if(!players[id].dead) allDead = false;
-            }
-            if(count > 0 && allDead) {
-                broadcast({ type: 'WORLD_STATE', state: { players, zombies, bullets, wave } });
-                setTimeout(() => {
-                    document.getElementById('game-over-screen').classList.remove('hidden');
-                    document.getElementById('mobile-controls').style.display = 'none';
-                    if(!isMobile) document.exitPointerLock();
-                }, 500);
-                gameState = 'GAME_OVER';
-                return true;
-            }
-            return false;
-        }
-
-        function handleZombies(dt) {
-            if (zombiesToSpawn > 0 && Math.random() < 0.03) {
-                let gx, gz;
-                let tries = 0;
-                let foundSpot = false;
-                while (tries < 50 && !foundSpot) {
-                    gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-                    gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-                    if (!isWall(gx, gz) && (Math.abs(gx - GRID_SIZE / 2) > 3 || Math.abs(gz - GRID_SIZE / 2) > 3)) foundSpot = true;
-                    tries++;
-                }
-                if (foundSpot) {
-                    let id = 'z_' + Date.now() + Math.random();
-                    let wx = (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
-                    let wz = (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
-                    zombies[id] = { id, x: wx, y: 2, z: wz, hp: 50 + (wave * 20), yaw: 0 };
-                    createZombiePhysics(id, wx, wz);
-                    zombiesToSpawn--;
-                }
-            }
-            
-            if(zombiesToSpawn === 0 && Object.keys(zombies).length === 0) {
-                gameState = 'SHOP';
-                broadcast({ type: 'SHOP_OPEN' });
-                document.getElementById('shop-menu').classList.remove('hidden');
-                document.getElementById('mobile-controls').style.display = 'none';
-                if(!isMobile) document.exitPointerLock();
-                return;
-            }
-
-            for(let zid in zombies) {
-                let z = zombies[zid];
-                let body = zombieBodies[zid];
-                if(!body) continue;
-                let target = getClosestPlayer(body.position.x, body.position.z);
-                if(target) {
-                    let dx = target.x - body.position.x;
-                    let dz = target.z - body.position.z;
-                    let dist = Math.sqrt(dx*dx + dz*dz);
-                    if(dist > 0.1) {
-                        body.velocity.x = (dx/dist) * ZOMBIE_SPEED;
-                        body.velocity.z = (dz/dist) * ZOMBIE_SPEED;
-                        z.yaw = Math.atan2(dx, dz);
-                        body.wakeUp();
-                    }
-                    z.x = body.position.x;
-                    z.y = body.position.y;
-                    z.z = body.position.z;
-                    if(dist < 1.5) {
-                         target.hp -= 20 * dt;
-                         if(target.hp <= 0) target.dead = true;
-                    }
-                }
-            }
-        }
-
-        function handleBullets(dt) {
-            for(let i = bullets.length - 1; i >= 0; i--) {
-                let b = bullets[i];
-                b.x += b.vx * dt;
-                b.y += b.vy * dt;
-                b.z += b.vz * dt;
-                b.life -= dt;
-                
-                let g = getGridPos(b.x, b.z);
-                if(isWall(g.x, g.z) || b.y < 0) { bullets.splice(i, 1); continue; }
-
-                let hit = false;
-                for(let zid in zombies) {
-                    let z = zombies[zid];
-                    let dx = b.x - z.x;
-                    let dz = b.z - z.z;
-                    let dy = b.y - z.y;
-                    if(Math.sqrt(dx*dx + dz*dz) < 0.8 && Math.abs(dy) < 1.5) {
-                        // Use damage from bullet object
-                        z.hp -= (b.damage || 35);
-                        if(z.hp <= 0) killZombie(zid, b.owner);
-                        hit = true; 
-                        break;
-                    }
-                }
-                if(hit || b.life <= 0) bullets.splice(i, 1);
-            }
-        }
-
-        function killZombie(zid, killerId) {
-            delete zombies[zid];
-            if(zombieBodies[zid]) {
-                world.removeBody(zombieBodies[zid]);
-                delete zombieBodies[zid];
-            }
-            if(players[killerId]) players[killerId].money += 25;
-        }
-
-        function clientUpdate() {
-            if(myId && hostId && conns[hostId]) {
-                conns[hostId].send({
-                    type: 'INPUT',
-                    input: { x: input.x, y: input.y, fire: input.fire, jump: input.jump, slot: input.slot },
-                    yaw: camYaw,
-                    pitch: camPitch
-                });
-            }
-        }
-
-        // ==========================================
-        // 7. RENDER & UI SYNC
-        // ==========================================
-
-        function syncLocalVisuals(state) {
-            players = state.players;
-            zombies = state.zombies;
-            bullets = state.bullets;
-            wave = state.wave;
-            
-            if(players[myId]) {
-                const p = players[myId];
-                document.getElementById('hp-disp').innerText = Math.floor(p.hp);
-                document.getElementById('money-disp').innerText = p.money;
-                document.getElementById('wave-disp').innerText = wave;
-                document.getElementById('zombie-disp').innerText = Object.keys(zombies).length + zombiesToSpawn;
-                
-                // --- WEAPON UI ---
-                const equipped = p.weapons[p.currentSlot];
-                
-                // Update Slot Highlights
-                for(let i=1; i<=4; i++) {
-                    const el = document.getElementById('slot-'+i);
-                    if(i === (p.currentSlot + 1)) el.classList.add('slot-active');
-                    else el.classList.remove('slot-active');
-                }
-
-                if(equipped) {
-                    const stats = WEAPON_REGISTRY[equipped.id];
-                    document.getElementById('weapon-name-disp').innerText = stats.name.toUpperCase();
-                    
-                    if(equipped.ammo === Infinity) {
-                        document.getElementById('ammo-disp').innerText = "INF";
-                        document.getElementById('ammo-disp').style.color = "#fff";
-                    } else {
-                        document.getElementById('ammo-disp').innerText = equipped.ammo;
-                        document.getElementById('ammo-disp').style.color = equipped.ammo === 0 ? "#f00" : "#ff0";
-                    }
-                } else {
-                    document.getElementById('weapon-name-disp').innerText = "EMPTY";
-                    document.getElementById('ammo-disp').innerText = "--";
-                }
-            }
-        }
-
-        function renderScene() {
-            if(players[myId] && !players[myId].dead) {
-                const p = players[myId];
-                camera.position.x = p.x;
-                camera.position.y = p.y + 0.6; 
-                camera.position.z = p.z;
-                camera.rotation.y = camYaw;
-                camera.rotation.x = camPitch;
-            }
-
-            for(let id in players) {
-                if(id === myId) continue; 
-                let p = players[id];
-                if(p.dead) {
-                    if(meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
-                    continue;
-                }
-                if(!meshes[id]) {
-                    const geo = new THREE.BoxGeometry(1, 2, 1);
-                    const mat = new THREE.MeshLambertMaterial({ color: 0x0088ff });
-                    meshes[id] = new THREE.Mesh(geo, mat);
-                    scene.add(meshes[id]);
-                }
-                meshes[id].position.set(p.x, p.y, p.z);
-                meshes[id].rotation.y = p.yaw;
-            }
-
-            // Clean zombies
-            for(let mid in meshes) {
-                if(mid.startsWith('z_') && !zombies[mid]) {
-                    scene.remove(meshes[mid]);
-                    delete meshes[mid];
-                }
-            }
-            // Draw zombies
-            for(let zid in zombies) {
-                let z = zombies[zid];
-                if(!meshes[zid]) {
-                    const geo = new THREE.BoxGeometry(1, 2, 1);
-                    const mat = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-                    meshes[zid] = new THREE.Mesh(geo, mat);
-                    scene.add(meshes[zid]);
-                }
-                meshes[zid].position.set(z.x, z.y, z.z);
-                meshes[zid].rotation.y = z.yaw;
-            }
-
-            // Draw bullets
-            while(bulletMeshes.length > bullets.length) {
-                scene.remove(bulletMeshes.pop());
-            }
-            while(bulletMeshes.length < bullets.length) {
-                const bMesh = new THREE.Mesh(
-                    new THREE.BoxGeometry(0.2, 0.2, 0.2),
-                    new THREE.MeshBasicMaterial({ color: 0xffff00 })
-                );
-                scene.add(bMesh);
-                bulletMeshes.push(bMesh);
-            }
-            for(let i=0; i<bullets.length; i++) {
-                bulletMeshes[i].position.set(bullets[i].x, bullets[i].y, bullets[i].z);
-            }
-
-            renderer.render(scene, camera);
-        }
-
-        // ==========================================
-        // 8. HELPERS & UI
-        // ==========================================
-
-        function isWall(gx, gz) {
-            if(gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return true;
-            return mapGrid[gx][gz] === 1;
-        }
-
-        function getGridPos(x, z) {
-            return {
-                x: Math.floor((x + MAP_OFFSET) / CELL_SIZE),
-                z: Math.floor((z + MAP_OFFSET) / CELL_SIZE)
-            };
-        }
-
-        function getClosestPlayer(x, z) {
-            let min = 9999, target = null;
-            for(let id in players) {
-                if(players[id].dead) continue;
-                let d = Math.sqrt((x-players[id].x)**2 + (z-players[id].z)**2);
-                if(d < min) { min = d; target = players[id]; }
-            }
-            return target;
-        }
-
-        function broadcast(msg) {
-            for(let id in conns) conns[id].send(msg);
-        }
-
-        function hostStartGame() {
-            if(!isHost) return;
-            broadcast({ type: 'START_GAME' });
-            document.getElementById('main-menu').classList.add('hidden');
-            gameState = 'PLAYING';
-            startWave(1);
-            if(!isMobile) document.body.requestPointerLock();
-            if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
-        }
-
-        function startWave(n) {
-            wave = n;
-            zombiesToSpawn = Math.floor(wave * wave * 2.5);
-            for(let id in players) players[id].ready = false;
-        }
-
-        function toggleReady() {
-            let r = !players[myId].ready;
-            players[myId].ready = r;
-            document.getElementById('btn-ready').style.background = r ? '#0a0' : '#444';
-            if(isHost) checkAllReady();
-            else conns[hostId].send({ type: 'READY_STATE', ready: r });
-        }
-
-        function buyItem(index) {
-            if(isHost) {
-                const item = SHOP_ITEMS[index];
-                if(item && players[myId].money >= item.cost) {
-                    players[myId].money -= item.cost;
-                    item.action(players[myId]);
-                    // Immediate UI update via loop logic since players[myId] changed
-                    syncLocalVisuals({ players, zombies, bullets, wave });
-                }
-            } else {
-                conns[hostId].send({ type: 'BUY_ITEM', index: index });
-            }
-        }
-
-        function checkAllReady() {
-            let all = true;
-            for(let id in players) if(!players[id].dead && !players[id].ready) all = false;
-            if(all) {
-                document.getElementById('shop-menu').classList.add('hidden');
-                gameState = 'PLAYING';
-                broadcast({ type: 'START_GAME' });
-                startWave(wave + 1);
-            }
-        }
-
-        function resetToLobby() {
-            if(isHost) broadcast({ type: 'RESET_LOBBY' });
-            window.location.reload();
-        }
-
         function updateLobbyUI() {
             let html = '';
-            for(let id in players) html += `<div>${players[id].name}</div>`;
-            document.getElementById('lobby-status').innerHTML = html;
+            for (let id in players) {
+                html += `<div>${players[id].name} ${players[id].ready ? '<span style="color:#0f0">[READY]</span>' : ''}</div>`;
+            }
+            const statusEl = document.getElementById('lobby-status');
+            if (statusEl) statusEl.innerHTML = html;
         }
 
         function copyInvite() {
@@ -1025,132 +443,857 @@
             alert("Invite Link Copied!");
         }
 
-        function openShopMobile() { /* Placeholder */ }
+        function init() {
+            document.getElementById('btn-copy').onclick = copyInvite;
+            document.getElementById('btn-start').onclick = hostStartGame;
+            document.getElementById('btn-ready').onclick = toggleReady;
+            document.getElementById('btn-shop').onclick = () => { /* mobile shop */ };
+            document.getElementById('btn-ready').onclick = toggleReady;
+            document.getElementById('btn-shop').onclick = () => { /* mobile shop */ };
+            document.getElementById('btn-return-lobby').onclick = resetToLobby;
+            document.getElementById('btn-retry').onclick = hostRestartGame;
 
-        // --- CONTROLS ---
+            initShopUI();
 
-        function setupPCControls() {
-            const keyState = {};
-            window.addEventListener('keydown', (e) => {
-                const k = e.key.toLowerCase();
-                keyState[k] = true;
-                if(e.code === 'Space') input.jump = true;
+            if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) setupMobileControls();
+            else setupPCControls();
 
-                // Number Keys 1-4 for Slot Selection
-                if (['1','2','3','4'].includes(e.key)) {
-                    input.slot = parseInt(e.key) - 1;
-                }
-            });
-            window.addEventListener('keyup', (e) => {
-                const k = e.key.toLowerCase();
-                keyState[k] = false;
-                if(e.code === 'Space') input.jump = false;
-            });
-            
-            // Scroll Wheel for Switching
-            window.addEventListener('wheel', (e) => {
-                if(e.deltaY > 0) input.slot = (input.slot + 1) % 4;
-                else input.slot = (input.slot - 1 + 4) % 4;
-            });
-            
-            document.addEventListener('mousemove', (e) => {
-                if(document.pointerLockElement === document.body) {
-                    camYaw -= e.movementX * 0.002;
-                    camPitch -= e.movementY * 0.002;
-                    camPitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, camPitch));
-                }
-            });
-            
-            document.addEventListener('mousedown', () => {
-                if(gameState === 'PLAYING') {
-                    if(document.pointerLockElement !== document.body) document.body.requestPointerLock();
-                    else input.fire = true; 
-                }
-            });
-
-            document.addEventListener('mouseup', () => {
-                input.fire = false; 
-            });
-
-            setInterval(() => {
-                let x = 0, y = 0;
-                if(keyState['w']) y += 1;
-                if(keyState['s']) y -= 1;
-                if(keyState['a']) x += 1;
-                if(keyState['d']) x -= 1;
-                input.x = x; input.y = y;
-            }, 16);
+            initNetwork();
         }
 
-        function setupMobileControls() {
-            const handleStick = (id, cb) => {
-                const el = document.getElementById(id);
-                const nub = el.querySelector('.stick-nub');
-                let touchId = null;
-                let origin = {x:0, y:0};
-                
-                el.addEventListener('touchstart', e => {
-                    e.preventDefault();
-                    let t = e.changedTouches[0];
-                    touchId = t.identifier;
-                    let rect = el.getBoundingClientRect();
-                    origin = {x: rect.left + rect.width/2, y: rect.top + rect.height/2};
-                    update(t.clientX, t.clientY);
-                });
-                
-                el.addEventListener('touchmove', e => {
-                    e.preventDefault();
-                    for(let i=0; i<e.changedTouches.length; i++) {
-                        if(e.changedTouches[i].identifier === touchId) {
-                            update(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
-                        }
-                    }
-                });
-                
-                const end = (e) => {
-                    e.preventDefault();
-                    for(let i=0; i<e.changedTouches.length; i++) {
-                        if(e.changedTouches[i].identifier === touchId) {
-                            touchId = null;
-                            nub.style.transform = `translate(-50%, -50%)`;
-                            cb(0, 0);
-                        }
-                    }
-                };
-                el.addEventListener('touchend', end);
-                
-                function update(cx, cy) {
-                    let dx = cx - origin.x;
-                    let dy = cy - origin.y;
-                    let dist = Math.sqrt(dx*dx + dy*dy);
-                    let max = 35;
-                    if(dist > max) {
-                        dx = (dx/dist)*max;
-                        dy = (dy/dist)*max;
-                    }
-                    nub.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-                    cb(dx/max, dy/max);
-                }
-            };
+        function initNetwork() {
+            peer = new Peer(null, { debug: 1 });
 
-            handleStick('stick-left', (x, y) => { input.x = x; input.y = -y; });
-            handleStick('stick-right', (x, y) => {
-                camYaw -= x * 0.05;
-                camPitch -= y * 0.05;
-                camPitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, camPitch));
+            peer.on('open', (id) => {
+                myId = id;
+                const p = new URLSearchParams(window.location.search);
+                if (p.get('join')) {
+                    isHost = false;
+                    hostId = p.get('join');
+                    document.getElementById('host-panel').classList.add('hidden');
+                    document.getElementById('client-panel').classList.remove('hidden');
+                    connectToHost(hostId);
+                    initThree();
+                } else {
+                    document.getElementById('lobby-status').innerText = "Waiting for players...";
+                    isHost = true;
+                    initPhysics();
+                    generateMap();
+                    rebuildMapPhysics();
+                    // HOST IS NOT A PLAYER
+                    // players[myId] = createPlayer(myId, document.getElementById('player-name').value);
+
+                    // Host Camera Setup
+                    camYaw = 0; camPitch = -1.0; // Look down
+
+                    initThree();
+                    rebuildMapMesh();
+                    updateLobbyUI();
+                    // Start Host Loop
+                    setInterval(hostGameLoop, TICK_MS);
+                }
             });
 
-            const btnFire = document.getElementById('btn-fire');
-            btnFire.addEventListener('touchstart', (e) => { e.preventDefault(); input.fire = true; btnFire.style.backgroundColor = "rgba(255,0,0,0.5)"; });
-            btnFire.addEventListener('touchend', (e) => { e.preventDefault(); input.fire = false; btnFire.style.backgroundColor = "rgba(255,0,0,0.2)"; });
+            peer.on('connection', (conn) => {
+                handleConnection(conn);
+            });
+        }
 
-            const btnJump = document.getElementById('btn-jump');
-            btnJump.addEventListener('touchstart', (e) => { e.preventDefault(); input.jump = true; btnJump.style.backgroundColor = "rgba(0,0,255,0.5)"; });
-            btnJump.addEventListener('touchend', (e) => { e.preventDefault(); input.jump = false; btnJump.style.backgroundColor = "rgba(255,0,0,0.2)"; });
+        function handleConnection(conn) {
+            conns[conn.peer] = conn;
+
+            conn.on('data', data => {
+                if (isHost) handleHostData(data, conn.peer);
+                else handleClientData(data);
+            });
+
+            conn.on('open', () => {
+                if (isHost) {
+                    // Send map immediately (Reliably if possible, but here we just send it)
+                    conn.send({ type: 'MAP_DATA', map: mapGrid });
+                }
+            });
+
+            conn.on('close', () => {
+                if (isHost) {
+                    delete players[conn.peer];
+                    if (physicsBodies[conn.peer]) { world.removeBody(physicsBodies[conn.peer]); delete physicsBodies[conn.peer]; }
+                    broadcast({ type: 'LOBBY_UPDATE', players: sanitizePlayersForLobby() });
+                    updateLobbyUI();
+                }
+            });
+        }
+
+        function connectToHost(id) {
+            // CRITICAL: reliable: false for UDP-like performance
+            let conn = peer.connect(id, { reliable: false, serialization: 'json' });
+            handleConnection(conn);
+            conn.on('open', () => {
+                conn.send({ type: 'JOIN', name: document.getElementById('player-name').value });
+            });
+        }
+
+        // ==========================================
+        // 4. HOST LOGIC (60Hz TICK)
+        // ==========================================
+
+        function hostGameLoop() {
+            if (gameState !== 'PLAYING' && gameState !== 'SHOP') return;
+            if (gameState === 'PLAYING' && checkGameOver()) return;
+
+            // Host has no player entity input logic anymore
+
+            // Physics Step
+            for (let pid in players) {
+                updatePlayerPhysics(pid);
+            }
+            world.step(TICK_MS / 1000);
+            updateZombies();
+            updateBullets();
+
+            // Broadcast Compressed State
+            // We only send dynamic data. 
+            // Protocol: [Timestamp, PlayersArray, ZombiesArray, BulletsArray, WaveInfo]
+            const state = compressState();
+            broadcast({ type: 'WS', d: state });
+
+            // Update Host HUD
+            document.getElementById('h-wave').innerText = wave;
+            document.getElementById('h-zombies').innerText = zombiesToSpawn + Object.keys(zombies).length;
+            document.getElementById('h-players').innerText = Object.keys(players).length;
+        }
+
+        function updatePlayerPhysics(pid) {
+            const p = players[pid];
+            if (p.dead || !physicsBodies[pid]) return;
+            const body = physicsBodies[pid];
+
+            const moveVec = new THREE.Vector3();
+            const camDir = new THREE.Vector3(-Math.sin(p.yaw), 0, -Math.cos(p.yaw)).normalize();
+            const camRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), camDir).normalize();
+
+            moveVec.addScaledVector(camDir, p.input.y);
+            moveVec.addScaledVector(camRight, p.input.x);
+            moveVec.normalize().multiplyScalar(PLAYER_SPEED);
+
+            body.velocity.x = moveVec.x;
+            body.velocity.z = moveVec.z;
+
+            if (p.input.jump && Math.abs(body.velocity.y) < 0.1 && body.position.y < 1.5) {
+                body.velocity.y = JUMP_FORCE;
+            }
+            body.wakeUp();
+
+            p.x = body.position.x;
+            p.y = body.position.y;
+            p.z = body.position.z;
+
+            // Update Weapon selection
+            if (p.input.slot >= 0 && p.input.slot < 4) {
+                p.currentSlot = p.input.slot;
+            }
+
+            // Attack Logic
+            if (p.input.fire) performAttack(pid);
+        }
+
+        function compressState() {
+            // Minify data for network transport
+            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent]
+            const pData = [];
+            for (let pid in players) {
+                const p = players[pid];
+                const w = p.weapons[p.currentSlot];
+                const ammo = w ? w.ammo : 0;
+                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.money]);
+            }
+
+            // Z: [id, x, z, yaw] (y is assumed floor or derivable)
+            const zData = [];
+            for (let zid in zombies) {
+                const z = zombies[zid];
+                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2))]);
+            }
+
+            // B: [x, y, z] (Bullets are simple visual particles mostly)
+            const bData = bullets.map(b => [parseFloat(b.x.toFixed(1)), parseFloat(b.y.toFixed(1)), parseFloat(b.z.toFixed(1))]);
+
+            return [Date.now(), pData, zData, bData, wave, zombiesToSpawn + Object.keys(zombies).length];
+        }
+
+        function handleHostData(data, sender) {
+            if (data.type === 'JOIN') {
+                players[sender] = createPlayer(sender, data.name);
+                broadcast({ type: 'LOBBY_UPDATE', players: sanitizePlayersForLobby() });
+                updateLobbyUI();
+            }
+            else if (data.type === 'IN') { // Input
+                if (players[sender]) {
+                    const i = data.i;
+                    players[sender].input = { x: i[0], y: i[1], fire: !!i[2], jump: !!i[3], slot: i[4] };
+                    players[sender].yaw = i[5];
+                    players[sender].pitch = i[6];
+                }
+            }
+            else if (data.type === 'BUY') {
+                if (players[sender]) {
+                    const item = SHOP_ITEMS[data.idx];
+                    if (item && players[sender].money >= item.cost) {
+                        players[sender].money -= item.cost;
+                        item.action(players[sender]);
+                    }
+                }
+            }
+            else if (data.type === 'RDY') {
+                if (players[sender]) {
+                    players[sender].ready = data.r;
+                    checkAllReady();
+                }
+            }
+        }
+
+        // ==========================================
+        // 5. CLIENT LOGIC (INTERPOLATION)
+        // ==========================================
+
+        function handleClientData(data) {
+            if (data.type === 'WS') { // World State
+                snapshots.push(data.d);
+                if (snapshots.length > 5) snapshots.shift(); // Keep buffer small
+
+                // Update non-positional data immediately
+                // Sync wave info
+                wave = data.d[4];
+                const zCount = data.d[5];
+                document.getElementById('wave-disp').innerText = wave;
+                document.getElementById('zombie-disp').innerText = zCount;
+
+                // Sync self ammo/hp immediately (don't interpolate HUD)
+                const pList = data.d[1];
+                const myData = pList.find(p => p[0] === myId);
+                if (myData) {
+                    updateHUD(myData);
+                }
+            }
+            else if (data.type === 'MAP_DATA') {
+                mapGrid = data.map;
+                rebuildMapMesh();
+            }
+            else if (data.type === 'LOBBY_UPDATE') {
+                updateLobbyPlayers(data.players);
+            }
+            else if (data.type === 'START_GAME') {
+                document.getElementById('main-menu').classList.add('hidden');
+                document.getElementById('shop-menu').classList.add('hidden'); // Ensure shop is hidden
+                document.getElementById('game-over-screen').classList.add('hidden');
+                gameState = 'PLAYING';
+
+                document.getElementById('hud-layer').style.display = 'block'; // Client HUD
+                // Show HUD elements
+                document.getElementById('ui-weapon').style.display = 'block';
+                document.getElementById('ui-ammo').style.display = 'block';
+                document.getElementById('ui-slots').style.display = 'block';
+
+                if (!(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))) document.body.requestPointerLock();
+                else document.getElementById('mobile-controls').style.display = 'block';
+            }
+            else if (data.type === 'SHOP_OPEN') {
+                gameState = 'SHOP';
+                document.getElementById('shop-menu').classList.remove('hidden');
+                document.getElementById('game-over-screen').classList.add('hidden'); // Fix 1: Hide Game Over
+                document.getElementById('hud-layer').style.display = 'block'; // Ensure HUD is visible (for money/hp)
+
+                // Fix 2: Hide irrelevant HUD
+                document.getElementById('ui-weapon').style.display = 'none';
+                document.getElementById('ui-ammo').style.display = 'none';
+                document.getElementById('ui-slots').style.display = 'none';
+
+                document.exitPointerLock();
+                document.getElementById('mobile-controls').style.display = 'none';
+            }
+            else if (data.type === 'GAME_OVER') {
+                gameState = 'GAME_OVER';
+                document.getElementById('game-over-screen').classList.remove('hidden');
+                document.getElementById('hud-layer').style.display = 'none';
+                document.exitPointerLock();
+                document.getElementById('btn-retry').style.display = 'none'; // Clients can't retry
+            }
+        }
+
+        function clientInterpolate() {
+            // Send Input
+            if (hostId && conns[hostId]) {
+                // Compact Input: [x, y, fire, jump, slot, yaw, pitch]
+                conns[hostId].send({
+                    type: 'IN',
+                    i: [input.x, input.y, input.fire ? 1 : 0, input.jump ? 1 : 0, input.slot, camYaw, camPitch]
+                });
+            }
+
+            // Interpolate World
+            const renderTime = Date.now() - INTERP_DELAY;
+
+            // Find two snapshots surrounding renderTime
+            let prev = null, next = null;
+            for (let i = 0; i < snapshots.length - 1; i++) {
+                if (snapshots[i][0] <= renderTime && snapshots[i + 1][0] >= renderTime) {
+                    prev = snapshots[i];
+                    next = snapshots[i + 1];
+                    break;
+                }
+            }
+
+            if (prev && next) {
+                const ratio = (renderTime - prev[0]) / (next[0] - prev[0]);
+
+                // Interpolate Players
+                next[1].forEach(np => {
+                    if (np[0] === myId) {
+                        // We predict our own movement locally in camera, but sync position for correction
+                        // Actually, simplified: just trust server for P2P simplicity
+                        const pp = prev[1].find(p => p[0] === np[0]);
+                        if (pp) {
+                            if (!players[np[0]]) players[np[0]] = { id: np[0] };
+                            players[np[0]].x = lerp(pp[1], np[1], ratio);
+                            players[np[0]].y = lerp(pp[2], np[2], ratio);
+                            players[np[0]].z = lerp(pp[3], np[3], ratio);
+                            players[np[0]].yaw = np[4]; // Don't lerp rotation usually
+                        }
+                    } else {
+                        const pp = prev[1].find(p => p[0] === np[0]);
+                        if (pp) {
+                            if (!players[np[0]]) players[np[0]] = { id: np[0] };
+                            players[np[0]].x = lerp(pp[1], np[1], ratio);
+                            players[np[0]].y = lerp(pp[2], np[2], ratio);
+                            players[np[0]].z = lerp(pp[3], np[3], ratio);
+                            players[np[0]].yaw = np[4];
+                        }
+                    }
+                });
+
+                // Interpolate Zombies
+                const currentZombieIds = [];
+                next[2].forEach(nz => {
+                    currentZombieIds.push(nz[0]);
+                    const pz = prev[2].find(z => z[0] === nz[0]);
+                    if (!zombies[nz[0]]) zombies[nz[0]] = { id: nz[0] };
+                    if (pz) {
+                        zombies[nz[0]].x = lerp(pz[1], nz[1], ratio);
+                        zombies[nz[0]].z = lerp(pz[2], nz[2], ratio);
+                        zombies[nz[0]].y = 1; // Constant
+                        zombies[nz[0]].yaw = nz[3];
+                    } else {
+                        // New zombie, snap
+                        zombies[nz[0]].x = nz[1];
+                        zombies[nz[0]].z = nz[2];
+                        zombies[nz[0]].y = 1;
+                        zombies[nz[0]].yaw = nz[3];
+                    }
+                });
+
+                // Cleanup dead zombies
+                for (let zid in zombies) {
+                    if (!currentZombieIds.includes(zid)) delete zombies[zid];
+                }
+
+                // Bullets (Just snap to next, they move too fast)
+                bullets = next[3].map(b => ({ x: b[0], y: b[1], z: b[2] }));
+            }
+        }
+
+        // ==========================================
+        // 6. RENDER LOOP
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (!isHost) clientInterpolate();
+
+            renderScene();
+        }
+
+        function renderScene() {
+            if (!renderer || !scene) return;
+
+            // Camera
+            // Camera
+            if (isHost || (players[myId] && players[myId].dead)) {
+                // Spectator Camera (Free Move)
+                // Use input.x/y for WASD movement of camera
+                const camSpeed = 0.5;
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), camYaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), camYaw);
+
+                // Allow WASD movement
+                camera.position.addScaledVector(forward, input.y * camSpeed);
+                camera.position.addScaledVector(right, input.x * camSpeed);
+
+                camera.rotation.order = 'YXZ';
+                camera.rotation.y = camYaw;
+                camera.rotation.x = camPitch;
+            }
+            else if (players[myId]) {
+                const p = players[myId];
+                camera.position.set(p.x, p.y + 0.6, p.z);
+                camera.rotation.order = 'YXZ';
+                camera.rotation.y = camYaw;
+                camera.rotation.x = camPitch;
+            }
+
+            // Render Players
+            for (let id in players) {
+                if (id === myId) continue;
+                const p = players[id];
+                if (!meshes[id]) {
+                    meshes[id] = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: 0x0088ff }));
+                    scene.add(meshes[id]);
+                }
+                meshes[id].position.set(p.x, p.y, p.z);
+                meshes[id].rotation.y = p.yaw;
+            }
+
+            // Render Zombies
+            // Clean old meshes
+            for (let mid in meshes) {
+                if (mid.startsWith('z_') && !zombies[mid]) { scene.remove(meshes[mid]); delete meshes[mid]; }
+            }
+            for (let zid in zombies) {
+                const z = zombies[zid];
+                if (!meshes[zid]) {
+                    meshes[zid] = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: 0x00ff00 }));
+                    scene.add(meshes[zid]);
+                }
+                meshes[zid].position.set(z.x, z.y, z.z);
+                meshes[zid].rotation.y = z.yaw;
+            }
+
+            // Render Bullets
+            while (bulletMeshes.length > bullets.length) scene.remove(bulletMeshes.pop());
+            while (bulletMeshes.length < bullets.length) {
+                const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                scene.add(b);
+                bulletMeshes.push(b);
+            }
+            for (let i = 0; i < bullets.length; i++) {
+                bulletMeshes[i].position.set(bullets[i].x, bullets[i].y, bullets[i].z);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // 7. HELPER FUNCTIONS & GAME LOGIC
+        // ==========================================
+        function lerp(a, b, t) { return a + (b - a) * t; }
+
+        function createPlayer(id, name) {
+            const p = {
+                id, name,
+                x: 0, y: 1, z: 0,
+                hp: 100, maxHp: 100, money: 100,
+                weapons: [{ id: 'pistol', ammo: 0 }, { id: 'knife', ammo: -1 }, null, null],
+                currentSlot: 0, lastFire: 0,
+                yaw: 0, pitch: 0, dead: false, ready: false,
+                input: { x: 0, y: 0, fire: false, jump: false, slot: 0 }
+            };
+
+            if (isHost && world) {
+                const shape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5));
+                const body = new CANNON.Body({
+                    mass: 60,
+                    fixedRotation: true,
+                    position: new CANNON.Vec3(0, 5, 0),
+                    shape: shape,
+                    material: new CANNON.Material({ friction: 0, restitution: 0 })
+                });
+
+                // REDUCE OR REMOVE THIS DAMPING:
+                body.linearDamping = 0.1; // Changed from 0.9 to 0.1
+
+                world.addBody(body);
+                physicsBodies[id] = body;
+            }
+            return p;
+        }
+
+        function sanitizePlayersForLobby() {
+            // Helper to send player list to clients
+            const list = {};
+            for (let id in players) list[id] = { name: players[id].name };
+            return list;
+        }
+
+        function updateLobbyPlayers(list) {
+            let html = '';
+            for (let id in list) html += `<div>${list[id].name}</div>`;
+            document.getElementById('lobby-status').innerHTML = html;
+        }
+
+        function updateHUD(data) {
+            // Data: [id, x, y, z, yaw, hp, slot, ammo, money]
+            document.getElementById('hp-disp').innerText = data[5];
+            document.getElementById('money-disp').innerText = data[8];
+            const slot = data[6];
+            for (let i = 1; i <= 4; i++) {
+                const el = document.getElementById('slot-' + i);
+                if (i === (slot + 1)) el.classList.add('slot-active'); else el.classList.remove('slot-active');
+            }
+            // Derive name from slot (We assume client has same registry)
+            // Ideally we should sync loadout, but for now we assume default loadout structure
+            // 0: Pistol, 1: Knife
+            const wName = slot === 0 ? "PISTOL" : (slot === 1 ? "KNIFE" : "EMPTY");
+            document.getElementById('ui-weapon').innerText = wName;
+            document.getElementById('ammo-disp').innerText = data[7] === -1 ? "INF" : data[7];
+        }
+
+        function performAttack(pid) {
+            const p = players[pid];
+            const w = p.weapons[p.currentSlot];
+            if (!w) return;
+            const stats = WEAPON_REGISTRY[w.id];
+            if (Date.now() - p.lastFire < stats.fireRateMs) return;
+            if (w.ammo === 0) return;
+
+            p.lastFire = Date.now();
+            if (w.ammo > 0) w.ammo--;
+
+            if (stats.type === 'projectile') {
+                const speed = stats.speed;
+                const vx = -Math.sin(p.yaw) * Math.cos(p.pitch) * speed;
+                const vy = Math.sin(p.pitch) * speed;
+                const vz = -Math.cos(p.yaw) * Math.cos(p.pitch) * speed;
+                bullets.push({ x: p.x, y: p.y + 0.5, z: p.z, vx, vy, vz, life: 2.0, dmg: stats.damage, owner: pid });
+            } else {
+                // Melee
+                const fx = -Math.sin(p.yaw);
+                const fz = -Math.cos(p.yaw);
+                for (let zid in zombies) {
+                    const z = zombies[zid];
+                    const dist = Math.sqrt((z.x - p.x) ** 2 + (z.z - p.z) ** 2);
+                    if (dist < stats.range) {
+                        const dot = fx * (z.x - p.x) / dist + fz * (z.z - p.z) / dist;
+                        if (dot > 0.5) {
+                            z.hp -= stats.damage;
+                            if (z.hp <= 0) killZombie(zid, pid);
+                        }
+                    }
+                }
+            }
+        }
+
+        function updateZombies() {
+            if (zombiesToSpawn > 0 && Math.random() < 0.05) {
+                let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+
+                if (mapGrid[gx] && !mapGrid[gx][gz]) {
+                    const id = 'z_' + Date.now() + Math.random();
+                    const x = (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
+                    const z = (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
+
+                    zombies[id] = { id, x, y: 2, z, hp: 50 + (wave * 20), yaw: 0 };
+
+                    // Ensure shape is defined BEFORE adding to body
+                    const zShape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5));
+                    const body = new CANNON.Body({
+                        mass: 40,
+                        fixedRotation: true,
+                        position: new CANNON.Vec3(x, 5, z),
+                        shape: zShape, // Pass shape here
+                        linearDamping: 0.5
+                    });
+
+                    world.addBody(body);
+                    zombieBodies[id] = body;
+                    zombiesToSpawn--;
+                }
+            }
+            if (zombiesToSpawn === 0 && Object.keys(zombies).length === 0 && gameState === 'PLAYING') {
+                gameState = 'SHOP';
+
+                // HOST: Open shop UI locally
+                if (isHost) {
+                    // Host is spectator, do not show shop menu
+                    // document.getElementById('shop-menu').classList.remove('hidden'); 
+                    document.exitPointerLock();
+                    document.getElementById('mobile-controls').style.display = 'none';
+
+                    // Reset ready states for next wave
+                    for (let id in players) {
+                        players[id].ready = false;
+                    }
+                }
+
+                // Broadcast to all clients
+                broadcast({ type: 'SHOP_OPEN' });
+            }
+
+            // Move
+            for (let zid in zombies) {
+                const z = zombies[zid];
+                const body = zombieBodies[zid];
+                if (!body) continue;
+
+                // Find target
+                let min = 999, target = null;
+                for (let pid in players) {
+                    if (players[pid].dead) continue;
+                    const d = Math.sqrt((players[pid].x - z.x) ** 2 + (players[pid].z - z.z) ** 2);
+                    if (d < min) { min = d; target = players[pid]; }
+                }
+
+                if (target) {
+                    const dx = target.x - z.x;
+                    const dz = target.z - z.z;
+                    if (min > 0.1) {
+                        body.velocity.x = (dx / min) * ZOMBIE_SPEED;
+                        body.velocity.z = (dz / min) * ZOMBIE_SPEED;
+                        z.yaw = Math.atan2(dx, dz);
+                    }
+                    if (min < 1.5) {
+                        target.hp -= 0.5; // Dmg per tick
+                        if (target.hp <= 0) target.dead = true;
+                    }
+                    body.wakeUp();
+                }
+                z.x = body.position.x;
+                z.y = body.position.y;
+                z.z = body.position.z;
+            }
+        }
+
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                b.x += b.vx * (TICK_MS / 1000);
+                b.y += b.vy * (TICK_MS / 1000);
+                b.z += b.vz * (TICK_MS / 1000);
+                b.life -= (TICK_MS / 1000);
+
+                const g = getGridPos(b.x, b.z);
+                if (g.x < 0 || g.x >= GRID_SIZE || g.z < 0 || g.z >= GRID_SIZE || mapGrid[g.x][g.z] === 1 || b.y < 0 || b.life <= 0) {
+                    bullets.splice(i, 1); continue;
+                }
+
+                for (let zid in zombies) {
+                    const z = zombies[zid];
+                    if (Math.abs(b.x - z.x) < 0.8 && Math.abs(b.z - z.z) < 0.8 && Math.abs(b.y - z.y) < 1.5) {
+                        z.hp -= b.dmg;
+                        if (z.hp <= 0) killZombie(zid, b.owner);
+                        bullets.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        function killZombie(zid, pid) {
+            delete zombies[zid];
+            if (zombieBodies[zid]) { world.removeBody(zombieBodies[zid]); delete zombieBodies[zid]; }
+            if (players[pid]) players[pid].money += 25;
+        }
+
+        function checkGameOver() {
+            let alive = false;
+            for (let id in players) if (!players[id].dead) alive = true;
+            if (!alive && Object.keys(players).length > 0) {
+                gameState = 'GAME_OVER';
+                broadcast({ type: 'GAME_OVER' }); // Sync to clients
+                setTimeout(() => {
+                    document.getElementById('game-over-screen').classList.remove('hidden');
+                    document.getElementById('hud-layer').style.display = 'none'; // Hide HUD
+                    document.exitPointerLock();
+
+                    if (isHost) document.getElementById('btn-retry').style.display = 'inline-block';
+                    else document.getElementById('btn-retry').style.display = 'none';
+
+                }, 500);
+                return true;
+            }
+            return false;
+        }
+
+        function broadcast(msg) {
+            for (let id in conns) conns[id].send(msg);
+        }
+
+        function hostStartGame() {
+            broadcast({ type: 'SHOP_OPEN' });
+            document.getElementById('main-menu').classList.add('hidden');
+            gameState = 'SHOP';
+            wave = 0;
+            zombiesToSpawn = 0;
+            for (let id in players) {
+                players[id].ready = false;
+                players[id].dead = false;
+                players[id].hp = players[id].maxHp;
+            }
+            if (!(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))) document.body.requestPointerLock();
+
+            // Host Overlay
+            document.getElementById('host-hud').style.display = 'block';
+            // Start Host Camera High
+            camera.position.set(0, 40, 0);
+            camPitch = -Math.PI / 2; // Look down initially
+        }
+
+        function toggleReady() {
+            if (!isHost) { conns[hostId].send({ type: 'RDY', r: !players[myId].ready }); players[myId].ready = !players[myId].ready; }
+            else { players[myId].ready = !players[myId].ready; checkAllReady(); }
+            document.getElementById('btn-ready').style.background = players[myId].ready ? '#0a0' : '#444';
+        }
+
+        function checkAllReady() {
+            let all = true;
+            for (let id in players) if (!players[id].dead && !players[id].ready) all = false;
+            if (all) {
+                document.getElementById('shop-menu').classList.add('hidden');
+                gameState = 'PLAYING';
+                wave++;
+                zombiesToSpawn = Math.floor(wave * wave * 2.5);
+
+                // Respawn all players
+                for (let id in players) {
+                    players[id].dead = false;
+                    players[id].hp = players[id].maxHp;
+                }
+
+                broadcast({ type: 'START_GAME' });
+            }
+        }
+
+        function hostRestartGame() {
+            // Cleanup
+            zombies = {};
+            zombieBodies = {};
+            // Re-init World bodies? No need, just clear them from map?
+            // Actually, best to just reset variables and broadcast SHOP_OPEN
+            bullets = [];
+            // Remove physical bodies of old zombies
+            // (We can't easily iterate world bodies to find zombies without the map, but we have zombieBodies list)
+            // Ideally we re-use hostStartGame logic
+            // Reset players
+            for (let id in players) {
+                players[id].hp = players[id].maxHp;
+                players[id].dead = false;
+                players[id].ready = false;
+                players[id].weapons[0].ammo = 0; // Reset ammo
+                players[id].money = 100; // Reset money
+            }
+            hostStartGame();
+            document.getElementById('game-over-screen').classList.add('hidden');
+        }
+
+        // --- MAP & THREEJS INIT HELPERS ---
+        function initThree() {
+            scene = new THREE.Scene(); scene.background = new THREE.Color(0x111111); scene.fog = new THREE.Fog(0x111111, 10, 80);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            const d = new THREE.DirectionalLight(0xffffff, 0.8); d.position.set(50, 100, 50); scene.add(d);
+            requestAnimationFrame(animate);
+        }
+        function initShopUI() {
+            const c = document.getElementById('shop-items-container'); c.innerHTML = '';
+            SHOP_ITEMS.forEach((it, i) => {
+                const b = document.createElement('button'); b.innerText = `${it.name} ($${it.cost})`;
+                b.style.width = "250px"; b.onclick = () => { if (isHost) { if (players[myId].money >= it.cost) { players[myId].money -= it.cost; it.action(players[myId]); } } else { conns[hostId].send({ type: 'BUY', idx: i }); } };
+                c.appendChild(b);
+            });
+        }
+        function initPhysics() {
+            world = new CANNON.World();
+            world.gravity.set(0, -25, 0);
+            world.broadphase = new CANNON.NaiveBroadphase();
+
+            // Friction Fix: Set default friction to 0 so characters don't stick to walls/ground
+            // We control movement via velocity directly.
+            world.defaultContactMaterial.friction = 0;
+
+            // Add floor with explicit shape in constructor
+            const floorShape = new CANNON.Plane();
+            const floorBody = new CANNON.Body({
+                mass: 0,
+                shape: floorShape
+            });
+            floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+            world.addBody(floorBody);
+        }
+        function generateMap() {
+            mapGrid = [];
+            for (let x = 0; x < GRID_SIZE; x++) {
+                let r = [];
+                for (let z = 0; z < GRID_SIZE; z++) {
+                    if (x === 0 || x === GRID_SIZE - 1 || z === 0 || z === GRID_SIZE - 1) r.push(1);
+                    else if (Math.random() < 0.15 && (Math.abs(x - GRID_SIZE / 2) > 3 || Math.abs(z - GRID_SIZE / 2) > 3)) r.push(1);
+                    else r.push(0);
+                }
+                mapGrid.push(r);
+            }
+        }
+        function rebuildMapPhysics() {
+            const s = new CANNON.Box(new CANNON.Vec3(CELL_SIZE / 2, 2, CELL_SIZE / 2));
+            for (let x = 0; x < GRID_SIZE; x++) for (let z = 0; z < GRID_SIZE; z++) if (mapGrid[x][z]) {
+                const b = new CANNON.Body({ mass: 0 }); b.addShape(s); b.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); world.addBody(b);
+            }
+        }
+        function rebuildMapMesh() {
+            const f = new THREE.Mesh(new THREE.PlaneGeometry(GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE), new THREE.MeshLambertMaterial({ color: 0x333333 })); f.rotation.x = -Math.PI / 2; scene.add(f);
+            const g = new THREE.BoxGeometry(CELL_SIZE, 4, CELL_SIZE); const m = new THREE.MeshLambertMaterial({ color: 0x554433 });
+            for (let x = 0; x < GRID_SIZE; x++) for (let z = 0; z < GRID_SIZE; z++) if (mapGrid[x][z]) {
+                const w = new THREE.Mesh(g, m); w.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); scene.add(w);
+            }
+        }
+        function getGridPos(x, z) { return { x: Math.floor((x + MAP_OFFSET) / CELL_SIZE), z: Math.floor((z + MAP_OFFSET) / CELL_SIZE) }; }
+        function resetToLobby() { window.location.reload(); }
+
+        // --- INPUT SETUP ---
+        function setupPCControls() {
+            document.addEventListener('keydown', e => {
+                if (e.key === 'w') input.y = 1; if (e.key === 's') input.y = -1; if (e.key === 'a') input.x = 1; if (e.key === 'd') input.x = -1;
+                if (e.code === 'Space') input.jump = true;
+                if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
+            });
+            document.addEventListener('keyup', e => {
+                if (e.key === 'w' || e.key === 's') input.y = 0; if (e.key === 'a' || e.key === 'd') input.x = 0; if (e.code === 'Space') input.jump = false;
+            });
+            document.addEventListener('mousemove', e => {
+                if (document.pointerLockElement === document.body) {
+                    camYaw -= e.movementX * 0.002; camPitch -= e.movementY * 0.002;
+                    camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
+                }
+            });
+            document.addEventListener('mousedown', () => { if (gameState === 'PLAYING') { if (document.pointerLockElement !== document.body) document.body.requestPointerLock(); else input.fire = true; } });
+            document.addEventListener('mouseup', () => input.fire = false);
+            window.addEventListener('wheel', e => {
+                if (e.deltaY > 0) input.slot = (input.slot + 1) % 4; else input.slot = (input.slot - 1 + 4) % 4;
+            });
+        }
+        function setupMobileControls() {
+            // (Simplified stick logic for brevity - assumes same CSS/HTML structure as original)
+            const handleStick = (id, cb) => {
+                const el = document.getElementById(id), nub = el.querySelector('.stick-nub');
+                let tid = null, o = { x: 0, y: 0 };
+                el.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; tid = t.identifier; const r = el.getBoundingClientRect(); o = { x: r.left + r.width / 2, y: r.top + r.height / 2 }; upd(t.clientX, t.clientY); });
+                el.addEventListener('touchmove', e => { e.preventDefault(); for (let i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === tid) upd(e.changedTouches[i].clientX, e.changedTouches[i].clientY); });
+                el.addEventListener('touchend', e => { e.preventDefault(); for (let i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === tid) { tid = null; nub.style.transform = `translate(-50%,-50%)`; cb(0, 0); } });
+                function upd(cx, cy) {
+                    let dx = cx - o.x, dy = cy - o.y, d = Math.sqrt(dx * dx + dy * dy), max = 35;
+                    if (d > max) { dx = (dx / d) * max; dy = (dy / d) * max; }
+                    nub.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+                    cb(dx / max, dy / max);
+                }
+            };
+            handleStick('stick-left', (x, y) => { input.x = x; input.y = -y; });
+            handleStick('stick-right', (x, y) => { camYaw -= x * 0.05; camPitch -= y * 0.05; camPitch = Math.max(-1.5, Math.min(1.5, camPitch)); });
+            const bf = document.getElementById('btn-fire'); bf.addEventListener('touchstart', e => { e.preventDefault(); input.fire = true; bf.style.background = "rgba(255,0,0,0.5)" }); bf.addEventListener('touchend', e => { e.preventDefault(); input.fire = false; bf.style.background = "rgba(255,0,0,0.2)" });
+            const bj = document.getElementById('btn-jump'); bj.addEventListener('touchstart', e => { e.preventDefault(); input.jump = true; bj.style.background = "rgba(0,0,255,0.5)" }); bj.addEventListener('touchend', e => { e.preventDefault(); input.jump = false; bj.style.background = "rgba(255,0,0,0.2)" });
         }
 
         init();
-
     </script>
 </body>
+
 </html>
