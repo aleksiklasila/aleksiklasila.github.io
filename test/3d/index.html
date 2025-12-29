@@ -402,9 +402,9 @@
         const GRID_SIZE = 10;
         const CELL_SIZE = 5;
         const MAP_OFFSET = (GRID_SIZE * CELL_SIZE) / 2;
-        const PLAYER_SPEED = 15.0;
-        const ZOMBIE_SPEED = 8.0;
-        const JUMP_FORCE = 12.0;
+        const PLAYER_SPEED = 8.0;
+        const ZOMBIE_SPEED = 6.0;
+        const JUMP_FORCE = 8.0;
 
         // ==========================================
         // 2. STATE & NETWORKING VARS
@@ -785,11 +785,11 @@
                 pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.money]);
             }
 
-            // Z: [id, x, z, yaw] (y is assumed floor or derivable)
+            // Z: [id, x, y, z, yaw] (now includes Y for vertical navigation)
             const zData = [];
             for (let zid in zombies) {
                 const z = zombies[zid];
-                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2))]);
+                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.y.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2))]);
             }
 
             // B: [x, y, z] (Bullets are simple visual particles mostly)
@@ -1031,23 +1031,24 @@
                     }
                 });
 
-                // Interpolate Zombies
+                // Interpolate Zombies (now with Y coordinate)
                 const currentZombieIds = [];
                 next[2].forEach(nz => {
                     currentZombieIds.push(nz[0]);
                     const pz = prev[2].find(z => z[0] === nz[0]);
                     if (!zombies[nz[0]]) zombies[nz[0]] = { id: nz[0] };
                     if (pz) {
+                        // nz format: [id, x, y, z, yaw]
                         zombies[nz[0]].x = lerp(pz[1], nz[1], ratio);
-                        zombies[nz[0]].z = lerp(pz[2], nz[2], ratio);
-                        zombies[nz[0]].y = 1; // Constant
-                        zombies[nz[0]].yaw = nz[3];
+                        zombies[nz[0]].y = lerp(pz[2], nz[2], ratio);
+                        zombies[nz[0]].z = lerp(pz[3], nz[3], ratio);
+                        zombies[nz[0]].yaw = nz[4];
                     } else {
                         // New zombie, snap
                         zombies[nz[0]].x = nz[1];
-                        zombies[nz[0]].z = nz[2];
-                        zombies[nz[0]].y = 1;
-                        zombies[nz[0]].yaw = nz[3];
+                        zombies[nz[0]].y = nz[2];
+                        zombies[nz[0]].z = nz[3];
+                        zombies[nz[0]].yaw = nz[4];
                     }
                 });
 
@@ -1359,13 +1360,27 @@
 
                 if (spawnNode) {
                     const id = 'z_' + Date.now() + Math.random();
-                    zombies[id] = { id, x: spawnNode.x, y: spawnNode.y + 1, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
+
+                    // Raycast from above to find actual surface height
+                    let spawnY = spawnNode.y + 1;
+                    if (mapMesh) {
+                        const raycaster = new THREE.Raycaster(
+                            new THREE.Vector3(spawnNode.x, spawnNode.y + 50, spawnNode.z),
+                            new THREE.Vector3(0, -1, 0)
+                        );
+                        const hits = raycaster.intersectObject(mapMesh, true);
+                        if (hits.length > 0) {
+                            spawnY = hits[0].point.y + 1.5; // Spawn above the surface
+                        }
+                    }
+
+                    zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
 
                     const zShape = new CANNON.Sphere(0.5);
                     const body = new CANNON.Body({
                         mass: 40,
                         fixedRotation: true,
-                        position: new CANNON.Vec3(spawnNode.x, spawnNode.y + 2, spawnNode.z),
+                        position: new CANNON.Vec3(spawnNode.x, spawnY + 0.5, spawnNode.z),
                         shape: zShape,
                         linearDamping: 0.5
                     });
@@ -1423,28 +1438,42 @@
                     }
 
                     let targetX = target.x;
+                    let targetY = z.y; // Default to current height
                     let targetZ = target.z;
 
                     // Follow path if exists
                     if (z.path && z.path.length > 0) {
                         const wp = z.path[0];
-                        const distToWp = Math.sqrt((wp.x - z.x) ** 2 + (wp.z - z.z) ** 2);
+                        const distToWp = Math.sqrt((wp.x - z.x) ** 2 + (wp.y - z.y) ** 2 + (wp.z - z.z) ** 2);
                         if (distToWp < 1.5) {
                             z.path.shift(); // Next waypoint
                         }
                         if (z.path.length > 0) {
                             targetX = z.path[0].x;
+                            targetY = z.path[0].y;
                             targetZ = z.path[0].z;
                         }
                     }
 
                     const dx = targetX - z.x;
+                    const dy = targetY - z.y;
                     const dz = targetZ - z.z;
-                    const dist = Math.sqrt(dx * dx + dz * dz);
+                    const dist2D = Math.sqrt(dx * dx + dz * dz);
+                    const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-                    if (dist > 0.1) {
-                        body.velocity.x = (dx / dist) * ZOMBIE_SPEED;
-                        body.velocity.z = (dz / dist) * ZOMBIE_SPEED;
+                    if (dist3D > 0.1) {
+                        // Normalize direction using 3D distance for proper speed
+                        const speed = ZOMBIE_SPEED;
+                        body.velocity.x = (dx / dist3D) * speed;
+                        body.velocity.z = (dz / dist3D) * speed;
+
+                        // Apply vertical velocity for climbing/descending
+                        // Use a stronger multiplier for climbing to overcome gravity
+                        if (Math.abs(dy) > 0.3) {
+                            const climbSpeed = dy > 0 ? speed * 1.5 : speed * 0.5;
+                            body.velocity.y = (dy / dist3D) * climbSpeed;
+                        }
+
                         z.yaw = Math.atan2(dx, dz);
                     }
 
@@ -1914,31 +1943,34 @@
             }
             console.log("Created " + navNodes.length + " Nav Nodes. Linking...");
 
-            // 2. Link Neighbors
-            // Optimization: Grid lookup?
-            // Brute force distance check for now (lazy but easy for <1000 nodes)
-            // Or better: Logic based on step
+            // 2. Link Neighbors (3D distance with height limit)
+            const MAX_HEIGHT_DIFF = 3.0; // Max vertical distance for a connection
+            const MAX_SLOPE = 1.5; // Max height per horizontal unit (prevents sheer cliffs)
+
             for (let i = 0; i < navNodes.length; i++) {
                 const n1 = navNodes[i];
                 for (let j = i + 1; j < navNodes.length; j++) {
                     const n2 = navNodes[j];
-                    const dist = Math.sqrt((n1.x - n2.x) ** 2 + (n1.z - n2.z) ** 2); // 2D dist
-                    // Diagonal neigh is sqrt(2*step^2) approx 1.41 * step
-                    if (dist < step * 1.5) {
-                        // Potential neighbor
+                    const dx = n1.x - n2.x;
+                    const dy = n1.y - n2.y;
+                    const dz = n1.z - n2.z;
+                    const dist2D = Math.sqrt(dx * dx + dz * dz);
+                    const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    const heightDiff = Math.abs(dy);
+
+                    // Check 2D proximity first (diagonal is ~1.41 * step)
+                    if (dist2D < step * 1.5) {
+                        // Check height constraints
+                        if (heightDiff > MAX_HEIGHT_DIFF) continue;
+                        if (dist2D > 0.1 && heightDiff / dist2D > MAX_SLOPE) continue;
+
                         // Check Line of Sight (Raycast between them to ensure no wall)
-                        // Lift ray slightly
                         const start = new THREE.Vector3(n1.x, n1.y + 1, n1.z);
                         const end = new THREE.Vector3(n2.x, n2.y + 1, n2.z);
                         const dir = new THREE.Vector3().subVectors(end, start).normalize();
                         const len = start.distanceTo(end);
 
                         raycaster.set(start, dir);
-                        // Intersect with map
-                        // Note: If mapMesh includes floor, it might hit floor?
-                        // We strictly want to avoid Walls.
-                        // Ideally mapMesh is everything.
-                        // Hack: If hit distance < len - 0.1, it's blocked.
                         const hits = raycaster.intersectObject(mapMesh, true);
                         let blocked = false;
                         for (let h of hits) {
@@ -2036,7 +2068,11 @@
                     const neighbor = navNodes[nid];
                     if (neighbor.visited) continue;
 
-                    const tempG = current.g + Math.sqrt((neighbor.x - current.x) ** 2 + (neighbor.z - current.z) ** 2);
+                    const tempG = current.g + Math.sqrt(
+                        (neighbor.x - current.x) ** 2 +
+                        (neighbor.y - current.y) ** 2 +
+                        (neighbor.z - current.z) ** 2
+                    );
 
                     let newPath = false;
                     if (openSet.includes(neighbor)) {
@@ -2051,7 +2087,11 @@
                     }
 
                     if (newPath) {
-                        neighbor.h = Math.sqrt((neighbor.x - end.x) ** 2 + (neighbor.z - end.z) ** 2);
+                        neighbor.h = Math.sqrt(
+                            (neighbor.x - end.x) ** 2 +
+                            (neighbor.y - end.y) ** 2 +
+                            (neighbor.z - end.z) ** 2
+                        );
                         neighbor.f = neighbor.g + neighbor.h;
                         neighbor.parent = current;
                     }
