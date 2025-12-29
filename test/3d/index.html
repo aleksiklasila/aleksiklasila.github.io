@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zombie Tactics: Fixed</title>
+    <title>Zombie Tactics: Stable</title>
     <style>
         /* --- CORE --- */
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; touch-action: none; user-select: none; -webkit-user-select: none; }
+        body { margin: 0; overflow: hidden; background: #111; font-family: 'Courier New', monospace; touch-action: none; user-select: none; }
         canvas { display: block; width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
 
         /* --- UI LAYERS --- */
@@ -14,18 +14,18 @@
         .hidden { display: none !important; }
         
         h1 { color: #d00; font-size: 3rem; margin-bottom: 10px; text-shadow: 2px 2px 0 #000; }
-        input, button { padding: 15px; margin: 5px; background: #222; border: 2px solid #555; color: white; font-size: 1.2rem; font-family: inherit; }
-        button:hover { border-color: #d00; color: #d00; cursor: pointer; }
+        input, button { padding: 15px; margin: 5px; background: #222; border: 2px solid #555; color: white; font-size: 1.2rem; font-family: inherit; cursor: pointer; }
+        button:hover { border-color: #d00; color: #d00; }
         button:active { background: #500; }
+        input { cursor: text; }
 
         /* --- HUD --- */
         #hud-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
         #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: #0f0; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 4px #0f0; }
         
-        .hud-text { position: absolute; text-shadow: 2px 2px 0 #000; font-weight: bold; }
-        #hud-top-right { top: 20px; right: 20px; text-align: right; font-size: 1.5rem; color: #fff; }
-        #hud-bottom-right { bottom: 20px; right: 20px; text-align: right; font-size: 1.2rem; color: #ff0; }
+        #hud-top-right { position: absolute; top: 20px; right: 20px; text-align: right; font-size: 1.5rem; color: #fff; text-shadow: 2px 2px 0 #000; font-weight: bold; }
+        #hud-bottom-right { position: absolute; bottom: 20px; right: 20px; text-align: right; font-size: 1.2rem; color: #ff0; text-shadow: 2px 2px 0 #000; font-weight: bold; }
         
         /* --- MOBILE CONTROLS --- */
         #mobile-controls { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50; pointer-events: none; display: none; }
@@ -33,14 +33,12 @@
         .stick-zone { position: absolute; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
         .stick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 255, 255, 0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         
-        /* Positioning Controls - Moved up to avoid overlap */
         #stick-left { bottom: 30px; left: 30px; }
         #stick-right { bottom: 30px; right: 30px; }
         
         .action-btn { position: absolute; width: 80px; height: 80px; background: rgba(255, 0, 0, 0.2); border: 3px solid #f00; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; pointer-events: auto; }
         .action-btn:active { background: rgba(255, 0, 0, 0.5); }
         
-        /* Buttons moved higher to clear the right stick */
         #btn-fire { bottom: 180px; right: 30px; width: 90px; height: 90px; } 
         #btn-shop { bottom: 180px; left: 30px; width: 60px; height: 60px; border-color: #ff0; font-size: 12px; }
 
@@ -54,7 +52,7 @@
 
     <div id="main-menu" class="overlay">
         <h1>ZOMBIE TACTICS</h1>
-        <input type="text" id="player-name" value="Survivor">
+        <input type="text" id="player-name" value="Survivor" placeholder="Enter Name">
         <div id="host-panel">
             <button onclick="copyInvite()">Copy Invite Link</button>
             <div id="lobby-status" style="margin:15px; color:#aaa">Waiting for players...</div>
@@ -67,7 +65,7 @@
 
     <div id="shop-menu" class="overlay hidden">
         <h1 style="color:#0f0">TRADER</h1>
-        <div id="shop-list"></div>
+        <div style="color:#aaa; margin-bottom:20px;">Safe Zone - Prepare for Next Wave</div>
         <button onclick="toggleReady()" id="ready-btn" style="margin-top:20px; width:200px; background:#444;">READY</button>
     </div>
 
@@ -82,8 +80,6 @@
             <div style="color:#ff0">AMMO: <span id="ammo-disp">∞</span></div>
             <div style="color:#0f0">$<span id="money-disp">0</span></div>
         </div>
-        <div id="hud-bottom-left" style="position:absolute; bottom:20px; left:20px;">
-            </div>
     </div>
 
     <div id="mobile-controls">
@@ -113,7 +109,7 @@
         let conns = {};
         
         // Game State
-        let gameState = 'LOBBY';
+        let gameState = 'LOBBY'; // LOBBY, PLAYING, SHOP
         let players = {};
         let zombies = {};
         let bullets = [];
@@ -140,7 +136,7 @@
                 for(let z=0; z<GRID_SIZE; z++) {
                     // Borders
                     if (x===0 || x===GRID_SIZE-1 || z===0 || z===GRID_SIZE-1) row.push(1);
-                    // Random Walls (avoid center 6x6 area for spawn)
+                    // Random Walls (avoid center)
                     else if (Math.random() < 0.15 && (Math.abs(x - GRID_SIZE/2) > 3 || Math.abs(z - GRID_SIZE/2) > 3)) row.push(1);
                     else row.push(0);
                 }
@@ -160,16 +156,15 @@
             };
         }
 
-        // --- A* PATHFINDING ---
+        // --- A* PATHFINDING (FIXED) ---
         function findPath(sx, sz, ex, ez) {
-            // Very simple bounded A* let start = {x:sx, z:sz, p:null, g:0, h:0};
+            let start = {x:sx, z:sz, p:null, g:0, h:0}; // FIXED: Variable defined correctly
             let open = [start];
             let closed = new Set();
             let count = 0;
 
-            while(open.length > 0 && count < 100) { // Hard limit to prevent lag
+            while(open.length > 0 && count < 100) { 
                 count++;
-                // Sort by F cost (low to high)
                 open.sort((a,b) => (a.g+a.h) - (b.g+b.h));
                 let curr = open.shift();
                 
@@ -183,7 +178,6 @@
                 if(closed.has(key)) continue;
                 closed.add(key);
 
-                // Neighbors
                 const dirs = [[0,1], [0,-1], [1,0], [-1,0]];
                 for(let d of dirs) {
                     let nx = curr.x + d[0];
@@ -195,7 +189,7 @@
                     }
                 }
             }
-            return null; // No path found
+            return null; 
         }
 
         // --- NETWORK ---
@@ -215,7 +209,7 @@
                     generateMap();
                     players[myId] = createPlayer(myId, document.getElementById('player-name').value);
                     updateLobbyUI();
-                    initThree(); // Start renderer immediately for host
+                    initThree(); // Start renderer for host (sky view)
                 }
             });
 
@@ -258,6 +252,10 @@
             else if(data.type === 'START_GAME') {
                 document.getElementById('main-menu').classList.add('hidden');
                 gameState = 'PLAYING';
+                if(!isMobile) {
+                    // Client requests pointer lock when game starts
+                    document.body.requestPointerLock(); 
+                }
             }
             else if(data.type === 'INPUT') {
                 if(isHost && players[sender]) {
@@ -272,6 +270,7 @@
             else if(data.type === 'SHOP_OPEN') {
                 gameState = 'SHOP';
                 document.getElementById('shop-menu').classList.remove('hidden');
+                if(!isMobile) document.exitPointerLock();
                 document.getElementById('mobile-controls').style.display = 'none';
             }
             else if(data.type === 'READY_STATE') {
@@ -289,7 +288,7 @@
         function createPlayer(id, name) {
             return {
                 id, name, 
-                x: 0, z: 0, // Center of map
+                x: 0, z: 0,
                 hp: 100, money: 0,
                 yaw: 0, dead: false, ready: false,
                 input: {x:0, y:0}
@@ -298,14 +297,13 @@
 
         // --- THREE.JS ENGINE ---
         function initThree() {
-            if(scene) return; // Prevent double init
+            if(scene) return; 
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x111111); // Dark grey background
+            scene.background = new THREE.Color(0x111111);
             scene.fog = new THREE.Fog(0x111111, 10, 80);
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-            // Default camera high up so we don't see black screen if player not loaded
             camera.position.set(0, 40, 0); 
             camera.lookAt(0, 0, 0);
 
@@ -313,7 +311,6 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Lighting (Bright enough to see!)
             const amb = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(amb);
             const dir = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -329,14 +326,12 @@
         }
 
         function rebuildMapMesh() {
-            // Floor
             const fGeo = new THREE.PlaneGeometry(GRID_SIZE*CELL_SIZE, GRID_SIZE*CELL_SIZE);
             const fMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
             const floor = new THREE.Mesh(fGeo, fMat);
             floor.rotation.x = -Math.PI/2;
             scene.add(floor);
 
-            // Walls
             if(mapGrid.length === 0) return;
             const wGeo = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
             const wMat = new THREE.MeshLambertMaterial({ color: 0x554433 });
@@ -362,13 +357,15 @@
             broadcast({ type: 'START_GAME' });
             document.getElementById('main-menu').classList.add('hidden');
             gameState = 'PLAYING';
+            // Start the wave logic
             startWave(1);
+            // On PC, host needs to lock cursor now
+            if(!isMobile) document.body.requestPointerLock();
         }
 
         function startWave(n) {
             wave = n;
-            zombiesToSpawn = 4 + Math.floor(wave * 2.5); // Increase count
-            // Reset player ready status
+            zombiesToSpawn = 4 + Math.floor(wave * 2.5);
             for(let id in players) players[id].ready = false;
         }
 
@@ -378,7 +375,6 @@
             // Spawn Zombies
             if(zombiesToSpawn > 0 && Math.random() < 0.03) {
                 let gx, gz;
-                // Find empty spot far from center
                 let tries = 0;
                 do {
                     gx = Math.floor(Math.random() * GRID_SIZE);
@@ -397,7 +393,7 @@
                 zombiesToSpawn--;
             }
 
-            // End Wave / Shop
+            // End Wave
             if(zombiesToSpawn === 0 && Object.keys(zombies).length === 0) {
                 gameState = 'SHOP';
                 broadcast({ type: 'SHOP_OPEN' });
@@ -413,14 +409,12 @@
                 let target = getClosestPlayer(z.x, z.z);
                 
                 if(target) {
-                    // Pathfinding every ~0.5s or if empty
                     if(Math.random() < 0.05 || z.path.length === 0) {
                         let gStart = getGridPos(z.x, z.z);
                         let gEnd = getGridPos(target.x, target.z);
                         z.path = findPath(gStart.x, gStart.z, gEnd.x, gEnd.z);
                     }
 
-                    // Move
                     let mx = 0, mz = 0;
                     if(z.path && z.path.length > 0) {
                         let next = z.path[0];
@@ -430,23 +424,18 @@
                         let dz = wz - z.z;
                         let dist = Math.sqrt(dx*dx + dz*dz);
                         if(dist < 0.5) z.path.shift();
-                        else {
-                            mx = dx/dist; mz = dz/dist;
-                        }
+                        else { mx = dx/dist; mz = dz/dist; }
                     } else {
-                        // Line of sight fallback
                         let dx = target.x - z.x;
                         let dz = target.z - z.z;
                         let dist = Math.sqrt(dx*dx + dz*dz);
                         mx = dx/dist; mz = dz/dist;
                     }
 
-                    // Apply move
                     z.x += mx * ZOMBIE_SPEED * dt;
                     z.z += mz * ZOMBIE_SPEED * dt;
                     z.yaw = Math.atan2(mx, mz);
 
-                    // Attack
                     let distToPlayer = Math.sqrt((target.x-z.x)**2 + (target.z-z.z)**2);
                     if(distToPlayer < 1.5) {
                         target.hp -= 20 * dt;
@@ -463,15 +452,13 @@
                 b.life -= dt;
                 
                 let hit = false;
-                // Wall Collision
                 let g = getGridPos(b.x, b.z);
                 if(isWall(g.x, g.z)) hit = true;
 
-                // Zombie Collision
                 for(let zid in zombies) {
                     let z = zombies[zid];
                     let d = Math.sqrt((b.x-z.x)**2 + (b.z-z.z)**2);
-                    if(d < 1.5) { // Hit radius
+                    if(d < 1.5) {
                         z.hp -= 35;
                         if(z.hp <= 0) {
                             delete zombies[zid];
@@ -481,7 +468,6 @@
                         break;
                     }
                 }
-
                 if(hit || b.life <= 0) bullets.splice(i, 1);
             }
 
@@ -490,46 +476,25 @@
                 let p = players[pid];
                 if(p.dead) continue;
                 
-                // Movement Logic
                 let speed = PLAYER_SPEED * dt;
-                let moveX = 0; 
-                let moveZ = 0;
-                
-                // Standard FPS controls:
-                // Input Y+ = Forward (-Z in 3D), Input Y- = Back (+Z)
-                // Input X+ = Right (+X), Input X- = Left (-X)
-                
                 let sin = Math.sin(p.yaw);
                 let cos = Math.cos(p.yaw);
-
-                // Forward vector (0,0,-1) rotated by Yaw
-                // Right vector (1,0,0) rotated by Yaw
                 
-                // Forward/Back
-                moveX -= sin * p.input.y * speed; 
-                moveZ -= cos * p.input.y * speed;
-                
-                // Strafe Left/Right
-                moveX += cos * p.input.x * speed;
-                moveZ -= sin * p.input.x * speed;
+                let moveX = (cos * p.input.x - sin * p.input.y) * speed;
+                let moveZ = (-sin * p.input.x - cos * p.input.y) * speed;
 
-                // Collision & Apply
                 if(!checkCollision(p.x + moveX, p.z)) p.x += moveX;
                 if(!checkCollision(p.x, p.z + moveZ)) p.z += moveZ;
             }
 
-            // Sync
             let state = { players, zombies, bullets, wave };
             broadcast({ type: 'WORLD_STATE', state });
             syncWorld({ state });
         }
 
         function checkCollision(x, z) {
-            let r = 0.6; // Player radius
-            let points = [
-                {x:x+r, z:z+r}, {x:x-r, z:z-r},
-                {x:x+r, z:z-r}, {x:x-r, z:z+r}
-            ];
+            let r = 0.6;
+            let points = [{x:x+r, z:z+r}, {x:x-r, z:z-r}, {x:x+r, z:z-r}, {x:x-r, z:z+r}];
             for(let p of points) {
                 let g = getGridPos(p.x, p.z);
                 if(isWall(g.x, g.z)) return true;
@@ -542,7 +507,7 @@
             if(!p || p.dead) return;
             bullets.push({
                 x: p.x, z: p.z,
-                vx: -Math.sin(p.yaw) * BULLET_SPEED, // Shoot forward
+                vx: -Math.sin(p.yaw) * BULLET_SPEED,
                 vz: -Math.cos(p.yaw) * BULLET_SPEED,
                 life: 1.5,
                 owner: pid
@@ -575,11 +540,10 @@
         }
 
         function clientUpdate() {
-            // Send Inputs
             if(myId && hostId && conns[hostId]) {
                 conns[hostId].send({
                     type: 'INPUT',
-                    input: { x: input.x, y: input.y }, // Stick inputs
+                    input: { x: input.x, y: input.y },
                     yaw: camYaw,
                     fire: input.fire
                 });
@@ -590,10 +554,9 @@
         function syncWorld(data) {
             players = data.state.players;
             zombies = data.state.zombies;
-            bullets = data.state.bullets; // Copy full bullet array
+            bullets = data.state.bullets; 
             wave = data.state.wave;
             
-            // HUD
             if(players[myId]) {
                 document.getElementById('hp-disp').innerText = Math.floor(players[myId].hp);
                 document.getElementById('money-disp').innerText = players[myId].money;
@@ -611,16 +574,14 @@
         const bMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
 
         function renderScene() {
-            // Camera follow
             if(players[myId] && !players[myId].dead) {
                 let p = players[myId];
                 camera.position.set(p.x, 2, p.z);
-                camera.rotation.set(camPitch, camYaw + Math.PI, 0); // Correct rotation
+                camera.rotation.set(camPitch, camYaw + Math.PI, 0); 
             }
 
-            // Players
             for(let id in players) {
-                if(id === myId) continue; // Don't draw self
+                if(id === myId) continue; 
                 let p = players[id];
                 if(p.dead) {
                     if(meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
@@ -631,7 +592,6 @@
                 meshes[id].rotation.y = p.yaw;
             }
 
-            // Zombies
             for(let id in zombies) {
                 let z = zombies[id];
                 if(!meshes[id]) { meshes[id] = new THREE.Mesh(zGeo, zMat); scene.add(meshes[id]); }
@@ -639,13 +599,11 @@
                 meshes[id].rotation.y = z.yaw;
             }
 
-            // Cleanups
             for(let id in meshes) {
                 if(id.startsWith('z_') && !zombies[id]) { scene.remove(meshes[id]); delete meshes[id]; }
                 if(!id.startsWith('z_') && !players[id]) { scene.remove(meshes[id]); delete meshes[id]; }
             }
 
-            // Bullets (Recreate every frame for simplicity)
             bulletMeshes.forEach(m => scene.remove(m));
             bulletMeshes = [];
             bullets.forEach(b => {
@@ -663,7 +621,6 @@
         function setupMobileControls() {
             document.getElementById('mobile-controls').style.display = 'block';
             
-            // Joystick Logic
             const bindStick = (eid, callback) => {
                 const el = document.getElementById(eid);
                 const nub = el.querySelector('.stick-nub');
@@ -679,7 +636,6 @@
                     let dist = Math.sqrt(dx*dx + dy*dy);
                     let max = 40;
                     if(dist > max) { dx = (dx/dist)*max; dy = (dy/dist)*max; }
-                    
                     nub.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
                     callback(dx/max, dy/max);
                 }, {passive:false});
@@ -691,23 +647,14 @@
                 });
             };
 
-            // LEFT STICK (Move)
-            bindStick('stick-left', (x, y) => {
-                input.x = x; 
-                input.y = -y; // Inverted: Drag Up (neg Y) -> Forward (pos Input)
-            });
-
-            // RIGHT STICK (Look)
-            bindStick('stick-right', (x, y) => {
-                camYaw -= x * 0.05; // Rotate Left/Right
-                camPitch -= y * 0.05; // Look Up/Down
+            bindStick('stick-left', (x, y) => { input.x = x; input.y = -y; });
+            bindStick('stick-right', (x, y) => { 
+                camYaw -= x * 0.05; 
+                camPitch -= y * 0.05; 
                 camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
             });
-
-            // FIRE
             document.getElementById('btn-fire').addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                input.fire = true;
+                e.preventDefault(); input.fire = true;
             });
         }
 
@@ -722,10 +669,19 @@
                 if(e.code === 'KeyW' || e.code === 'KeyS') input.y = 0;
                 if(e.code === 'KeyA' || e.code === 'KeyD') input.x = 0;
             });
-            document.addEventListener('mousedown', () => {
-                if(document.pointerLockElement !== document.body) document.body.requestPointerLock();
-                else input.fire = true;
+            
+            // Mouse Capture Logic
+            document.addEventListener('mousedown', (e) => {
+                // If in lobby/menu, do not lock cursor unless we are starting game
+                if(gameState !== 'PLAYING') return;
+
+                if(document.pointerLockElement !== document.body) {
+                    document.body.requestPointerLock();
+                } else {
+                    input.fire = true;
+                }
             });
+            
             document.addEventListener('mousemove', e => {
                 if(document.pointerLockElement === document.body) {
                     camYaw -= e.movementX * 0.002;
@@ -750,7 +706,6 @@
 
         function openShopMobile() {
             if(gameState === 'SHOP') return;
-            // Only functional if game state is shop, handled by host logic
         }
         
         function toggleReady() {
