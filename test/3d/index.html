@@ -285,33 +285,39 @@
     <div id="net-stats">PING: <span id="ping-disp">0</span>ms</div>
 
     <div id="main-menu" class="overlay">
-        <h1>ZOMBIE TACTICSish <span style="font-size:0.5em; vertical-align:middle; color: #fff;">(60Hz)</span></h1>
-        <input type="text" id="player-name" value="Survivor" placeholder="Enter Name">
+        <h1>ZOMBIE TACTICS</h1>
+
+        <!-- HOST PANEL -->
         <div id="host-panel">
-            <button id="btn-copy">Copy Invite Link</button>
-            <input type="text" id="map-url" placeholder="Map URL (Optional)" style="width: 200px; font-size: 0.8rem;">
-            <div style="font-size: 0.7rem; color: #888; margin-top: 2px;">
-                <label><input type="checkbox" id="use-proxy" checked> Use Proxy (Fix CORS)</label>
+            <div style="margin-bottom: 15px;">
+                <label
+                    style="cursor:pointer; padding:15px 30px; background:#333; border:2px solid #0a0; color:#0a0; font-size:1rem;">
+                    📁 SELECT MAP (.glb)
+                    <input type="file" id="map-file" accept=".glb,.gltf" style="display:none;">
+                </label>
             </div>
-            <div style="margin-top:5px; border-top:1px solid #444; padding-top:5px;">
-                <div style="font-size:0.7rem; color:#aaa; margin-bottom:2px;">OR Load Local File (.glb):</div>
-                <input type="file" id="map-file" accept=".glb,.gltf" style="width: 200px; font-size: 0.7rem;">
-            </div>
-            <button id="btn-update-map" style="font-size: 0.8rem; padding: 10px; margin-top: 5px;">Load Map</button>
+            <div id="map-status" style="color:#888; font-size:0.8rem; margin-bottom:15px;">No map loaded</div>
+            <button id="btn-copy" style="background:#333; width:200px; margin-bottom:10px;">📋 Copy Invite Link</button>
+            <div id="lobby-status" style="margin:15px; color:#aaa;">Waiting for players...</div>
+            <button id="btn-start" style="background:#0a0; width:200px; font-size:1.5rem;">START GAME</button>
         </div>
-        <div id="lobby-status" style="margin:15px; color:#aaa">Connecting to Server...</div>
-        <button id="btn-start" style="background:#0a0; width: 200px;">START GAME</button>
-    </div>
-    <div id="client-panel" class="hidden">
-        <p>Connecting to Host...</p>
-    </div>
+
+        <!-- CLIENT PANEL -->
+        <div id="client-panel" class="hidden">
+            <input type="text" id="player-name" value="Survivor" placeholder="Your Name" style="margin-bottom:15px;">
+            <div id="client-status" style="margin:10px 0;">
+                <div>Server: <span id="status-server" style="color:#888;">Connecting...</span></div>
+                <div>Map: <span id="status-map" style="color:#888;">Waiting...</span></div>
+            </div>
+            <div id="lobby-status-client" style="margin:15px; color:#aaa;"></div>
+        </div>
     </div>
 
     <div id="shop-menu" class="overlay hidden">
         <h1 style="color:#0f0">TRADER</h1>
         <div style="color:#aaa; margin-bottom:20px;">Safe Zone - Prepare for Next Wave</div>
         <div id="shop-items-container"></div>
-        <button id="btn-ready" style="margin-top:20px; width:200px; background:#444;">READY</button>
+        <button id="btn-shop-ready" style="margin-top:20px; width:200px; background:#444;">READY</button>
     </div>
 
     <div id="game-over-screen" class="overlay hidden">
@@ -448,6 +454,43 @@
         let navNodes = [];
         let navDebugMesh = null;
 
+        // Chunked Map Transfer
+        const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+        let pendingMapChunks = {}; // For client: { expected, received: [], totalSize }
+
+        function sendMapChunked(conn, dataUrl) {
+            const totalSize = dataUrl.length;
+            const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
+            console.log(`Sending map in ${totalChunks} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
+
+            // Send start message
+            conn.send({ type: 'MAP_START', totalChunks, totalSize });
+
+            // Send chunks with small delay to avoid overwhelming
+            let chunkIndex = 0;
+            const sendNext = () => {
+                if (chunkIndex >= totalChunks) return;
+                const start = chunkIndex * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, totalSize);
+                const chunk = dataUrl.substring(start, end);
+                conn.send({ type: 'MAP_CHUNK', index: chunkIndex, data: chunk });
+                chunkIndex++;
+                if (chunkIndex < totalChunks) {
+                    setTimeout(sendNext, 50); // 50ms delay between chunks
+                } else {
+                    conn.send({ type: 'MAP_END' });
+                }
+            };
+            sendNext();
+        }
+
+        function broadcastMapChunked() {
+            if (!currentMapDataUrl) return;
+            for (let peerId in conns) {
+                sendMapChunked(conns[peerId], currentMapDataUrl);
+            }
+        }
+
         // ==========================================
         // 3. INITIALIZATION
         // ==========================================
@@ -467,14 +510,28 @@
         }
 
         function init() {
-            document.getElementById('btn-copy').onclick = copyInvite;
-            document.getElementById('btn-start').onclick = hostStartGame;
-            document.getElementById('btn-ready').onclick = toggleReady;
-            document.getElementById('btn-shop').onclick = () => { /* mobile shop */ };
-            document.getElementById('btn-return-lobby').onclick = resetToLobby;
-            document.getElementById('btn-retry').onclick = hostRestartGame;
+            // Host buttons
+            const startBtn = document.getElementById('btn-start');
+            if (startBtn) startBtn.onclick = hostStartGame;
 
-            document.getElementById('btn-update-map').onclick = loadMapFromInput;
+            const copyBtn = document.getElementById('btn-copy');
+            if (copyBtn) copyBtn.onclick = copyInvite;
+
+            // File input auto-load
+            const fileInput = document.getElementById('map-file');
+            if (fileInput) fileInput.onchange = loadMapFromInput;
+
+            // Client ready button (for shop)
+            const readyBtn = document.getElementById('btn-shop-ready');
+            if (readyBtn) readyBtn.onclick = toggleReady;
+
+            // Other buttons
+            const shopBtn = document.getElementById('btn-shop');
+            if (shopBtn) shopBtn.onclick = () => { /* mobile shop */ };
+            const returnBtn = document.getElementById('btn-return-lobby');
+            if (returnBtn) returnBtn.onclick = resetToLobby;
+            const retryBtn = document.getElementById('btn-retry');
+            if (retryBtn) retryBtn.onclick = hostRestartGame;
 
             initShopUI();
 
@@ -516,77 +573,55 @@
         }
 
         function loadMapFromInput() {
-            let url = document.getElementById('map-url').value.trim();
             const fileInput = document.getElementById('map-file');
-
-            // Priority: File Input > URL Input
+            const statusEl = document.getElementById('map-status');
 
             clearMap();
 
-            if (fileInput.files.length > 0) {
-                // LOCAL FILE MODE
+            if (fileInput && fileInput.files.length > 0) {
                 const file = fileInput.files[0];
                 if (file.name.endsWith('.zip')) {
-                    alert("ZIP files are not supported directly. Please unzip and upload the .glb or .gltf file.");
+                    statusEl.innerText = "❌ ZIP not supported";
+                    statusEl.style.color = "#f44";
                     return;
                 }
 
-                // Read as Data URL for P2P Transfer
+                const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                statusEl.innerText = "⏳ Reading " + file.name + " (" + fileSizeMB + " MB)...";
+                statusEl.style.color = "#ff0";
+
                 const reader = new FileReader();
+                reader.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const pct = Math.round((e.loaded / e.total) * 100);
+                        statusEl.innerText = "⏳ Reading " + pct + "% (" + (e.loaded / 1024 / 1024).toFixed(1) + " MB)";
+                    }
+                };
                 reader.onload = (e) => {
                     const dataUrl = e.target.result;
                     currentMapDataUrl = dataUrl;
                     useGltfMap = true;
-                    // Host loads it too (ThreeJS supports data URI)
+                    statusEl.innerText = "⏳ Parsing model...";
                     loadGltfMap(dataUrl).then(() => {
-                        console.log("Loaded local map");
-                        // Broadcast URL to existing peers
+                        statusEl.innerText = "✅ " + file.name + " (" + fileSizeMB + " MB)";
+                        statusEl.style.color = "#0f0";
                         broadcast({ type: 'MAP_FILE', url: dataUrl });
                     }).catch(err => {
-                        alert("Failed to load local map: " + err);
+                        statusEl.innerText = "❌ Failed: " + err;
+                        statusEl.style.color = "#f44";
                     });
                 };
                 reader.readAsDataURL(file);
-            }
-            else if (url) {
-                // URL MODE
-                if (url.endsWith('.zip') || url.includes('.zip?')) {
-                    alert("ZIP files are not supported directly. Please use a direct .glb or .gltf link.");
-                    return;
-                }
-
-                // Auto-fix Google Drive Links
-                url = convertGoogleDriveLink(url);
-
-                // Proxy
-                const useProxy = document.getElementById('use-proxy').checked;
-                let finalUrl = url;
-                if (useProxy) {
-                    finalUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
-                }
-
-                useGltfMap = true;
-                gltfMapUrl = finalUrl;
-                document.getElementById('map-url').value = url;
-
-                loadGltfMap(finalUrl).then(() => {
-                    broadcast({ type: 'MAP_TYPE', mode: 'GLTF', url: finalUrl });
-                }).catch(e => {
-
-                    // alert("Failed to load map: " + e);
-                    throw e;
-                    // Fallback?
-                    clearMap();
-                    generateMap();
-                    rebuildMapPhysics();
-                    rebuildMapMesh();
-                    broadcast({ type: 'MAP_DATA', map: mapGrid });
-                });
             } else {
+                // No file - generate default grid map
                 generateMap();
                 rebuildMapPhysics();
                 rebuildMapMesh();
                 broadcast({ type: 'MAP_DATA', map: mapGrid });
+                if (statusEl) {
+                    statusEl.innerText = "Using generated map";
+                    statusEl.style.color = "#888";
+                }
             }
         }
 
@@ -601,6 +636,8 @@
                     hostId = p.get('join');
                     document.getElementById('host-panel').classList.add('hidden');
                     document.getElementById('client-panel').classList.remove('hidden');
+                    const statusServer = document.getElementById('status-server');
+                    if (statusServer) { statusServer.innerText = "⏳ Connecting..."; statusServer.style.color = "#ff0"; }
                     connectToHost(hostId);
                     initThree();
                 } else {
@@ -641,9 +678,9 @@
 
             conn.on('open', () => {
                 if (isHost) {
-                    // Send map immediately
+                    // Send map immediately (chunked for large local files)
                     if (useGltfMap && currentMapDataUrl) {
-                        conn.send({ type: 'MAP_FILE', url: currentMapDataUrl });
+                        sendMapChunked(conn, currentMapDataUrl);
                     } else if (useGltfMap) {
                         conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl });
                     } else {
@@ -667,6 +704,8 @@
             let conn = peer.connect(id, { reliable: false, serialization: 'json' });
             handleConnection(conn);
             conn.on('open', () => {
+                const statusServer = document.getElementById('status-server');
+                if (statusServer && !isHost) { statusServer.innerText = "✅ Connected"; statusServer.style.color = "#0f0"; }
                 conn.send({ type: 'JOIN', name: document.getElementById('player-name').value });
             });
         }
@@ -819,13 +858,68 @@
                 rebuildMapMesh();
             }
             else if (data.type === 'MAP_FILE') {
-                // Received Data URI from Host
+                // Received Data URI from Host (legacy single-message)
                 clearMap();
                 useGltfMap = true;
+                const statusMap = document.getElementById('status-map');
+                if (statusMap) { statusMap.innerText = "⏳ Loading..."; statusMap.style.color = "#ff0"; }
                 console.log("Receiving Map File (" + Math.round(data.url.length / 1024) + " KB)...");
                 loadGltfMap(data.url).then(() => {
                     console.log("Client loaded P2P MAP");
-                }).catch(e => console.error("Client failed to load P2P map", e));
+                    if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
+                }).catch(e => {
+                    console.error("Client failed to load P2P map", e);
+                    if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
+                });
+            }
+            else if (data.type === 'MAP_START') {
+                // Start receiving chunked map
+                pendingMapChunks = {
+                    expected: data.totalChunks,
+                    totalSize: data.totalSize,
+                    received: new Array(data.totalChunks).fill(null),
+                    count: 0
+                };
+                const statusMap = document.getElementById('status-map');
+                if (statusMap) {
+                    statusMap.innerText = "⏳ 0/" + data.totalChunks + " chunks (0 MB)";
+                    statusMap.style.color = "#ff0";
+                }
+                console.log(`Expecting ${data.totalChunks} chunks (${(data.totalSize / 1024 / 1024).toFixed(2)} MB)`);
+            }
+            else if (data.type === 'MAP_CHUNK') {
+                // Receive a chunk
+                if (pendingMapChunks.received && !pendingMapChunks.received[data.index]) {
+                    pendingMapChunks.received[data.index] = data.data;
+                    pendingMapChunks.count++;
+                    const statusMap = document.getElementById('status-map');
+                    const receivedMB = (pendingMapChunks.count * CHUNK_SIZE / 1024 / 1024).toFixed(1);
+                    if (statusMap) {
+                        statusMap.innerText = "⏳ " + pendingMapChunks.count + "/" + pendingMapChunks.expected + " chunks (" + receivedMB + " MB)";
+                    }
+                }
+            }
+            else if (data.type === 'MAP_END') {
+                // All chunks received, reassemble
+                if (!pendingMapChunks.received) return;
+                const statusMap = document.getElementById('status-map');
+                if (statusMap) { statusMap.innerText = "⏳ Assembling..."; }
+
+                const fullData = pendingMapChunks.received.join('');
+                pendingMapChunks = {};
+
+                clearMap();
+                useGltfMap = true;
+                console.log("Map assembled, loading (" + (fullData.length / 1024 / 1024).toFixed(2) + " MB)...");
+                if (statusMap) { statusMap.innerText = "⏳ Parsing model..."; }
+
+                loadGltfMap(fullData).then(() => {
+                    console.log("Client loaded chunked P2P MAP");
+                    if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
+                }).catch(e => {
+                    console.error("Client failed to load chunked P2P map", e);
+                    if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
+                });
             }
             else if (data.type === 'MAP_TYPE') {
                 if (data.mode === 'GLTF') {
@@ -1169,7 +1263,11 @@
             for (let id in list) {
                 html += `<div>${list[id].name} ${list[id].ready ? '<span style="color:#0f0">[READY]</span>' : ''}</div>`;
             }
-            document.getElementById('lobby-status').innerHTML = html;
+            // Update both possible lobby status elements
+            const lobbyHost = document.getElementById('lobby-status');
+            const lobbyClient = document.getElementById('lobby-status-client');
+            if (lobbyHost) lobbyHost.innerHTML = html || "No players yet...";
+            if (lobbyClient) lobbyClient.innerHTML = html || "Waiting for players...";
         }
 
         function updateHUD(data) {
@@ -1462,10 +1560,19 @@
             camPitch = -Math.PI / 2; // Look down initially
         }
 
+        let clientReady = false; // Track ready state locally for client
         function toggleReady() {
-            if (!isHost) { conns[hostId].send({ type: 'RDY', r: !players[myId].ready }); players[myId].ready = !players[myId].ready; }
-            else { players[myId].ready = !players[myId].ready; checkAllReady(); }
-            document.getElementById('btn-ready').style.background = players[myId].ready ? '#0a0' : '#444';
+            if (!isHost) {
+                clientReady = !clientReady;
+                conns[hostId].send({ type: 'RDY', r: clientReady });
+                document.getElementById('btn-shop-ready').style.background = clientReady ? '#0a0' : '#444';
+            } else {
+                if (players[myId]) {
+                    players[myId].ready = !players[myId].ready;
+                    checkAllReady();
+                    document.getElementById('btn-shop-ready').style.background = players[myId].ready ? '#0a0' : '#444';
+                }
+            }
         }
 
         function checkAllReady() {
