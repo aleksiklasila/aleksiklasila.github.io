@@ -285,16 +285,26 @@
     <div id="net-stats">PING: <span id="ping-disp">0</span>ms</div>
 
     <div id="main-menu" class="overlay">
-        <h1>ZOMBIE TACTICS <span style="font-size:0.5em; vertical-align:middle; color: #fff;">(60Hz)</span></h1>
+        <h1>ZOMBIE TACTICSish <span style="font-size:0.5em; vertical-align:middle; color: #fff;">(60Hz)</span></h1>
         <input type="text" id="player-name" value="Survivor" placeholder="Enter Name">
         <div id="host-panel">
             <button id="btn-copy">Copy Invite Link</button>
-            <div id="lobby-status" style="margin:15px; color:#aaa">Connecting to Server...</div>
-            <button id="btn-start" style="background:#0a0; width: 200px;">START GAME</button>
+            <input type="text" id="map-url" placeholder="Map URL (Optional)" style="width: 200px; font-size: 0.8rem;">
+            <div style="font-size: 0.7rem; color: #888; margin-top: 2px;">
+                <label><input type="checkbox" id="use-proxy" checked> Use Proxy (Fix CORS)</label>
+            </div>
+            <div style="margin-top:5px; border-top:1px solid #444; padding-top:5px;">
+                <div style="font-size:0.7rem; color:#aaa; margin-bottom:2px;">OR Load Local File (.glb):</div>
+                <input type="file" id="map-file" accept=".glb,.gltf" style="width: 200px; font-size: 0.7rem;">
+            </div>
+            <button id="btn-update-map" style="font-size: 0.8rem; padding: 10px; margin-top: 5px;">Load Map</button>
         </div>
-        <div id="client-panel" class="hidden">
-            <p>Connecting to Host...</p>
-        </div>
+        <div id="lobby-status" style="margin:15px; color:#aaa">Connecting to Server...</div>
+        <button id="btn-start" style="background:#0a0; width: 200px;">START GAME</button>
+    </div>
+    <div id="client-panel" class="hidden">
+        <p>Connecting to Host...</p>
+    </div>
     </div>
 
     <div id="shop-menu" class="overlay hidden">
@@ -359,6 +369,7 @@
     <script type="module">
         import * as THREE from 'three';
         import * as CANNON from 'cannon-es';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         // ==========================================
         // 1. CONSTANTS & CONFIG
@@ -404,6 +415,11 @@
         let zombies = {};
         let bullets = [];
         let mapGrid = [];
+        let useGltfMap = false;
+        let gltfMapUrl = null;
+        let mapMesh = null; // Collision mesh for bullets
+        let mapGroup = null; // ThreeJS Group for map
+        let mapBodies = []; // Physics bodies for map
         let wave = 1;
         let zombiesToSpawn = 0;
         let lastWaveTime = 0;
@@ -414,6 +430,8 @@
         let zombieBodies = {};
         let meshes = {};
         let bulletMeshes = [];
+        let debugPhysics = false;
+        let debugMeshes = [];
         const clock = new THREE.Clock();
 
         // Input
@@ -421,9 +439,14 @@
         let camYaw = 0;
         let camPitch = 0;
 
-        // Interpolation Buffers (Client Only)
+        //Interpolation Buffers (Client Only)
         let snapshots = [];
         const INTERP_DELAY = 50; // ms to buffer
+        let currentMapDataUrl = null; // Store base64 map data for transfer
+
+        // Navigation
+        let navNodes = [];
+        let navDebugMesh = null;
 
         // ==========================================
         // 3. INITIALIZATION
@@ -448,10 +471,10 @@
             document.getElementById('btn-start').onclick = hostStartGame;
             document.getElementById('btn-ready').onclick = toggleReady;
             document.getElementById('btn-shop').onclick = () => { /* mobile shop */ };
-            document.getElementById('btn-ready').onclick = toggleReady;
-            document.getElementById('btn-shop').onclick = () => { /* mobile shop */ };
             document.getElementById('btn-return-lobby').onclick = resetToLobby;
             document.getElementById('btn-retry').onclick = hostRestartGame;
+
+            document.getElementById('btn-update-map').onclick = loadMapFromInput;
 
             initShopUI();
 
@@ -459,6 +482,112 @@
             else setupPCControls();
 
             initNetwork();
+        }
+
+        function clearMap() {
+            // Clear Visuals
+            if (mapGroup && scene) {
+                scene.remove(mapGroup);
+                // dispose geometries/materials if possible to avoid leaks, but for now just remove from scene
+                mapGroup = null;
+            }
+            if (mapMesh) mapMesh = null;
+
+            // Clear Physics
+            if (world) {
+                mapBodies.forEach(b => world.removeBody(b));
+            }
+            mapBodies = [];
+            mapGrid = [];
+            useGltfMap = false;
+            gltfMapUrl = null;
+        }
+
+        function convertGoogleDriveLink(url) {
+            // Converts https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+            // To https://drive.google.com/uc?export=download&id=FILE_ID
+            if (url.includes('drive.google.com') && url.includes('/file/d/')) {
+                const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+                if (match && match[1]) {
+                    return `https://drive.google.com/uc?export=download&id=${match[1]}`;
+                }
+            }
+            return url;
+        }
+
+        function loadMapFromInput() {
+            let url = document.getElementById('map-url').value.trim();
+            const fileInput = document.getElementById('map-file');
+
+            // Priority: File Input > URL Input
+
+            clearMap();
+
+            if (fileInput.files.length > 0) {
+                // LOCAL FILE MODE
+                const file = fileInput.files[0];
+                if (file.name.endsWith('.zip')) {
+                    alert("ZIP files are not supported directly. Please unzip and upload the .glb or .gltf file.");
+                    return;
+                }
+
+                // Read as Data URL for P2P Transfer
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const dataUrl = e.target.result;
+                    currentMapDataUrl = dataUrl;
+                    useGltfMap = true;
+                    // Host loads it too (ThreeJS supports data URI)
+                    loadGltfMap(dataUrl).then(() => {
+                        console.log("Loaded local map");
+                        // Broadcast URL to existing peers
+                        broadcast({ type: 'MAP_FILE', url: dataUrl });
+                    }).catch(err => {
+                        alert("Failed to load local map: " + err);
+                    });
+                };
+                reader.readAsDataURL(file);
+            }
+            else if (url) {
+                // URL MODE
+                if (url.endsWith('.zip') || url.includes('.zip?')) {
+                    alert("ZIP files are not supported directly. Please use a direct .glb or .gltf link.");
+                    return;
+                }
+
+                // Auto-fix Google Drive Links
+                url = convertGoogleDriveLink(url);
+
+                // Proxy
+                const useProxy = document.getElementById('use-proxy').checked;
+                let finalUrl = url;
+                if (useProxy) {
+                    finalUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
+                }
+
+                useGltfMap = true;
+                gltfMapUrl = finalUrl;
+                document.getElementById('map-url').value = url;
+
+                loadGltfMap(finalUrl).then(() => {
+                    broadcast({ type: 'MAP_TYPE', mode: 'GLTF', url: finalUrl });
+                }).catch(e => {
+
+                    // alert("Failed to load map: " + e);
+                    throw e;
+                    // Fallback?
+                    clearMap();
+                    generateMap();
+                    rebuildMapPhysics();
+                    rebuildMapMesh();
+                    broadcast({ type: 'MAP_DATA', map: mapGrid });
+                });
+            } else {
+                generateMap();
+                rebuildMapPhysics();
+                rebuildMapMesh();
+                broadcast({ type: 'MAP_DATA', map: mapGrid });
+            }
         }
 
         function initNetwork() {
@@ -477,17 +606,20 @@
                 } else {
                     document.getElementById('lobby-status').innerText = "Waiting for players...";
                     isHost = true;
+
                     initPhysics();
-                    generateMap();
-                    rebuildMapPhysics();
-                    // HOST IS NOT A PLAYER
-                    // players[myId] = createPlayer(myId, document.getElementById('player-name').value);
 
                     // Host Camera Setup
                     camYaw = 0; camPitch = -1.0; // Look down
+                    initThree(); // Init Scene BEFORE map loading
 
-                    initThree();
-                    rebuildMapMesh();
+                    // Initial Load
+                    const initialMap = p.get('map');
+                    if (initialMap) {
+                        document.getElementById('map-url').value = initialMap;
+                    }
+                    loadMapFromInput(); // Will load from input or default to random if empty
+
                     updateLobbyUI();
                     // Start Host Loop
                     setInterval(hostGameLoop, TICK_MS);
@@ -509,8 +641,14 @@
 
             conn.on('open', () => {
                 if (isHost) {
-                    // Send map immediately (Reliably if possible, but here we just send it)
-                    conn.send({ type: 'MAP_DATA', map: mapGrid });
+                    // Send map immediately
+                    if (useGltfMap && currentMapDataUrl) {
+                        conn.send({ type: 'MAP_FILE', url: currentMapDataUrl });
+                    } else if (useGltfMap) {
+                        conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl });
+                    } else {
+                        conn.send({ type: 'MAP_DATA', map: mapGrid });
+                    }
                 }
             });
 
@@ -676,10 +814,38 @@
                 }
             }
             else if (data.type === 'MAP_DATA') {
+                clearMap();
                 mapGrid = data.map;
                 rebuildMapMesh();
             }
+            else if (data.type === 'MAP_FILE') {
+                // Received Data URI from Host
+                clearMap();
+                useGltfMap = true;
+                console.log("Receiving Map File (" + Math.round(data.url.length / 1024) + " KB)...");
+                loadGltfMap(data.url).then(() => {
+                    console.log("Client loaded P2P MAP");
+                }).catch(e => console.error("Client failed to load P2P map", e));
+            }
+            else if (data.type === 'MAP_TYPE') {
+                if (data.mode === 'GLTF') {
+                    if (data.url.startsWith('blob:')) {
+                        console.warn("Host is using a local file (blob:). Client cannot load this directly. Please use a public URL for multiplayer testing.");
+                        alert("Host is using a local file. Detailed sync is not supported yet for local files. You will not see the map.");
+                        return;
+                    }
+                    clearMap();
+                    useGltfMap = true;
+                    loadGltfMap(data.url).then(() => {
+                        console.log("Client loaded MAP");
+                    }).catch(e => console.error("Client failed to load map", e));
+                }
+            }
             else if (data.type === 'LOBBY_UPDATE') {
+                // Sync local players list for logic
+                // Ensure we don't overwrite our own full object if it exists? 
+                // Using assign is safer, or just replace since lobby data is authoritative for lobby
+                players = data.players;
                 updateLobbyPlayers(data.players);
             }
             else if (data.type === 'START_GAME') {
@@ -840,6 +1006,9 @@
                 camera.rotation.x = camPitch;
             }
 
+            // if (debugPhysics) updatePhysicsDebug();
+            // else clearPhysicsDebug();
+
             // Render Players
             for (let id in players) {
                 if (id === myId) continue;
@@ -884,6 +1053,77 @@
         // ==========================================
         // 7. HELPER FUNCTIONS & GAME LOGIC
         // ==========================================
+        function clearPhysicsDebug() {
+            if (debugMeshes.length > 0) {
+                debugMeshes.forEach(m => scene.remove(m));
+                debugMeshes = [];
+            }
+        }
+
+        function updatePhysicsDebug() {
+            if (!world) return;
+            // Simple approach: Rebuild every frame or manage pool. 
+            // Rebuild is easier for now given low body count (except Trimesh).
+            // Optimization: Keep map static bodies, only update dynamic.
+
+            // For now, clear and redraw (performance hit but accurate debug)
+            clearPhysicsDebug();
+
+            world.bodies.forEach(b => {
+                b.shapes.forEach((s, i) => {
+                    const offset = b.shapeOffsets[i];
+                    const orient = b.shapeOrientations[i];
+
+                    let mesh;
+                    let geom;
+                    const mat = new THREE.MeshBasicMaterial({ color: b.mass === 0 ? 0xff0000 : 0x0000ff, wireframe: true, depthTest: false });
+
+                    if (s.type === CANNON.Shape.types.BOX) {
+                        geom = new THREE.BoxGeometry(s.halfExtents.x * 2, s.halfExtents.y * 2, s.halfExtents.z * 2);
+                        mesh = new THREE.Mesh(geom, mat);
+                    } else if (s.type === CANNON.Shape.types.SPHERE) {
+                        geom = new THREE.SphereGeometry(s.radius);
+                        mesh = new THREE.Mesh(geom, mat);
+                    } else if (s.type === CANNON.Shape.types.TRIMESH) {
+                        // Reconstruct Trimesh geometry
+                        geom = new THREE.BufferGeometry();
+                        geom.setAttribute('position', new THREE.Float32BufferAttribute(s.vertices, 3));
+                        geom.setIndex(Array.from(s.indices));
+                        mesh = new THREE.Mesh(geom, mat);
+                    } else if (s.type === CANNON.Shape.types.PLANE) {
+                        // Plane is infinite, draw large grid
+                        geom = new THREE.PlaneGeometry(100, 100);
+                        mesh = new THREE.Mesh(geom, mat);
+                        // Cannon plane assumes normal Z+, Three uses Z+ but looks at it? 
+                        // Check rotation later.
+                    }
+
+                    if (mesh) {
+                        // Position
+                        const worldPos = b.position.clone();
+                        // Apply offset relative to body
+                        // We need to compose: BodyPos * BodyQuat * Offset * Orient
+                        // But ThreeJS scenes objects are usually just BodyPos/Quat if shape is centered.
+                        // If multi-shape, we need a child mesh.
+
+                        // For this debug, let's just place mesh at body pos, and if offset exists, apply it.
+                        mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+                        mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+
+                        // Handle shape offset?
+                        if (offset) {
+                            // This is tricky without nesting. 
+                            // Ignore offset for now as our bodies are simple (1 shape centered) generally.
+                            // Actually, Trimesh origin is usually mesh origin so offset is 0.
+                        }
+
+                        scene.add(mesh);
+                        debugMeshes.push(mesh);
+                    }
+                });
+            });
+        }
+
         function lerp(a, b, t) { return a + (b - a) * t; }
 
         function createPlayer(id, name) {
@@ -898,7 +1138,8 @@
             };
 
             if (isHost && world) {
-                const shape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5));
+                // Helper for players
+                const shape = new CANNON.Sphere(0.5); // Changed from Box to Sphere for better Trimesh support
                 const body = new CANNON.Body({
                     mass: 60,
                     fixedRotation: true,
@@ -919,13 +1160,15 @@
         function sanitizePlayersForLobby() {
             // Helper to send player list to clients
             const list = {};
-            for (let id in players) list[id] = { name: players[id].name };
+            for (let id in players) list[id] = { name: players[id].name, ready: players[id].ready };
             return list;
         }
 
         function updateLobbyPlayers(list) {
             let html = '';
-            for (let id in list) html += `<div>${list[id].name}</div>`;
+            for (let id in list) {
+                html += `<div>${list[id].name} ${list[id].ready ? '<span style="color:#0f0">[READY]</span>' : ''}</div>`;
+            }
             document.getElementById('lobby-status').innerHTML = html;
         }
 
@@ -983,23 +1226,35 @@
 
         function updateZombies() {
             if (zombiesToSpawn > 0 && Math.random() < 0.05) {
-                let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-                let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                // Determine spawn pos
+                let spawnX, spawnZ;
+                let canSpawn = false;
 
-                if (mapGrid[gx] && !mapGrid[gx][gz]) {
+                if (useGltfMap) {
+                    // Random spawn in radius 20
+                    spawnX = (Math.random() - 0.5) * 40;
+                    spawnZ = (Math.random() - 0.5) * 40;
+                    canSpawn = true; // Assume safe for now, they are high up
+                } else {
+                    let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                    let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                    if (mapGrid[gx] && !mapGrid[gx][gz]) {
+                        spawnX = (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
+                        spawnZ = (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
+                        canSpawn = true;
+                    }
+                }
+
+                if (canSpawn) {
                     const id = 'z_' + Date.now() + Math.random();
-                    const x = (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
-                    const z = (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
+                    zombies[id] = { id, x: spawnX, y: 2, z: spawnZ, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
 
-                    zombies[id] = { id, x, y: 2, z, hp: 50 + (wave * 20), yaw: 0 };
-
-                    // Ensure shape is defined BEFORE adding to body
-                    const zShape = new CANNON.Box(new CANNON.Vec3(0.5, 1, 0.5));
+                    const zShape = new CANNON.Sphere(0.5); // Use Sphere for Trimesh collision
                     const body = new CANNON.Body({
                         mass: 40,
                         fixedRotation: true,
-                        position: new CANNON.Vec3(x, 5, z),
-                        shape: zShape, // Pass shape here
+                        position: new CANNON.Vec3(spawnX, 5, spawnZ),
+                        shape: zShape,
                         linearDamping: 0.5
                     });
 
@@ -1043,13 +1298,44 @@
                 }
 
                 if (target) {
-                    const dx = target.x - z.x;
-                    const dz = target.z - z.z;
-                    if (min > 0.1) {
-                        body.velocity.x = (dx / min) * ZOMBIE_SPEED;
-                        body.velocity.z = (dz / min) * ZOMBIE_SPEED;
+                    // Pathfinding Logic
+                    const now = Date.now();
+                    if (!z.pathTimer || now - z.pathTimer > 1000) { // Recalc every 1s
+                        z.pathTimer = now + Math.random() * 500; // Stagger
+                        const path = findPath({ x: z.x, y: z.y, z: z.z }, { x: target.x, y: target.y, z: target.z });
+                        if (path && path.length > 0) {
+                            z.path = path;
+                        } else {
+                            z.path = []; // Direct if no path
+                        }
+                    }
+
+                    let targetX = target.x;
+                    let targetZ = target.z;
+
+                    // Follow path if exists
+                    if (z.path && z.path.length > 0) {
+                        const wp = z.path[0];
+                        const distToWp = Math.sqrt((wp.x - z.x) ** 2 + (wp.z - z.z) ** 2);
+                        if (distToWp < 1.5) {
+                            z.path.shift(); // Next waypoint
+                        }
+                        if (z.path.length > 0) {
+                            targetX = z.path[0].x;
+                            targetZ = z.path[0].z;
+                        }
+                    }
+
+                    const dx = targetX - z.x;
+                    const dz = targetZ - z.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+
+                    if (dist > 0.1) {
+                        body.velocity.x = (dx / dist) * ZOMBIE_SPEED;
+                        body.velocity.z = (dz / dist) * ZOMBIE_SPEED;
                         z.yaw = Math.atan2(dx, dz);
                     }
+
                     if (min < 1.5) {
                         target.hp -= 0.5; // Dmg per tick
                         if (target.hp <= 0) target.dead = true;
@@ -1071,7 +1357,32 @@
                 b.life -= (TICK_MS / 1000);
 
                 const g = getGridPos(b.x, b.z);
-                if (g.x < 0 || g.x >= GRID_SIZE || g.z < 0 || g.z >= GRID_SIZE || mapGrid[g.x][g.z] === 1 || b.y < 0 || b.life <= 0) {
+
+                let hitWall = false;
+                if (useGltfMap) {
+                    // Use Raycaster against mapMesh
+                    if (mapMesh) {
+                        // Raycast backwards (from current to prev pos? or just check point)
+                        // Simple check: Ray from b.oldPos to b.nePos
+                        // Since we don't store oldPos, let's just use point collision via a small ray
+                        const raycaster = new THREE.Raycaster(
+                            new THREE.Vector3(b.x - b.vx * 0.1, b.y - b.vy * 0.1, b.z - b.vz * 0.1),
+                            new THREE.Vector3(b.vx, b.vy, b.vz).normalize(),
+                            0,
+                            (TICK_MS / 1000) * 200 // length
+                        );
+                        // Note: Raycaster is expensive in loop. Optimize?
+                        // MapMesh is complex?
+                        const intersects = raycaster.intersectObject(mapMesh, true);
+                        if (intersects.length > 0 && intersects[0].distance < 1.0) hitWall = true;
+                    }
+                    // Also check floor or simple bounds
+                    if (b.y < -5) hitWall = true;
+                } else {
+                    if (g.x < 0 || g.x >= GRID_SIZE || g.z < 0 || g.z >= GRID_SIZE || mapGrid[g.x][g.z] === 1 || b.y < 0) hitWall = true;
+                }
+
+                if (hitWall || b.life <= 0) {
                     bullets.splice(i, 1); continue;
                 }
 
@@ -1185,6 +1496,77 @@
         }
 
         // --- MAP & THREEJS INIT HELPERS ---
+
+        function loadGltfMap(url) {
+            return new Promise((resolve, reject) => {
+                const loader = new GLTFLoader();
+                loader.load(url, (gltf) => {
+                    const model = gltf.scene;
+
+                    if (!mapGroup) { mapGroup = new THREE.Group(); scene.add(mapGroup); }
+                    mapGroup.add(model);
+
+                    mapMesh = model;
+
+                    if (isHost && world) {
+                        // FORCE recursive update so children behave correctly relative to parents
+                        model.updateMatrixWorld(true);
+
+                        // Generate Physics
+                        model.traverse(node => {
+                            if (node.isMesh) {
+                                const geo = node.geometry;
+                                let vertices;
+                                let indices;
+
+                                const pos = new THREE.Vector3();
+                                const quat = new THREE.Quaternion();
+                                const scale = new THREE.Vector3();
+                                // node.matrixWorld is now up to date
+                                node.matrixWorld.decompose(pos, quat, scale);
+
+                                console.log("Creating Physics Body:", node.name, "Pos:", pos, "Scale:", scale);
+
+                                if (geo.index) {
+                                    vertices = Array.from(geo.attributes.position.array);
+                                    indices = Array.from(geo.index.array);
+                                } else {
+                                    vertices = Array.from(geo.attributes.position.array);
+                                    indices = [];
+                                    for (let i = 0; i < vertices.length / 3; i++) indices.push(i);
+                                }
+
+                                // Apply Scale to vertices (Bake scale)
+                                for (let i = 0; i < vertices.length; i += 3) {
+                                    vertices[i] *= scale.x;
+                                    vertices[i + 1] *= scale.y;
+                                    vertices[i + 2] *= scale.z;
+                                }
+
+                                const shape = new CANNON.Trimesh(vertices, indices);
+                                const body = new CANNON.Body({ mass: 0 });
+                                body.addShape(shape);
+
+                                body.position.copy(pos);
+                                body.quaternion.copy(quat);
+
+                                // Cannon Trimesh assumes scale 1. If we have scale, we might need to apply it to vertices?
+                                // Trimesh doesn't support setScale efficiently for collisions in some versions, but let's try.
+                                // Actually, for static bodies, we can just bake the scale if needed, but Trimesh is raw data.
+                                // Let's trust the user uses 1.0 scale for map for now.
+
+                                world.addBody(body);
+                                mapBodies.push(body);
+                            }
+                        });
+
+                        // After Physics, generate Nav Graph (Host only)
+                        generateNavGraph();
+                    }
+                    resolve();
+                }, undefined, reject);
+            });
+        }
         function initThree() {
             scene = new THREE.Scene(); scene.background = new THREE.Color(0x111111); scene.fog = new THREE.Fog(0x111111, 10, 80);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -1236,25 +1618,214 @@
         function rebuildMapPhysics() {
             const s = new CANNON.Box(new CANNON.Vec3(CELL_SIZE / 2, 2, CELL_SIZE / 2));
             for (let x = 0; x < GRID_SIZE; x++) for (let z = 0; z < GRID_SIZE; z++) if (mapGrid[x][z]) {
-                const b = new CANNON.Body({ mass: 0 }); b.addShape(s); b.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); world.addBody(b);
+                const b = new CANNON.Body({ mass: 0 }); b.addShape(s); b.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); world.addBody(b); mapBodies.push(b);
             }
         }
         function rebuildMapMesh() {
-            const f = new THREE.Mesh(new THREE.PlaneGeometry(GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE), new THREE.MeshLambertMaterial({ color: 0x333333 })); f.rotation.x = -Math.PI / 2; scene.add(f);
+            if (!mapGroup) { mapGroup = new THREE.Group(); scene.add(mapGroup); }
+            const f = new THREE.Mesh(new THREE.PlaneGeometry(GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE), new THREE.MeshLambertMaterial({ color: 0x333333 })); f.rotation.x = -Math.PI / 2; mapGroup.add(f);
             const g = new THREE.BoxGeometry(CELL_SIZE, 4, CELL_SIZE); const m = new THREE.MeshLambertMaterial({ color: 0x554433 });
             for (let x = 0; x < GRID_SIZE; x++) for (let z = 0; z < GRID_SIZE; z++) if (mapGrid[x][z]) {
-                const w = new THREE.Mesh(g, m); w.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); scene.add(w);
+                const w = new THREE.Mesh(g, m); w.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); mapGroup.add(w);
             }
+            if (isHost && !useGltfMap) generateNavGraph(); // Grid map nav
         }
         function getGridPos(x, z) { return { x: Math.floor((x + MAP_OFFSET) / CELL_SIZE), z: Math.floor((z + MAP_OFFSET) / CELL_SIZE) }; }
         function resetToLobby() { window.location.reload(); }
 
-        // --- INPUT SETUP ---
+        // --- NAVIGATION & PATHFINDING ---
+        function generateNavGraph() {
+            if (!isHost) return; // Client doesn't need to nav
+            console.log("Generating Nav Graph...");
+            navNodes = [];
+            const step = 2.0; // Distance between nodes
+            const range = 40; // Map size +/-
+
+            const raycaster = new THREE.Raycaster();
+            const down = new THREE.Vector3(0, -1, 0);
+
+            // 1. Create Nodes
+            for (let x = -range; x <= range; x += step) {
+                for (let z = -range; z <= range; z += step) {
+                    raycaster.set(new THREE.Vector3(x, 20, z), down);
+                    let intersects = [];
+                    if (mapMesh) intersects = raycaster.intersectObject(mapMesh, true);
+
+                    // Check intersection
+                    if (intersects.length > 0) {
+                        const p = intersects[0].point;
+                        // Check slope (normal up-ish)
+                        if (intersects[0].face.normal.y > 0.5) {
+                            // Check height (approx floor level or slightly higher for stairs)
+                            // Our floor is around 0. Allow some tolerance?
+                            // Actually, just taking valid ground hits is enough
+                            navNodes.push({
+                                id: navNodes.length,
+                                x: p.x, y: p.y, z: p.z,
+                                neighbors: [],
+                                g: 0, f: 0, parent: null // for A*
+                            });
+                        }
+                    } else if (!useGltfMap) {
+                        // Fallback for grid map
+                        // ... (Skip for now, assuming GLTF priority or flat floor)
+                    }
+                }
+            }
+            console.log("Created " + navNodes.length + " Nav Nodes. Linking...");
+
+            // 2. Link Neighbors
+            // Optimization: Grid lookup?
+            // Brute force distance check for now (lazy but easy for <1000 nodes)
+            // Or better: Logic based on step
+            for (let i = 0; i < navNodes.length; i++) {
+                const n1 = navNodes[i];
+                for (let j = i + 1; j < navNodes.length; j++) {
+                    const n2 = navNodes[j];
+                    const dist = Math.sqrt((n1.x - n2.x) ** 2 + (n1.z - n2.z) ** 2); // 2D dist
+                    // Diagonal neigh is sqrt(2*step^2) approx 1.41 * step
+                    if (dist < step * 1.5) {
+                        // Potential neighbor
+                        // Check Line of Sight (Raycast between them to ensure no wall)
+                        // Lift ray slightly
+                        const start = new THREE.Vector3(n1.x, n1.y + 1, n1.z);
+                        const end = new THREE.Vector3(n2.x, n2.y + 1, n2.z);
+                        const dir = new THREE.Vector3().subVectors(end, start).normalize();
+                        const len = start.distanceTo(end);
+
+                        raycaster.set(start, dir);
+                        // Intersect with map
+                        // Note: If mapMesh includes floor, it might hit floor?
+                        // We strictly want to avoid Walls.
+                        // Ideally mapMesh is everything.
+                        // Hack: If hit distance < len - 0.1, it's blocked.
+                        const hits = raycaster.intersectObject(mapMesh, true);
+                        let blocked = false;
+                        for (let h of hits) {
+                            if (h.distance < len - 0.5) { blocked = true; break; }
+                        }
+
+                        if (!blocked) {
+                            n1.neighbors.push(j);
+                            n2.neighbors.push(i);
+                        }
+                    }
+                }
+            }
+            console.log("Nav Graph Ready.");
+
+            // Debug verify (draw lines) - HOST ONLY visual
+            // (We can't easily draw on Host if Host is headless logic, but here Host is playing too)
+            drawNavDebug();
+        }
+
+        function drawNavDebug() {
+            if (navDebugMesh) scene.remove(navDebugMesh);
+
+            // Only draw if we have nodes
+            if (navNodes.length === 0) return;
+
+            const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, opacity: 0.5, transparent: true });
+            const points = [];
+            navNodes.forEach(n => {
+                n.neighbors.forEach(nid => {
+                    const n2 = navNodes[nid];
+                    // Draw connection close to ground
+                    points.push(new THREE.Vector3(n.x, n.y + 0.2, n.z));
+                    points.push(new THREE.Vector3(n2.x, n2.y + 0.2, n2.z));
+                });
+            });
+            const geo = new THREE.BufferGeometry().setFromPoints(points);
+            navDebugMesh = new THREE.LineSegments(geo, mat);
+            scene.add(navDebugMesh); // Add to local scene
+            console.log("Nav Debug Mesh added to scene.");
+        }
+
+        function findPath(start, end) {
+            // Add Safety Log
+            if (navNodes.length === 0) {
+                // console.warn("No Nav Nodes!");
+                return null;
+            }
+
+            // 1. Find closet start node
+            let startNode = null, endNode = null;
+            let minS = 9999, minE = 9999;
+
+            for (let n of navNodes) {
+                // Reset A* state
+                n.g = 0; n.f = 0; n.parent = null; n.visited = false;
+
+                const dS = (n.x - start.x) ** 2 + (n.z - start.z) ** 2;
+                if (dS < minS) { minS = dS; startNode = n; }
+                const dE = (n.x - end.x) ** 2 + (n.z - end.z) ** 2;
+                if (dE < minE) { minE = dE; endNode = n; }
+            }
+
+            // Debug: Log if nodes are far
+            // if (minS > 20 || minE > 20) console.warn("Nav target too far from graph:", minS, minE);
+
+            if (!startNode || !endNode) return null;
+            if (startNode === endNode) return [end]; // Close enough
+
+            // 2. A*
+            let openSet = [startNode];
+
+            while (openSet.length > 0) {
+                // Get lowest f
+                let winner = 0;
+                for (let i = 1; i < openSet.length; i++) if (openSet[i].f < openSet[winner].f) winner = i;
+                const current = openSet[winner];
+
+                if (current === endNode) {
+                    // Reconstruct
+                    const path = [];
+                    let temp = current;
+                    while (temp.parent) {
+                        path.push({ x: temp.x, y: temp.y, z: temp.z });
+                        temp = temp.parent;
+                    }
+                    path.reverse();
+                    return path;
+                }
+
+                openSet.splice(winner, 1);
+                current.visited = true;
+
+                for (let nid of current.neighbors) {
+                    const neighbor = navNodes[nid];
+                    if (neighbor.visited) continue;
+
+                    const tempG = current.g + Math.sqrt((neighbor.x - current.x) ** 2 + (neighbor.z - current.z) ** 2);
+
+                    let newPath = false;
+                    if (openSet.includes(neighbor)) {
+                        if (tempG < neighbor.g) {
+                            neighbor.g = tempG;
+                            newPath = true;
+                        }
+                    } else {
+                        neighbor.g = tempG;
+                        newPath = true;
+                        openSet.push(neighbor);
+                    }
+
+                    if (newPath) {
+                        neighbor.h = Math.sqrt((neighbor.x - end.x) ** 2 + (neighbor.z - end.z) ** 2);
+                        neighbor.f = neighbor.g + neighbor.h;
+                        neighbor.parent = current;
+                    }
+                }
+            }
+            return null; // No path
+        }
+
         function setupPCControls() {
             document.addEventListener('keydown', e => {
                 if (e.key === 'w') input.y = 1; if (e.key === 's') input.y = -1; if (e.key === 'a') input.x = 1; if (e.key === 'd') input.x = -1;
                 if (e.code === 'Space') input.jump = true;
                 if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
+                if (e.key === 'p' || e.key === 'P') { debugPhysics = !debugPhysics; console.log("Debug Physics:", debugPhysics); }
             });
             document.addEventListener('keyup', e => {
                 if (e.key === 'w' || e.key === 's') input.y = 0; if (e.key === 'a' || e.key === 'd') input.x = 0; if (e.code === 'Space') input.jump = false;
