@@ -1226,34 +1226,48 @@
 
         function updateZombies() {
             if (zombiesToSpawn > 0 && Math.random() < 0.05) {
-                // Determine spawn pos
-                let spawnX, spawnZ;
-                let canSpawn = false;
+                // Spawn on NavMesh node
+                let spawnNode = null;
+                let attempts = 0;
+                const minPlayerDist = 10; // Don't spawn too close to players
 
-                if (useGltfMap) {
-                    // Random spawn in radius 20
-                    spawnX = (Math.random() - 0.5) * 40;
-                    spawnZ = (Math.random() - 0.5) * 40;
-                    canSpawn = true; // Assume safe for now, they are high up
-                } else {
+                while (!spawnNode && attempts < 50 && navNodes.length > 0) {
+                    attempts++;
+                    const candidate = navNodes[Math.floor(Math.random() * navNodes.length)];
+
+                    // Check distance to all players
+                    let tooClose = false;
+                    for (let pid in players) {
+                        const p = players[pid];
+                        const dist = Math.sqrt((p.x - candidate.x) ** 2 + (p.z - candidate.z) ** 2);
+                        if (dist < minPlayerDist) { tooClose = true; break; }
+                    }
+
+                    if (!tooClose) spawnNode = candidate;
+                }
+
+                // Fallback for grid maps or if navNodes empty
+                if (!spawnNode && !useGltfMap) {
                     let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
                     let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
                     if (mapGrid[gx] && !mapGrid[gx][gz]) {
-                        spawnX = (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
-                        spawnZ = (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2;
-                        canSpawn = true;
+                        spawnNode = {
+                            x: (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2,
+                            y: 2,
+                            z: (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2
+                        };
                     }
                 }
 
-                if (canSpawn) {
+                if (spawnNode) {
                     const id = 'z_' + Date.now() + Math.random();
-                    zombies[id] = { id, x: spawnX, y: 2, z: spawnZ, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
+                    zombies[id] = { id, x: spawnNode.x, y: spawnNode.y + 1, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
 
-                    const zShape = new CANNON.Sphere(0.5); // Use Sphere for Trimesh collision
+                    const zShape = new CANNON.Sphere(0.5);
                     const body = new CANNON.Body({
                         mass: 40,
                         fixedRotation: true,
-                        position: new CANNON.Vec3(spawnX, 5, spawnZ),
+                        position: new CANNON.Vec3(spawnNode.x, spawnNode.y + 2, spawnNode.z),
                         shape: zShape,
                         linearDamping: 0.5
                     });
@@ -1562,6 +1576,9 @@
 
                         // After Physics, generate Nav Graph (Host only)
                         generateNavGraph();
+
+                        // Create invisible boundary walls
+                        createBoundaryWalls();
                     }
                     resolve();
                 }, undefined, reject);
@@ -1632,6 +1649,122 @@
         }
         function getGridPos(x, z) { return { x: Math.floor((x + MAP_OFFSET) / CELL_SIZE), z: Math.floor((z + MAP_OFFSET) / CELL_SIZE) }; }
         function resetToLobby() { window.location.reload(); }
+
+        // --- BOUNDARY WALLS ---
+        let boundaryBodies = [];
+        function createBoundaryWalls() {
+            if (!isHost || !world || !mapMesh) return;
+
+            // Clear old boundaries
+            boundaryBodies.forEach(b => world.removeBody(b));
+            boundaryBodies = [];
+
+            // Use bounding box of map mesh - walls go OUTSIDE to prevent escaping
+            const box = new THREE.Box3().setFromObject(mapMesh);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+
+            const padding = 1;
+            const wallThickness = 2;
+            const wallHeight = size.y + 30;
+
+            // Front (+Z)
+            const frontShape = new CANNON.Box(new CANNON.Vec3(size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2));
+            const frontBody = new CANNON.Body({ mass: 0 });
+            frontBody.addShape(frontShape);
+            frontBody.position.set(center.x, center.y + wallHeight / 4, box.max.z + padding);
+            world.addBody(frontBody);
+            boundaryBodies.push(frontBody);
+
+            // Back (-Z)
+            const backBody = new CANNON.Body({ mass: 0 });
+            backBody.addShape(frontShape);
+            backBody.position.set(center.x, center.y + wallHeight / 4, box.min.z - padding);
+            world.addBody(backBody);
+            boundaryBodies.push(backBody);
+
+            // Right (+X)
+            const sideShape = new CANNON.Box(new CANNON.Vec3(wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness));
+            const rightBody = new CANNON.Body({ mass: 0 });
+            rightBody.addShape(sideShape);
+            rightBody.position.set(box.max.x + padding, center.y + wallHeight / 4, center.z);
+            world.addBody(rightBody);
+            boundaryBodies.push(rightBody);
+
+            // Left (-X)
+            const leftBody = new CANNON.Body({ mass: 0 });
+            leftBody.addShape(sideShape);
+            leftBody.position.set(box.min.x - padding, center.y + wallHeight / 4, center.z);
+            world.addBody(leftBody);
+            boundaryBodies.push(leftBody);
+
+            // Floor
+            const floorShape = new CANNON.Box(new CANNON.Vec3(size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2));
+            const floorBody = new CANNON.Body({ mass: 0 });
+            floorBody.addShape(floorShape);
+            floorBody.position.set(center.x, box.min.y - 2, center.z);
+            world.addBody(floorBody);
+            boundaryBodies.push(floorBody);
+
+            console.log("Boundary Walls Created:", boundaryBodies.length);
+        }
+
+        function createBoxBoundary(box) {
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const padding = 2;
+            const wallThickness = 1;
+            const wallHeight = size.y + 20;
+
+            const walls = [
+                { pos: [center.x, center.y, box.max.z + padding], size: [size.x / 2 + padding, wallHeight / 2, wallThickness / 2] },
+                { pos: [center.x, center.y, box.min.z - padding], size: [size.x / 2 + padding, wallHeight / 2, wallThickness / 2] },
+                { pos: [box.max.x + padding, center.y, center.z], size: [wallThickness / 2, wallHeight / 2, size.z / 2 + padding] },
+                { pos: [box.min.x - padding, center.y, center.z], size: [wallThickness / 2, wallHeight / 2, size.z / 2 + padding] },
+                { pos: [center.x, box.min.y - wallThickness / 2, center.z], size: [size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2] }
+            ];
+
+            walls.forEach(w => {
+                const shape = new CANNON.Box(new CANNON.Vec3(...w.size));
+                const body = new CANNON.Body({ mass: 0 });
+                body.addShape(shape);
+                body.position.set(...w.pos);
+                world.addBody(body);
+                boundaryBodies.push(body);
+            });
+        }
+
+        function convexHull2D(points) {
+            if (points.length < 3) return points;
+
+            let start = 0;
+            for (let i = 1; i < points.length; i++) {
+                if (points[i].z < points[start].z || (points[i].z === points[start].z && points[i].x < points[start].x)) {
+                    start = i;
+                }
+            }
+            [points[0], points[start]] = [points[start], points[0]];
+            const pivot = points[0];
+
+            const sorted = points.slice(1).sort((a, b) => {
+                const angleA = Math.atan2(a.z - pivot.z, a.x - pivot.x);
+                const angleB = Math.atan2(b.z - pivot.z, b.x - pivot.x);
+                return angleA - angleB;
+            });
+
+            const hull = [pivot];
+            for (const p of sorted) {
+                while (hull.length > 1 && cross(hull[hull.length - 2], hull[hull.length - 1], p) <= 0) {
+                    hull.pop();
+                }
+                hull.push(p);
+            }
+            return hull;
+        }
+
+        function cross(o, a, b) {
+            return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+        }
 
         // --- NAVIGATION & PATHFINDING ---
         function generateNavGraph() {
