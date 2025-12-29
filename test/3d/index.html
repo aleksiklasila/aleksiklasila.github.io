@@ -3,50 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Zombie Survival: Tactics Update</title>
+    <title>Zombie Tactics: Fixed</title>
     <style>
-        /* --- GLOBAL --- */
-        body { margin: 0; overflow: hidden; background: #000; color: #fff; touch-action: none; user-select: none; font-family: 'Courier New', monospace; }
-        
-        /* --- MENUS --- */
-        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 50; }
+        /* --- CORE --- */
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; touch-action: none; user-select: none; -webkit-user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+
+        /* --- UI LAYERS --- */
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; color: white; }
         .hidden { display: none !important; }
-        h1 { color: #e00; font-size: 3rem; text-shadow: 0 0 10px #f00; margin: 0 0 20px 0; }
         
-        input, button { padding: 10px; margin: 5px; background: #222; border: 1px solid #444; color: #fff; font-family: inherit; font-size: 1.1rem; }
-        button:hover { background: #e00; cursor: pointer; border-color: #f00; }
-        button:active { background: #900; }
-        
+        h1 { color: #d00; font-size: 3rem; margin-bottom: 10px; text-shadow: 2px 2px 0 #000; }
+        input, button { padding: 15px; margin: 5px; background: #222; border: 2px solid #555; color: white; font-size: 1.2rem; font-family: inherit; }
+        button:hover { border-color: #d00; color: #d00; cursor: pointer; }
+        button:active { background: #500; }
+
         /* --- HUD --- */
-        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; background: #0f0; border-radius: 50%; transform: translate(-50%, -50%); z-index: 10; box-shadow: 0 0 5px #0f0; }
+        #hud-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
-        .hud-panel { position: absolute; padding: 10px; z-index: 5; text-shadow: 1px 1px 0 #000; }
-        #hud-top-right { top: 10px; right: 10px; text-align: right; font-size: 1.5rem; }
-        #hud-bottom-right { bottom: 20px; right: 20px; text-align: right; font-size: 1.2rem; line-height: 1.5; }
-        #hud-bottom-left { bottom: 20px; left: 20px; pointer-events: auto; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: #0f0; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 4px #0f0; }
         
-        #chat-box { width: 300px; height: 150px; overflow-y: auto; background: rgba(0,0,0,0.5); font-size: 12px; padding: 5px; margin-bottom: 5px; }
-        #chat-input { width: 100%; box-sizing: border-box; display: none; }
-
-        /* --- SHOP --- */
-        #shop-items { display: flex; flex-direction: column; gap: 10px; width: 90%; max-width: 400px; }
-        .shop-row { display: flex; justify-content: space-between; background: #222; padding: 10px; align-items: center; border: 1px solid #444; }
-
+        .hud-text { position: absolute; text-shadow: 2px 2px 0 #000; font-weight: bold; }
+        #hud-top-right { top: 20px; right: 20px; text-align: right; font-size: 1.5rem; color: #fff; }
+        #hud-bottom-right { bottom: 20px; right: 20px; text-align: right; font-size: 1.2rem; color: #ff0; }
+        
         /* --- MOBILE CONTROLS --- */
-        #mobile-controls { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; display: none; pointer-events: none; }
+        #mobile-controls { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 50; pointer-events: none; display: none; }
         
-        .joystick-zone { position: absolute; width: 150px; height: 150px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto; }
-        .joystick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255,255,255,0.3); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .stick-zone { position: absolute; width: 120px; height: 120px; background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
+        .stick-nub { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 255, 255, 0.5); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         
+        /* Positioning Controls - Moved up to avoid overlap */
         #stick-left { bottom: 30px; left: 30px; }
         #stick-right { bottom: 30px; right: 30px; }
         
-        .action-btn { position: absolute; background: rgba(200, 0, 0, 0.3); border: 2px solid #f00; color: #fff; font-weight: bold; border-radius: 50%; display: flex; justify-content: center; align-items: center; pointer-events: auto; }
-        .action-btn:active { background: rgba(255,0,0,0.6); }
+        .action-btn { position: absolute; width: 80px; height: 80px; background: rgba(255, 0, 0, 0.2); border: 3px solid #f00; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; pointer-events: auto; }
+        .action-btn:active { background: rgba(255, 0, 0, 0.5); }
+        
+        /* Buttons moved higher to clear the right stick */
+        #btn-fire { bottom: 180px; right: 30px; width: 90px; height: 90px; } 
+        #btn-shop { bottom: 180px; left: 30px; width: 60px; height: 60px; border-color: #ff0; font-size: 12px; }
 
-        #btn-fire { bottom: 100px; right: 190px; width: 70px; height: 70px; } 
-        #btn-reload { bottom: 40px; right: 190px; width: 50px; height: 50px; font-size: 12px; background: rgba(255,255,255,0.1); border-color: #fff; }
+        /* --- SHOP --- */
+        .shop-item { display: flex; justify-content: space-between; width: 300px; padding: 10px; background: #333; margin-bottom: 5px; align-items: center; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
@@ -55,192 +54,177 @@
 
     <div id="main-menu" class="overlay">
         <h1>ZOMBIE TACTICS</h1>
-        <input type="text" id="player-name" value="Soldier" placeholder="Enter Name">
-        
+        <input type="text" id="player-name" value="Survivor">
         <div id="host-panel">
             <button onclick="copyInvite()">Copy Invite Link</button>
-            <div id="lobby-list" style="margin:20px; color:#aaa;">Waiting for players...</div>
-            <button onclick="hostStartGame()" style="background:#0a0; border-color:#0f0; width: 200px;">START GAME</button>
+            <div id="lobby-status" style="margin:15px; color:#aaa">Waiting for players...</div>
+            <button onclick="hostStartGame()" style="background:#0a0; width: 200px;">START GAME</button>
         </div>
-
         <div id="client-panel" class="hidden">
             <p>Connecting to Host...</p>
-            <div id="client-status" style="color:#ff0">Connecting...</div>
         </div>
     </div>
 
     <div id="shop-menu" class="overlay hidden">
-        <h1 style="color:#0f0">ARMORY</h1>
-        <div id="shop-items"></div>
-        <button onclick="toggleReady()" id="ready-btn" style="margin-top:20px; width:100%; padding:20px; background:#005500;">READY UP</button>
+        <h1 style="color:#0f0">TRADER</h1>
+        <div id="shop-list"></div>
+        <button onclick="toggleReady()" id="ready-btn" style="margin-top:20px; width:200px; background:#444;">READY</button>
     </div>
 
-    <div id="ui-layer">
+    <div id="hud-layer">
         <div id="crosshair"></div>
         <div id="hud-top-right">
-            <div style="color:#e00">WAVE <span id="wave-num">1</span></div>
-            <div style="font-size:1rem; color:#888">Enemies: <span id="enemy-count">0</span></div>
+            <div>WAVE <span id="wave-disp">1</span></div>
+            <div style="font-size:1rem; color:#aaa">Zombies: <span id="zombie-disp">0</span></div>
         </div>
         <div id="hud-bottom-right">
-            <div style="font-size:1.5rem; color:#0f0">HP: <span id="hp-val">100</span></div>
-            <div style="color:#ff0">AMMO: <span id="ammo-val">30</span></div>
-            <div style="color:#fff">CASH: $<span id="cash-val">0</span></div>
+            <div style="color:#f44">HP: <span id="hp-disp">100</span></div>
+            <div style="color:#ff0">AMMO: <span id="ammo-disp">∞</span></div>
+            <div style="color:#0f0">$<span id="money-disp">0</span></div>
         </div>
-        <div id="hud-bottom-left">
-            <div id="chat-box"></div>
-            <input type="text" id="chat-input" placeholder="Press Enter to chat...">
-        </div>
+        <div id="hud-bottom-left" style="position:absolute; bottom:20px; left:20px;">
+            </div>
     </div>
 
     <div id="mobile-controls">
-        <div id="stick-left" class="joystick-zone"><div class="joystick-nub" id="nub-left"></div></div>
-        <div id="stick-right" class="joystick-zone"><div class="joystick-nub" id="nub-right"></div></div>
+        <div id="stick-left" class="stick-zone"><div class="stick-nub"></div></div>
+        <div id="stick-right" class="stick-zone"><div class="stick-nub"></div></div>
         <div id="btn-fire" class="action-btn">FIRE</div>
-        <div id="btn-reload" class="action-btn" onclick="openShop()">SHOP</div> 
+        <div id="btn-shop" class="action-btn" onclick="openShopMobile()">SHOP</div>
     </div>
 
     <script>
-        // --- CONSTANTS & CONFIG ---
-        const GRID_SIZE = 40; // 40x40 grid
-        const CELL_SIZE = 4;  // Each cell is 4x4 units
+        // --- CONFIG ---
+        const GRID_SIZE = 30; 
+        const CELL_SIZE = 5; 
         const MAP_OFFSET = (GRID_SIZE * CELL_SIZE) / 2;
+        const WALL_HEIGHT = 4;
         
-        const PLAYER_SPEED = 25.0;
-        const ZOMBIE_SPEED = 14.0;
-        const BULLET_SPEED = 80.0;
-        
+        const PLAYER_SPEED = 20.0;
+        const ZOMBIE_SPEED = 12.0;
+        const BULLET_SPEED = 60.0;
+
         // --- GLOBALS ---
-        let isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+        let isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+        let myId = null;
         let isHost = true;
-        let myId = null, hostId = null;
-        let peer = null;
-        let conns = {}; // Store connections
+        let hostId = null;
+        let peer;
+        let conns = {};
         
         // Game State
-        let gameState = 'LOBBY'; // LOBBY, PLAYING, SHOP, GAMEOVER
+        let gameState = 'LOBBY';
         let players = {};
         let zombies = {};
         let bullets = [];
-        let mapGrid = []; // 0=Walkable, 1=Wall
+        let mapGrid = [];
         let wave = 1;
         let zombiesToSpawn = 0;
         let lastTime = performance.now();
-
-        // Inputs
-        const input = { x: 0, y: 0, aimX: 0, aimY: 0, shoot: false }; // x/y = move, aimX/aimY = look
+        
+        // Input State
+        let input = { x: 0, y: 0, aimX: 0, aimY: 0, fire: false };
         let camPitch = 0;
         let camYaw = 0;
 
         // Three.js
-        let scene, camera, renderer, audioListener;
+        let scene, camera, renderer;
         let meshes = {};
         let bulletMeshes = [];
-        
-        // --- MAP GENERATION ---
+
+        // --- MAP SYSTEM ---
         function generateMap() {
             mapGrid = [];
             for(let x=0; x<GRID_SIZE; x++) {
                 let row = [];
                 for(let z=0; z<GRID_SIZE; z++) {
-                    // Borders are walls
-                    if(x===0 || x===GRID_SIZE-1 || z===0 || z===GRID_SIZE-1) row.push(1);
-                    // Random obstacles (10% chance), but keep center clear
-                    else if(Math.random() < 0.1 && Math.abs(x-GRID_SIZE/2) > 4 && Math.abs(z-GRID_SIZE/2) > 4) row.push(1);
+                    // Borders
+                    if (x===0 || x===GRID_SIZE-1 || z===0 || z===GRID_SIZE-1) row.push(1);
+                    // Random Walls (avoid center 6x6 area for spawn)
+                    else if (Math.random() < 0.15 && (Math.abs(x - GRID_SIZE/2) > 3 || Math.abs(z - GRID_SIZE/2) > 3)) row.push(1);
                     else row.push(0);
                 }
                 mapGrid.push(row);
             }
         }
 
-        function getGridPos(worldX, worldZ) {
-            let gx = Math.floor((worldX + MAP_OFFSET) / CELL_SIZE);
-            let gz = Math.floor((worldZ + MAP_OFFSET) / CELL_SIZE);
-            return { x: gx, z: gz };
-        }
-
         function isWall(gx, gz) {
-            if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return true;
+            if(gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) return true;
             return mapGrid[gx][gz] === 1;
         }
 
-        // --- PATHFINDING (A*) ---
+        function getGridPos(x, z) {
+            return {
+                x: Math.floor((x + MAP_OFFSET) / CELL_SIZE),
+                z: Math.floor((z + MAP_OFFSET) / CELL_SIZE)
+            };
+        }
+
+        // --- A* PATHFINDING ---
         function findPath(sx, sz, ex, ez) {
-            // Simplified A* on Grid
-            // Optimization: Limit search depth for performance in JS
-            let openSet = [{x:sx, z:sz, g:0, f:0, p:null}];
+            // Very simple bounded A* let start = {x:sx, z:sz, p:null, g:0, h:0};
+            let open = [start];
             let closed = new Set();
             let count = 0;
 
-            while(openSet.length > 0 && count < 200) { // Limit iterations
-                // Get lowest F
-                let currentIdx = 0;
-                for(let i=1; i<openSet.length; i++) 
-                    if(openSet[i].f < openSet[currentIdx].f) currentIdx = i;
+            while(open.length > 0 && count < 100) { // Hard limit to prevent lag
+                count++;
+                // Sort by F cost (low to high)
+                open.sort((a,b) => (a.g+a.h) - (b.g+b.h));
+                let curr = open.shift();
                 
-                let current = openSet[currentIdx];
-                if(current.x === ex && current.z === ez) {
-                    // Reconstruct path
+                if(curr.x === ex && curr.z === ez) {
                     let path = [];
-                    let temp = current;
-                    while(temp) { path.push({x:temp.x, z:temp.z}); temp = temp.p; }
+                    while(curr.p) { path.push({x:curr.x, z:curr.z}); curr = curr.p; }
                     return path.reverse();
                 }
 
-                openSet.splice(currentIdx, 1);
-                closed.add(`${current.x},${current.z}`);
-                count++;
+                let key = curr.x + "," + curr.z;
+                if(closed.has(key)) continue;
+                closed.add(key);
 
                 // Neighbors
-                let dirs = [[0,1], [0,-1], [1,0], [-1,0]];
+                const dirs = [[0,1], [0,-1], [1,0], [-1,0]];
                 for(let d of dirs) {
-                    let nx = current.x + d[0];
-                    let nz = current.z + d[1];
-                    
-                    if(isWall(nx, nz) || closed.has(`${nx},${nz}`)) continue;
-
-                    let g = current.g + 1;
-                    let h = Math.abs(nx-ex) + Math.abs(nz-ez); // Manhattan
-                    let existing = openSet.find(n => n.x === nx && n.z === nz);
-
-                    if(!existing) {
-                        openSet.push({x:nx, z:nz, g:g, f:g+h, p:current});
-                    } else if (g < existing.g) {
-                        existing.g = g;
-                        existing.f = g+h;
-                        existing.p = current;
+                    let nx = curr.x + d[0];
+                    let nz = curr.z + d[1];
+                    if(!isWall(nx, nz)) {
+                        let g = curr.g + 1;
+                        let h = Math.abs(nx-ex) + Math.abs(nz-ez);
+                        open.push({x:nx, z:nz, p:curr, g:g, h:h});
                     }
                 }
             }
-            return null; // No path found or too far
+            return null; // No path found
         }
 
-        // --- NETWORK SETUP ---
+        // --- NETWORK ---
         function initNetwork() {
             peer = new Peer(null, { debug: 1 });
-            
             peer.on('open', (id) => {
                 myId = id;
-                console.log("My ID:", myId);
-                const params = new URLSearchParams(window.location.search);
-                if(params.get('join')) {
+                console.log("My ID:", id);
+                const p = new URLSearchParams(window.location.search);
+                if(p.get('join')) {
                     isHost = false;
-                    hostId = params.get('join');
+                    hostId = p.get('join');
                     document.getElementById('host-panel').classList.add('hidden');
                     document.getElementById('client-panel').classList.remove('hidden');
                     connectToHost(hostId);
                 } else {
+                    generateMap();
                     players[myId] = createPlayer(myId, document.getElementById('player-name').value);
-                    generateMap(); // Host generates map
-                    updateLobby();
+                    updateLobbyUI();
+                    initThree(); // Start renderer immediately for host
                 }
             });
 
             peer.on('connection', (conn) => {
-                conn.on('data', (data) => handleData(data, conn.peer));
+                conn.on('data', data => handleData(data, conn.peer));
                 conn.on('open', () => {
                     if(isHost) {
                         conns[conn.peer] = conn;
-                        conn.send({ type: 'MAP_DATA', map: mapGrid }); // Send map to new player
+                        conn.send({ type: 'MAP_DATA', map: mapGrid });
                     }
                 });
                 conn.on('close', () => { if(isHost) delete players[conn.peer]; });
@@ -248,269 +232,306 @@
         }
 
         function connectToHost(id) {
-            const conn = peer.connect(id);
+            let conn = peer.connect(id);
             conns[id] = conn;
             conn.on('open', () => {
-                document.getElementById('client-status').innerText = "Connected! Waiting for host...";
                 conn.send({ type: 'JOIN', name: document.getElementById('player-name').value });
             });
-            conn.on('data', (data) => handleData(data, id));
+            conn.on('data', data => handleData(data, id));
+            initThree(); // Start renderer for client
         }
 
         function handleData(data, sender) {
             if(data.type === 'JOIN' && isHost) {
                 players[sender] = createPlayer(sender, data.name);
                 broadcast({ type: 'LOBBY_UPDATE', players: players });
-                updateLobby();
+                updateLobbyUI();
             }
-            else if (data.type === 'MAP_DATA') {
-                mapGrid = data.map; // Client receives map
+            else if(data.type === 'MAP_DATA') {
+                mapGrid = data.map;
+                rebuildMapMesh();
             }
-            else if (data.type === 'LOBBY_UPDATE') {
+            else if(data.type === 'LOBBY_UPDATE') {
                 players = data.players;
-                updateLobby();
+                updateLobbyUI();
             }
-            else if (data.type === 'START') {
-                startGame();
+            else if(data.type === 'START_GAME') {
+                document.getElementById('main-menu').classList.add('hidden');
+                gameState = 'PLAYING';
             }
-            else if (data.type === 'INPUT') {
+            else if(data.type === 'INPUT') {
                 if(isHost && players[sender]) {
                     players[sender].input = data.input;
                     players[sender].yaw = data.yaw;
                     if(data.fire) spawnBullet(sender);
                 }
             }
-            else if (data.type === 'WORLD_STATE') {
+            else if(data.type === 'WORLD_STATE') {
                 if(!isHost) syncWorld(data);
             }
-            else if (data.type === 'SHOP_OPEN') {
+            else if(data.type === 'SHOP_OPEN') {
                 gameState = 'SHOP';
                 document.getElementById('shop-menu').classList.remove('hidden');
                 document.getElementById('mobile-controls').style.display = 'none';
             }
-            else if (data.type === 'READY_UPDATE') {
+            else if(data.type === 'READY_STATE') {
                 if(isHost) {
-                    players[sender].ready = data.state;
+                    players[sender].ready = data.ready;
                     checkAllReady();
                 }
             }
         }
 
         function broadcast(msg) {
-            Object.values(conns).forEach(c => c.send(msg));
+            for(let id in conns) conns[id].send(msg);
         }
 
         function createPlayer(id, name) {
             return {
-                id, name, x: 0, z: 0, hp: 100, money: 0,
+                id, name, 
+                x: 0, z: 0, // Center of map
+                hp: 100, money: 0,
                 yaw: 0, dead: false, ready: false,
-                input: { x:0, y:0 }, 
-                lastShot: 0
+                input: {x:0, y:0}
             };
         }
 
-        // --- GRAPHICS ---
+        // --- THREE.JS ENGINE ---
         function initThree() {
+            if(scene) return; // Prevent double init
+
             scene = new THREE.Scene();
-            scene.fog = new THREE.Fog(0x000000, 10, 60);
-            
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 100);
+            scene.background = new THREE.Color(0x111111); // Dark grey background
+            scene.fog = new THREE.Fog(0x111111, 10, 80);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            // Default camera high up so we don't see black screen if player not loaded
+            camera.position.set(0, 40, 0); 
+            camera.lookAt(0, 0, 0);
+
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
-            
-            // Lights
-            const ambient = new THREE.AmbientLight(0x404040);
-            scene.add(ambient);
-            const point = new THREE.PointLight(0xffffff, 1, 50);
-            point.position.set(0, 10, 0);
-            scene.add(point);
 
-            // Build Map Mesh
-            const wallGeo = new THREE.BoxGeometry(CELL_SIZE, 6, CELL_SIZE);
-            const wallMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
-            const floorGeo = new THREE.PlaneGeometry(GRID_SIZE*CELL_SIZE, GRID_SIZE*CELL_SIZE);
-            const floorMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-            
-            const floor = new THREE.Mesh(floorGeo, floorMat);
-            floor.rotation.x = -Math.PI/2;
-            scene.add(floor);
+            // Lighting (Bright enough to see!)
+            const amb = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(amb);
+            const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+            dir.position.set(50, 100, 50);
+            scene.add(dir);
 
-            for(let x=0; x<GRID_SIZE; x++) {
-                for(let z=0; z<GRID_SIZE; z++) {
-                    if(mapGrid[x][z] === 1) {
-                        const wall = new THREE.Mesh(wallGeo, wallMat);
-                        wall.position.set(
-                            (x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2, 
-                            3, 
-                            (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2
-                        );
-                        scene.add(wall);
-                    }
-                }
-            }
+            rebuildMapMesh();
 
-            if(isMobile) setupTouchControls();
+            if(isMobile) setupMobileControls();
             else setupPCControls();
 
             requestAnimationFrame(animate);
         }
 
-        // --- GAME LOOP ---
-        function animate() {
-            requestAnimationFrame(animate);
-            if(gameState === 'LOBBY') return;
+        function rebuildMapMesh() {
+            // Floor
+            const fGeo = new THREE.PlaneGeometry(GRID_SIZE*CELL_SIZE, GRID_SIZE*CELL_SIZE);
+            const fMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+            const floor = new THREE.Mesh(fGeo, fMat);
+            floor.rotation.x = -Math.PI/2;
+            scene.add(floor);
 
-            let now = performance.now();
-            let dt = Math.min((now - lastTime)/1000, 0.1);
-            lastTime = now;
-
-            if(isHost) hostLogic(dt);
-            else clientLogic();
-
-            renderInterpolation(dt);
-            renderer.render(scene, camera);
+            // Walls
+            if(mapGrid.length === 0) return;
+            const wGeo = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
+            const wMat = new THREE.MeshLambertMaterial({ color: 0x554433 });
+            
+            for(let x=0; x<GRID_SIZE; x++) {
+                for(let z=0; z<GRID_SIZE; z++) {
+                    if(mapGrid[x][z] === 1) {
+                        const w = new THREE.Mesh(wGeo, wMat);
+                        w.position.set(
+                            (x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
+                            WALL_HEIGHT/2,
+                            (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2
+                        );
+                        scene.add(w);
+                    }
+                }
+            }
         }
 
-        function hostLogic(dt) {
-            if(gameState === 'PLAYING') {
-                // Wave Logic
-                if(zombiesToSpawn > 0 && Math.random() < 0.05) {
-                    spawnZombie();
-                }
-                
-                if(zombiesToSpawn === 0 && Object.keys(zombies).length === 0) {
-                    gameState = 'SHOP';
-                    broadcast({ type: 'SHOP_OPEN' });
-                    // Open host shop too
-                    document.getElementById('shop-menu').classList.remove('hidden');
-                    if(isMobile) document.getElementById('mobile-controls').style.display = 'none';
-                    else document.exitPointerLock();
-                    return;
-                }
+        // --- GAME LOGIC ---
+        function hostStartGame() {
+            if(!isHost) return;
+            broadcast({ type: 'START_GAME' });
+            document.getElementById('main-menu').classList.add('hidden');
+            gameState = 'PLAYING';
+            startWave(1);
+        }
 
-                // Update Zombies
-                for(let zid in zombies) {
-                    let z = zombies[zid];
-                    
-                    // Simple pathfinding update (recalc every 0.5s or if no path)
-                    if(!z.path || z.path.length === 0 || Math.random() < 0.05) {
-                        let target = getClosestPlayer(z.x, z.z);
-                        if(target) {
-                            let gStart = getGridPos(z.x, z.z);
-                            let gEnd = getGridPos(target.x, target.z);
-                            z.path = findPath(gStart.x, gStart.z, gEnd.x, gEnd.z);
-                        }
+        function startWave(n) {
+            wave = n;
+            zombiesToSpawn = 4 + Math.floor(wave * 2.5); // Increase count
+            // Reset player ready status
+            for(let id in players) players[id].ready = false;
+        }
+
+        function hostUpdate(dt) {
+            if(gameState !== 'PLAYING') return;
+
+            // Spawn Zombies
+            if(zombiesToSpawn > 0 && Math.random() < 0.03) {
+                let gx, gz;
+                // Find empty spot far from center
+                let tries = 0;
+                do {
+                    gx = Math.floor(Math.random() * GRID_SIZE);
+                    gz = Math.floor(Math.random() * GRID_SIZE);
+                    tries++;
+                } while( (isWall(gx, gz) || (Math.abs(gx - GRID_SIZE/2) < 5 && Math.abs(gz - GRID_SIZE/2) < 5)) && tries < 50 );
+                
+                let id = 'z_' + Date.now() + Math.random();
+                zombies[id] = {
+                    id: id,
+                    x: (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
+                    z: (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
+                    hp: 50 + (wave * 20),
+                    path: []
+                };
+                zombiesToSpawn--;
+            }
+
+            // End Wave / Shop
+            if(zombiesToSpawn === 0 && Object.keys(zombies).length === 0) {
+                gameState = 'SHOP';
+                broadcast({ type: 'SHOP_OPEN' });
+                document.getElementById('shop-menu').classList.remove('hidden');
+                document.getElementById('mobile-controls').style.display = 'none';
+                if(!isMobile) document.exitPointerLock();
+                return;
+            }
+
+            // Update Zombies
+            for(let zid in zombies) {
+                let z = zombies[zid];
+                let target = getClosestPlayer(z.x, z.z);
+                
+                if(target) {
+                    // Pathfinding every ~0.5s or if empty
+                    if(Math.random() < 0.05 || z.path.length === 0) {
+                        let gStart = getGridPos(z.x, z.z);
+                        let gEnd = getGridPos(target.x, target.z);
+                        z.path = findPath(gStart.x, gStart.z, gEnd.x, gEnd.z);
                     }
 
-                    // Move along path
-                    let moveTarget = { x: z.x, z: z.z }; // Default stay
+                    // Move
+                    let mx = 0, mz = 0;
                     if(z.path && z.path.length > 0) {
-                        // Get next cell center in world coords
-                        let nextCell = z.path[0];
-                        let targetX = (nextCell.x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2;
-                        let targetZ = (nextCell.z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2;
-                        
-                        // Direction
-                        let dx = targetX - z.x;
-                        let dz = targetZ - z.z;
+                        let next = z.path[0];
+                        let wx = (next.x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2;
+                        let wz = (next.z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2;
+                        let dx = wx - z.x;
+                        let dz = wz - z.z;
                         let dist = Math.sqrt(dx*dx + dz*dz);
-                        
-                        if(dist < 0.5) {
-                            z.path.shift(); // Reached node
-                        } else {
-                            z.x += (dx/dist) * ZOMBIE_SPEED * dt;
-                            z.z += (dz/dist) * ZOMBIE_SPEED * dt;
-                            z.yaw = Math.atan2(dx, dz);
+                        if(dist < 0.5) z.path.shift();
+                        else {
+                            mx = dx/dist; mz = dz/dist;
                         }
                     } else {
-                        // Fallback: Line of sight move if close
-                         let target = getClosestPlayer(z.x, z.z);
-                         if(target) {
-                             let dx = target.x - z.x;
-                             let dz = target.z - z.z;
-                             z.yaw = Math.atan2(dx, dz);
-                             z.x += Math.sin(z.yaw) * ZOMBIE_SPEED * dt;
-                             z.z += Math.cos(z.yaw) * ZOMBIE_SPEED * dt;
-                         }
+                        // Line of sight fallback
+                        let dx = target.x - z.x;
+                        let dz = target.z - z.z;
+                        let dist = Math.sqrt(dx*dx + dz*dz);
+                        mx = dx/dist; mz = dz/dist;
                     }
 
-                    // Zombie Damage
-                    let target = getClosestPlayer(z.x, z.z);
-                    if(target && dist(z.x, z.z, target.x, target.z) < 1.5) {
+                    // Apply move
+                    z.x += mx * ZOMBIE_SPEED * dt;
+                    z.z += mz * ZOMBIE_SPEED * dt;
+                    z.yaw = Math.atan2(mx, mz);
+
+                    // Attack
+                    let distToPlayer = Math.sqrt((target.x-z.x)**2 + (target.z-z.z)**2);
+                    if(distToPlayer < 1.5) {
                         target.hp -= 20 * dt;
                         if(target.hp <= 0) target.dead = true;
                     }
                 }
-
-                // Update Bullets
-                for(let i=bullets.length-1; i>=0; i--) {
-                    let b = bullets[i];
-                    b.x += b.vx * dt;
-                    b.z += b.vz * dt;
-                    b.life -= dt;
-                    
-                    // Hit Zombies
-                    let hit = false;
-                    for(let zid in zombies) {
-                        let z = zombies[zid];
-                        if(dist(b.x, b.z, z.x, z.z) < 1.0) {
-                            z.hp -= 35; 
-                            if(z.hp <= 0) {
-                                delete zombies[zid];
-                                players[b.owner].money += 20;
-                            }
-                            hit = true;
-                            break;
-                        }
-                    }
-                    
-                    // Hit Walls
-                    let gPos = getGridPos(b.x, b.z);
-                    if(isWall(gPos.x, gPos.z)) hit = true;
-
-                    if(hit || b.life <= 0) bullets.splice(i, 1);
-                }
             }
 
-            // Move Players (Collision)
+            // Update Bullets
+            for(let i = bullets.length - 1; i >= 0; i--) {
+                let b = bullets[i];
+                b.x += b.vx * dt;
+                b.z += b.vz * dt;
+                b.life -= dt;
+                
+                let hit = false;
+                // Wall Collision
+                let g = getGridPos(b.x, b.z);
+                if(isWall(g.x, g.z)) hit = true;
+
+                // Zombie Collision
+                for(let zid in zombies) {
+                    let z = zombies[zid];
+                    let d = Math.sqrt((b.x-z.x)**2 + (b.z-z.z)**2);
+                    if(d < 1.5) { // Hit radius
+                        z.hp -= 35;
+                        if(z.hp <= 0) {
+                            delete zombies[zid];
+                            players[b.owner].money += 25;
+                        }
+                        hit = true;
+                        break;
+                    }
+                }
+
+                if(hit || b.life <= 0) bullets.splice(i, 1);
+            }
+
+            // Update Players
             for(let pid in players) {
                 let p = players[pid];
                 if(p.dead) continue;
                 
-                // Calculate Velocity based on Yaw and Input
-                // Forward/Back moves along Yaw vector
-                // Strafe moves perpendicular
+                // Movement Logic
+                let speed = PLAYER_SPEED * dt;
+                let moveX = 0; 
+                let moveZ = 0;
+                
+                // Standard FPS controls:
+                // Input Y+ = Forward (-Z in 3D), Input Y- = Back (+Z)
+                // Input X+ = Right (+X), Input X- = Left (-X)
+                
                 let sin = Math.sin(p.yaw);
                 let cos = Math.cos(p.yaw);
-                
-                // Input X = Strafe, Input Y = Forward/Back
-                let vx = (p.input.x * cos - p.input.y * sin) * PLAYER_SPEED;
-                let vz = (-p.input.x * sin - p.input.y * cos) * PLAYER_SPEED;
 
-                // Try X Move
-                if(!checkWallCollision(p.x + vx*dt, p.z)) p.x += vx*dt;
-                // Try Z Move
-                if(!checkWallCollision(p.x, p.z + vz*dt)) p.z += vz*dt;
+                // Forward vector (0,0,-1) rotated by Yaw
+                // Right vector (1,0,0) rotated by Yaw
+                
+                // Forward/Back
+                moveX -= sin * p.input.y * speed; 
+                moveZ -= cos * p.input.y * speed;
+                
+                // Strafe Left/Right
+                moveX += cos * p.input.x * speed;
+                moveZ -= sin * p.input.x * speed;
+
+                // Collision & Apply
+                if(!checkCollision(p.x + moveX, p.z)) p.x += moveX;
+                if(!checkCollision(p.x, p.z + moveZ)) p.z += moveZ;
             }
 
             // Sync
-            broadcast({ 
-                type: 'WORLD_STATE', 
-                state: { players, zombies, bullets: bullets.map(b => ({x:b.x, z:b.z})), wave } 
-            });
-            syncWorld({ state: { players, zombies, bullets, wave } }); // Update host local view
+            let state = { players, zombies, bullets, wave };
+            broadcast({ type: 'WORLD_STATE', state });
+            syncWorld({ state });
         }
 
-        function checkWallCollision(x, z) {
-            // Check bounding box radius
-            let rad = 0.5;
-            let checks = [
-                {x: x+rad, z: z+rad}, {x: x-rad, z: z-rad},
-                {x: x+rad, z: z-rad}, {x: x-rad, z: z+rad}
+        function checkCollision(x, z) {
+            let r = 0.6; // Player radius
+            let points = [
+                {x:x+r, z:z+r}, {x:x-r, z:z-r},
+                {x:x+r, z:z-r}, {x:x-r, z:z+r}
             ];
-            for(let c of checks) {
-                let g = getGridPos(c.x, c.z);
+            for(let p of points) {
+                let g = getGridPos(p.x, p.z);
                 if(isWall(g.x, g.z)) return true;
             }
             return false;
@@ -519,185 +540,175 @@
         function spawnBullet(pid) {
             let p = players[pid];
             if(!p || p.dead) return;
-            
-            // Spawn slightly in front
-            let bx = p.x + Math.sin(p.yaw) * 1.0;
-            let bz = p.z + Math.cos(p.yaw) * 1.0;
-            
             bullets.push({
-                x: bx, z: bz,
-                vx: Math.sin(p.yaw) * BULLET_SPEED,
-                vz: Math.cos(p.yaw) * BULLET_SPEED,
-                life: 2.0,
+                x: p.x, z: p.z,
+                vx: -Math.sin(p.yaw) * BULLET_SPEED, // Shoot forward
+                vz: -Math.cos(p.yaw) * BULLET_SPEED,
+                life: 1.5,
                 owner: pid
             });
         }
 
-        function spawnZombie() {
-            let id = 'z'+Math.random();
-            // Find random empty spot
-            let gx, gz;
-            do {
-                gx = Math.floor(Math.random()*GRID_SIZE);
-                gz = Math.floor(Math.random()*GRID_SIZE);
-            } while(isWall(gx, gz) || dist((gx*CELL_SIZE)-MAP_OFFSET, (gz*CELL_SIZE)-MAP_OFFSET, 0, 0) < 20);
-
-            zombies[id] = {
-                x: (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
-                z: (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE/2,
-                hp: 100 + (wave*20),
-                path: [],
-                yaw: 0
-            };
-            zombiesToSpawn--;
+        function getClosestPlayer(x, z) {
+            let min = 9999, target = null;
+            for(let id in players) {
+                if(players[id].dead) continue;
+                let d = Math.sqrt((x-players[id].x)**2 + (z-players[id].z)**2);
+                if(d < min) { min = d; target = players[id]; }
+            }
+            return target;
         }
 
-        function clientLogic() {
-            if(isMobile) {
-                // Mobile: Send joystick data
-                // Left stick moves, Right stick sets Absolute Yaw
-                // We send {x, y} for movement, and yaw for looking
-                if(myId && conns[hostId]) {
-                    conns[hostId].send({
-                        type: 'INPUT',
-                        input: { x: input.x, y: input.y },
-                        yaw: camYaw,
-                        fire: input.shoot
-                    });
-                    input.shoot = false; // Reset trigger
-                }
-            } else {
-                // PC: Send WASD and Yaw
-                if(myId && conns[hostId]) {
-                    conns[hostId].send({
-                        type: 'INPUT',
-                        input: { x: input.x, y: input.y },
-                        yaw: camYaw,
-                        fire: input.shoot
-                    });
-                    input.shoot = false;
-                }
+        // --- CLIENT ---
+        function animate() {
+            requestAnimationFrame(animate);
+            if(gameState === 'LOBBY' || !renderer) return;
+
+            let now = performance.now();
+            let dt = Math.min((now - lastTime)/1000, 0.1);
+            lastTime = now;
+
+            if(isHost) hostUpdate(dt);
+            else clientUpdate();
+
+            renderScene();
+        }
+
+        function clientUpdate() {
+            // Send Inputs
+            if(myId && hostId && conns[hostId]) {
+                conns[hostId].send({
+                    type: 'INPUT',
+                    input: { x: input.x, y: input.y }, // Stick inputs
+                    yaw: camYaw,
+                    fire: input.fire
+                });
+                input.fire = false;
             }
         }
 
-        // --- RENDERER ---
+        function syncWorld(data) {
+            players = data.state.players;
+            zombies = data.state.zombies;
+            bullets = data.state.bullets; // Copy full bullet array
+            wave = data.state.wave;
+            
+            // HUD
+            if(players[myId]) {
+                document.getElementById('hp-disp').innerText = Math.floor(players[myId].hp);
+                document.getElementById('money-disp').innerText = players[myId].money;
+                document.getElementById('wave-disp').innerText = wave;
+                document.getElementById('zombie-disp').innerText = Object.keys(zombies).length + zombiesToSpawn;
+            }
+        }
+
+        // --- RENDER ---
+        const pGeo = new THREE.BoxGeometry(1, 2, 1);
         const pMat = new THREE.MeshLambertMaterial({ color: 0x0088ff });
+        const zGeo = new THREE.BoxGeometry(1, 2, 1);
         const zMat = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+        const bGeo = new THREE.BoxGeometry(0.3, 0.3, 0.8);
         const bMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-        const charGeo = new THREE.BoxGeometry(1, 2, 1);
-        const bulletGeo = new THREE.SphereGeometry(0.2, 4, 4);
 
-        function renderInterpolation(dt) {
-            // Camera Logic
+        function renderScene() {
+            // Camera follow
             if(players[myId] && !players[myId].dead) {
-                let me = players[myId];
-                camera.position.set(me.x, 2, me.z);
-                // On mobile, camYaw is set by right stick. On PC by mouse.
-                camera.rotation.y = camYaw + Math.PI; // Invert for Three.js camera
-                camera.rotation.x = camPitch;
+                let p = players[myId];
+                camera.position.set(p.x, 2, p.z);
+                camera.rotation.set(camPitch, camYaw + Math.PI, 0); // Correct rotation
             }
 
-            // Sync Meshes
             // Players
-            for(let pid in players) {
-                if(pid === myId) continue; // Don't render self body for FPS
-                let p = players[pid];
-                if(p.dead) { if(meshes[pid]) { scene.remove(meshes[pid]); delete meshes[pid]; } continue; }
-                
-                if(!meshes[pid]) { meshes[pid] = new THREE.Mesh(charGeo, pMat); scene.add(meshes[pid]); }
-                meshes[pid].position.set(p.x, 1, p.z);
-                meshes[pid].rotation.y = p.yaw;
-            }
-            
-            // Zombies
-            for(let zid in zombies) {
-                let z = zombies[zid];
-                if(!meshes[zid]) { meshes[zid] = new THREE.Mesh(charGeo, zMat); scene.add(meshes[zid]); }
-                meshes[zid].position.set(z.x, 1, z.z);
-                meshes[zid].rotation.y = z.yaw;
-            }
-            
-            // Clean dead entities
-            for(let id in meshes) {
-                if(id.startsWith('z') && !zombies[id]) { scene.remove(meshes[id]); delete meshes[id]; }
-                if(!id.startsWith('z') && !players[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+            for(let id in players) {
+                if(id === myId) continue; // Don't draw self
+                let p = players[id];
+                if(p.dead) {
+                    if(meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+                    continue;
+                }
+                if(!meshes[id]) { meshes[id] = new THREE.Mesh(pGeo, pMat); scene.add(meshes[id]); }
+                meshes[id].position.set(p.x, 1, p.z);
+                meshes[id].rotation.y = p.yaw;
             }
 
-            // Bullets (Pool/Recreate)
-            // Lazy approach: Remove all bullet meshes, re-add. 
-            // Better: Pool. But strictly simpler code:
+            // Zombies
+            for(let id in zombies) {
+                let z = zombies[id];
+                if(!meshes[id]) { meshes[id] = new THREE.Mesh(zGeo, zMat); scene.add(meshes[id]); }
+                meshes[id].position.set(z.x, 1, z.z);
+                meshes[id].rotation.y = z.yaw;
+            }
+
+            // Cleanups
+            for(let id in meshes) {
+                if(id.startsWith('z_') && !zombies[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+                if(!id.startsWith('z_') && !players[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+            }
+
+            // Bullets (Recreate every frame for simplicity)
             bulletMeshes.forEach(m => scene.remove(m));
             bulletMeshes = [];
             bullets.forEach(b => {
-                let m = new THREE.Mesh(bulletGeo, bMat);
-                m.position.set(b.x, 2, b.z);
+                let m = new THREE.Mesh(bGeo, bMat);
+                m.position.set(b.x, 1.5, b.z);
+                m.lookAt(b.x + b.vx, 1.5, b.z + b.vz);
                 scene.add(m);
                 bulletMeshes.push(m);
             });
 
-            // HUD
-            if(players[myId]) {
-                document.getElementById('hp-val').innerText = Math.floor(players[myId].hp);
-                document.getElementById('cash-val').innerText = players[myId].money;
-                document.getElementById('enemy-count').innerText = Object.keys(zombies).length + zombiesToSpawn;
-                document.getElementById('wave-num').innerText = wave;
-            }
+            renderer.render(scene, camera);
         }
 
-        // --- CONTROLS ---
-        function setupTouchControls() {
+        // --- CONTROLS SETUP ---
+        function setupMobileControls() {
             document.getElementById('mobile-controls').style.display = 'block';
             
-            // Helper for joystick logic
-            const handleStick = (e, stickId, callback) => {
-                const stick = document.getElementById(stickId);
-                const rect = stick.getBoundingClientRect();
-                const center = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+            // Joystick Logic
+            const bindStick = (eid, callback) => {
+                const el = document.getElementById(eid);
+                const nub = el.querySelector('.stick-nub');
                 
-                for(let i=0; i<e.changedTouches.length; i++) {
-                    let t = e.changedTouches[i];
-                    // Check if touch is near stick
-                    let dx = t.clientX - center.x;
-                    let dy = t.clientY - center.y;
+                el.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    let touch = e.targetTouches[0];
+                    let rect = el.getBoundingClientRect();
+                    let cx = rect.left + rect.width/2;
+                    let cy = rect.top + rect.height/2;
+                    let dx = touch.clientX - cx;
+                    let dy = touch.clientY - cy;
                     let dist = Math.sqrt(dx*dx + dy*dy);
+                    let max = 40;
+                    if(dist > max) { dx = (dx/dist)*max; dy = (dy/dist)*max; }
                     
-                    if(dist < 100) { // Interaction radius
-                        // Clamp nub
-                        let max = 40;
-                        if(dist > max) { dx = (dx/dist)*max; dy = (dy/dist)*max; }
-                        stick.children[0].style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
-                        
-                        // Normalize -1 to 1
-                        callback(dx/max, dy/max);
-                        e.preventDefault();
-                    }
-                }
-            };
-            
-            const resetStick = (stickId) => {
-                document.getElementById(stickId).children[0].style.transform = `translate(-50%, -50%)`;
+                    nub.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
+                    callback(dx/max, dy/max);
+                }, {passive:false});
+
+                el.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    nub.style.transform = `translate(-50%, -50%)`;
+                    callback(0, 0);
+                });
             };
 
             // LEFT STICK (Move)
-            const sLeft = document.getElementById('stick-left');
-            sLeft.addEventListener('touchmove', e => handleStick(e, 'stick-left', (x, y) => {
+            bindStick('stick-left', (x, y) => {
                 input.x = x; 
-                input.y = -y; // Invert Y: Drag Up (-1) -> Move Forward (+1)
-            }));
-            sLeft.addEventListener('touchend', () => { resetStick('stick-left'); input.x=0; input.y=0; });
+                input.y = -y; // Inverted: Drag Up (neg Y) -> Forward (pos Input)
+            });
 
             // RIGHT STICK (Look)
-            const sRight = document.getElementById('stick-right');
-            sRight.addEventListener('touchmove', e => handleStick(e, 'stick-right', (x, y) => {
-                // Rotate camera based on stick deflection
-                camYaw -= x * 0.1; // Turn Left/Right
+            bindStick('stick-right', (x, y) => {
+                camYaw -= x * 0.05; // Rotate Left/Right
                 camPitch -= y * 0.05; // Look Up/Down
                 camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
-            }));
-            sRight.addEventListener('touchend', () => resetStick('stick-right'));
+            });
 
-            // BUTTONS
-            document.getElementById('btn-fire').addEventListener('touchstart', (e) => { e.preventDefault(); input.shoot = true; });
+            // FIRE
+            document.getElementById('btn-fire').addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                input.fire = true;
+            });
         }
 
         function setupPCControls() {
@@ -711,6 +722,10 @@
                 if(e.code === 'KeyW' || e.code === 'KeyS') input.y = 0;
                 if(e.code === 'KeyA' || e.code === 'KeyD') input.x = 0;
             });
+            document.addEventListener('mousedown', () => {
+                if(document.pointerLockElement !== document.body) document.body.requestPointerLock();
+                else input.fire = true;
+            });
             document.addEventListener('mousemove', e => {
                 if(document.pointerLockElement === document.body) {
                     camYaw -= e.movementX * 0.002;
@@ -718,89 +733,50 @@
                     camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
                 }
             });
-            document.addEventListener('mousedown', () => {
-                if(document.pointerLockElement !== document.body) document.body.requestPointerLock();
-                else input.shoot = true;
-            });
         }
 
         // --- UTILS ---
-        function hostStartGame() {
-            if(!isHost) return;
-            broadcast({ type: 'START' });
-            startGame();
+        function copyInvite() {
+            const url = location.href.split('?')[0] + "?join=" + myId;
+            navigator.clipboard.writeText(url);
+            alert("Invite Copied!");
         }
 
-        function startGame() {
-            document.getElementById('main-menu').classList.add('hidden');
-            gameState = 'PLAYING';
-            if(!scene) initThree();
-            if(isHost) startWave(1);
+        function updateLobbyUI() {
+            let html = "";
+            for(let id in players) html += `<div>${players[id].name}</div>`;
+            document.getElementById('lobby-status').innerHTML = html || "Waiting...";
         }
 
-        function startWave(n) {
-            wave = n;
-            zombiesToSpawn = 5 + (wave * 3);
-            gameState = 'PLAYING';
-            // Reset shop readiness
-            for(let id in players) players[id].ready = false;
+        function openShopMobile() {
+            if(gameState === 'SHOP') return;
+            // Only functional if game state is shop, handled by host logic
         }
-
+        
         function toggleReady() {
+            let me = players[myId];
             if(isHost) {
-                players[myId].ready = !players[myId].ready;
+                me.ready = !me.ready;
                 checkAllReady();
             } else {
-                conns[hostId].send({ type: 'READY_UPDATE', state: !players[myId].ready });
+                conns[hostId].send({ type: 'READY_STATE', ready: !me.ready });
+                me.ready = !me.ready;
             }
-            let btn = document.getElementById('ready-btn');
-            btn.style.background = players[myId].ready ? '#0a0' : '#500';
-            btn.innerText = players[myId].ready ? 'WAITING...' : 'READY UP';
+            document.getElementById('ready-btn').style.background = me.ready ? '#0d0' : '#444';
         }
 
         function checkAllReady() {
+            if(!isHost) return;
             let all = true;
             for(let id in players) if(!players[id].ready) all = false;
-            
             if(all) {
                 document.getElementById('shop-menu').classList.add('hidden');
                 if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
                 else document.body.requestPointerLock();
-                
                 startWave(wave + 1);
-                broadcast({ type: 'LOBBY_UPDATE', players: players }); // Force sync hud
             }
         }
 
-        function copyInvite() {
-            const url = window.location.href.split('?')[0] + '?join=' + myId;
-            navigator.clipboard.writeText(url);
-            alert("Invite Link Copied!");
-        }
-
-        function updateLobby() {
-            document.getElementById('lobby-list').innerHTML = Object.values(players).map(p => `<div>${p.name}</div>`).join('');
-        }
-        
-        function getClosestPlayer(x, z) {
-            let closest = null, minDist = 9999;
-            for(let id in players) {
-                let p = players[id];
-                if(p.dead) continue;
-                let d = dist(x, z, p.x, p.z);
-                if(d < minDist) { minDist = d; closest = p; }
-            }
-            return closest;
-        }
-
-        function dist(x1, z1, x2, z2) { return Math.sqrt((x2-x1)**2 + (z2-z1)**2); }
-        
-        function openShop() {
-            // Mobile only toggle for visual shop menu
-            if(gameState === 'SHOP') return; // Logic handled by host
-        }
-
-        // --- BOOTSTRAP ---
         initNetwork();
     </script>
 </body>
