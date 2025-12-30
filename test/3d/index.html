@@ -2158,15 +2158,51 @@
         }
 
         function setupPCControls() {
+            // Track individual key states to handle overlapping presses
+            const keys = { w: false, a: false, s: false, d: false };
+
+            function updateMovementInput() {
+                // Compute input from key states - allows proper handling of multiple keys
+                input.y = (keys.w ? 1 : 0) + (keys.s ? -1 : 0);
+                input.x = (keys.a ? 1 : 0) + (keys.d ? -1 : 0);
+            }
+
             document.addEventListener('keydown', e => {
-                if (e.key === 'w') input.y = 1; if (e.key === 's') input.y = -1; if (e.key === 'a') input.x = 1; if (e.key === 'd') input.x = -1;
+                // Ignore repeated keydown events (key held)
+                if (e.repeat) return;
+
+                switch (e.key.toLowerCase()) {
+                    case 'w': keys.w = true; break;
+                    case 's': keys.s = true; break;
+                    case 'a': keys.a = true; break;
+                    case 'd': keys.d = true; break;
+                }
+                updateMovementInput();
+
                 if (e.code === 'Space') input.jump = true;
                 if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
                 if (e.key === 'p' || e.key === 'P') { debugPhysics = !debugPhysics; console.log("Debug Physics:", debugPhysics); }
             });
             document.addEventListener('keyup', e => {
-                if (e.key === 'w' || e.key === 's') input.y = 0; if (e.key === 'a' || e.key === 'd') input.x = 0; if (e.code === 'Space') input.jump = false;
+                switch (e.key.toLowerCase()) {
+                    case 'w': keys.w = false; break;
+                    case 's': keys.s = false; break;
+                    case 'a': keys.a = false; break;
+                    case 'd': keys.d = false; break;
+                }
+                updateMovementInput();
+
+                if (e.code === 'Space') input.jump = false;
             });
+
+            // Reset keys when window loses focus (prevents stuck keys)
+            window.addEventListener('blur', () => {
+                keys.w = keys.a = keys.s = keys.d = false;
+                input.x = input.y = 0;
+                input.jump = false;
+                input.fire = false;
+            });
+
             document.addEventListener('mousemove', e => {
                 if (document.pointerLockElement === document.body) {
                     camYaw -= e.movementX * 0.002; camPitch -= e.movementY * 0.002;
