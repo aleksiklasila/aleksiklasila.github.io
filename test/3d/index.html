@@ -273,7 +273,7 @@
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
                 "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+                "@dimforge/rapier3d-compat": "https://unpkg.com/@dimforge/rapier3d-compat@0.11.2/rapier.es.js"
             }
         }
     </script>
@@ -377,7 +377,7 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import * as CANNON from 'cannon-es';
+        import RAPIER from '@dimforge/rapier3d-compat';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         // ==========================================
@@ -543,35 +543,43 @@
         }
 
         function init() {
-            // Host buttons
-            const startBtn = document.getElementById('btn-start');
-            if (startBtn) startBtn.onclick = hostStartGame;
+            // Initialize Rapier WASM first
+            RAPIER.init().then(() => {
+                console.log("Rapier Physics Initialized");
 
-            const copyBtn = document.getElementById('btn-copy');
-            if (copyBtn) copyBtn.onclick = copyInvite;
+                // Host buttons
+                const startBtn = document.getElementById('btn-start');
+                if (startBtn) startBtn.onclick = hostStartGame;
 
-            // File input auto-load
-            const fileInput = document.getElementById('map-file');
-            if (fileInput) fileInput.onchange = loadMapFromInput;
+                const copyBtn = document.getElementById('btn-copy');
+                if (copyBtn) copyBtn.onclick = copyInvite;
 
-            // Client ready button (for shop)
-            const readyBtn = document.getElementById('btn-shop-ready');
-            if (readyBtn) readyBtn.onclick = toggleReady;
+                // File input auto-load
+                const fileInput = document.getElementById('map-file');
+                if (fileInput) fileInput.onchange = loadMapFromInput;
 
-            // Other buttons
-            const shopBtn = document.getElementById('btn-shop');
-            if (shopBtn) shopBtn.onclick = () => { /* mobile shop */ };
-            const returnBtn = document.getElementById('btn-return-lobby');
-            if (returnBtn) returnBtn.onclick = resetToLobby;
-            const retryBtn = document.getElementById('btn-retry');
-            if (retryBtn) retryBtn.onclick = hostRestartGame;
+                // Client ready button (for shop)
+                const readyBtn = document.getElementById('btn-shop-ready');
+                if (readyBtn) readyBtn.onclick = toggleReady;
 
-            initShopUI();
+                // Other buttons
+                const shopBtn = document.getElementById('btn-shop');
+                if (shopBtn) shopBtn.onclick = () => { /* mobile shop */ };
+                const returnBtn = document.getElementById('btn-return-lobby');
+                if (returnBtn) returnBtn.onclick = resetToLobby;
+                const retryBtn = document.getElementById('btn-retry');
+                if (retryBtn) retryBtn.onclick = hostRestartGame;
 
-            if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) setupMobileControls();
-            else setupPCControls();
+                initShopUI();
 
-            initNetwork();
+                if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) setupMobileControls();
+                else setupPCControls();
+
+                initNetwork();
+            }).catch(err => {
+                console.error("Failed to init Rapier:", err);
+                alert("Critical Error: Physics Engine Failed to Load");
+            });
         }
 
         function clearMap() {
@@ -585,7 +593,10 @@
 
             // Clear Physics
             if (world) {
-                mapBodies.forEach(b => world.removeBody(b));
+                mapBodies.forEach(b => {
+                    // Check if body still exists in world before removing (Rapier safety)
+                    if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
+                });
             }
             mapBodies = [];
             mapGrid = [];
@@ -727,7 +738,10 @@
             conn.on('close', () => {
                 if (isHost) {
                     delete players[conn.peer];
-                    if (physicsBodies[conn.peer]) { world.removeBody(physicsBodies[conn.peer]); delete physicsBodies[conn.peer]; }
+                    if (physicsBodies[conn.peer]) {
+                        if (world.getRigidBody(physicsBodies[conn.peer].handle)) world.removeRigidBody(physicsBodies[conn.peer]);
+                        delete physicsBodies[conn.peer];
+                    }
                     broadcast({ type: 'LOBBY_UPDATE', players: sanitizePlayersForLobby() });
                     updateLobbyUI();
                 }
@@ -759,7 +773,7 @@
             for (let pid in players) {
                 updatePlayerPhysics(pid);
             }
-            world.step(TICK_MS / 1000);
+            world.step();
             updateZombies();
             updateBullets();
 
@@ -777,31 +791,32 @@
 
         // Check if player is grounded using raycast
         function isPlayerGrounded(body) {
-            const rayFrom = new CANNON.Vec3(body.position.x, body.position.y, body.position.z);
-            const rayTo = new CANNON.Vec3(body.position.x, body.position.y - 0.7, body.position.z); // 0.5 (sphere radius) + 0.2 buffer
+            const pos = body.translation();
+            // Ray from center downwards
+            // Capsule is 2m tall, center at mid. Bottom is at y-1.
+            // We want to check slightly below bottom. Dist = 1.0 + buffer.
+            const ray = new RAPIER.Ray({ x: pos.x, y: pos.y, z: pos.z }, { x: 0, y: -1, z: 0 });
+            const maxToi = 1.1; // 1.0 is bottom + 0.1 buffer
 
-            const result = new CANNON.RaycastResult();
-            world.raycastClosest(rayFrom, rayTo, { skipBackfaces: true }, result);
+            // Mask: Environment (1) only? Or zombies too? Usually just env for jumping.
+            // Filter: Member ?, Filter 1 (Env) | 4 (Zombie)? No, just Env for ground.
+            // Interaction groups are (Member << 16) | Filter
+            // We want to hit Environment(1). So look for things with Member 1.
+            // Ray doesn't have membership, just filter.
+            // Filter = 1.
 
-            if (result.hasHit) {
-                return true;
-            }
+            // castRay(ray, maxToi, solid, filter, groups)
+            // Groups is a bitmask ? Actually Rapier JS QueryFilter structure.
+            // Or simple bitmask in recent versions.
 
-            // Fallback: check velocity for near-standstill (helps on complex geometry)
-            // More lenient than before: 0.5 instead of 0.1
-            if (Math.abs(body.velocity.y) < 0.5) {
-                // Also check contacts directly
-                for (let i = 0; i < world.contacts.length; i++) {
-                    const c = world.contacts[i];
-                    if (c.bi === body || c.bj === body) {
-                        // Check if contact normal is pointing up (floor contact)
-                        const normal = c.bi === body ? c.ni : new CANNON.Vec3(-c.ni.x, -c.ni.y, -c.ni.z);
-                        if (normal.y < -0.5) { // Normal pointing into player from below
-                            return true;
-                        }
-                    }
-                }
-            }
+            // world.castRay(ray, maxToi, true) -> returns hit
+            const hit = world.castRay(ray, maxToi, true, 0xffff0001); // Filter against Member 1 (Env)
+
+            if (hit) return true;
+
+            // Fallback: Check vertical velocity for stationary
+            // const vel = body.linvel();
+            // if (Math.abs(vel.y) < 0.1) return true;
 
             return false;
         }
@@ -820,8 +835,7 @@
             moveVec.addScaledVector(camRight, p.input.x);
             moveVec.normalize().multiplyScalar(PLAYER_SPEED);
 
-            body.velocity.x = moveVec.x;
-            body.velocity.z = moveVec.z;
+            body.setLinvel({ x: moveVec.x, y: body.linvel().y, z: moveVec.z }, true);
 
             // Ground detection with coyote time and jump buffering
             const grounded = isPlayerGrounded(body);
@@ -840,17 +854,19 @@
             const withinJumpBuffer = (now - p.lastJumpPressTime) < JUMP_BUFFER_MS;
             const wantsToJump = p.input.jump || withinJumpBuffer;
 
-            if (wantsToJump && withinCoyoteTime && body.velocity.y < 2) {
-                body.velocity.y = JUMP_FORCE;
+            if (wantsToJump && withinCoyoteTime && body.linvel().y < 2) {
+                const vel = body.linvel();
+                body.setLinvel({ x: vel.x, y: JUMP_FORCE, z: vel.z }, true);
                 // Reset timers to prevent double-jump
                 p.lastGroundedTime = 0;
                 p.lastJumpPressTime = 0;
             }
             body.wakeUp();
 
-            p.x = body.position.x;
-            p.y = body.position.y;
-            p.z = body.position.z;
+            const pos = body.translation();
+            p.x = pos.x;
+            p.y = pos.y;
+            p.z = pos.z;
 
             // Update Weapon selection
             if (p.input.slot >= 0 && p.input.slot < 4) {
@@ -1264,6 +1280,7 @@
         // 7. HELPER FUNCTIONS & GAME LOGIC
         // ==========================================
         function clearPhysicsDebug() {
+            // TODO: adapt for Rapier or remove
             if (debugMeshes.length > 0) {
                 debugMeshes.forEach(m => scene.remove(m));
                 debugMeshes = [];
@@ -1272,66 +1289,9 @@
 
         function updatePhysicsDebug() {
             if (!world) return;
-            // Simple approach: Rebuild every frame or manage pool. 
-            // Rebuild is easier for now given low body count (except Trimesh).
-            // Optimization: Keep map static bodies, only update dynamic.
-
-            // For now, clear and redraw (performance hit but accurate debug)
-            clearPhysicsDebug();
-
-            world.bodies.forEach(b => {
-                b.shapes.forEach((s, i) => {
-                    const offset = b.shapeOffsets[i];
-                    const orient = b.shapeOrientations[i];
-
-                    let mesh;
-                    let geom;
-                    const mat = new THREE.MeshBasicMaterial({ color: b.mass === 0 ? 0xff0000 : 0x0000ff, wireframe: true, depthTest: false });
-
-                    if (s.type === CANNON.Shape.types.BOX) {
-                        geom = new THREE.BoxGeometry(s.halfExtents.x * 2, s.halfExtents.y * 2, s.halfExtents.z * 2);
-                        mesh = new THREE.Mesh(geom, mat);
-                    } else if (s.type === CANNON.Shape.types.SPHERE) {
-                        geom = new THREE.SphereGeometry(s.radius);
-                        mesh = new THREE.Mesh(geom, mat);
-                    } else if (s.type === CANNON.Shape.types.TRIMESH) {
-                        // Reconstruct Trimesh geometry
-                        geom = new THREE.BufferGeometry();
-                        geom.setAttribute('position', new THREE.Float32BufferAttribute(s.vertices, 3));
-                        geom.setIndex(Array.from(s.indices));
-                        mesh = new THREE.Mesh(geom, mat);
-                    } else if (s.type === CANNON.Shape.types.PLANE) {
-                        // Plane is infinite, draw large grid
-                        geom = new THREE.PlaneGeometry(100, 100);
-                        mesh = new THREE.Mesh(geom, mat);
-                        // Cannon plane assumes normal Z+, Three uses Z+ but looks at it? 
-                        // Check rotation later.
-                    }
-
-                    if (mesh) {
-                        // Position
-                        const worldPos = b.position.clone();
-                        // Apply offset relative to body
-                        // We need to compose: BodyPos * BodyQuat * Offset * Orient
-                        // But ThreeJS scenes objects are usually just BodyPos/Quat if shape is centered.
-                        // If multi-shape, we need a child mesh.
-
-                        // For this debug, let's just place mesh at body pos, and if offset exists, apply it.
-                        mesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-                        mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
-
-                        // Handle shape offset?
-                        if (offset) {
-                            // This is tricky without nesting. 
-                            // Ignore offset for now as our bodies are simple (1 shape centered) generally.
-                            // Actually, Trimesh origin is usually mesh origin so offset is 0.
-                        }
-
-                        scene.add(mesh);
-                        debugMeshes.push(mesh);
-                    }
-                });
-            });
+            // Rapier has a debug render pipeline, but we need to extract buffers. 
+            // For now, let's disable debug visualization to focus on mechanics.
+            // RAPIER.renderDebugToGraphics(world); // (if using PIXI/etc, but for Three we need manual buffer copy)
         }
 
         function lerp(a, b, t) { return a + (b - a) * t; }
@@ -1351,22 +1311,26 @@
             };
 
             if (isHost && world) {
-                // Helper for players
-                const shape = new CANNON.Sphere(0.5); // Changed from Box to Sphere for better Trimesh support
-                const body = new CANNON.Body({
-                    mass: 60,
-                    fixedRotation: true,
-                    position: new CANNON.Vec3(0, 5, 0),
-                    shape: shape,
-                    material: new CANNON.Material({ friction: 0, restitution: 0 }),
-                    collisionFilterGroup: COLLISION_GROUPS.PLAYER,
-                    collisionFilterMask: COLLISION_GROUPS.ENVIRONMENT // Only collide with environment
-                });
+                // Rapier Player Body
+                const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                    .setTranslation(0.0, 5.0, 0.0)
+                    .lockRotations() // Prevent tipping
+                    .setLinearDamping(0.0); // We control velocity manually
 
-                // REDUCE OR REMOVE THIS DAMPING:
-                body.linearDamping = 0.1; // Changed from 0.9 to 0.1
+                const body = world.createRigidBody(bodyDesc);
 
-                world.addBody(body);
+                // Capsule Collider: Height 1 (halfHeight 0.5?), Radius 0.5
+                // Capsule is (halfHeight, radius). Total height = 2*halfHeight + 2*radius.
+                // We want ~2m tall. radius 0.5 -> 1m diam. + 1m cylinder -> halfHeight 0.5.
+                const colliderDesc = RAPIER.ColliderDesc.capsule(0.5, 0.5);
+                colliderDesc.setFriction(0.0);
+                colliderDesc.setRestitution(0.0);
+
+                // Group 2 (Player), Mask 1 (Environment) | 4 (Zombie)
+                // Filter: Env(1) | Zombie(4) = 5
+                colliderDesc.setCollisionGroups(0x00020005);
+
+                world.createCollider(colliderDesc, body);
                 physicsBodies[id] = body;
             }
             return p;
@@ -1496,16 +1460,19 @@
 
                     zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
 
-                    const zShape = new CANNON.Sphere(0.5);
-                    const body = new CANNON.Body({
-                        mass: 40,
-                        fixedRotation: true,
-                        position: new CANNON.Vec3(spawnNode.x, spawnY + 0.5, spawnNode.z),
-                        shape: zShape,
-                        linearDamping: 0.5
-                    });
+                    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                        .setTranslation(spawnNode.x, spawnY + 0.5, spawnNode.z)
+                        .lockRotations()
+                        .setLinearDamping(0.5);
 
-                    world.addBody(body);
+                    const body = world.createRigidBody(bodyDesc);
+
+                    const colliderDesc = RAPIER.ColliderDesc.ball(0.5);
+                    colliderDesc.setFriction(0.0);
+                    // Group 4 (Zombie), Mask 1(Env)|2(Player)|4(Zombie)
+                    colliderDesc.setCollisionGroups(0x00040007);
+
+                    world.createCollider(colliderDesc, body);
                     zombieBodies[id] = body;
                     zombiesToSpawn--;
                 }
@@ -1532,13 +1499,12 @@
 
             // Zombie grounded check helper
             function isZombieGrounded(body) {
-                const rayFrom = new CANNON.Vec3(body.position.x, body.position.y, body.position.z);
-                const rayTo = new CANNON.Vec3(body.position.x, body.position.y - 0.7, body.position.z);
-                const result = new CANNON.RaycastResult();
-                world.raycastClosest(rayFrom, rayTo, { skipBackfaces: true }, result);
-                if (result.hasHit) return true;
-                // Fallback: check if nearly stationary vertically
-                return Math.abs(body.velocity.y) < 0.5;
+                const pos = body.translation();
+                const ray = new RAPIER.Ray({ x: pos.x, y: pos.y, z: pos.z }, { x: 0, y: -1, z: 0 });
+                const maxToi = 0.7; // Sphere 0.5 + 0.2
+                // Filter 1 (Env), Member 4 (Zombie) => 0x00010004
+                const hit = world.castRay(ray, maxToi, true, 0x00010004);
+                return !!hit;
             }
 
             // Move
@@ -1595,15 +1561,30 @@
                     if (dist3D > 0.1) {
                         // Normalize direction using 3D distance for proper speed
                         const speed = ZOMBIE_SPEED;
-                        body.velocity.x = (dx / dist3D) * speed;
-                        body.velocity.z = (dz / dist3D) * speed;
+                        let vx = (dx / dist3D) * speed;
+                        let vz = (dz / dist3D) * speed;
+                        let vy = body.linvel().y;
 
-                        // Apply vertical velocity for climbing/descending
-                        // Use a stronger multiplier for climbing to overcome gravity
-                        if (Math.abs(dy) > 0.3) {
-                            const climbSpeed = dy > 0 ? speed * 1.5 : speed * 0.5;
-                            body.velocity.y = (dy / dist3D) * climbSpeed;
-                        }
+                        // Apply vertical velocity ONLY if climbing/stuck or grounded on slope
+                        // Simply moving towards target Y causes flying.
+                        // Let gravity handle Y mostly.
+                        // Only assist Y if slope is steep or we are "climbing" (which we don't have animation/state for yet)
+                        // For now: Just apply X/Z velocity, let physics handle Y.
+                        // EXCEPT if stuck (handled below) or slope walking?
+                        // If we don't set Y, they will fall. But we need to preserve existing Y (gravity).
+                        // body.linvel().y has current vertical velocity (gravity etc).
+
+                        // But if we construct vector from (dx, dy, dz), we are forcing Y.
+                        // Let's use gravity-friendly approach:
+                        // vx, vz from path. vy from body (unless climbing).
+
+                        // If target is significantly higher and we are close, maybe jump/climb?
+                        // For now, disable the direct flight:
+                        // if (Math.abs(dy) > 0.3) ...
+
+                        // Just use current Y velocity
+                        const currentVel = body.linvel();
+                        vy = currentVel.y;
 
                         z.yaw = Math.atan2(dx, dz);
 
@@ -1628,11 +1609,11 @@
                                     const maxClimbVelocity = 15; // Cap to prevent flying
 
                                     // Add to velocity, but cap it
-                                    if (body.velocity.y < maxClimbVelocity) {
-                                        body.velocity.y += climbStrength;
+                                    if (vy < maxClimbVelocity) {
+                                        vy += climbStrength;
                                         // Clamp to max
-                                        if (body.velocity.y > maxClimbVelocity) {
-                                            body.velocity.y = maxClimbVelocity;
+                                        if (vy > maxClimbVelocity) {
+                                            vy = maxClimbVelocity;
                                         }
                                     }
                                     z.climbImpulseY = climbStrength;
@@ -1645,6 +1626,8 @@
                             }
                             z.lastPos = { x: z.x, z: z.z, time: now };
                         }
+
+                        body.setLinvel({ x: vx, y: vy, z: vz }, true);
                     }
 
                     if (min < 1.5) {
@@ -1653,9 +1636,10 @@
                     }
                     body.wakeUp();
                 }
-                z.x = body.position.x;
-                z.y = body.position.y;
-                z.z = body.position.z;
+                const pos = body.translation();
+                z.x = pos.x;
+                z.y = pos.y;
+                z.z = pos.z;
             }
         }
 
@@ -1711,7 +1695,10 @@
 
         function killZombie(zid, pid) {
             delete zombies[zid];
-            if (zombieBodies[zid]) { world.removeBody(zombieBodies[zid]); delete zombieBodies[zid]; }
+            if (zombieBodies[zid]) {
+                if (world.getRigidBody(zombieBodies[zid].handle)) world.removeRigidBody(zombieBodies[zid]);
+                delete zombieBodies[zid];
+            }
             if (players[pid]) players[pid].money += 25;
         }
 
@@ -1795,14 +1782,18 @@
 
         function hostRestartGame() {
             // Cleanup
+
+            // Remove physical bodies of old zombies
+            for (let zid in zombieBodies) {
+                if (world.getRigidBody(zombieBodies[zid].handle)) {
+                    world.removeRigidBody(zombieBodies[zid]);
+                }
+            }
             zombies = {};
             zombieBodies = {};
-            // Re-init World bodies? No need, just clear them from map?
-            // Actually, best to just reset variables and broadcast SHOP_OPEN
+
             bullets = [];
-            // Remove physical bodies of old zombies
-            // (We can't easily iterate world bodies to find zombies without the map, but we have zombieBodies list)
-            // Ideally we re-use hostStartGame logic
+
             // Reset players
             for (let id in players) {
                 players[id].hp = players[id].maxHp;
@@ -1810,6 +1801,12 @@
                 players[id].ready = false;
                 players[id].weapons[0].ammo = 0; // Reset ammo
                 players[id].money = 100; // Reset money
+
+                // Reposition players to spawn?
+                if (physicsBodies[id]) {
+                    physicsBodies[id].setTranslation({ x: 0, y: 5, z: 0 }, true);
+                    physicsBodies[id].setLinvel({ x: 0, y: 0, z: 0 }, true);
+                }
             }
             hostStartGame();
             document.getElementById('game-over-screen').classList.add('hidden');
@@ -1863,19 +1860,20 @@
                                     vertices[i + 2] *= scale.z;
                                 }
 
-                                const shape = new CANNON.Trimesh(vertices, indices);
-                                const body = new CANNON.Body({ mass: 0 });
-                                body.addShape(shape);
+                                // Create Rapier Trimesh
+                                const verticesFloat32 = new Float32Array(vertices);
+                                const indicesUint32 = new Uint32Array(indices);
 
-                                body.position.copy(pos);
-                                body.quaternion.copy(quat);
+                                const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+                                    .setTranslation(pos.x, pos.y, pos.z)
+                                    .setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
 
-                                // Cannon Trimesh assumes scale 1. If we have scale, we might need to apply it to vertices?
-                                // Trimesh doesn't support setScale efficiently for collisions in some versions, but let's try.
-                                // Actually, for static bodies, we can just bake the scale if needed, but Trimesh is raw data.
-                                // Let's trust the user uses 1.0 scale for map for now.
+                                const body = world.createRigidBody(bodyDesc);
 
-                                world.addBody(body);
+                                const colliderDesc = RAPIER.ColliderDesc.trimesh(verticesFloat32, indicesUint32);
+                                colliderDesc.setCollisionGroups(0x00010006); // Env vs Player|Zombie
+
+                                world.createCollider(colliderDesc, body);
                                 mapBodies.push(body);
                             }
                         });
@@ -1916,30 +1914,23 @@
         };
 
         function initPhysics() {
-            world = new CANNON.World();
-            world.gravity.set(0, -25, 0);
+            // Gravity: -25 on Y
+            world = new RAPIER.World({ x: 0.0, y: -25.0, z: 0.0 });
 
-            // SAPBroadphase is much faster than NaiveBroadphase for bodies spread across space
-            // Uses sweep-and-prune algorithm instead of O(n²) pair checks
-            world.broadphase = new CANNON.SAPBroadphase(world);
+            // Ground Floor (Infinite Plane in logic, but Rapier prefers boxes or explicit planes)
+            // Let's make a huge box for the floor
+            const groundBodyDesc = RAPIER.RigidBodyDesc.fixed();
+            const groundBody = world.createRigidBody(groundBodyDesc);
 
-            // Reduce solver iterations for faster (slightly less accurate) physics
-            world.solver.iterations = 5; // Default is 10
+            // Box inputs are Half-Extents
+            const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500.0, 0.1, 500.0);
+            groundColliderDesc.setTranslation(0.0, -0.1, 0.0); // Slightly below 0
 
-            // Friction Fix: Set default friction to 0 so characters don't stick to walls/ground
-            // We control movement via velocity directly.
-            world.defaultContactMaterial.friction = 0;
+            // Collision Groups: Environment (1)
+            // Membership: 0x0001, Filter: 0xFFFF (Everything)
+            groundColliderDesc.setCollisionGroups(0x00010006); // M: 1 (Env), F: 2(Player)|4(Zombie)
 
-            // Add floor with explicit shape in constructor
-            const floorShape = new CANNON.Plane();
-            const floorBody = new CANNON.Body({
-                mass: 0,
-                shape: floorShape,
-                collisionFilterGroup: COLLISION_GROUPS.ENVIRONMENT,
-                collisionFilterMask: COLLISION_GROUPS.PLAYER | COLLISION_GROUPS.ZOMBIE
-            });
-            floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-            world.addBody(floorBody);
+            world.createCollider(groundColliderDesc, groundBody);
         }
         function generateMap() {
             mapGrid = [];
@@ -1954,9 +1945,32 @@
             }
         }
         function rebuildMapPhysics() {
-            const s = new CANNON.Box(new CANNON.Vec3(CELL_SIZE / 2, 2, CELL_SIZE / 2));
-            for (let x = 0; x < GRID_SIZE; x++) for (let z = 0; z < GRID_SIZE; z++) if (mapGrid[x][z]) {
-                const b = new CANNON.Body({ mass: 0 }); b.addShape(s); b.position.set((x * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2, 2, (z * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2); world.addBody(b); mapBodies.push(b);
+            // Grid-based blocks
+            const halfSize = CELL_SIZE / 2.0;
+
+            for (let x = 0; x < GRID_SIZE; x++) {
+                for (let z = 0; z < GRID_SIZE; z++) {
+                    if (mapGrid[x][z]) {
+                        // Create fixed body
+                        const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+                            .setTranslation(
+                                (x * CELL_SIZE) - MAP_OFFSET + halfSize,
+                                2.0,
+                                (z * CELL_SIZE) - MAP_OFFSET + halfSize
+                            );
+                        const body = world.createRigidBody(bodyDesc);
+
+                        // Collider: 2.0 high -> Half extent 2.0/2 = 1.0 (but logic says 2 height? BoxGeometry(.. 4 ..) means total 4, half 2)
+                        // Old code: Box(Vec3(halfSize, 2, halfSize)) -> 2 is halfExtentY, so total height 4.
+                        const colliderDesc = RAPIER.ColliderDesc.cuboid(halfSize, 2.0, halfSize);
+
+                        // Interaction: Environment (1)
+                        colliderDesc.setCollisionGroups(0x00010006); // M:Env, F:Player|Zombie
+
+                        world.createCollider(colliderDesc, body);
+                        mapBodies.push(body);
+                    }
+                }
             }
         }
         function rebuildMapMesh() {
@@ -1977,7 +1991,9 @@
             if (!isHost || !world || !mapMesh) return;
 
             // Clear old boundaries
-            boundaryBodies.forEach(b => world.removeBody(b));
+            boundaryBodies.forEach(b => {
+                if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
+            });
             boundaryBodies = [];
 
             // Use bounding box of map mesh - walls go OUTSIDE to prevent escaping
@@ -1990,41 +2006,49 @@
             const wallHeight = size.y + 30;
 
             // Front (+Z)
-            const frontShape = new CANNON.Box(new CANNON.Vec3(size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2));
-            const frontBody = new CANNON.Body({ mass: 0 });
-            frontBody.addShape(frontShape);
-            frontBody.position.set(center.x, center.y + wallHeight / 4, box.max.z + padding);
-            world.addBody(frontBody);
+            const frontShapeHalf = [size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2];
+            const frontBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, center.y + wallHeight / 4, box.max.z + padding);
+            const frontBody = world.createRigidBody(frontBodyDesc);
+
+            const frontCollider = RAPIER.ColliderDesc.cuboid(...frontShapeHalf);
+            frontCollider.setCollisionGroups(0x00010006);
+
+            world.createCollider(frontCollider, frontBody);
             boundaryBodies.push(frontBody);
 
             // Back (-Z)
-            const backBody = new CANNON.Body({ mass: 0 });
-            backBody.addShape(frontShape);
-            backBody.position.set(center.x, center.y + wallHeight / 4, box.min.z - padding);
-            world.addBody(backBody);
+            const backBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, center.y + wallHeight / 4, box.min.z - padding);
+            const backBody = world.createRigidBody(backBodyDesc);
+            const backCollider = RAPIER.ColliderDesc.cuboid(size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2);
+            backCollider.setCollisionGroups(0x00010006);
+            world.createCollider(backCollider, backBody);
             boundaryBodies.push(backBody);
 
             // Right (+X)
-            const sideShape = new CANNON.Box(new CANNON.Vec3(wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness));
-            const rightBody = new CANNON.Body({ mass: 0 });
-            rightBody.addShape(sideShape);
-            rightBody.position.set(box.max.x + padding, center.y + wallHeight / 4, center.z);
-            world.addBody(rightBody);
+            const rightBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(box.max.x + padding, center.y + wallHeight / 4, center.z);
+            const rightBody = world.createRigidBody(rightBodyDesc);
+            // Re-use shape dimension? 
+            const sideShapeHalf = [wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness];
+            const rightCollider = RAPIER.ColliderDesc.cuboid(...sideShapeHalf);
+            rightCollider.setCollisionGroups(0x00010006);
+            world.createCollider(rightCollider, rightBody);
             boundaryBodies.push(rightBody);
 
             // Left (-X)
-            const leftBody = new CANNON.Body({ mass: 0 });
-            leftBody.addShape(sideShape);
-            leftBody.position.set(box.min.x - padding, center.y + wallHeight / 4, center.z);
-            world.addBody(leftBody);
+            const leftBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(box.min.x - padding, center.y + wallHeight / 4, center.z);
+            const leftBody = world.createRigidBody(leftBodyDesc);
+            const leftCollider = RAPIER.ColliderDesc.cuboid(wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness);
+            leftCollider.setCollisionGroups(0x00010006);
+            world.createCollider(leftCollider, leftBody);
             boundaryBodies.push(leftBody);
 
             // Floor
-            const floorShape = new CANNON.Box(new CANNON.Vec3(size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2));
-            const floorBody = new CANNON.Body({ mass: 0 });
-            floorBody.addShape(floorShape);
-            floorBody.position.set(center.x, box.min.y - 2, center.z);
-            world.addBody(floorBody);
+            const floorShapeHalf = [size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2];
+            const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, box.min.y - 2, center.z);
+            const floorBody = world.createRigidBody(floorBodyDesc);
+            const floorCollider = RAPIER.ColliderDesc.cuboid(...floorShapeHalf);
+            floorCollider.setCollisionGroups(0x00010006);
+            world.createCollider(floorCollider, floorBody);
             boundaryBodies.push(floorBody);
 
             console.log("Boundary Walls Created:", boundaryBodies.length);
@@ -2046,11 +2070,23 @@
             ];
 
             walls.forEach(w => {
-                const shape = new CANNON.Box(new CANNON.Vec3(...w.size));
-                const body = new CANNON.Body({ mass: 0 });
-                body.addShape(shape);
-                body.position.set(...w.pos);
-                world.addBody(body);
+                // Pos: Center. Size: Box Full Size (Rapier needs Half Extents)
+                // w.size was prepared for Cannon Box args? Cannon Box args are half-extents.
+                // Let's verify existing logic: 
+                // Cannon Box(Vec3(halfX, halfY, halfZ))
+                // Code calls: new CANNON.Box(new CANNON.Vec3(...w.size))
+                // w.size calc: [size.x / 2 + padding, ...] -> These ARE half extents already.
+
+                const halfExtents = w.size;
+                const pos = w.pos;
+
+                const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(pos[0], pos[1], pos[2]);
+                const body = world.createRigidBody(bodyDesc);
+
+                const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents[0], halfExtents[1], halfExtents[2]);
+                colliderDesc.setCollisionGroups(0x00010006);
+
+                world.createCollider(colliderDesc, body);
                 boundaryBodies.push(body);
             });
         }
