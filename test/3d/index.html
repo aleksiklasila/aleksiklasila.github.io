@@ -2089,6 +2089,16 @@
             world.createCollider(floorCollider, floorBody);
             boundaryBodies.push(floorBody);
 
+            // Ceiling (2.0m above highest point)
+            const ceilingY = box.max.y + 4.0;
+            // Use same shape as floor for simplicity
+            const ceilingBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, ceilingY, center.z);
+            const ceilingBody = world.createRigidBody(ceilingBodyDesc);
+            const ceilingCollider = RAPIER.ColliderDesc.cuboid(...floorShapeHalf);
+            ceilingCollider.setCollisionGroups(0x0001000E);
+            world.createCollider(ceilingCollider, ceilingBody);
+            boundaryBodies.push(ceilingBody);
+
             console.log("Boundary Walls Created:", boundaryBodies.length);
         }
 
