@@ -1426,9 +1426,14 @@
                 const fz = -Math.cos(p.yaw);
                 for (let zid in zombies) {
                     const z = zombies[zid];
-                    const dist = Math.sqrt((z.x - p.x) ** 2 + (z.z - p.z) ** 2);
-                    if (dist < stats.range) {
-                        const dot = fx * (z.x - p.x) / dist + fz * (z.z - p.z) / dist;
+                    const dx = z.x - p.x;
+                    const dy = z.y - p.y;
+                    const dz = z.z - p.z;
+                    const dist2D = Math.sqrt(dx * dx + dz * dz);
+                    const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                    if (dist3D < stats.range) {
+                        const dot = fx * dx / dist2D + fz * dz / dist2D;
                         if (dot > 0.5) {
                             z.hp -= stats.damage;
                             if (z.hp <= 0) killZombie(zid, pid);
@@ -1662,7 +1667,7 @@
                         body.setLinvel({ x: vx, y: vy, z: vz }, true);
                     }
 
-                    if (min < 1.5) {
+                    if (min < 1.5 && Math.abs(target.y - z.y) < 2.0) {
                         target.hp -= 0.5; // Dmg per tick
                         if (target.hp <= 0) target.dead = true;
                     }
