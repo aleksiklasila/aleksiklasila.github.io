@@ -333,6 +333,9 @@
 
     <div id="hud-layer" style="display:none;">
         <div id="crosshair"></div>
+        <div id="fps-counter"
+            style="position: absolute; top: 10px; left: 10px; color: #0f0; font-weight: bold; display: none; font-family: monospace; z-index: 300;">
+            FPS: 0</div>
         <div id="hud-top-right">
             <div>WAVE <span id="wave-disp">1</span></div>
             <div style="font-size:1rem; color:#aaa">Zombies: <span id="zombie-disp">0</span></div>
@@ -409,6 +412,29 @@
         const JUMP_BUFFER_MS = 100; // Grace period where jump input is remembered before landing
 
         // ==========================================
+        // 1b. WEB WORKER TIMER (Immune to browser throttling)
+        // ==========================================
+        // Browsers throttle setInterval/setTimeout in background tabs to ~1/sec
+        // Web Workers are NOT throttled, so we use them for game loops
+        function createTickWorker(callback, intervalMs) {
+            const workerCode = `
+                let interval;
+                self.onmessage = (e) => {
+                    if (e.data.cmd === 'start') {
+                        interval = setInterval(() => self.postMessage('tick'), e.data.ms);
+                    } else if (e.data.cmd === 'stop') {
+                        clearInterval(interval);
+                    }
+                };
+            `;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
+            worker.onmessage = callback;
+            worker.postMessage({ cmd: 'start', ms: intervalMs });
+            return worker;
+        }
+
+        // ==========================================
         // 2. STATE & NETWORKING VARS
         // ==========================================
         let myId = null;
@@ -441,6 +467,11 @@
         let debugPhysics = false;
         let debugMeshes = [];
         const clock = new THREE.Clock();
+
+        // FPS Counter
+        let fpsVisible = false;
+        let fpsFrameCount = 0;
+        let fpsLastTime = performance.now();
 
         // Input
         let input = { x: 0, y: 0, fire: false, jump: false, slot: 0 };
@@ -642,6 +673,8 @@
                     if (statusServer) { statusServer.innerText = "⏳ Connecting..."; statusServer.style.color = "#ff0"; }
                     connectToHost(hostId);
                     initThree();
+                    // Start client input loop using Web Worker (immune to browser throttling)
+                    createTickWorker(() => clientSendInput(), TICK_MS);
                 } else {
                     document.getElementById('lobby-status').innerText = "Waiting for players...";
                     isHost = true;
@@ -660,8 +693,8 @@
                     loadMapFromInput(); // Will load from input or default to random if empty
 
                     updateLobbyUI();
-                    // Start Host Loop
-                    setInterval(hostGameLoop, TICK_MS);
+                    // Start Host Loop using Web Worker (immune to browser throttling)
+                    createTickWorker(() => hostGameLoop(), TICK_MS);
                 }
             });
 
@@ -1033,19 +1066,28 @@
                 document.getElementById('btn-retry').style.display = 'none'; // Clients can't retry
             }
         }
-
-        function clientInterpolate() {
-            // Send Input
-            if (hostId && conns[hostId]) {
+        // Client: Send input to host (runs via Web Worker timer)
+        function clientSendInput() {
+            if (hostId && conns[hostId] && conns[hostId].open) {
                 // Compact Input: [x, y, fire, jump, slot, yaw, pitch]
                 conns[hostId].send({
                     type: 'IN',
                     i: [input.x, input.y, input.fire ? 1 : 0, input.jump ? 1 : 0, input.slot, camYaw, camPitch]
                 });
             }
+        }
+
+        function clientInterpolate() {
+            const now = Date.now();
+
+            // Discard stale snapshots (older than 300ms) to prevent rubber-banding
+            // This happens when the tab was unfocused and old data accumulated
+            while (snapshots.length > 0 && (now - snapshots[0][0]) > 300) {
+                snapshots.shift();
+            }
 
             // Interpolate World
-            const renderTime = Date.now() - INTERP_DELAY;
+            const renderTime = now - INTERP_DELAY;
 
             // Find two snapshots surrounding renderTime
             let prev = null, next = null;
@@ -1057,8 +1099,16 @@
                 }
             }
 
+            // If no interpolation pair found, use latest snapshot for smooth catch-up
+            if (!prev && !next && snapshots.length > 0) {
+                next = snapshots[snapshots.length - 1];
+                prev = next; // Same as next = snap to latest position
+            }
+
             if (prev && next) {
-                const ratio = (renderTime - prev[0]) / (next[0] - prev[0]);
+                const timeDiff = next[0] - prev[0];
+                const ratio = timeDiff > 0 ? (renderTime - prev[0]) / timeDiff : 1;
+                const clampedRatio = Math.max(0, Math.min(1, ratio));
 
                 // Interpolate Players
                 next[1].forEach(np => {
@@ -1068,18 +1118,18 @@
                         const pp = prev[1].find(p => p[0] === np[0]);
                         if (pp) {
                             if (!players[np[0]]) players[np[0]] = { id: np[0] };
-                            players[np[0]].x = lerp(pp[1], np[1], ratio);
-                            players[np[0]].y = lerp(pp[2], np[2], ratio);
-                            players[np[0]].z = lerp(pp[3], np[3], ratio);
+                            players[np[0]].x = lerp(pp[1], np[1], clampedRatio);
+                            players[np[0]].y = lerp(pp[2], np[2], clampedRatio);
+                            players[np[0]].z = lerp(pp[3], np[3], clampedRatio);
                             players[np[0]].yaw = np[4]; // Don't lerp rotation usually
                         }
                     } else {
                         const pp = prev[1].find(p => p[0] === np[0]);
                         if (pp) {
                             if (!players[np[0]]) players[np[0]] = { id: np[0] };
-                            players[np[0]].x = lerp(pp[1], np[1], ratio);
-                            players[np[0]].y = lerp(pp[2], np[2], ratio);
-                            players[np[0]].z = lerp(pp[3], np[3], ratio);
+                            players[np[0]].x = lerp(pp[1], np[1], clampedRatio);
+                            players[np[0]].y = lerp(pp[2], np[2], clampedRatio);
+                            players[np[0]].z = lerp(pp[3], np[3], clampedRatio);
                             players[np[0]].yaw = np[4];
                         }
                     }
@@ -1093,9 +1143,9 @@
                     if (!zombies[nz[0]]) zombies[nz[0]] = { id: nz[0] };
                     if (pz) {
                         // nz format: [id, x, y, z, yaw]
-                        zombies[nz[0]].x = lerp(pz[1], nz[1], ratio);
-                        zombies[nz[0]].y = lerp(pz[2], nz[2], ratio);
-                        zombies[nz[0]].z = lerp(pz[3], nz[3], ratio);
+                        zombies[nz[0]].x = lerp(pz[1], nz[1], clampedRatio);
+                        zombies[nz[0]].y = lerp(pz[2], nz[2], clampedRatio);
+                        zombies[nz[0]].z = lerp(pz[3], nz[3], clampedRatio);
                         zombies[nz[0]].yaw = nz[4];
                     } else {
                         // New zombie, snap
@@ -1121,6 +1171,17 @@
         // ==========================================
         function animate() {
             requestAnimationFrame(animate);
+
+            // FPS Calculation
+            fpsFrameCount++;
+            const time = performance.now();
+            if (time - fpsLastTime >= 1000) {
+                if (fpsVisible) {
+                    document.getElementById('fps-counter').innerText = `FPS: ${fpsFrameCount}`;
+                }
+                fpsFrameCount = 0;
+                fpsLastTime = time;
+            }
 
             if (!isHost) clientInterpolate();
 
@@ -1297,7 +1358,9 @@
                     fixedRotation: true,
                     position: new CANNON.Vec3(0, 5, 0),
                     shape: shape,
-                    material: new CANNON.Material({ friction: 0, restitution: 0 })
+                    material: new CANNON.Material({ friction: 0, restitution: 0 }),
+                    collisionFilterGroup: COLLISION_GROUPS.PLAYER,
+                    collisionFilterMask: COLLISION_GROUPS.ENVIRONMENT // Only collide with environment
                 });
 
                 // REDUCE OR REMOVE THIS DAMPING:
@@ -1431,7 +1494,7 @@
                         }
                     }
 
-                    zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0 };
+                    zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
 
                     const zShape = new CANNON.Sphere(0.5);
                     const body = new CANNON.Body({
@@ -1465,6 +1528,17 @@
 
                 // Broadcast to all clients
                 broadcast({ type: 'SHOP_OPEN' });
+            }
+
+            // Zombie grounded check helper
+            function isZombieGrounded(body) {
+                const rayFrom = new CANNON.Vec3(body.position.x, body.position.y, body.position.z);
+                const rayTo = new CANNON.Vec3(body.position.x, body.position.y - 0.7, body.position.z);
+                const result = new CANNON.RaycastResult();
+                world.raycastClosest(rayFrom, rayTo, { skipBackfaces: true }, result);
+                if (result.hasHit) return true;
+                // Fallback: check if nearly stationary vertically
+                return Math.abs(body.velocity.y) < 0.5;
             }
 
             // Move
@@ -1532,6 +1606,45 @@
                         }
 
                         z.yaw = Math.atan2(dx, dz);
+
+                        // Stuck detection and continuous climbing impulse
+                        const now = Date.now();
+                        if (!z.lastPos) {
+                            z.lastPos = { x: z.x, z: z.z, time: now };
+                            z.climbImpulseY = 0;
+                        } else if (now - z.lastPos.time > 200) { // Check every 200ms
+                            const movedDist = Math.sqrt((z.x - z.lastPos.x) ** 2 + (z.z - z.lastPos.z) ** 2);
+                            const expectedDist = speed * 0.2; // Expected movement in 200ms
+
+                            // If moved less than 30% of expected distance, might be stuck
+                            if (movedDist < expectedDist * 0.3 && dist2D > 1.5) {
+                                z.stuckTime = (z.stuckTime || 0) + (now - z.lastPos.time);
+
+                                // If stuck for >150ms and grounded, apply continuous small climbing impulse
+                                if (z.stuckTime > 150 && isZombieGrounded(body)) {
+                                    // Apply a small upward impulse continuously while stuck
+                                    // This allows climbing walls gradually instead of one big hop
+                                    const climbStrength = 8; // Small continuous impulse
+                                    const maxClimbVelocity = 15; // Cap to prevent flying
+
+                                    // Add to velocity, but cap it
+                                    if (body.velocity.y < maxClimbVelocity) {
+                                        body.velocity.y += climbStrength;
+                                        // Clamp to max
+                                        if (body.velocity.y > maxClimbVelocity) {
+                                            body.velocity.y = maxClimbVelocity;
+                                        }
+                                    }
+                                    z.climbImpulseY = climbStrength;
+                                } else {
+                                    z.climbImpulseY = 0;
+                                }
+                            } else {
+                                z.stuckTime = 0; // Making progress, reset
+                                z.climbImpulseY = 0;
+                            }
+                            z.lastPos = { x: z.x, z: z.z, time: now };
+                        }
                     }
 
                     if (min < 1.5) {
@@ -1795,10 +1908,23 @@
                 c.appendChild(b);
             });
         }
+        // Collision Groups for filtering - prevents unnecessary collision checks
+        const COLLISION_GROUPS = {
+            ENVIRONMENT: 1,  // Map geometry, floor, boundaries
+            PLAYER: 2,       // Player bodies
+            ZOMBIE: 4        // Zombie bodies
+        };
+
         function initPhysics() {
             world = new CANNON.World();
             world.gravity.set(0, -25, 0);
-            world.broadphase = new CANNON.NaiveBroadphase();
+
+            // SAPBroadphase is much faster than NaiveBroadphase for bodies spread across space
+            // Uses sweep-and-prune algorithm instead of O(n²) pair checks
+            world.broadphase = new CANNON.SAPBroadphase(world);
+
+            // Reduce solver iterations for faster (slightly less accurate) physics
+            world.solver.iterations = 5; // Default is 10
 
             // Friction Fix: Set default friction to 0 so characters don't stick to walls/ground
             // We control movement via velocity directly.
@@ -1808,7 +1934,9 @@
             const floorShape = new CANNON.Plane();
             const floorBody = new CANNON.Body({
                 mass: 0,
-                shape: floorShape
+                shape: floorShape,
+                collisionFilterGroup: COLLISION_GROUPS.ENVIRONMENT,
+                collisionFilterMask: COLLISION_GROUPS.PLAYER | COLLISION_GROUPS.ZOMBIE
             });
             floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
             world.addBody(floorBody);
@@ -2181,7 +2309,11 @@
 
                 if (e.code === 'Space') input.jump = true;
                 if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
-                if (e.key === 'p' || e.key === 'P') { debugPhysics = !debugPhysics; console.log("Debug Physics:", debugPhysics); }
+                if (e.key === 'p' || e.key === 'P') {
+                    fpsVisible = !fpsVisible;
+                    document.getElementById('fps-counter').style.display = fpsVisible ? 'block' : 'none';
+                }
+                if (e.key === 'o' || e.key === 'O') { debugPhysics = !debugPhysics; console.log("Debug Physics:", debugPhysics); }
             });
             document.addEventListener('keyup', e => {
                 switch (e.key.toLowerCase()) {
