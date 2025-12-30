@@ -278,6 +278,7 @@
         }
     </script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
 <body>
@@ -292,8 +293,8 @@
             <div style="margin-bottom: 15px;">
                 <label
                     style="cursor:pointer; padding:15px 30px; background:#333; border:2px solid #0a0; color:#0a0; font-size:1rem;">
-                    📁 SELECT MAP (.glb)
-                    <input type="file" id="map-file" accept=".glb,.gltf" style="display:none;">
+                    📁 SELECT MAP (.zip or .glb)
+                    <input type="file" id="map-file" accept=".glb,.gltf,.zip" style="display:none;">
                 </label>
             </div>
             <div id="map-status" style="color:#888; font-size:0.8rem; margin-bottom:15px;">No map loaded</div>
@@ -379,6 +380,7 @@
         import * as THREE from 'three';
         import RAPIER from '@dimforge/rapier3d-compat';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
         // ==========================================
         // 1. CONSTANTS & CONFIG
@@ -458,6 +460,29 @@
         let zombiesToSpawn = 0;
         let lastWaveTime = 0;
 
+        // Assets
+        const GameAssets = {
+            map: null,      // Blob URL
+            mapConfig: null, // { location, rotation, scale }
+            player: { config: null },     // { 'base': url, ... }
+            zombie: { config: null },     // { 'base': url, ... }
+        };
+
+        function clearGameAssets() {
+            if (GameAssets.map) URL.revokeObjectURL(GameAssets.map);
+            for (let k in GameAssets.player) {
+                if (typeof GameAssets.player[k] === 'string') URL.revokeObjectURL(GameAssets.player[k]);
+            }
+            for (let k in GameAssets.zombie) {
+                if (typeof GameAssets.zombie[k] === 'string') URL.revokeObjectURL(GameAssets.zombie[k]);
+            }
+            GameAssets.map = null;
+            GameAssets.mapConfig = null;
+            GameAssets.player = { config: null };
+            GameAssets.zombie = { config: null };
+            currentMapZipData = null; // Also clear the zip data buffer
+        }
+
         // Visuals & Physics
         let scene, camera, renderer, world;
         let physicsBodies = {};
@@ -482,6 +507,7 @@
         let snapshots = [];
         const INTERP_DELAY = 50; // ms to buffer
         let currentMapDataUrl = null; // Store base64 map data for transfer
+        let currentMapZipData = null; // Store raw ZIP data (base64)
 
         // Navigation
         let navNodes = [];
@@ -491,13 +517,13 @@
         const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
         let pendingMapChunks = {}; // For client: { expected, received: [], totalSize }
 
-        function sendMapChunked(conn, dataUrl) {
+        function sendMapChunked(conn, dataUrl, isZip = false) {
             const totalSize = dataUrl.length;
             const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-            console.log(`Sending map in ${totalChunks} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
+            console.log(`Sending map in ${totalChunks} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB) ${isZip ? '(ZIP)' : ''}`);
 
             // Send start message
-            conn.send({ type: 'MAP_START', totalChunks, totalSize });
+            conn.send({ type: 'MAP_START', totalChunks, totalSize, isZip });
 
             // Send chunks with small delay to avoid overwhelming
             let chunkIndex = 0;
@@ -518,9 +544,14 @@
         }
 
         function broadcastMapChunked() {
-            if (!currentMapDataUrl) return;
-            for (let peerId in conns) {
-                sendMapChunked(conns[peerId], currentMapDataUrl);
+            if (currentMapZipData) {
+                for (let peerId in conns) {
+                    sendMapChunked(conns[peerId], currentMapZipData, true);
+                }
+            } else if (currentMapDataUrl) {
+                for (let peerId in conns) {
+                    sendMapChunked(conns[peerId], currentMapDataUrl, false);
+                }
             }
         }
 
@@ -582,23 +613,42 @@
             });
         }
 
+
+
+        let boundaryEffectGroup = null;
+        let mapBounds = null; // THREE.Box3
+
         function clearMap() {
+            clearGameAssets(); // Reset asset blobs
+
             // Clear Visuals
             if (mapGroup && scene) {
                 scene.remove(mapGroup);
-                // dispose geometries/materials if possible to avoid leaks, but for now just remove from scene
                 mapGroup = null;
             }
             if (mapMesh) mapMesh = null;
 
+            // Clear Boundary Visuals
+            if (boundaryEffectGroup && scene) {
+                scene.remove(boundaryEffectGroup);
+                boundaryEffectGroup = null;
+            }
+            mapBounds = null;
+
             // Clear Physics
             if (world) {
                 mapBodies.forEach(b => {
-                    // Check if body still exists in world before removing (Rapier safety)
                     if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
                 });
             }
             mapBodies = [];
+
+            // Clear old physics boundaries (if any exist from old version)
+            boundaryBodies.forEach(b => {
+                if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
+            });
+            boundaryBodies = [];
+
             mapGrid = [];
             useGltfMap = false;
             gltfMapUrl = null;
@@ -616,6 +666,109 @@
             return url;
         }
 
+        async function processZip(zip, statusEl) {
+            // Helper to load config
+            const loadConfig = async (regex) => {
+                const file = zip.file(regex)[0];
+                if (file) {
+                    try {
+                        const text = await file.async("text");
+                        return JSON.parse(text);
+                    } catch (e) {
+                        console.warn("Failed to parse config:", file.name, e);
+                    }
+                }
+                return null;
+            };
+
+            // Load Configs
+            GameAssets.mapConfig = (await loadConfig(/^map\/map\.json$/i)) || (await loadConfig(/^map\.json$/i));
+            GameAssets.player.config = (await loadConfig(/^player\/player\.json$/i));
+            GameAssets.zombie.config = (await loadConfig(/^zombie\/zombie\.json$/i));
+
+            console.log("Loaded Configs:", { map: GameAssets.mapConfig, player: GameAssets.player.config, zombie: GameAssets.zombie.config });
+
+            // 1. Load Map
+            const mapFile = zip.file(/map\/map\.(glb|gltf)/i)[0] || zip.file(/map\.(glb|gltf)/i)[0];
+            if (!mapFile) throw new Error("No map/map.glb found in zip");
+
+            const mapBlob = await mapFile.async("blob");
+            GameAssets.map = URL.createObjectURL(mapBlob);
+
+            // 2. Load Players
+            // Expect player/player.glb, player/player.walk.glb etc
+            const playerFiles = zip.file(/player\/player.*\.glb/i);
+            console.log("Found Player Files:", playerFiles.map(f => f.name));
+
+            for (let pf of playerFiles) {
+                const name = pf.name.split('/').pop().toLowerCase();
+                const blob = await pf.async("blob");
+
+                if (name === 'player.glb') {
+                    GameAssets.player.base = URL.createObjectURL(blob);
+                } else {
+                    const action = name.replace('player.', '').replace('.glb', '');
+                    GameAssets.player[action] = URL.createObjectURL(blob);
+                }
+            }
+
+            // 3. Load Zombies
+            const zombieFiles = zip.file(/zombie\/zombie.*\.glb/i);
+            console.log("Found Zombie Files:", zombieFiles.map(f => f.name));
+
+            for (let zf of zombieFiles) {
+                const name = zf.name.split('/').pop().toLowerCase();
+                const blob = await zf.async("blob");
+
+                if (name === 'zombie.glb') {
+                    GameAssets.zombie.base = URL.createObjectURL(blob);
+                } else {
+                    const action = name.replace('zombie.', '').replace('.glb', '');
+                    GameAssets.zombie[action] = URL.createObjectURL(blob);
+                }
+            }
+
+            // Check minimum requirements
+            if (!GameAssets.player.base) throw new Error("Missing player/player.glb");
+            if (!GameAssets.zombie.base) throw new Error("Missing zombie/zombie.glb");
+
+            statusEl.innerText = "⏳ Parsing model...";
+            await loadGltfMap(GameAssets.map);
+        }
+
+        async function handleZipUpload(file, statusEl) {
+            statusEl.innerText = "⏳ Unzipping...";
+            try {
+                const zip = await JSZip.loadAsync(file);
+                await processZip(zip, statusEl);
+
+                const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                statusEl.innerText = "✅ Loaded Zip (" + fileSizeMB + " MB)";
+                statusEl.style.color = "#0f0";
+
+            } catch (err) {
+                console.error(err);
+                statusEl.innerText = "❌ Zip Error: " + err.message;
+                statusEl.style.color = "#f44";
+                throw err;
+            }
+        }
+
+        async function handleZipData(base64Data, statusEl) {
+            if (statusEl) statusEl.innerText = "⏳ Unzipping data...";
+            try {
+                const zip = await JSZip.loadAsync(base64Data, { base64: true });
+                await processZip(zip, statusEl || { innerText: () => { } });
+            } catch (err) {
+                console.error(err);
+                if (statusEl) {
+                    statusEl.innerText = "❌ Zip Error: " + err.message;
+                    statusEl.style.color = "#f44";
+                }
+                throw err;
+            }
+        }
+
         function loadMapFromInput() {
             const fileInput = document.getElementById('map-file');
             const statusEl = document.getElementById('map-status');
@@ -624,38 +777,49 @@
 
             if (fileInput && fileInput.files.length > 0) {
                 const file = fileInput.files[0];
-                if (file.name.endsWith('.zip')) {
-                    statusEl.innerText = "❌ ZIP not supported";
-                    statusEl.style.color = "#f44";
-                    return;
-                }
-
                 const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-                statusEl.innerText = "⏳ Reading " + file.name + " (" + fileSizeMB + " MB)...";
-                statusEl.style.color = "#ff0";
 
-                const reader = new FileReader();
-                reader.onprogress = (e) => {
-                    if (e.lengthComputable) {
-                        const pct = Math.round((e.loaded / e.total) * 100);
-                        statusEl.innerText = "⏳ Reading " + pct + "% (" + (e.loaded / 1024 / 1024).toFixed(1) + " MB)";
-                    }
-                };
-                reader.onload = (e) => {
-                    const dataUrl = e.target.result;
-                    currentMapDataUrl = dataUrl;
-                    useGltfMap = true;
-                    statusEl.innerText = "⏳ Parsing model...";
-                    loadGltfMap(dataUrl).then(() => {
-                        statusEl.innerText = "✅ " + file.name + " (" + fileSizeMB + " MB)";
-                        statusEl.style.color = "#0f0";
-                        broadcast({ type: 'MAP_FILE', url: dataUrl });
-                    }).catch(err => {
-                        statusEl.innerText = "❌ Failed: " + err;
-                        statusEl.style.color = "#f44";
-                    });
-                };
-                reader.readAsDataURL(file);
+                if (file.name.endsWith('.zip')) {
+                    // Handle Zip
+                    statusEl.innerText = "⏳ Reading Zip " + fileSizeMB + " MB...";
+                    statusEl.style.color = "#ff0";
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        currentMapZipData = e.target.result; // Store raw zip base64
+                        currentMapDataUrl = null;
+                        useGltfMap = true;
+
+                        // We need the BLOB for JSZip, but also the base64 for network
+                        // FileReader gives base64. JSZip can take base64 string
+                        handleZipUpload(file, statusEl).then(() => {
+                            broadcastMapChunked(); // Will send ZIP data
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    // Standard GLB
+                    currentMapZipData = null;
+                    statusEl.innerText = "⏳ Reading " + file.name + " (" + fileSizeMB + " MB)...";
+                    statusEl.style.color = "#ff0";
+
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const dataUrl = e.target.result;
+                        currentMapDataUrl = dataUrl;
+                        useGltfMap = true;
+                        statusEl.innerText = "⏳ Parsing model...";
+                        loadGltfMap(dataUrl).then(() => {
+                            statusEl.innerText = "✅ " + file.name + " (" + fileSizeMB + " MB)";
+                            statusEl.style.color = "#0f0";
+                            broadcast({ type: 'MAP_FILE', url: dataUrl });
+                        }).catch(err => {
+                            statusEl.innerText = "❌ Failed: " + err;
+                            statusEl.style.color = "#f44";
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                }
             } else {
                 // No file - generate default grid map
                 generateMap();
@@ -725,10 +889,12 @@
             conn.on('open', () => {
                 if (isHost) {
                     // Send map immediately (chunked for large local files)
-                    if (useGltfMap && currentMapDataUrl) {
-                        sendMapChunked(conn, currentMapDataUrl);
+                    if (useGltfMap && currentMapZipData) {
+                        sendMapChunked(conn, currentMapZipData, true);
+                    } else if (useGltfMap && currentMapDataUrl) {
+                        sendMapChunked(conn, currentMapDataUrl, false);
                     } else if (useGltfMap) {
-                        conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl });
+                        conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl || '' });
                     } else {
                         conn.send({ type: 'MAP_DATA', map: mapGrid });
                     }
@@ -884,6 +1050,31 @@
 
             // Attack Logic
             if (p.input.fire) performAttack(pid);
+
+            // Out of Bounds Logic (Damage 20/sec)
+            if (mapBounds) {
+                // Check if outside X/Z or below Y
+                // Allow some vertical freedom upwards, but kill if below
+                const buffer = 2.0; // Grace distance
+                if (pos.x < mapBounds.min.x - buffer || pos.x > mapBounds.max.x + buffer ||
+                    pos.z < mapBounds.min.z - buffer || pos.z > mapBounds.max.z + buffer ||
+                    pos.y < mapBounds.min.y - 10) { // Die if 10 units below map
+
+                    p.hp -= 20 * (TICK_MS / 1000); // 20 damage per second
+
+                    // Visual feedback or sound could go here (server side, so maybe just state)
+                    if (p.hp <= 0 && !p.dead) {
+                        p.dead = true;
+                        p.hp = 0;
+                        if (physicsBodies[pid]) {
+                            // Teleport body away or disable? 
+                            // Usually we keep it for death cam, but maybe disable physics
+                        }
+                        broadcast({ type: 'KILL_FEED', killer: 'The Abyss', victim: p.name });
+                        checkGameOver();
+                    }
+                }
+            }
         }
 
         function compressState() {
@@ -989,6 +1180,7 @@
                 pendingMapChunks = {
                     expected: data.totalChunks,
                     totalSize: data.totalSize,
+                    isZip: data.isZip, // Store isZip flag
                     received: new Array(data.totalChunks).fill(null),
                     count: 0
                 };
@@ -997,7 +1189,7 @@
                     statusMap.innerText = "⏳ 0/" + data.totalChunks + " chunks (0 MB)";
                     statusMap.style.color = "#ff0";
                 }
-                console.log(`Expecting ${data.totalChunks} chunks (${(data.totalSize / 1024 / 1024).toFixed(2)} MB)`);
+                console.log(`Expecting ${data.totalChunks} chunks (${(data.totalSize / 1024 / 1024).toFixed(2)} MB) ${data.isZip ? '(ZIP)' : ''}`);
             }
             else if (data.type === 'MAP_CHUNK') {
                 // Receive a chunk
@@ -1018,33 +1210,64 @@
                 if (statusMap) { statusMap.innerText = "⏳ Assembling..."; }
 
                 const fullData = pendingMapChunks.received.join('');
+                const isZip = pendingMapChunks.isZip;
                 pendingMapChunks = {};
 
                 clearMap();
-                useGltfMap = true;
-                console.log("Map assembled, loading (" + (fullData.length / 1024 / 1024).toFixed(2) + " MB)...");
-                if (statusMap) { statusMap.innerText = "⏳ Parsing model..."; }
 
-                loadGltfMap(fullData).then(() => {
-                    console.log("Client loaded chunked P2P MAP");
-                    if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
-                }).catch(e => {
-                    console.error("Client failed to load chunked P2P map", e);
-                    if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
-                });
+                if (isZip) {
+                    // It's a zip base64, load it via JSZip
+                    console.log("Client unzipping MAP...");
+                    // Need to convert base64 to something JSZip likes? JSZip handles base64 string if {base64: true}
+                    // Actually loadAsync handles "base64" string if detected or specified.
+                    // The data is a dataURL "data:application/zip;base64,..." or just raw base64?
+                    // FileReader result is DataURL. 
+                    // JSZip.loadAsync(data) supports base64 string.
+
+                    // We need to strip the prefix if it exists 'data:application/xxx;base64,'
+                    let base64 = fullData;
+                    if (base64.includes('base64,')) base64 = base64.split('base64,')[1];
+
+                    // Reuse the handleZipUpload logic but manually
+                    // Or better, let's extract the extraction logic to share it?
+                    // For now, inline for client simplicity or call a shared helper if we adapt handleZipUpload
+
+                    handleZipData(base64, statusMap).then(() => {
+                        console.log("Client loaded ZIP MAP");
+                        if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
+                    }).catch(e => {
+                        console.error("Client failed to load ZIP", e);
+                        if (statusMap) { statusMap.innerText = "❌ Failed: " + e.message; statusMap.style.color = "#f44"; }
+                    });
+
+                } else {
+                    useGltfMap = true;
+                    console.log("Map assembled, loading (" + (fullData.length / 1024 / 1024).toFixed(2) + " MB)...");
+                    if (statusMap) { statusMap.innerText = "⏳ Parsing model..."; }
+
+                    loadGltfMap(fullData).then(() => {
+                        console.log("Client loaded chunked P2P MAP");
+                        if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
+                    }).catch(e => {
+                        console.error("Client failed to load chunked P2P map", e);
+                        if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
+                    });
+                }
             }
             else if (data.type === 'MAP_TYPE') {
                 if (data.mode === 'GLTF') {
-                    if (data.url.startsWith('blob:')) {
+                    if (data.url && data.url.startsWith('blob:')) {
                         console.warn("Host is using a local file (blob:). Client cannot load this directly. Please use a public URL for multiplayer testing.");
                         alert("Host is using a local file. Detailed sync is not supported yet for local files. You will not see the map.");
                         return;
                     }
                     clearMap();
                     useGltfMap = true;
-                    loadGltfMap(data.url).then(() => {
-                        console.log("Client loaded MAP");
-                    }).catch(e => console.error("Client failed to load map", e));
+                    if (data.url) {
+                        loadGltfMap(data.url).then(() => {
+                            console.log("Client loaded MAP");
+                        }).catch(e => console.error("Client failed to load map", e));
+                    }
                 }
             }
             else if (data.type === 'LOBBY_UPDATE') {
@@ -1197,6 +1420,8 @@
         function animate() {
             requestAnimationFrame(animate);
 
+            const dt = clock.getDelta();
+
             // FPS Calculation
             fpsFrameCount++;
             const time = performance.now();
@@ -1210,6 +1435,7 @@
 
             if (!isHost) clientInterpolate();
 
+            updateEntityAnimations(dt);
             renderScene();
         }
 
@@ -1217,15 +1443,12 @@
             if (!renderer || !scene) return;
 
             // Camera
-            // Camera
             if (isHost || (players[myId] && players[myId].dead)) {
                 // Spectator Camera (Free Move)
-                // Use input.x/y for WASD movement of camera
                 const camSpeed = 0.5;
                 const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), camYaw);
                 const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), camYaw);
 
-                // Allow WASD movement
                 camera.position.addScaledVector(forward, input.y * camSpeed);
                 camera.position.addScaledVector(right, input.x * camSpeed);
 
@@ -1235,46 +1458,82 @@
             }
             else if (players[myId]) {
                 const p = players[myId];
-                camera.position.set(p.x, p.y + 0.6, p.z);
+                camera.position.set(p.x, p.y + 0.6, p.z); // Eye height 1.6
                 camera.rotation.order = 'YXZ';
                 camera.rotation.y = camYaw;
                 camera.rotation.x = camPitch;
             }
 
-            // if (debugPhysics) updatePhysicsDebug();
-            // else clearPhysicsDebug();
-
             // Render Players
             for (let id in players) {
-                if (id === myId) continue;
+                if (id === myId && !isHost) continue; // Don't render self if client (FPS view) - HOST sees all in spectator
                 const p = players[id];
                 if (!meshes[id]) {
-                    meshes[id] = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: 0x0088ff }));
-                    scene.add(meshes[id]);
+                    meshes[id] = { parsing: true };
+                    createEntityVisual(id, 'player').then(m => {
+                        meshes[id] = m;
+                        // Default anim
+                        playAnimation(id, 'idle');
+                    });
                 }
-                meshes[id].position.set(p.x, p.y, p.z);
-                meshes[id].rotation.y = p.yaw;
+
+                if (meshes[id].isObject3D) {
+                    // Smooth visual interpolation?
+                    // For now, snap
+                    meshes[id].position.set(p.x, p.y, p.z); // GLTF origin usually at feet
+                    meshes[id].rotation.y = p.yaw + Math.PI; // Adjust GLTF facing (often +Z, we need -Z?)
+
+                    // Animation State
+                    // Calc velocity
+                    if (!p.lastPos) p.lastPos = { x: p.x, z: p.z, time: Date.now() };
+                    const dist = Math.sqrt((p.x - p.lastPos.x) ** 2 + (p.z - p.lastPos.z) ** 2);
+                    if (Date.now() - p.lastPos.time > 100) {
+                        const speed = dist / ((Date.now() - p.lastPos.time) / 1000);
+                        if (speed > 0.5) playAnimation(id, 'walk', true);
+                        else playAnimation(id, 'idle', true);
+                        p.lastPos = { x: p.x, z: p.z, time: Date.now() };
+                    }
+                }
             }
 
             // Render Zombies
             // Clean old meshes
             for (let mid in meshes) {
-                if (mid.startsWith('z_') && !zombies[mid]) { scene.remove(meshes[mid]); delete meshes[mid]; }
+                if (mid.startsWith('z_') && !zombies[mid]) {
+                    if (meshes[mid].isObject3D) scene.remove(meshes[mid]);
+                    delete meshes[mid];
+                    delete mixermap[mid];
+                }
             }
             for (let zid in zombies) {
                 const z = zombies[zid];
                 if (!meshes[zid]) {
-                    meshes[zid] = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color: 0x00ff00 }));
-                    scene.add(meshes[zid]);
+                    meshes[zid] = { parsing: true };
+                    createEntityVisual(zid, 'zombie').then(m => {
+                        meshes[zid] = m;
+                        playAnimation(zid, 'idle');
+                    });
                 }
-                meshes[zid].position.set(z.x, z.y, z.z);
-                meshes[zid].rotation.y = z.yaw;
+                if (meshes[zid].isObject3D) {
+                    meshes[zid].position.set(z.x, z.y, z.z);
+                    meshes[zid].rotation.y = z.yaw + Math.PI;
+
+                    // Calc velocity for anim
+                    if (!z.lastPosRender) z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
+                    const dist = Math.sqrt((z.x - z.lastPosRender.x) ** 2 + (z.z - z.lastPosRender.z) ** 2);
+                    if (Date.now() - z.lastPosRender.time > 100) {
+                        const speed = dist / ((Date.now() - z.lastPosRender.time) / 1000);
+                        if (speed > 0.5) playAnimation(zid, 'walk', true);
+                        else playAnimation(zid, 'idle', true);
+                        z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
+                    }
+                }
             }
 
             // Render Bullets
             while (bulletMeshes.length > bullets.length) scene.remove(bulletMeshes.pop());
             while (bulletMeshes.length < bullets.length) {
-                const b = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
                 scene.add(b);
                 bulletMeshes.push(b);
             }
@@ -1680,6 +1939,176 @@
             }
         }
 
+        // --- ANIMATION SYSTEM ---
+        const mixermap = {}; // id -> mixer
+
+        function getAnimationAction(id, clipName) {
+            if (!meshes[id] || !mixermap[id]) return null;
+            const mixer = mixermap[id];
+            // Find clip in asset source? Or did we store it?
+            // We need to look up the clip from the loaded assets based on the name.
+            // But we cloned the scene. The clips are usually on the original GLTF object, or we need to pass them.
+            // Simplification: We'll store clips on the mesh.userData.clips
+            const clips = meshes[id].userData.clips;
+            if (!clips) return null;
+
+            // Map generic name to specific clip
+            // e.g. 'walk' -> 'zombie.walk' or just 'walk' if embedded
+            // For now, assume we searched and found relevant clip and named it 'walk'
+            const clip = clips[clipName];
+            if (!clip) return null;
+
+            return mixer.clipAction(clip);
+        }
+
+        function playAnimation(id, animName, loop = true) {
+            if (!meshes[id] || !mixermap[id]) return;
+
+            const action = getAnimationAction(id, animName);
+            if (!action) return;
+
+            if (meshes[id].userData.currentAnim === animName && action.isRunning()) return;
+
+            const prevAnim = meshes[id].userData.currentAnim;
+            const prevAction = getAnimationAction(id, prevAnim);
+
+            if (prevAction && prevAnim !== animName) {
+                prevAction.fadeOut(0.2);
+            }
+
+            action.reset().fadeIn(0.2).play();
+            action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce);
+            action.clampWhenFinished = !loop;
+
+            meshes[id].userData.currentAnim = animName;
+
+            // If non-looping (like attack), restore idle/walk after
+            if (!loop) {
+                const restore = () => {
+                    if (meshes[id].userData.currentAnim === animName) {
+                        // Check velocity to decide return state
+                        const vel = getVelocity(id);
+                        if (vel > 0.1) playAnimation(id, 'walk', true);
+                        else playAnimation(id, 'idle', true);
+                    }
+                    mixer.removeEventListener('finished', restore);
+                };
+                const mixer = mixermap[id];
+                mixer.addEventListener('finished', restore);
+            }
+        }
+
+        function getVelocity(id) {
+            // Helper to get velocity magnitude
+            if (players[id]) {
+                // We don't have direct velocity for remote players easily without diffing pos
+                // But we have Physics body if host. Client? Client lerps.
+                // Approximation:
+                return 0; // TODO: Implement velocity tracking for anim state
+            }
+            return 0;
+        }
+
+        // We need to load animations from the separate files or the main file
+        async function loadGLB(url) {
+            return new Promise((resolve, reject) => {
+                new GLTFLoader().load(url, (gltf) => {
+                    resolve(gltf);
+                }, undefined, reject);
+            });
+        }
+
+        async function createEntityVisual(id, type) {
+            // type: 'player' | 'zombie'
+            const assets = GameAssets[type];
+            if (!assets || !assets.base) {
+                // Fallback Cube
+                const color = type === 'player' ? 0x0088ff : 0x00ff00;
+                const m = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color }));
+                scene.add(m);
+                return m;
+            }
+
+            // Load base model if not cached (THREE.Cache enabled? or manual)
+            // We already loaded it? No, we have Blob URLs. We need to load the GLTF structure.
+            // CACHE: We should load the GLTF *once* and reuse using SkeletonUtils.clone
+            // But we haven't implemented a pre-loader. 
+            // We should do lazy loading with a cache.
+
+            if (!GameAssets[type].gltf) {
+                GameAssets[type].gltf = await loadGLB(assets.base);
+                // Also load external animations if any
+                // e.g. assets['walk'], assets['attack']
+                GameAssets[type].clips = {};
+
+                // Harvest animations from base
+                if (GameAssets[type].gltf.animations) {
+                    GameAssets[type].gltf.animations.forEach(c => {
+                        GameAssets[type].clips[c.name.toLowerCase()] = c;
+                        // Map 'mixamo.com' or generic names to standard idle/walk?
+                        // Simple heuristic: if name contains 'walk', map to 'walk'
+                        if (c.name.toLowerCase().includes('walk')) GameAssets[type].clips['walk'] = c;
+                        if (c.name.toLowerCase().includes('idle')) GameAssets[type].clips['idle'] = c;
+                        if (c.name.toLowerCase().includes('attack') || c.name.toLowerCase().includes('knife')) GameAssets[type].clips['attack'] = c;
+                    });
+                }
+
+                // Load separate files
+                for (let action in assets) {
+                    if (action === 'base' || action === 'gltf' || action === 'clips') continue;
+                    try {
+                        const animGltf = await loadGLB(assets[action]);
+                        if (animGltf.animations.length > 0) {
+                            // Assume the first animation in the file is the one we want
+                            GameAssets[type].clips[action] = animGltf.animations[0];
+                        }
+                    } catch (e) { console.warn("Failed to load anim:", action, e); }
+                }
+                // If no idle found, use the first one as default
+                if (!GameAssets[type].clips['idle'] && GameAssets[type].gltf.animations.length > 0) {
+                    console.log(`No 'idle' animation found for ${type}, using first available: ${GameAssets[type].gltf.animations[0].name}`);
+                    GameAssets[type].clips['idle'] = GameAssets[type].gltf.animations[0];
+                }
+                console.log(`Final Clips for ${type}:`, Object.keys(GameAssets[type].clips));
+            }
+
+            const model = SkeletonUtils.clone(GameAssets[type].gltf.scene);
+
+            // Apply JSON Config
+            const config = GameAssets[type].config;
+            const wrapper = new THREE.Group();
+
+            if (config) {
+                if (config.scale) model.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                if (config.rotation) model.rotation.set(
+                    THREE.MathUtils.degToRad(config.rotation[0]),
+                    THREE.MathUtils.degToRad(config.rotation[1]),
+                    THREE.MathUtils.degToRad(config.rotation[2])
+                );
+                if (config.location) model.position.set(config.location[0], config.location[1], config.location[2]);
+            }
+
+            wrapper.add(model);
+
+            // Setup Mixer (Targeting the SkinnedMesh root)
+            const mixer = new THREE.AnimationMixer(model);
+            mixermap[id] = mixer;
+
+            // UserData on wrapper for easy access
+            wrapper.userData.clips = GameAssets[type].clips;
+            wrapper.userData.currentAnim = '';
+
+            scene.add(wrapper);
+            console.log(`Created visual for ${type} [${id}]`);
+            return wrapper;
+        }
+
+        function updateEntityAnimations(dt) {
+            for (let id in mixermap) {
+                mixermap[id].update(dt);
+            }
+        }
+
         function updateBullets() {
             for (let i = bullets.length - 1; i >= 0; i--) {
                 const b = bullets[i];
@@ -1858,6 +2287,19 @@
                 loader.load(url, (gltf) => {
                     const model = gltf.scene;
 
+                    // Apply JSON Config
+                    const config = GameAssets.mapConfig;
+                    if (config) {
+                        console.log("Applying Map Config:", config);
+                        if (config.scale) model.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                        if (config.rotation) model.rotation.set(
+                            THREE.MathUtils.degToRad(config.rotation[0]),
+                            THREE.MathUtils.degToRad(config.rotation[1]),
+                            THREE.MathUtils.degToRad(config.rotation[2])
+                        );
+                        if (config.location) model.position.set(config.location[0], config.location[1], config.location[2]);
+                    }
+
                     if (!mapGroup) { mapGroup = new THREE.Group(); scene.add(mapGroup); }
                     mapGroup.add(model);
 
@@ -1920,7 +2362,8 @@
                         generateNavGraph();
 
                         // Create invisible boundary walls
-                        createBoundaryWalls();
+                        // Create invisible boundary walls
+                        initBoundarySystem();
                     }
                     resolve();
                 }, undefined, reject);
@@ -1955,20 +2398,8 @@
             // Gravity: -25 on Y
             world = new RAPIER.World({ x: 0.0, y: -25.0, z: 0.0 });
 
-            // Ground Floor (Infinite Plane in logic, but Rapier prefers boxes or explicit planes)
-            // Let's make a huge box for the floor
-            const groundBodyDesc = RAPIER.RigidBodyDesc.fixed();
-            const groundBody = world.createRigidBody(groundBodyDesc);
-
-            // Box inputs are Half-Extents
-            const groundColliderDesc = RAPIER.ColliderDesc.cuboid(500.0, 0.1, 500.0);
-            groundColliderDesc.setTranslation(0.0, -0.1, 0.0); // Slightly below 0
-
-            // Collision Groups: Environment (1)
-            // Membership: 0x0001, Filter: 0xFFFF (Everything)
-            groundColliderDesc.setCollisionGroups(0x00010006); // M: 1 (Env), F: 2(Player)|4(Zombie)
-
-            world.createCollider(groundColliderDesc, groundBody);
+            // REMOVED Infinite Ground Floor to allow falling off the map
+            // Use specific map floors (GLTF or Generated) instead
         }
         function generateMap() {
             mapGrid = [];
@@ -2010,6 +2441,20 @@
                     }
                 }
             }
+
+            // Create Floor for Generated Map (since we removed the infinite one)
+            const gridSizeReal = GRID_SIZE * CELL_SIZE;
+            const floorHalf = gridSizeReal / 2.0;
+
+            const floorBodyDesc = RAPIER.RigidBodyDesc.fixed()
+                .setTranslation(-MAP_OFFSET + floorHalf, -0.1, -MAP_OFFSET + floorHalf);
+            const floorBody = world.createRigidBody(floorBodyDesc);
+
+            const floorCollider = RAPIER.ColliderDesc.cuboid(floorHalf, 0.1, floorHalf);
+            floorCollider.setCollisionGroups(0x0001000E);
+
+            world.createCollider(floorCollider, floorBody);
+            mapBodies.push(floorBody);
         }
         function rebuildMapMesh() {
             if (!mapGroup) { mapGroup = new THREE.Group(); scene.add(mapGroup); }
@@ -2024,82 +2469,130 @@
         function resetToLobby() { window.location.reload(); }
 
         // --- BOUNDARY WALLS ---
-        let boundaryBodies = [];
-        function createBoundaryWalls() {
+        let boundaryBodies = []; // Kept for cleanup compatibility
+
+        function initBoundarySystem() {
             if (!isHost || !world || !mapMesh) return;
 
-            // Clear old boundaries
+            // Clear old physics boundaries if any
             boundaryBodies.forEach(b => {
                 if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
             });
             boundaryBodies = [];
 
-            // Use bounding box of map mesh - walls go OUTSIDE to prevent escaping
+            // Calculate Bounds
             const box = new THREE.Box3().setFromObject(mapMesh);
+            mapBounds = box.clone();
+
+            console.log("Map Bounds Calculated:", mapBounds);
+
+            // Create Visuals for Host (and broadcast? No, clients need to generate their own visuals)
+            // Wait, host runs headless logic often, but here host is a player.
+            // Function to spawn visuals should be called by everyone? 
+            // Currently createBoundaryWalls was called in loadGltfMap.
+            // loadGltfMap is called by both Host and Client.
+            // But 'navNodes' and 'physics' were Host only.
+
+            // We need a way for clients to see the boundary too.
+            // Since loadGltfMap calls this, and clients run loadGltfMap, we can add visuals here.
+
+            createBoundaryVisuals(box);
+        }
+
+        function createBoundaryVisuals(box) {
+            if (boundaryEffectGroup) scene.remove(boundaryEffectGroup);
+            boundaryEffectGroup = new THREE.Group();
+
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
+            const padding = 1.0;
 
-            const padding = 1;
-            const wallThickness = 2;
-            const wallHeight = size.y + 30;
+            // Haze material - High Performance Simple Shader
+            // Reddish/Orange haze for danger
+            const vertexShader = `
+                varying vec2 vUv;
+                varying float vHeight;
+                void main() {
+                    vUv = uv;
+                    vHeight = position.y;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `;
+            const fragmentShader = `
+                uniform float time;
+                varying vec2 vUv;
+                varying float vHeight;
+                
+                void main() {
+                    // Moving noise-like pattern
+                    float n = sin(vUv.x * 10.0 + time) * sin(vUv.y * 20.0 - time * 0.5);
+                    
+                    // Fade out at top
+                    float alpha = 0.5 * (1.0 - smoothstep(0.0, 1.0, vUv.y)) + 0.1 * n;
+                    
+                    // Color: Orange/Red Haze
+                    vec3 color = vec3(1.0, 0.3, 0.1); 
+                    
+                    gl_FragColor = vec4(color, alpha * 0.6);
+                }
+            `;
 
-            // Front (+Z)
-            const frontShapeHalf = [size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2];
-            const frontBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, center.y + wallHeight / 4, box.max.z + padding);
-            const frontBody = world.createRigidBody(frontBodyDesc);
+            const uniforms = {
+                time: { value: 0 }
+            };
 
-            const frontCollider = RAPIER.ColliderDesc.cuboid(...frontShapeHalf);
-            frontCollider.setCollisionGroups(0x0001000E);
+            const mat = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
 
-            world.createCollider(frontCollider, frontBody);
-            boundaryBodies.push(frontBody);
+            // Animate uniforms
+            const animateHaze = () => {
+                if (!boundaryEffectGroup) return;
+                mat.uniforms.time.value += 0.01;
+                requestAnimationFrame(animateHaze);
+            };
+            animateHaze();
 
-            // Back (-Z)
-            const backBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, center.y + wallHeight / 4, box.min.z - padding);
-            const backBody = world.createRigidBody(backBodyDesc);
-            const backCollider = RAPIER.ColliderDesc.cuboid(size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2);
-            backCollider.setCollisionGroups(0x0001000E);
-            world.createCollider(backCollider, backBody);
-            boundaryBodies.push(backBody);
+            const wallHeight = size.y + 50; // Tall walls
 
-            // Right (+X)
-            const rightBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(box.max.x + padding, center.y + wallHeight / 4, center.z);
-            const rightBody = world.createRigidBody(rightBodyDesc);
-            // Re-use shape dimension? 
-            const sideShapeHalf = [wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness];
-            const rightCollider = RAPIER.ColliderDesc.cuboid(...sideShapeHalf);
-            rightCollider.setCollisionGroups(0x0001000E);
-            world.createCollider(rightCollider, rightBody);
-            boundaryBodies.push(rightBody);
+            // Create 4 planes
+            // 1. Front (+Z)
+            const p1 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 2, wallHeight), mat);
+            p1.position.set(center.x, center.y + wallHeight / 4, box.max.z + padding);
+            p1.rotation.y = Math.PI; // Face inward? DoubleSide handles it.
+            boundaryEffectGroup.add(p1);
 
-            // Left (-X)
-            const leftBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(box.min.x - padding, center.y + wallHeight / 4, center.z);
-            const leftBody = world.createRigidBody(leftBodyDesc);
-            const leftCollider = RAPIER.ColliderDesc.cuboid(wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness);
-            leftCollider.setCollisionGroups(0x0001000E);
-            world.createCollider(leftCollider, leftBody);
-            boundaryBodies.push(leftBody);
+            // 2. Back (-Z)
+            const p2 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 2, wallHeight), mat);
+            p2.position.set(center.x, center.y + wallHeight / 4, box.min.z - padding);
+            boundaryEffectGroup.add(p2);
 
-            // Floor
-            const floorShapeHalf = [size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2];
-            const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, box.min.y - 2, center.z);
-            const floorBody = world.createRigidBody(floorBodyDesc);
-            const floorCollider = RAPIER.ColliderDesc.cuboid(...floorShapeHalf);
-            floorCollider.setCollisionGroups(0x0001000E);
-            world.createCollider(floorCollider, floorBody);
-            boundaryBodies.push(floorBody);
+            // 3. Right (+X)
+            const p3 = new THREE.Mesh(new THREE.PlaneGeometry(size.z + padding * 2, wallHeight), mat);
+            p3.position.set(box.max.x + padding, center.y + wallHeight / 4, center.z);
+            p3.rotation.y = -Math.PI / 2;
+            boundaryEffectGroup.add(p3);
 
-            // Ceiling (2.0m above highest point)
-            const ceilingY = box.max.y + 4.0;
-            // Use same shape as floor for simplicity
-            const ceilingBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, ceilingY, center.z);
-            const ceilingBody = world.createRigidBody(ceilingBodyDesc);
-            const ceilingCollider = RAPIER.ColliderDesc.cuboid(...floorShapeHalf);
-            ceilingCollider.setCollisionGroups(0x0001000E);
-            world.createCollider(ceilingCollider, ceilingBody);
-            boundaryBodies.push(ceilingBody);
+            // 4. Left (-X)
+            const p4 = new THREE.Mesh(new THREE.PlaneGeometry(size.z + padding * 2, wallHeight), mat);
+            p4.position.set(box.min.x - padding, center.y + wallHeight / 4, center.z);
+            p4.rotation.y = Math.PI / 2;
+            boundaryEffectGroup.add(p4);
 
-            console.log("Boundary Walls Created:", boundaryBodies.length);
+            // 5. Floor Abyss (Below)
+            const p5 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 4, size.z + padding * 4), mat);
+            p5.position.set(center.x, box.min.y - 5, center.z);
+            p5.rotation.x = -Math.PI / 2;
+            boundaryEffectGroup.add(p5);
+
+            scene.add(boundaryEffectGroup);
+            console.log("Boundary Visuals Created");
         }
 
         function createBoxBoundary(box) {
