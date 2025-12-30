@@ -792,31 +792,40 @@
         // Check if player is grounded using raycast
         function isPlayerGrounded(body) {
             const pos = body.translation();
-            // Ray from center downwards
-            // Capsule is 2m tall, center at mid. Bottom is at y-1.
-            // We want to check slightly below bottom. Dist = 1.0 + buffer.
-            const ray = new RAPIER.Ray({ x: pos.x, y: pos.y, z: pos.z }, { x: 0, y: -1, z: 0 });
-            const maxToi = 1.1; // 1.0 is bottom + 0.1 buffer
+            // 1. Rim Casting: Check 4 points around the radius (0.5) to catch edges and thin floors
+            // Start from Center Y (pos.y) and cast down. Offset 0.51 to be just outside the 0.5 radius.
+            const r = 0.51;
+            const rimOrigins = [
+                { x: pos.x + r, y: pos.y, z: pos.z },
+                { x: pos.x - r, y: pos.y, z: pos.z },
+                { x: pos.x, y: pos.y, z: pos.z + r },
+                { x: pos.x, y: pos.y, z: pos.z - r }
+            ];
+            const rimMaxToi = 1.1; // HalfHeight 1.0 + 0.1 buffer
 
-            // Mask: Environment (1) only? Or zombies too? Usually just env for jumping.
-            // Filter: Member ?, Filter 1 (Env) | 4 (Zombie)? No, just Env for ground.
-            // Interaction groups are (Member << 16) | Filter
-            // We want to hit Environment(1). So look for things with Member 1.
-            // Ray doesn't have membership, just filter.
-            // Filter = 1.
+            // 2. Inner Casting: Check Center + Triangle at r/2 to catch wires/thin objects underfoot
+            // MUST start below the collider (y - 1.05) to avoid self-hit.
+            const innerY = pos.y - 1.05;
+            const innerR = 0.25; // r/2
+            const innerOrigins = [
+                { x: pos.x, y: innerY, z: pos.z }, // Center
+                { x: pos.x + innerR, y: innerY, z: pos.z }, // Triangle 1
+                { x: pos.x - innerR * 0.5, y: innerY, z: pos.z + innerR * 0.866 }, // Triangle 2
+                { x: pos.x - innerR * 0.5, y: innerY, z: pos.z - innerR * 0.866 }  // Triangle 3
+            ];
+            const innerMaxToi = 0.2; // Short probe
 
-            // castRay(ray, maxToi, solid, filter, groups)
-            // Groups is a bitmask ? Actually Rapier JS QueryFilter structure.
-            // Or simple bitmask in recent versions.
+            // Check Rim Rays (Sensor Group 8)
+            for (let o of rimOrigins) {
+                const ray = new RAPIER.Ray(o, { x: 0, y: -1, z: 0 });
+                if (world.castRay(ray, rimMaxToi, true, 0x00080001)) return true;
+            }
 
-            // world.castRay(ray, maxToi, true) -> returns hit
-            const hit = world.castRay(ray, maxToi, true, 0xffff0001); // Filter against Member 1 (Env)
-
-            if (hit) return true;
-
-            // Fallback: Check vertical velocity for stationary
-            // const vel = body.linvel();
-            // if (Math.abs(vel.y) < 0.1) return true;
+            // Check Inner Rays (Sensor Group 8)
+            for (let o of innerOrigins) {
+                const ray = new RAPIER.Ray(o, { x: 0, y: -1, z: 0 });
+                if (world.castRay(ray, innerMaxToi, true, 0x00080001)) return true;
+            }
 
             return false;
         }
@@ -1296,6 +1305,27 @@
 
         function lerp(a, b, t) { return a + (b - a) * t; }
 
+        function getSafeSpawnY(x, z, distToCenter) {
+            // Default safe height for grid
+            let y = 3.0; // 2.0 (Floor) + 1.0 (Margin)
+
+            if (mapMesh) {
+                const raycaster = new THREE.Raycaster(
+                    new THREE.Vector3(x, 100, z),
+                    new THREE.Vector3(0, -1, 0)
+                );
+                const hits = raycaster.intersectObject(mapMesh, true);
+                if (hits.length > 0) {
+                    // Highest point + distToCenter + small buffer
+                    y = hits[0].point.y + distToCenter + 0.1;
+                }
+            } else {
+                // Grid map fallback: Floor is at 2.0
+                y = 2.0 + distToCenter + 0.1;
+            }
+            return y;
+        }
+
         function createPlayer(id, name) {
             const p = {
                 id, name,
@@ -1312,8 +1342,9 @@
 
             if (isHost && world) {
                 // Rapier Player Body
+                const spawnY = getSafeSpawnY(0, 0, 1.0); // 0,0 is center. Capsule distToCenter is 1.0 (Height 2)
                 const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-                    .setTranslation(0.0, 5.0, 0.0)
+                    .setTranslation(0.0, spawnY, 0.0)
                     .lockRotations() // Prevent tipping
                     .setLinearDamping(0.0); // We control velocity manually
 
@@ -1446,17 +1477,8 @@
                     const id = 'z_' + Date.now() + Math.random();
 
                     // Raycast from above to find actual surface height
-                    let spawnY = spawnNode.y + 1;
-                    if (mapMesh) {
-                        const raycaster = new THREE.Raycaster(
-                            new THREE.Vector3(spawnNode.x, spawnNode.y + 50, spawnNode.z),
-                            new THREE.Vector3(0, -1, 0)
-                        );
-                        const hits = raycaster.intersectObject(mapMesh, true);
-                        if (hits.length > 0) {
-                            spawnY = hits[0].point.y + 1.5; // Spawn above the surface
-                        }
-                    }
+                    // Use helper
+                    let spawnY = getSafeSpawnY(spawnNode.x, spawnNode.z, 0.6); // 0.6 for zombie (radius 0.5 + 0.1)
 
                     zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
 
@@ -1500,11 +1522,21 @@
             // Zombie grounded check helper
             function isZombieGrounded(body) {
                 const pos = body.translation();
-                const ray = new RAPIER.Ray({ x: pos.x, y: pos.y, z: pos.z }, { x: 0, y: -1, z: 0 });
-                const maxToi = 0.7; // Sphere 0.5 + 0.2
-                // Filter 1 (Env), Member 4 (Zombie) => 0x00010004
-                const hit = world.castRay(ray, maxToi, true, 0x00010004);
-                return !!hit;
+                // Rim Casting for Zombie (Radius 0.5)
+                const r = 0.51;
+                const origins = [
+                    { x: pos.x + r, y: pos.y, z: pos.z },
+                    { x: pos.x - r, y: pos.y, z: pos.z },
+                    { x: pos.x, y: pos.y, z: pos.z + r },
+                    { x: pos.x, y: pos.y, z: pos.z - r }
+                ];
+                const maxToi = 0.7; // Radius 0.5 + 0.2 buffer (slightly more for zombies to climb)
+
+                for (let o of origins) {
+                    const ray = new RAPIER.Ray(o, { x: 0, y: -1, z: 0 });
+                    if (world.castRay(ray, maxToi, true, 0x00080001)) return true;
+                }
+                return false;
             }
 
             // Move
@@ -1804,7 +1836,8 @@
 
                 // Reposition players to spawn?
                 if (physicsBodies[id]) {
-                    physicsBodies[id].setTranslation({ x: 0, y: 5, z: 0 }, true);
+                    const rY = getSafeSpawnY(0, 0, 1.0);
+                    physicsBodies[id].setTranslation({ x: 0, y: rY, z: 0 }, true);
                     physicsBodies[id].setLinvel({ x: 0, y: 0, z: 0 }, true);
                 }
             }
@@ -1871,7 +1904,7 @@
                                 const body = world.createRigidBody(bodyDesc);
 
                                 const colliderDesc = RAPIER.ColliderDesc.trimesh(verticesFloat32, indicesUint32);
-                                colliderDesc.setCollisionGroups(0x00010006); // Env vs Player|Zombie
+                                colliderDesc.setCollisionGroups(0x0001000E); // Env vs Player|Zombie|Sensor
 
                                 world.createCollider(colliderDesc, body);
                                 mapBodies.push(body);
@@ -1965,7 +1998,7 @@
                         const colliderDesc = RAPIER.ColliderDesc.cuboid(halfSize, 2.0, halfSize);
 
                         // Interaction: Environment (1)
-                        colliderDesc.setCollisionGroups(0x00010006); // M:Env, F:Player|Zombie
+                        colliderDesc.setCollisionGroups(0x0001000E); // M:Env, F:Player|Zombie|Sensor
 
                         world.createCollider(colliderDesc, body);
                         mapBodies.push(body);
@@ -2011,7 +2044,7 @@
             const frontBody = world.createRigidBody(frontBodyDesc);
 
             const frontCollider = RAPIER.ColliderDesc.cuboid(...frontShapeHalf);
-            frontCollider.setCollisionGroups(0x00010006);
+            frontCollider.setCollisionGroups(0x0001000E);
 
             world.createCollider(frontCollider, frontBody);
             boundaryBodies.push(frontBody);
@@ -2020,7 +2053,7 @@
             const backBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, center.y + wallHeight / 4, box.min.z - padding);
             const backBody = world.createRigidBody(backBodyDesc);
             const backCollider = RAPIER.ColliderDesc.cuboid(size.x / 2 + padding + wallThickness, wallHeight / 2, wallThickness / 2);
-            backCollider.setCollisionGroups(0x00010006);
+            backCollider.setCollisionGroups(0x0001000E);
             world.createCollider(backCollider, backBody);
             boundaryBodies.push(backBody);
 
@@ -2030,7 +2063,7 @@
             // Re-use shape dimension? 
             const sideShapeHalf = [wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness];
             const rightCollider = RAPIER.ColliderDesc.cuboid(...sideShapeHalf);
-            rightCollider.setCollisionGroups(0x00010006);
+            rightCollider.setCollisionGroups(0x0001000E);
             world.createCollider(rightCollider, rightBody);
             boundaryBodies.push(rightBody);
 
@@ -2038,7 +2071,7 @@
             const leftBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(box.min.x - padding, center.y + wallHeight / 4, center.z);
             const leftBody = world.createRigidBody(leftBodyDesc);
             const leftCollider = RAPIER.ColliderDesc.cuboid(wallThickness / 2, wallHeight / 2, size.z / 2 + padding + wallThickness);
-            leftCollider.setCollisionGroups(0x00010006);
+            leftCollider.setCollisionGroups(0x0001000E);
             world.createCollider(leftCollider, leftBody);
             boundaryBodies.push(leftBody);
 
@@ -2047,7 +2080,7 @@
             const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(center.x, box.min.y - 2, center.z);
             const floorBody = world.createRigidBody(floorBodyDesc);
             const floorCollider = RAPIER.ColliderDesc.cuboid(...floorShapeHalf);
-            floorCollider.setCollisionGroups(0x00010006);
+            floorCollider.setCollisionGroups(0x0001000E);
             world.createCollider(floorCollider, floorBody);
             boundaryBodies.push(floorBody);
 
@@ -2084,7 +2117,7 @@
                 const body = world.createRigidBody(bodyDesc);
 
                 const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents[0], halfExtents[1], halfExtents[2]);
-                colliderDesc.setCollisionGroups(0x00010006);
+                colliderDesc.setCollisionGroups(0x0001000E);
 
                 world.createCollider(colliderDesc, body);
                 boundaryBodies.push(body);
