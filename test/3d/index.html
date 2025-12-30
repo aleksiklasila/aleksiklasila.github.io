@@ -462,24 +462,32 @@
 
         // Assets
         const GameAssets = {
-            map: null,      // Blob URL
-            mapConfig: null, // { location, rotation, scale }
-            player: { config: null },     // { 'base': url, ... }
-            zombie: { config: null },     // { 'base': url, ... }
+            map: { base: null, config: null },       // { base: url, config: { location, rotation, scale } }
+            player: { base: null, config: null },    // { base: url, config: ... }
+            zombie: { base: null, config: null },    // { base: url, config: ... }
+            skybox: { base: null, type: null, config: null } // { base: url, type: 'texture'|'model', config: ... }
         };
 
         function clearGameAssets() {
-            if (GameAssets.map) URL.revokeObjectURL(GameAssets.map);
+            // Map
+            if (GameAssets.map.base) URL.revokeObjectURL(GameAssets.map.base);
+            GameAssets.map = { base: null, config: null };
+
+            // Player
             for (let k in GameAssets.player) {
-                if (typeof GameAssets.player[k] === 'string') URL.revokeObjectURL(GameAssets.player[k]);
+                if (k !== 'config' && typeof GameAssets.player[k] === 'string') URL.revokeObjectURL(GameAssets.player[k]);
             }
+            GameAssets.player = { base: null, config: null };
+
+            // Zombie
             for (let k in GameAssets.zombie) {
-                if (typeof GameAssets.zombie[k] === 'string') URL.revokeObjectURL(GameAssets.zombie[k]);
+                if (k !== 'config' && typeof GameAssets.zombie[k] === 'string') URL.revokeObjectURL(GameAssets.zombie[k]);
             }
-            GameAssets.map = null;
-            GameAssets.mapConfig = null;
-            GameAssets.player = { config: null };
-            GameAssets.zombie = { config: null };
+            GameAssets.zombie = { base: null, config: null };
+
+            // Skybox
+            if (GameAssets.skybox.base) URL.revokeObjectURL(GameAssets.skybox.base);
+            GameAssets.skybox = { base: null, type: null, config: null };
             currentMapZipData = null; // Also clear the zip data buffer
         }
 
@@ -615,24 +623,25 @@
 
 
 
-        let boundaryEffectGroup = null;
+        let skyboxGroup = null;
         let mapBounds = null; // THREE.Box3
 
         function clearMap() {
-            clearGameAssets(); // Reset asset blobs
-
-            // Clear Visuals
             if (mapGroup && scene) {
                 scene.remove(mapGroup);
                 mapGroup = null;
             }
+            if (scene) {
+                scene.background = new THREE.Color(0x111111);
+                scene.environment = null;
+            }
+            if (skyboxGroup && scene) {
+                scene.remove(skyboxGroup);
+                skyboxGroup = null;
+            }
             if (mapMesh) mapMesh = null;
 
             // Clear Boundary Visuals
-            if (boundaryEffectGroup && scene) {
-                scene.remove(boundaryEffectGroup);
-                boundaryEffectGroup = null;
-            }
             mapBounds = null;
 
             // Clear Physics
@@ -643,11 +652,7 @@
             }
             mapBodies = [];
 
-            // Clear old physics boundaries (if any exist from old version)
-            boundaryBodies.forEach(b => {
-                if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
-            });
-            boundaryBodies = [];
+
 
             mapGrid = [];
             useGltfMap = false;
@@ -682,18 +687,22 @@
             };
 
             // Load Configs
-            GameAssets.mapConfig = (await loadConfig(/^map\/map\.json$/i)) || (await loadConfig(/^map\.json$/i));
+            GameAssets.map.config = (await loadConfig(/^map\/map\.json$/i)) || (await loadConfig(/^map\.json$/i));
             GameAssets.player.config = (await loadConfig(/^player\/player\.json$/i));
             GameAssets.zombie.config = (await loadConfig(/^zombie\/zombie\.json$/i));
+            // Skybox Config loaded later or here? Let's check skybox/skybox.json
+            const skyboxConfig = (await loadConfig(/^skybox\/skybox\.json$/i));
+            if (skyboxConfig) GameAssets.skybox.config = skyboxConfig;
 
-            console.log("Loaded Configs:", { map: GameAssets.mapConfig, player: GameAssets.player.config, zombie: GameAssets.zombie.config });
+
+            console.log("Loaded Configs:", { map: GameAssets.map.config, player: GameAssets.player.config, zombie: GameAssets.zombie.config, skybox: GameAssets.skybox.config });
 
             // 1. Load Map
             const mapFile = zip.file(/map\/map\.(glb|gltf)/i)[0] || zip.file(/map\.(glb|gltf)/i)[0];
             if (!mapFile) throw new Error("No map/map.glb found in zip");
 
             const mapBlob = await mapFile.async("blob");
-            GameAssets.map = URL.createObjectURL(mapBlob);
+            GameAssets.map.base = URL.createObjectURL(mapBlob);
 
             // 2. Load Players
             // Expect player/player.glb, player/player.walk.glb etc
@@ -728,12 +737,31 @@
                 }
             }
 
+            // 4. Load Skybox
+            // Now under skybox/ directory
+            const skyboxGlb = zip.file(/skybox\/skybox\.glb/i)[0] || zip.file(/skybox\/skybox\.gltf/i)[0];
+            const skyboxPng = zip.file(/skybox\/skybox\.png/i)[0];
+            // skybox/skybox.json already loaded above
+
+            if (skyboxGlb) {
+                console.log("Found Skybox GLB:", skyboxGlb.name);
+                const blob = await skyboxGlb.async("blob");
+                GameAssets.skybox.base = URL.createObjectURL(blob);
+                GameAssets.skybox.type = 'model';
+                // Config already attached if found
+            } else if (skyboxPng) {
+                console.log("Found Skybox PNG:", skyboxPng.name);
+                const blob = await skyboxPng.async("blob");
+                GameAssets.skybox.base = URL.createObjectURL(blob);
+                GameAssets.skybox.type = 'texture';
+            }
+
             // Check minimum requirements
             if (!GameAssets.player.base) throw new Error("Missing player/player.glb");
             if (!GameAssets.zombie.base) throw new Error("Missing zombie/zombie.glb");
 
             statusEl.innerText = "⏳ Parsing model...";
-            await loadGltfMap(GameAssets.map);
+            await loadGltfMap(GameAssets.map.base);
         }
 
         async function handleZipUpload(file, statusEl) {
@@ -1452,6 +1480,10 @@
                 camera.position.addScaledVector(forward, input.y * camSpeed);
                 camera.position.addScaledVector(right, input.x * camSpeed);
 
+                // Vertical Movement (Space/Ctrl)
+                if (input.jump) camera.position.y += camSpeed;
+                if (input.crouch) camera.position.y -= camSpeed;
+
                 camera.rotation.order = 'YXZ';
                 camera.rotation.y = camYaw;
                 camera.rotation.x = camPitch;
@@ -1702,64 +1734,71 @@
             }
         }
 
+        function spawnZombie() {
+            // Spawn on NavMesh node
+            let spawnNode = null;
+            let attempts = 0;
+            const minPlayerDist = 10; // Don't spawn too close to players
+
+            while (!spawnNode && attempts < 50 && navNodes.length > 0) {
+                attempts++;
+                const candidate = navNodes[Math.floor(Math.random() * navNodes.length)];
+
+                // Check distance to all players
+                let tooClose = false;
+                for (let pid in players) {
+                    const p = players[pid];
+                    const dist = Math.sqrt((p.x - candidate.x) ** 2 + (p.z - candidate.z) ** 2);
+                    if (dist < minPlayerDist) { tooClose = true; break; }
+                }
+
+                if (!tooClose) spawnNode = candidate;
+            }
+
+            // Fallback for grid maps or if navNodes empty
+            if (!spawnNode && !useGltfMap) {
+                let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
+                if (mapGrid[gx] && !mapGrid[gx][gz]) {
+                    spawnNode = {
+                        x: (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2,
+                        y: 2,
+                        z: (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2
+                    };
+                }
+            }
+
+            if (spawnNode) {
+                const id = 'z_' + Date.now() + Math.random();
+
+                // Raycast from above to find actual surface height
+                // Use helper
+                let spawnY = getSafeSpawnY(spawnNode.x, spawnNode.z, 0.6); // 0.6 for zombie (radius 0.5 + 0.1)
+
+                zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
+
+                const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                    .setTranslation(spawnNode.x, spawnY + 0.5, spawnNode.z)
+                    .lockRotations()
+                    .setLinearDamping(0.5);
+
+                const body = world.createRigidBody(bodyDesc);
+
+                const colliderDesc = RAPIER.ColliderDesc.ball(0.5);
+                colliderDesc.setFriction(0.0);
+                // Group 4 (Zombie), Mask 1(Env)|2(Player)|4(Zombie)
+                colliderDesc.setCollisionGroups(0x00040007);
+
+                world.createCollider(colliderDesc, body);
+                zombieBodies[id] = body;
+                return true;
+            }
+            return false;
+        }
+
         function updateZombies() {
             if (zombiesToSpawn > 0 && Math.random() < 0.05) {
-                // Spawn on NavMesh node
-                let spawnNode = null;
-                let attempts = 0;
-                const minPlayerDist = 10; // Don't spawn too close to players
-
-                while (!spawnNode && attempts < 50 && navNodes.length > 0) {
-                    attempts++;
-                    const candidate = navNodes[Math.floor(Math.random() * navNodes.length)];
-
-                    // Check distance to all players
-                    let tooClose = false;
-                    for (let pid in players) {
-                        const p = players[pid];
-                        const dist = Math.sqrt((p.x - candidate.x) ** 2 + (p.z - candidate.z) ** 2);
-                        if (dist < minPlayerDist) { tooClose = true; break; }
-                    }
-
-                    if (!tooClose) spawnNode = candidate;
-                }
-
-                // Fallback for grid maps or if navNodes empty
-                if (!spawnNode && !useGltfMap) {
-                    let gx = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-                    let gz = Math.floor(Math.random() * (GRID_SIZE - 2)) + 1;
-                    if (mapGrid[gx] && !mapGrid[gx][gz]) {
-                        spawnNode = {
-                            x: (gx * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2,
-                            y: 2,
-                            z: (gz * CELL_SIZE) - MAP_OFFSET + CELL_SIZE / 2
-                        };
-                    }
-                }
-
-                if (spawnNode) {
-                    const id = 'z_' + Date.now() + Math.random();
-
-                    // Raycast from above to find actual surface height
-                    // Use helper
-                    let spawnY = getSafeSpawnY(spawnNode.x, spawnNode.z, 0.6); // 0.6 for zombie (radius 0.5 + 0.1)
-
-                    zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
-
-                    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-                        .setTranslation(spawnNode.x, spawnY + 0.5, spawnNode.z)
-                        .lockRotations()
-                        .setLinearDamping(0.5);
-
-                    const body = world.createRigidBody(bodyDesc);
-
-                    const colliderDesc = RAPIER.ColliderDesc.ball(0.5);
-                    colliderDesc.setFriction(0.0);
-                    // Group 4 (Zombie), Mask 1(Env)|2(Player)|4(Zombie)
-                    colliderDesc.setCollisionGroups(0x00040007);
-
-                    world.createCollider(colliderDesc, body);
-                    zombieBodies[id] = body;
+                if (spawnZombie()) {
                     zombiesToSpawn--;
                 }
             }
@@ -1936,6 +1975,14 @@
                 z.x = pos.x;
                 z.y = pos.y;
                 z.z = pos.z;
+
+                // Fall Check
+                if (z.y < -15) {
+                    // Respawn a replacement first
+                    spawnZombie();
+                    // Then kill the falling one (no points awarded)
+                    killZombie(zid, null);
+                }
             }
         }
 
@@ -2055,7 +2102,7 @@
 
                 // Load separate files
                 for (let action in assets) {
-                    if (action === 'base' || action === 'gltf' || action === 'clips') continue;
+                    if (action === 'base' || action === 'gltf' || action === 'clips' || action === 'config') continue;
                     try {
                         const animGltf = await loadGLB(assets[action]);
                         if (animGltf.animations.length > 0) {
@@ -2288,7 +2335,7 @@
                     const model = gltf.scene;
 
                     // Apply JSON Config
-                    const config = GameAssets.mapConfig;
+                    const config = GameAssets.map.config;
                     if (config) {
                         console.log("Applying Map Config:", config);
                         if (config.scale) model.scale.set(config.scale[0], config.scale[1], config.scale[2]);
@@ -2304,6 +2351,56 @@
                     mapGroup.add(model);
 
                     mapMesh = model;
+
+
+                    if (GameAssets.skybox.base) {
+                        if (GameAssets.skybox.type === 'texture') {
+                            const texLoader = new THREE.TextureLoader();
+                            texLoader.load(GameAssets.skybox.base, (texture) => {
+                                texture.mapping = THREE.EquirectangularReflectionMapping;
+                                scene.background = texture;
+                                scene.environment = texture;
+                                console.log("Applied Skybox Texture");
+                            });
+                        } else if (GameAssets.skybox.type === 'model') {
+                            new GLTFLoader().load(GameAssets.skybox.base, (gltf) => {
+                                const model = gltf.scene;
+                                const config = GameAssets.skybox.config;
+                                if (config) {
+                                    if (config.scale) model.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                                    if (config.rotation) model.rotation.set(
+                                        THREE.MathUtils.degToRad(config.rotation[0]),
+                                        THREE.MathUtils.degToRad(config.rotation[1]),
+                                        THREE.MathUtils.degToRad(config.rotation[2])
+                                    );
+                                    if (config.location) model.position.set(config.location[0], config.location[1], config.location[2]);
+                                }
+
+                                // Fix visibility: Render using BasicMaterial (Unlit)
+                                model.traverse(child => {
+                                    if (child.isMesh) {
+                                        const oldMat = child.material;
+                                        // Create unlit material, preserving map/color
+                                        const newMat = new THREE.MeshBasicMaterial({
+                                            map: oldMat.map,
+                                            color: oldMat.color,
+                                            side: THREE.BackSide,
+                                            depthWrite: false,
+                                            fog: false
+                                        });
+                                        child.material = newMat;
+                                        child.frustumCulled = false;
+                                        child.renderOrder = -1;
+                                    }
+                                });
+
+                                skyboxGroup = new THREE.Group();
+                                skyboxGroup.add(model);
+                                scene.add(skyboxGroup);
+                                console.log("Applied Skybox Model");
+                            });
+                        }
+                    }
 
                     if (isHost && world) {
                         // FORCE recursive update so children behave correctly relative to parents
@@ -2363,7 +2460,8 @@
 
                         // Create invisible boundary walls
                         // Create invisible boundary walls
-                        initBoundarySystem();
+                        // Create invisible boundary walls
+                        // initBoundarySystem(); // REMOVED Visuals
                     }
                     resolve();
                 }, undefined, reject);
@@ -2469,200 +2567,7 @@
         function resetToLobby() { window.location.reload(); }
 
         // --- BOUNDARY WALLS ---
-        let boundaryBodies = []; // Kept for cleanup compatibility
 
-        function initBoundarySystem() {
-            if (!isHost || !world || !mapMesh) return;
-
-            // Clear old physics boundaries if any
-            boundaryBodies.forEach(b => {
-                if (world.getRigidBody(b.handle)) world.removeRigidBody(b);
-            });
-            boundaryBodies = [];
-
-            // Calculate Bounds
-            const box = new THREE.Box3().setFromObject(mapMesh);
-            mapBounds = box.clone();
-
-            console.log("Map Bounds Calculated:", mapBounds);
-
-            // Create Visuals for Host (and broadcast? No, clients need to generate their own visuals)
-            // Wait, host runs headless logic often, but here host is a player.
-            // Function to spawn visuals should be called by everyone? 
-            // Currently createBoundaryWalls was called in loadGltfMap.
-            // loadGltfMap is called by both Host and Client.
-            // But 'navNodes' and 'physics' were Host only.
-
-            // We need a way for clients to see the boundary too.
-            // Since loadGltfMap calls this, and clients run loadGltfMap, we can add visuals here.
-
-            createBoundaryVisuals(box);
-        }
-
-        function createBoundaryVisuals(box) {
-            if (boundaryEffectGroup) scene.remove(boundaryEffectGroup);
-            boundaryEffectGroup = new THREE.Group();
-
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const padding = 1.0;
-
-            // Haze material - High Performance Simple Shader
-            // Reddish/Orange haze for danger
-            const vertexShader = `
-                varying vec2 vUv;
-                varying float vHeight;
-                void main() {
-                    vUv = uv;
-                    vHeight = position.y;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `;
-            const fragmentShader = `
-                uniform float time;
-                varying vec2 vUv;
-                varying float vHeight;
-                
-                void main() {
-                    // Moving noise-like pattern
-                    float n = sin(vUv.x * 10.0 + time) * sin(vUv.y * 20.0 - time * 0.5);
-                    
-                    // Fade out at top
-                    float alpha = 0.5 * (1.0 - smoothstep(0.0, 1.0, vUv.y)) + 0.1 * n;
-                    
-                    // Color: Orange/Red Haze
-                    vec3 color = vec3(1.0, 0.3, 0.1); 
-                    
-                    gl_FragColor = vec4(color, alpha * 0.6);
-                }
-            `;
-
-            const uniforms = {
-                time: { value: 0 }
-            };
-
-            const mat = new THREE.ShaderMaterial({
-                uniforms: uniforms,
-                vertexShader: vertexShader,
-                fragmentShader: fragmentShader,
-                transparent: true,
-                side: THREE.DoubleSide,
-                depthWrite: false,
-                blending: THREE.AdditiveBlending
-            });
-
-            // Animate uniforms
-            const animateHaze = () => {
-                if (!boundaryEffectGroup) return;
-                mat.uniforms.time.value += 0.01;
-                requestAnimationFrame(animateHaze);
-            };
-            animateHaze();
-
-            const wallHeight = size.y + 50; // Tall walls
-
-            // Create 4 planes
-            // 1. Front (+Z)
-            const p1 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 2, wallHeight), mat);
-            p1.position.set(center.x, center.y + wallHeight / 4, box.max.z + padding);
-            p1.rotation.y = Math.PI; // Face inward? DoubleSide handles it.
-            boundaryEffectGroup.add(p1);
-
-            // 2. Back (-Z)
-            const p2 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 2, wallHeight), mat);
-            p2.position.set(center.x, center.y + wallHeight / 4, box.min.z - padding);
-            boundaryEffectGroup.add(p2);
-
-            // 3. Right (+X)
-            const p3 = new THREE.Mesh(new THREE.PlaneGeometry(size.z + padding * 2, wallHeight), mat);
-            p3.position.set(box.max.x + padding, center.y + wallHeight / 4, center.z);
-            p3.rotation.y = -Math.PI / 2;
-            boundaryEffectGroup.add(p3);
-
-            // 4. Left (-X)
-            const p4 = new THREE.Mesh(new THREE.PlaneGeometry(size.z + padding * 2, wallHeight), mat);
-            p4.position.set(box.min.x - padding, center.y + wallHeight / 4, center.z);
-            p4.rotation.y = Math.PI / 2;
-            boundaryEffectGroup.add(p4);
-
-            // 5. Floor Abyss (Below)
-            const p5 = new THREE.Mesh(new THREE.PlaneGeometry(size.x + padding * 4, size.z + padding * 4), mat);
-            p5.position.set(center.x, box.min.y - 5, center.z);
-            p5.rotation.x = -Math.PI / 2;
-            boundaryEffectGroup.add(p5);
-
-            scene.add(boundaryEffectGroup);
-            console.log("Boundary Visuals Created");
-        }
-
-        function createBoxBoundary(box) {
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const padding = 2;
-            const wallThickness = 1;
-            const wallHeight = size.y + 20;
-
-            const walls = [
-                { pos: [center.x, center.y, box.max.z + padding], size: [size.x / 2 + padding, wallHeight / 2, wallThickness / 2] },
-                { pos: [center.x, center.y, box.min.z - padding], size: [size.x / 2 + padding, wallHeight / 2, wallThickness / 2] },
-                { pos: [box.max.x + padding, center.y, center.z], size: [wallThickness / 2, wallHeight / 2, size.z / 2 + padding] },
-                { pos: [box.min.x - padding, center.y, center.z], size: [wallThickness / 2, wallHeight / 2, size.z / 2 + padding] },
-                { pos: [center.x, box.min.y - wallThickness / 2, center.z], size: [size.x / 2 + padding * 2, wallThickness / 2, size.z / 2 + padding * 2] }
-            ];
-
-            walls.forEach(w => {
-                // Pos: Center. Size: Box Full Size (Rapier needs Half Extents)
-                // w.size was prepared for Cannon Box args? Cannon Box args are half-extents.
-                // Let's verify existing logic: 
-                // Cannon Box(Vec3(halfX, halfY, halfZ))
-                // Code calls: new CANNON.Box(new CANNON.Vec3(...w.size))
-                // w.size calc: [size.x / 2 + padding, ...] -> These ARE half extents already.
-
-                const halfExtents = w.size;
-                const pos = w.pos;
-
-                const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(pos[0], pos[1], pos[2]);
-                const body = world.createRigidBody(bodyDesc);
-
-                const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents[0], halfExtents[1], halfExtents[2]);
-                colliderDesc.setCollisionGroups(0x0001000E);
-
-                world.createCollider(colliderDesc, body);
-                boundaryBodies.push(body);
-            });
-        }
-
-        function convexHull2D(points) {
-            if (points.length < 3) return points;
-
-            let start = 0;
-            for (let i = 1; i < points.length; i++) {
-                if (points[i].z < points[start].z || (points[i].z === points[start].z && points[i].x < points[start].x)) {
-                    start = i;
-                }
-            }
-            [points[0], points[start]] = [points[start], points[0]];
-            const pivot = points[0];
-
-            const sorted = points.slice(1).sort((a, b) => {
-                const angleA = Math.atan2(a.z - pivot.z, a.x - pivot.x);
-                const angleB = Math.atan2(b.z - pivot.z, b.x - pivot.x);
-                return angleA - angleB;
-            });
-
-            const hull = [pivot];
-            for (const p of sorted) {
-                while (hull.length > 1 && cross(hull[hull.length - 2], hull[hull.length - 1], p) <= 0) {
-                    hull.pop();
-                }
-                hull.push(p);
-            }
-            return hull;
-        }
-
-        function cross(o, a, b) {
-            return (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
-        }
 
         // --- NAVIGATION & PATHFINDING ---
         function generateNavGraph() {
@@ -2885,6 +2790,7 @@
                 updateMovementInput();
 
                 if (e.code === 'Space') input.jump = true;
+                if (e.key === 'Control') input.crouch = true;
                 if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
                 if (e.key === 'p' || e.key === 'P') {
                     fpsVisible = !fpsVisible;
@@ -2902,13 +2808,16 @@
                 updateMovementInput();
 
                 if (e.code === 'Space') input.jump = false;
+                if (e.key === 'Control') input.crouch = false;
             });
 
             // Reset keys when window loses focus (prevents stuck keys)
             window.addEventListener('blur', () => {
                 keys.w = keys.a = keys.s = keys.d = false;
                 input.x = input.y = 0;
+                input.x = input.y = 0;
                 input.jump = false;
+                input.crouch = false;
                 input.fire = false;
             });
 
