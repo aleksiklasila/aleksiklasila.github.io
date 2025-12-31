@@ -13,7 +13,6 @@
             --accent-dim: #00a856;
             --danger: #cf6679;
             --highlight: #2c2c2c;
-            /* Dart Colors */
             --dart-flight: #ff4081;
             --dart-shaft: #eee;
             --dart-barrel: #333;
@@ -24,40 +23,23 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh; 
-            height: 100dvh;
-            overflow: hidden;
-            touch-action: none;
-            user-select: none;
+            margin: 0; padding: 0;
+            display: flex; flex-direction: column;
+            height: 100vh; height: 100dvh;
+            overflow: hidden; touch-action: none; user-select: none;
         }
 
         /* --- Header --- */
         header {
-            flex: 0 0 auto;
-            padding: 5px 15px;
-            background: var(--card-bg);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #333;
-            height: 44px;
-            padding-top: max(5px, env(safe-area-inset-top)); 
-            z-index: 100;
+            flex: 0 0 auto; padding: 5px 15px; background: var(--card-bg);
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #333; height: 44px;
+            padding-top: max(5px, env(safe-area-inset-top)); z-index: 100;
         }
         h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.5px; }
         button {
-            background: var(--accent);
-            color: #000;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 6px;
-            font-weight: 700;
-            cursor: pointer;
-            font-size: 0.85rem;
+            background: var(--accent); color: #000; border: none; padding: 6px 14px;
+            border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.85rem;
             transition: transform 0.1s;
         }
         button:active { transform: scale(0.95); }
@@ -65,314 +47,165 @@
 
         /* --- Scoreboard --- */
         #scoreboard {
-            flex: 0 0 90px;
-            display: flex;
-            overflow-x: auto;
-            background: #000;
-            padding: 8px;
-            gap: 8px;
-            border-bottom: 1px solid #333;
-            scroll-snap-type: x mandatory;
+            flex: 0 0 90px; display: flex; overflow-x: auto; background: #000;
+            padding: 8px; gap: 8px; border-bottom: 1px solid #333; scroll-snap-type: x mandatory;
         }
-
         .player-column {
-            min-width: 100px;
-            flex: 1;
-            background: var(--card-bg);
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid transparent;
-            scroll-snap-align: center;
-            padding: 5px;
-            position: relative;
+            min-width: 100px; flex: 1; background: var(--card-bg); border-radius: 8px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            border: 2px solid transparent; scroll-snap-align: center; padding: 5px; position: relative;
         }
-
-        .player-column.active {
-            border-color: var(--accent);
-            background: #252525;
-            box-shadow: 0 0 15px rgba(0, 230, 118, 0.1);
-        }
-
-        .player-column.finished {
-            opacity: 0.6;
-            border-color: gold;
-        }
-
+        .player-column.active { border-color: var(--accent); background: #252525; box-shadow: 0 0 15px rgba(0, 230, 118, 0.1); }
+        .player-column.finished { opacity: 0.6; border-color: gold; }
         .player-name { font-size: 0.85rem; font-weight: 600; color: #aaa; margin-bottom: 2px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .current-score { font-size: 2.2rem; font-weight: 800; color: white; line-height: 1; letter-spacing: -1px; }
-        
-        .projected-row {
-            margin-top: 4px;
-            font-size: 0.75rem;
-            color: #777;
-            display: flex;
-            justify-content: center;
-            gap: 4px;
-        }
+        .projected-row { margin-top: 4px; font-size: 0.75rem; color: #777; display: flex; justify-content: center; gap: 4px; }
         .next-score { color: var(--accent); font-weight: bold; }
         .next-score.bust { color: var(--danger); text-decoration: line-through; }
 
-        /* --- View Switcher (Swipe Area) --- */
+        /* --- View Slider --- */
         #view-slider {
-            flex: 1;
-            display: flex;
-            overflow-x: auto;
-            overflow-y: hidden;
-            scroll-snap-type: x mandatory;
-            scroll-behavior: smooth;
-            width: 100%;
-            background: #121212;
-            position: relative;
+            flex: 1; display: flex; overflow-x: auto; overflow-y: hidden;
+            scroll-snap-type: x mandatory; scroll-behavior: smooth;
+            width: 100%; background: #121212; position: relative;
         }
-        
         .view-section {
-            flex: 0 0 100%;
-            width: 100%;
-            height: 100%;
-            scroll-snap-align: start;
-            position: relative;
-            overflow: hidden;
+            flex: 0 0 100%; width: 100%; height: 100%;
+            scroll-snap-align: start; position: relative; overflow: hidden;
+            display: flex; flex-direction: column; /* Organize content vertically */
         }
 
-        /* --- View 1: Game Area (Visual) --- */
-        #game-area {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            height: 100%;
+        /* --- View 1: Board Visual --- */
+        #board-content-wrapper {
+            flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
-            position: relative;
         }
-
         #dartboard-container {
-            width: 90%;
-            max-width: 420px;
-            aspect-ratio: 1/1;
-            position: relative;
+            width: 90%; max-width: 420px; aspect-ratio: 1/1; position: relative;
             filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.6));
         }
-
         svg { width: 100%; height: 100%; }
 
-        /* --- View 2: Grid Input --- */
-        #grid-area {
-            display: flex;
-            flex-direction: column;
-            background: #181818;
-            padding: 10px;
-            overflow-y: auto;
+        /* Footer inside Board View */
+        .view-footer {
+            flex: 0 0 auto; background: var(--card-bg); width: 100%;
+            border-top: 1px solid #333; padding: 10px 15px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            display: flex; flex-direction: column; gap: 10px;
             box-sizing: border-box;
         }
 
-        .dart-accordion {
-            background: #252525;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            overflow: hidden;
-            border: 1px solid #333;
-            transition: all 0.3s ease;
+        /* --- View 2: Grid Input --- */
+        #grid-content-wrapper {
+            flex: 1; overflow-y: auto; background: #181818; padding: 10px;
         }
-        .dart-accordion.active {
-            border-color: var(--accent);
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        /* Footer inside Grid View (No Tray) */
+        #grid-footer {
+            flex: 0 0 auto; background: var(--card-bg); border-top: 1px solid #333;
+            padding: 10px 15px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
         }
 
-        .accordion-header {
-            padding: 15px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            background: #2a2a2a;
-        }
-        .accordion-title { font-weight: bold; color: #aaa; }
-        .accordion-value { font-weight: 800; font-size: 1.2rem; color: var(--accent); }
-        .dart-accordion.active .accordion-title { color: white; }
-        
-        .accordion-body {
-            max-height: 0;
-            overflow: hidden; /* Hide scrollbar inside body */
-            transition: max-height 0.3s ease-out;
-            background: #151515;
-        }
-        .dart-accordion.active .accordion-body {
-            max-height: 400px; /* Arbitrary large height */
-            overflow-y: auto;
-        }
-
-        .grid-matrix {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr); /* Single, Double, Triple */
-            gap: 4px;
-            padding: 10px;
-        }
-        
-        .g-btn {
-            padding: 10px 5px;
-            text-align: center;
-            background: #333;
-            border-radius: 4px;
-            font-size: 0.9rem;
-            font-weight: bold;
-            color: #ddd;
-            cursor: pointer;
-            border: 1px solid #444;
-        }
-        .g-btn:active { background: #555; transform: scale(0.98); }
-        
-        /* Specific Colors for Multipliers */
-        .g-single { background: #222; }
-        .g-double { background: #388e3c; color: white; border-color: #388e3c;}
-        .g-triple { background: #d32f2f; color: white; border-color: #d32f2f;}
-        .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top:5px; }
-        .g-miss { grid-column: span 3; background: #333; color: #888; margin-top:5px; }
-
-        /* --- Pagination Dots --- */
-        #swipe-indicator {
-            position: absolute;
-            bottom: 120px; /* Above Footer */
-            left: 0; width: 100%;
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            pointer-events: none;
-            z-index: 50;
-        }
-        .dot {
-            width: 8px; height: 8px;
-            background: #555;
-            border-radius: 50%;
-            transition: background 0.3s;
-        }
-        .dot.active { background: var(--accent); }
-        .swipe-hint-text {
-            position: absolute;
-            top: -25px;
-            width: 100%; text-align: center;
-            font-size: 0.75rem; color: #777;
-            opacity: 0.8;
-            animation: pulse 2s infinite;
-        }
-
-        /* --- Magnifier (Zoom) --- */
+        /* --- Dart & Magnifier --- */
         #magnifier {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            width: 120px;
-            height: 120px;
-            border: 3px solid var(--accent);
-            border-radius: 50%;
-            background: #000;
-            overflow: hidden;
-            display: none; 
-            z-index: 500;
-            pointer-events: none;
+            position: absolute; top: 15px; right: 15px; width: 120px; height: 120px;
+            border: 3px solid var(--accent); border-radius: 50%; background: #000;
+            overflow: hidden; display: none; z-index: 500; pointer-events: none;
             box-shadow: 0 4px 20px rgba(0,0,0,0.9);
         }
-        
         .magnifier-crosshair {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 8px; height: 8px;
-            background: transparent;
-            border: 2px solid rgba(255, 255, 0, 0.8);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 502;
+            position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+            background: transparent; border: 2px solid rgba(255, 255, 0, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); z-index: 502;
         }
-        
         #magnifier-score {
-            position: absolute;
-            bottom: 10px; width: 100%;
-            text-align: center; font-weight: 900;
-            color: yellow;
-            text-shadow: 0px 2px 4px rgba(0,0,0,1);
-            z-index: 502;
-            font-size: 1.5rem;
-        }
-
-        /* --- Footer / Controls --- */
-        #footer-controls {
-            flex: 0 0 auto;
-            background: var(--card-bg);
-            width: 100%;
-            border-top: 1px solid #333;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            z-index: 200;
-            padding: 10px 15px;
-            padding-bottom: calc(10px + env(safe-area-inset-bottom)); 
+            position: absolute; bottom: 10px; width: 100%; text-align: center;
+            font-weight: 900; color: yellow; text-shadow: 0px 2px 4px rgba(0,0,0,1);
+            z-index: 502; font-size: 1.5rem;
         }
 
         #dart-dock {
-            display: flex;
-            justify-content: center;
-            gap: 30px; 
-            background: rgba(0,0,0,0.3);
-            border-radius: 12px;
-            height: 100px;
-            border: 2px dashed #333;
-            position: relative;
-            align-items: flex-end; 
-            padding-bottom: 10px;
-            /* Hide dock if using Grid? No, keep it for reference or just disable interaction */
+            display: flex; justify-content: center; gap: 30px;
+            background: rgba(0,0,0,0.3); border-radius: 12px; height: 100px;
+            border: 2px dashed #333; position: relative; align-items: flex-end; padding-bottom: 10px;
         }
 
         .dart-obj {
-            width: 40px; height: 120px;
-            position: absolute; z-index: 1000;
-            cursor: grab;
-            filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
-            touch-action: none; transform-origin: 50% 95%; 
+            width: 40px; height: 120px; position: absolute; z-index: 1000;
+            cursor: grab; filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
+            touch-action: none; transform-origin: 50% 95%;
         }
         .dart-badge {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
-            font-size: 10px; font-weight: bold; color: white; text-shadow: 0 1px 2px black; pointer-events: none;
+            font-size: 11px; font-weight: 900; color: white; text-shadow: 0 1px 3px black;
+            pointer-events: none; white-space: nowrap;
         }
 
-        #action-btn {
-            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px; background: #333; color: #777; pointer-events: none;
+        .action-btn {
+            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px;
+            background: #333; color: #777; pointer-events: none; border: none; font-weight: bold;
         }
-        #action-btn.ready {
-            background: var(--accent); color: #000; pointer-events: auto; box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+        .action-btn.ready {
+            background: var(--accent); color: #000; pointer-events: auto;
+            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
         }
 
-        /* --- Tutorial Overlay --- */
-        #tutorial-overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; z-index: 1500; display: none;
+        /* --- Accordion Grid Styles --- */
+        .dart-accordion {
+            background: #252525; border-radius: 8px; margin-bottom: 8px; overflow: hidden;
+            border: 1px solid #333; transition: all 0.3s ease; flex-shrink: 0;
         }
-        .tut-text {
-            position: absolute; width: 100%; text-align: center; color: white; font-weight: bold; font-size: 1.1rem;
-            text-shadow: 0 2px 4px black; animation: fadeText 2.5s infinite;
+        .dart-accordion.active { border-color: var(--accent); box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        .accordion-header {
+            padding: 15px; display: flex; justify-content: space-between; align-items: center;
+            cursor: pointer; background: #2a2a2a;
         }
+        .accordion-title { font-weight: bold; color: #aaa; }
+        .accordion-value { font-weight: 800; font-size: 1.1rem; color: var(--accent); }
+        .dart-accordion.active .accordion-title { color: white; }
+        .accordion-body {
+            max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; background: #151515;
+        }
+        .dart-accordion.active .accordion-body { max-height: 500px; overflow-y: auto; }
+        .grid-matrix {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 10px;
+        }
+        .g-btn {
+            padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
+            font-size: 0.9rem; font-weight: bold; color: #ddd; cursor: pointer;
+            border: 1px solid #444; user-select: none;
+        }
+        .g-btn:active { background: #555; transform: scale(0.98); }
+        .g-single { background: #222; }
+        .g-double { background: #388e3c; color: white; border-color: #388e3c; }
+        .g-triple { background: #d32f2f; color: white; border-color: #d32f2f; }
+        .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; }
+        .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; }
+
+        /* --- Indicators --- */
+        #swipe-indicator {
+            position: absolute; bottom: 150px; left: 0; width: 100%;
+            display: flex; justify-content: center; gap: 8px; pointer-events: none; z-index: 50;
+        }
+        .dot {
+            width: 8px; height: 8px; background: #555; border-radius: 50%; transition: background 0.3s;
+        }
+        .dot.active { background: var(--accent); }
+        .swipe-hint-text {
+            position: absolute; top: -25px; width: 100%; text-align: center;
+            font-size: 0.75rem; color: #777; opacity: 0.8; animation: pulse 2s infinite;
+        }
+
+        #tutorial-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1500; display: none; }
+        .tut-text { position: absolute; width: 100%; text-align: center; color: white; font-weight: bold; font-size: 1.1rem; text-shadow: 0 2px 4px black; animation: fadeText 2.5s infinite; }
         @keyframes pulse { 0%, 100% { opacity:0.5; } 50% { opacity:1; transform: scale(1.05); } }
         @keyframes fadeText { 0%, 100% { opacity: 0; } 20%, 60% { opacity: 1; } }
 
-        /* --- Modal --- */
-        #setup-modal {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9); z-index: 2000;
-            display: flex; justify-content: center; align-items: center; backdrop-filter: blur(5px);
-        }
-        .modal-content {
-            background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px;
-            border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        }
-        input {
-            width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box;
-        }
+        /* Modal */
+        #setup-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal-content { background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        input { width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box; }
         .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
-        .player-tag {
-            background: #333; padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; border: 1px solid #444;
-        }
+        .player-tag { background: #333; padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; border: 1px solid #444; }
 
     </style>
 </head>
@@ -382,7 +215,7 @@
     <div class="modal-content">
         <h2 id="modal-title" style="margin-top:0">New Game</h2>
         <input type="text" id="new-player-input" placeholder="Player Name" maxlength="10">
-        <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white; border:none; padding:10px; border-radius:6px;" id="btn-add">Add Player</button>
+        <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white; border:none; padding:10px; border-radius:6px;">Add Player</button>
         <div class="tag-container" id="player-list-display"></div>
         <div style="border-top: 1px solid #333; padding-top: 15px;">
              <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size: 0.9rem; color:#ccc;">
@@ -393,14 +226,14 @@
                     <option value="701">701</option>
                 </select>
             </label>
-            <button onclick="startGame()" style="width:100%; padding: 12px; font-size:1rem;" id="btn-start">Start Game</button>
+            <button onclick="startGame()" style="width:100%; padding: 12px; font-size:1rem;">Start Game</button>
         </div>
     </div>
 </div>
 
 <header>
     <h1 id="app-title">Darts Scorer Pro</h1>
-    <button onclick="resetGame()" class="danger" id="btn-reset">Reset</button>
+    <button onclick="resetGame()" class="danger">Reset</button>
 </header>
 
 <div id="scoreboard"></div>
@@ -408,35 +241,39 @@
 <div id="view-slider">
     
     <div class="view-section" id="section-visual">
-        <div id="game-area">
+        <div id="board-content-wrapper">
             <div id="magnifier">
                 <div class="magnifier-crosshair"></div>
                 <div id="magnifier-score"></div>
             </div>
             <div id="dartboard-container"></div>
-            
             <div id="tutorial-overlay">
                 <div class="tut-text" style="bottom: 200px;">Drag to Throw</div>
             </div>
         </div>
+        
+        <div class="view-footer">
+            <div id="dart-dock"></div>
+            <button onclick="manualNext()" class="action-btn" id="btn-next-board">Next Player</button>
+        </div>
     </div>
 
     <div class="view-section" id="section-grid">
-        <div id="grid-area">
-            </div>
+        <div id="grid-content-wrapper">
+            <div id="grid-area"></div>
+        </div>
+        
+        <div id="grid-footer">
+            <button onclick="manualNext()" class="action-btn" id="btn-next-grid">Next Player</button>
+        </div>
     </div>
 
 </div>
 
 <div id="swipe-indicator">
-    <div class="swipe-hint-text">&larr; SWIPE TO CHANGE INPUT &rarr;</div>
+    <div class="swipe-hint-text">&larr; SWIPE FOR GRID &rarr;</div>
     <div class="dot active" id="dot-0"></div>
     <div class="dot" id="dot-1"></div>
-</div>
-
-<div id="footer-controls">
-    <div id="dart-dock"></div>
-    <button onclick="manualNext()" id="action-btn">Next Player</button>
 </div>
 
 <script>
@@ -451,7 +288,67 @@
     let currentPlayerIndex = 0;
     let gameActive = false;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
-    let currentDartEditIndex = 0; // For Grid mode
+
+    // --- MATH & GEOMETRY FOR SYNCING ---
+    const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+    
+    function getBoardCoordinates(score, mult) {
+        // SVG Coordinates: 0,0 is center. Viewbox -205 to 205.
+        // Returns relative X/Y (-205 to 205)
+        
+        if(score === 0) return {x: 220, y: 220}; // Miss off board
+        if(score === 25) return {x:0, y:0, r: 25}; // Outer Bull (approximation)
+        if(score === 50) return {x:0, y:0, r: 0};  // Bullseye
+
+        const numberIndex = boardNumbers.indexOf(score);
+        // 20 is at top (-9 to +9 degrees). 
+        // Index 0 (20) -> angle 0. 
+        // Formula: Angle = (Index * 18 deg)
+        // SVG rotation starts at -9deg, but for math 0 deg is typically 3 o'clock.
+        // In our SVG construction: 20 is at -9 rotation... let's simplify.
+        // 20 is at top (12 o'clock). 
+        // Angle in radians from 12 o'clock (moving clockwise):
+        const angleDeg = numberIndex * 18;
+        const angleRad = (angleDeg - 90) * (Math.PI / 180); // -90 to rotate 0 to top
+
+        // Radii based on SVG paths
+        // Inner Single: 32-99 (mid ~65)
+        // Triple: 99-109 (mid ~104)
+        // Outer Single: 109-162 (mid ~135)
+        // Double: 162-172 (mid ~167)
+        let r = 0;
+        if(mult === 3) r = 104;
+        else if(mult === 2) r = 167;
+        else r = 135; // Default single outer
+
+        // Jitter for realism (avoid perfect stacking)
+        const jitterX = (Math.random() - 0.5) * 8;
+        const jitterY = (Math.random() - 0.5) * 8;
+
+        const x = (r * Math.cos(angleRad)) + jitterX;
+        const y = (r * Math.sin(angleRad)) + jitterY;
+        
+        return {x, y};
+    }
+
+    // --- HELPER: FORMAT POINTS ---
+    function formatScore(val, mult, style) {
+        const total = val * mult;
+        if (val === 0) {
+            if(style === 'badge') return '0';
+            if(style === 'grid') return `${txt.miss.toUpperCase()}`;
+            return `${txt.miss} (0)`;
+        }
+        if(val === 25 || val === 50) {
+            const lbl = val === 50 ? "BULL" : "25";
+            if(style === 'badge') return total.toString();
+            return lbl;
+        }
+        if(style === 'badge') return total.toString();
+        if(style === 'grid') return mult === 1 ? val.toString() : `${mult}x${val}`;
+        if(style === 'full') return mult === 1 ? total.toString() : `${total} (${mult}x${val})`;
+        return total.toString();
+    }
 
     // --- SVG GENERATION ---
     const NS = "http://www.w3.org/2000/svg";
@@ -464,19 +361,17 @@
         svg.style.pointerEvents = "none";
 
         const flight = document.createElementNS(NS, "path");
-        flight.setAttribute("d", "M10,0 L30,0 L25,30 L15,30 Z"); flight.setAttribute("fill", "var(--dart-flight)");
-        svg.appendChild(flight);
+        flight.setAttribute("d", "M10,0 L30,0 L25,30 L15,30 Z"); flight.setAttribute("fill", "var(--dart-flight)"); svg.appendChild(flight);
         const shaft = document.createElementNS(NS, "rect");
-        shaft.setAttribute("x", "18"); shaft.setAttribute("y", "30"); shaft.setAttribute("width", "4"); shaft.setAttribute("height", "40"); shaft.setAttribute("fill", "var(--dart-shaft)");
-        svg.appendChild(shaft);
+        shaft.setAttribute("x", "18"); shaft.setAttribute("y", "30"); shaft.setAttribute("width", "4"); shaft.setAttribute("height", "40"); shaft.setAttribute("fill", "var(--dart-shaft)"); svg.appendChild(shaft);
         const barrel = document.createElementNS(NS, "path");
-        barrel.setAttribute("d", "M16,70 L24,70 L23,100 L17,100 Z"); barrel.setAttribute("fill", "var(--dart-barrel)");
-        svg.appendChild(barrel);
+        barrel.setAttribute("d", "M16,70 L24,70 L23,100 L17,100 Z"); barrel.setAttribute("fill", "var(--dart-barrel)"); svg.appendChild(barrel);
         const tip = document.createElementNS(NS, "path");
-        tip.setAttribute("d", "M19,100 L21,100 L20,120 Z"); tip.setAttribute("fill", "var(--dart-tip)");
-        svg.appendChild(tip);
+        tip.setAttribute("d", "M19,100 L21,100 L20,120 Z"); tip.setAttribute("fill", "var(--dart-tip)"); svg.appendChild(tip);
         div.appendChild(svg);
-        const badge = document.createElement('div'); badge.className = 'dart-badge'; badge.innerText = number;
+        
+        const badge = document.createElement('div'); 
+        badge.className = 'dart-badge'; badge.id = `badge-${id}`; badge.innerText = number;
         div.appendChild(badge);
         return div;
     }
@@ -484,13 +379,12 @@
     function createBoardSVG() {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "-205 -205 410 410");
-        const numbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+        const numbers = boardNumbers;
         for (let i=0; i<20; i++) {
             const rot = (i*18)-9;
             const g = document.createElementNS(NS, "g");
             g.setAttribute("transform", `rotate(${rot})`);
-            const c1 = i%2===0?"#121212":"#e0e0e0";
-            const c2 = i%2===0?"#d32f2f":"#388e3c";
+            const c1 = i%2===0?"#121212":"#e0e0e0"; const c2 = i%2===0?"#d32f2f":"#388e3c";
             const seg = (r1,r2,m,c) => {
                 const p = document.createElementNS(NS,"path");
                 const rad = Math.PI/180, a=9*rad;
@@ -528,7 +422,8 @@
         const dock = document.getElementById('dart-dock');
         [1,2,3].forEach(i => dock.appendChild(createDartSVG(`dart-${i}`, i)));
 
-        document.getElementById('action-btn').innerText = txt.btnNext;
+        document.getElementById('btn-next-board').innerText = txt.btnNext;
+        document.getElementById('btn-next-grid').innerText = txt.btnNext;
         document.getElementById('new-player-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') addPlayer(); });
 
         setupDragAndDrop();
@@ -542,50 +437,38 @@
         container.innerHTML = '';
         
         [0, 1, 2].forEach(dartIdx => {
-            // Accordion Header
             const wrap = document.createElement('div');
-            wrap.className = 'dart-accordion';
-            wrap.id = `accordion-${dartIdx}`;
+            wrap.className = 'dart-accordion'; wrap.id = `accordion-${dartIdx}`;
             
             const head = document.createElement('div');
             head.className = 'accordion-header';
             head.onclick = () => openAccordion(dartIdx);
             head.innerHTML = `<span class="accordion-title">Dart ${dartIdx+1}</span> <span class="accordion-value" id="grid-val-${dartIdx}">-</span>`;
             
-            // Accordion Body (Grid)
             const body = document.createElement('div');
             body.className = 'accordion-body';
-            
             const grid = document.createElement('div');
             grid.className = 'grid-matrix';
             
-            // Generate Buttons 20 -> 1
             for(let i=20; i>=1; i--) {
                 grid.innerHTML += `
-                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${i}</div>
-                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">D${i}</div>
-                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">T${i}</div>
+                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'grid')}</div>
+                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'grid')}</div>
+                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'grid')}</div>
                 `;
             }
-            // Bull & Miss
             grid.innerHTML += `
-                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">BULL (50)</div>
-                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">OUTER BULL (25)</div>
-                <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">${txt.miss.toUpperCase()} (0)</div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">BULL</div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">25</div>
+                <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">${txt.miss.toUpperCase()}</div>
             `;
             
-            body.appendChild(grid);
-            wrap.appendChild(head);
-            wrap.appendChild(body);
-            container.appendChild(wrap);
+            body.appendChild(grid); wrap.appendChild(head); wrap.appendChild(body); container.appendChild(wrap);
         });
-        
-        // Open first accordion by default
         openAccordion(0);
     }
 
     function openAccordion(idx) {
-        currentDartEditIndex = idx;
         [0,1,2].forEach(i => {
             const el = document.getElementById(`accordion-${i}`);
             if(i === idx) el.classList.add('active');
@@ -599,52 +482,61 @@
         // 1. Update State
         dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
 
-        // 2. Update UI Text for this accordion
-        const lbl = document.getElementById(`grid-val-${dartIdx}`);
-        let txtVal = score === 0 ? txt.miss : score;
-        if(mult===2) txtVal = "D"+score;
-        if(mult===3) txtVal = "T"+score;
-        if(score===25) txtVal = "25";
-        if(score===50) txtVal = "BULL";
-        lbl.innerText = txtVal;
-        
-        // 3. Move visual dart to "hidden" or dock to indicate grid usage
-        // We will just place it in the dock to keep board clean
-        resetSingleDart(dartIdx); 
+        // 2. Sync to Board Visual (The Sync Magic)
+        moveDartToBoardLocation(dartIdx, score, mult);
 
-        // 4. Update Game Score Logic
+        // 3. Update UI Text
+        updateDartVisuals(dartIdx, score, mult);
         updateGameState();
 
-        // 5. Auto Advance
-        if(dartIdx < 2) {
-            openAccordion(dartIdx + 1);
-        } else {
-            // Close all if last dart
-            document.getElementById(`accordion-2`).classList.remove('active');
-        }
+        // 4. Auto Advance
+        if(dartIdx < 2) openAccordion(dartIdx + 1);
+        else document.getElementById(`accordion-2`).classList.remove('active');
+    }
+
+    function moveDartToBoardLocation(dartIdx, score, mult) {
+        const d = document.getElementById(`dart-${dartIdx+1}`);
+        const container = document.getElementById('dartboard-container');
+        const rect = container.getBoundingClientRect();
+        
+        // Calculate position inside board
+        const coords = getBoardCoordinates(score, mult);
+        
+        // Convert SVG Relative Coords (-205 to 205) to Screen Pixels
+        // Board width = rect.width. Center is at rect.width/2
+        const scale = rect.width / 410; // 410 is SVG viewBox width
+        
+        const pixelX = (coords.x * scale) + (rect.left + rect.width/2);
+        const pixelY = (coords.y * scale) + (rect.top + rect.height/2);
+
+        // Apply to dart style (Tip at coords)
+        // Dart tip is at 20, 120 (relative to dart)
+        d.style.position = 'fixed';
+        d.style.transition = 'all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+        d.style.left = (pixelX - 20) + 'px'; 
+        d.style.top = (pixelY - 120) + 'px';
+        d.style.transform = 'scale(0.8) rotate(0deg)';
+        d.style.zIndex = 1000 + dartIdx;
+    }
+
+    function updateDartVisuals(idx, score, mult) {
+        document.getElementById(`grid-val-${idx}`).innerText = formatScore(score, mult, 'full');
+        const badge = document.getElementById(`badge-dart-${idx+1}`);
+        if(badge) badge.innerText = formatScore(score, mult, 'badge');
     }
 
     // --- SWIPE LOGIC ---
     function setupSwipeObserver() {
         const slider = document.getElementById('view-slider');
         const dots = [document.getElementById('dot-0'), document.getElementById('dot-1')];
-        
         slider.addEventListener('scroll', () => {
-            const scrollLeft = slider.scrollLeft;
-            const width = slider.offsetWidth;
-            const index = Math.round(scrollLeft / width);
-            
-            dots.forEach((d, i) => {
-                if(i === index) d.classList.add('active');
-                else d.classList.remove('active');
-            });
-            
-            // Hide hint on scroll
+            const index = Math.round(slider.scrollLeft / slider.offsetWidth);
+            dots.forEach((d, i) => d.classList.toggle('active', i===index));
             document.querySelector('.swipe-hint-text').style.opacity = '0';
         });
     }
 
-    // --- DRAG LOGIC (Preserved) ---
+    // --- DRAG LOGIC ---
     function setupDragAndDrop() {
         const darts = [1,2,3].map(i => document.getElementById(`dart-${i}`));
         const magnifier = document.getElementById('magnifier');
@@ -655,9 +547,7 @@
         darts.forEach((dart, idx) => {
             const onStart = (e) => {
                 if(!gameActive) return;
-                // Check if slider is on visual view (index 0)
-                const slider = document.getElementById('view-slider');
-                if(slider.scrollLeft > 100) return; // Disable drag on grid view
+                if(document.getElementById('view-slider').scrollLeft > 100) return; // Prevent drag if on grid view
 
                 document.getElementById('tutorial-overlay').style.display='none';
                 e.preventDefault();
@@ -677,7 +567,7 @@
                         const svgP = pt.matrixTransform(mainSVG.getScreenCTM().inverse());
                         magSVG.setAttribute("viewBox", `${svgP.x - 20} ${svgP.y - 20} 40 40`);
                         const s = parseInt(hit.getAttribute('data-s')), m = parseInt(hit.getAttribute('data-m'));
-                        magScore.innerText = (m===3?'T':(m===2?'D':'')) + s;
+                        magScore.innerText = formatScore(s, m, 'full');
                         magScore.style.color = (m===3?'#00e676':(m===2?'#ff4081':'white'));
                     } else {
                         magScore.innerText = txt.miss; magScore.style.color = '#aaa';
@@ -701,12 +591,14 @@
                         const s = parseInt(el.getAttribute('data-s')), m = parseInt(el.getAttribute('data-m'));
                         dart.style.transition = 'transform 0.1s ease-out'; dart.style.transform = 'scale(0.8) rotate(0deg)';
                         dart.style.left = (mx - 20) + 'px'; dart.style.top = (my - 120) + 'px';
-                        
-                        // Sync with Grid UI
-                        updateGridUIFromDrag(idx, s, m);
+                        dartState[idx] = { val: s, mult: m, missed: false };
+                        updateDartVisuals(idx, s, m);
+                        updateGameState();
                     } else {
-                        resetSingleDart(idx);
-                        updateGridUIFromDrag(idx, 0, 1);
+                        resetSingleDart(idx); // Miss sends back to dock
+                        dartState[idx] = { val: 0, mult: 1, missed: true };
+                        updateDartVisuals(idx, 0, 1);
+                        updateGameState();
                     }
                 };
                 document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
@@ -714,15 +606,6 @@
             };
             dart.addEventListener('touchstart', onStart, {passive:false}); dart.addEventListener('mousedown', onStart);
         });
-    }
-
-    function updateGridUIFromDrag(idx, s, m) {
-        dartState[idx] = { val: s, mult: m, missed: (s===0) };
-        const lbl = document.getElementById(`grid-val-${idx}`);
-        let txtVal = s === 0 ? txt.miss : s;
-        if(m===2) txtVal = "D"+s; if(m===3) txtVal = "T"+s; if(s===25) txtVal="25"; if(s===50) txtVal="BULL";
-        lbl.innerText = txtVal;
-        updateGameState();
     }
 
     // --- GAME CORE ---
@@ -739,14 +622,15 @@
             }
         }
         
-        // Count attempts (either placed on board or entered in grid)
         const thrown = dartState.filter(d => d.val > 0 || d.missed).length;
-        const btn = document.getElementById('action-btn');
+        const btnB = document.getElementById('btn-next-board');
+        const btnG = document.getElementById('btn-next-grid');
+        
         if(thrown === 3 || res.isWin || res.isBust) {
-            btn.classList.add('ready');
+            btnB.classList.add('ready'); btnG.classList.add('ready');
             if(res.isWin) setTimeout(manualNext, 1000);
         } else {
-            btn.classList.remove('ready');
+            btnB.classList.remove('ready'); btnG.classList.remove('ready');
         }
     }
 
@@ -775,11 +659,15 @@
         else if(!res.isBust) { p.score = res.rem; }
 
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
-        document.getElementById('action-btn').classList.remove('ready');
+        document.getElementById('btn-next-board').classList.remove('ready');
+        document.getElementById('btn-next-grid').classList.remove('ready');
         
-        // Reset Grid UI labels
-        [0,1,2].forEach(i => document.getElementById(`grid-val-${i}`).innerText = '-');
-        openAccordion(0); // Reset accordion
+        [0,1,2].forEach(i => {
+            document.getElementById(`grid-val-${i}`).innerText = '-';
+            const badge = document.getElementById(`badge-dart-${i+1}`);
+            if(badge) badge.innerText = i+1; 
+        });
+        openAccordion(0);
 
         if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
 
@@ -788,9 +676,6 @@
 
         renderScoreboard();
         resetDartsPosition();
-        
-        // Reset Slider to Visual view for new turn? Or keep preference? Let's keep preference.
-        // If we wanted to force visual: document.getElementById('view-slider').scrollLeft = 0;
     }
 
     function resetDartsPosition() {
@@ -805,9 +690,25 @@
         });
     }
     function resetSingleDart(i) {
+        // Only used if grid selects a "Miss" or drag misses
+        // Logic: Send back to Board Tray coordinates
         const dock = document.getElementById('dart-dock');
+        // Note: If we are in Grid view, the dock might be offscreen, but getBoundingClientRect still works relative to viewport
         const rect = dock.getBoundingClientRect();
-        const gap = 50, centerX = rect.left + rect.width/2, bottomY = rect.bottom - 15;
+        
+        // If rect is 0 (hidden), we need a fallback calculation based on screen
+        let centerX, bottomY;
+        
+        if(rect.width === 0) {
+            // Fallback for when dock is hidden
+            centerX = window.innerWidth / 2;
+            bottomY = window.innerHeight - 30; // Approx footer height
+        } else {
+            centerX = rect.left + rect.width/2;
+            bottomY = rect.bottom - 15;
+        }
+
+        const gap = 50;
         const d = document.getElementById(`dart-${i+1}`);
         d.style.transition = 'all 0.4s ease-out';
         d.style.left = (centerX + (i-1)*gap - 20) + 'px'; d.style.top = (bottomY - 120) + 'px'; d.style.transform = 'rotate(0deg)';
