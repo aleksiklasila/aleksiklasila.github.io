@@ -88,12 +88,11 @@
             filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.6));
         }
         svg { width: 100%; height: 100%; }
+        
+        /* Footer Spacer (Invisible) */
         .view-footer {
-            flex: 0 0 auto; background: var(--card-bg); width: 100%;
-            border-top: 1px solid #333; padding: 10px 15px;
-            padding-bottom: calc(10px + env(safe-area-inset-bottom));
-            display: flex; flex-direction: column; gap: 10px; box-sizing: border-box;
-            position: relative; z-index: 10;
+            flex: 0 0 auto; width: 100%; height: 60px; /* Spacer for fixed footer */
+            pointer-events: none;
         }
 
         /* --- View 2: Grid --- */
@@ -131,11 +130,6 @@
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; }
 
         /* --- Darts --- */
-        #dart-dock {
-            display: flex; justify-content: center; gap: 30px;
-            background: rgba(0,0,0,0.3); border-radius: 12px; height: 100px;
-            border: 2px dashed #333; position: relative; align-items: flex-end; padding-bottom: 10px;
-        }
         .dart-obj {
             width: 40px; height: 120px; 
             position: absolute; z-index: 1000;
@@ -146,8 +140,10 @@
         .dart-obj.hidden-in-grid { display: none !important; }
         .dart-badge {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
-            font-size: 11px; font-weight: 900; color: white; text-shadow: 0 1px 3px black;
+            font-size: 9px; font-weight: 900; color: white; 
+            text-shadow: 0 1px 3px black;
             pointer-events: none; white-space: nowrap;
+            background: rgba(0,0,0,0.3); padding: 1px 3px; border-radius: 4px;
         }
 
         /* --- Magnifier --- */
@@ -165,7 +161,7 @@
         #magnifier-score {
             position: absolute; bottom: 10px; width: 100%; text-align: center;
             font-weight: 900; color: yellow; text-shadow: 0px 2px 4px rgba(0,0,0,1);
-            z-index: 502; font-size: 1.5rem;
+            z-index: 502; font-size: 1.2rem;
         }
 
         /* --- Fixed Footer --- */
@@ -265,17 +261,15 @@
             </div>
         </div>
         
-        <div class="view-footer">
-            <div id="dart-dock"></div>
-        </div>
+        <div class="view-footer"></div>
     </div>
 
     <div class="view-section" id="section-grid">
         <div id="grid-content-wrapper">
             <div id="grid-tabs">
-                <div class="grid-tab active" onclick="switchGridTab(0)" id="tab-0"><span class="grid-tab-label">1st</span><span class="grid-tab-val" id="grid-val-0">-</span></div>
-                <div class="grid-tab" onclick="switchGridTab(1)" id="tab-1"><span class="grid-tab-label">2nd</span><span class="grid-tab-val" id="grid-val-1">-</span></div>
-                <div class="grid-tab" onclick="switchGridTab(2)" id="tab-2"><span class="grid-tab-label">3rd</span><span class="grid-tab-val" id="grid-val-2">-</span></div>
+                <div class="grid-tab active" onclick="switchGridTab(0)" id="tab-0"><span class="grid-tab-label">1st</span><span class="grid-tab-val" id="grid-val-0">0</span></div>
+                <div class="grid-tab" onclick="switchGridTab(1)" id="tab-1"><span class="grid-tab-label">2nd</span><span class="grid-tab-val" id="grid-val-1">0</span></div>
+                <div class="grid-tab" onclick="switchGridTab(2)" id="tab-2"><span class="grid-tab-label">3rd</span><span class="grid-tab-val" id="grid-val-2">0</span></div>
             </div>
             <div id="grid-body-container"></div>
         </div>
@@ -299,8 +293,7 @@
     let currentPlayerIndex = 0;
     let gameActive = false;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
-    
-    // Tutorial Logic
+    let tutorialState = { dragShown: true, swipeShown: true };
     let tutorialInterval = null;
     let tutorialsActive = false;
     let currentGridTab = 0;
@@ -326,13 +319,19 @@
 
     function formatScore(val, mult, style) {
         const total = val * mult;
-        if (val === 0) return "0";
-        if (val === 25 || val === 50) return val.toString();
         
-        if(style === 'badge') return total.toString();
-        if(style === 'grid') return mult === 1 ? val.toString() : `${mult}x${val}`;
-        if(style === 'mag') return mult === 1 ? val.toString() : `${mult}x${val}`;
-        return total.toString();
+        if(style === 'button') {
+            if (val === 0) return "0";
+            if (val === 25) return "25";
+            if (val === 50) return "50";
+            return mult === 1 ? val.toString() : `${mult}x${val}`;
+        }
+
+        if (val === 0) return "0";
+        if (val === 25) return "25 (1x25)";
+        if (val === 50) return "50 (1x50)";
+        
+        return `${total} (${mult}x${val})`;
     }
 
     const NS = "http://www.w3.org/2000/svg";
@@ -427,9 +426,9 @@
             
             for(let i=20; i>=1; i--) {
                 grid.innerHTML += `
-                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'grid')}</div>
-                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'grid')}</div>
-                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'grid')}</div>
+                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'button')}</div>
+                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'button')}</div>
+                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'button')}</div>
                 `;
             }
             grid.innerHTML += `
@@ -472,7 +471,6 @@
     function moveDartToBoardLocation(dartIdx, score, mult) {
         const d = document.getElementById(`dart-${dartIdx+1}`);
         const container = document.getElementById('dartboard-container');
-        
         const boardRect = container.getBoundingClientRect();
         const sectionRect = document.getElementById('section-visual').getBoundingClientRect();
         
@@ -494,15 +492,15 @@
     }
 
     function updateDartVisuals(idx, score, mult) {
-        document.getElementById(`grid-val-${idx}`).innerText = formatScore(score, mult, 'badge');
+        document.getElementById(`grid-val-${idx}`).innerText = formatScore(score, mult, 'display');
         const badge = document.getElementById(`badge-dart-${idx+1}`);
-        if(badge) badge.innerText = formatScore(score, mult, 'badge');
+        if(badge) badge.innerText = formatScore(score, mult, 'display');
     }
 
-    /* --- TUTORIAL LOGIC --- */
+    /* --- TUTORIALS --- */
     function startTutorialLoop() {
         tutorialsActive = true;
-        let phase = 0; // 0=Drag, 1=Swipe
+        let phase = 0; 
         const drag = document.getElementById('tut-drag');
         const swipe = document.getElementById('tut-swipe');
         
@@ -514,12 +512,10 @@
         tutorialInterval = setInterval(() => {
             if(!tutorialsActive) return;
             if(phase === 0) {
-                // Switch to Swipe
                 drag.style.display = 'none';
                 swipe.style.display = 'flex';
                 phase = 1;
             } else {
-                // Switch to Drag
                 swipe.style.display = 'none';
                 drag.style.display = 'flex';
                 phase = 0;
@@ -546,7 +542,6 @@
                 else d.classList.remove('hidden-in-grid');
             });
 
-            // End tutorials on swipe
             if(slider.scrollLeft > 10) endTutorials();
         });
     }
@@ -562,7 +557,6 @@
         darts.forEach((dart, idx) => {
             const onStart = (e) => {
                 if(!gameActive) return;
-                // Prevent drag if in grid view
                 if(document.getElementById('view-slider').scrollLeft > 100) return;
 
                 endTutorials();
@@ -583,16 +577,30 @@
                     dart.style.top = (my - 120) + 'px';
                     
                     const hit = document.elementFromPoint(mx, my);
+                    
+                    // Always calculate relative to visual container for Zoom, 
+                    // even if not on board (black void)
+                    // We map visual coords to SVG viewBox coords
+                    const container = document.getElementById('dartboard-container');
+                    const rect = container.getBoundingClientRect();
+                    
+                    // Calculate zoom box based on SVG dimensions (410x410)
+                    // Map Mouse X/Y to SVG X/Y
+                    // SVG ViewBox is -205 to 205
+                    
+                    const scale = 410 / rect.width;
+                    const svgX = (mx - (rect.left + rect.width/2)) * scale;
+                    const svgY = (my - (rect.top + rect.height/2)) * scale;
+                    
+                    magSVG.setAttribute("viewBox", `${svgX - 20} ${svgY - 20} 40 40`);
+
                     if(hit && hit.classList.contains('board-segment')) {
-                        const pt = mainSVG.createSVGPoint(); pt.x = mx; pt.y = my;
-                        const svgP = pt.matrixTransform(mainSVG.getScreenCTM().inverse());
-                        magSVG.setAttribute("viewBox", `${svgP.x - 20} ${svgP.y - 20} 40 40`);
                         const s = parseInt(hit.getAttribute('data-s')), m = parseInt(hit.getAttribute('data-m'));
-                        magScore.innerText = formatScore(s, m, 'mag');
+                        magScore.innerText = formatScore(s, m, 'display');
                         magScore.style.color = (m===3?'#00e676':(m===2?'#ff4081':'white'));
                     } else {
-                        magScore.innerText = txt.miss; magScore.style.color = '#aaa';
-                        magSVG.setAttribute("viewBox", "-205 -205 410 410");
+                        magScore.innerText = "0"; 
+                        magScore.style.color = '#aaa';
                     }
                 };
                 updatePos(cx, cy);
@@ -704,7 +712,6 @@
         });
         switchGridTab(0);
         
-        // Hide tutorials after first turn (double check)
         endTutorials();
 
         if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
@@ -712,6 +719,7 @@
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
+        // Scoreboard Manual Scroll
         const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
@@ -732,19 +740,16 @@
     }
 
     function resetDartsPosition() {
-        // Dock Position Logic (Bottom Right)
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
         
-        // "Dock" coordinates relative to section
-        const startX = rect.width - 60; // 60px from right
-        const startY = rect.height - 100; // 100px from bottom (above footer)
+        const startX = rect.width - 60; 
+        const startY = rect.height - 100;
 
         [0,1,2].forEach(i => {
             const d = document.getElementById(`dart-${i+1}`);
             d.style.position = 'absolute'; 
             d.style.transition = 'all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-            // Fan them out slightly
             d.style.left = (startX - (i*15)) + 'px'; 
             d.style.top = (startY + (i*5)) + 'px';
             d.style.transform = 'rotate(10deg)'; 
