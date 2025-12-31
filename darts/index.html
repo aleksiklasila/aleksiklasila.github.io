@@ -115,17 +115,38 @@
         .next-score { color: var(--accent); font-weight: bold; }
         .next-score.bust { color: var(--danger); text-decoration: line-through; }
 
-        /* --- Game Area --- */
-        #game-area {
+        /* --- View Switcher (Swipe Area) --- */
+        #view-slider {
             flex: 1;
+            display: flex;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-snap-type: x mandatory;
+            scroll-behavior: smooth;
+            width: 100%;
+            background: #121212;
             position: relative;
+        }
+        
+        .view-section {
+            flex: 0 0 100%;
+            width: 100%;
+            height: 100%;
+            scroll-snap-align: start;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* --- View 1: Game Area (Visual) --- */
+        #game-area {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
             width: 100%;
+            height: 100%;
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
+            position: relative;
         }
 
         #dartboard-container {
@@ -137,6 +158,106 @@
         }
 
         svg { width: 100%; height: 100%; }
+
+        /* --- View 2: Grid Input --- */
+        #grid-area {
+            display: flex;
+            flex-direction: column;
+            background: #181818;
+            padding: 10px;
+            overflow-y: auto;
+            box-sizing: border-box;
+        }
+
+        .dart-accordion {
+            background: #252525;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            overflow: hidden;
+            border: 1px solid #333;
+            transition: all 0.3s ease;
+        }
+        .dart-accordion.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .accordion-header {
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            background: #2a2a2a;
+        }
+        .accordion-title { font-weight: bold; color: #aaa; }
+        .accordion-value { font-weight: 800; font-size: 1.2rem; color: var(--accent); }
+        .dart-accordion.active .accordion-title { color: white; }
+        
+        .accordion-body {
+            max-height: 0;
+            overflow: hidden; /* Hide scrollbar inside body */
+            transition: max-height 0.3s ease-out;
+            background: #151515;
+        }
+        .dart-accordion.active .accordion-body {
+            max-height: 400px; /* Arbitrary large height */
+            overflow-y: auto;
+        }
+
+        .grid-matrix {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr); /* Single, Double, Triple */
+            gap: 4px;
+            padding: 10px;
+        }
+        
+        .g-btn {
+            padding: 10px 5px;
+            text-align: center;
+            background: #333;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #ddd;
+            cursor: pointer;
+            border: 1px solid #444;
+        }
+        .g-btn:active { background: #555; transform: scale(0.98); }
+        
+        /* Specific Colors for Multipliers */
+        .g-single { background: #222; }
+        .g-double { background: #388e3c; color: white; border-color: #388e3c;}
+        .g-triple { background: #d32f2f; color: white; border-color: #d32f2f;}
+        .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top:5px; }
+        .g-miss { grid-column: span 3; background: #333; color: #888; margin-top:5px; }
+
+        /* --- Pagination Dots --- */
+        #swipe-indicator {
+            position: absolute;
+            bottom: 120px; /* Above Footer */
+            left: 0; width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            pointer-events: none;
+            z-index: 50;
+        }
+        .dot {
+            width: 8px; height: 8px;
+            background: #555;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+        .dot.active { background: var(--accent); }
+        .swipe-hint-text {
+            position: absolute;
+            top: -25px;
+            width: 100%; text-align: center;
+            font-size: 0.75rem; color: #777;
+            opacity: 0.8;
+            animation: pulse 2s infinite;
+        }
 
         /* --- Magnifier (Zoom) --- */
         #magnifier {
@@ -165,11 +286,6 @@
             transform: translate(-50%, -50%);
             z-index: 502;
         }
-        .magnifier-crosshair::before, .magnifier-crosshair::after {
-            content: ''; position: absolute; background: rgba(255, 255, 0, 0.5);
-        }
-        .magnifier-crosshair::before { top: -10px; left: 2px; width: 2px; height: 26px; transform: translateX(-1px); }
-        .magnifier-crosshair::after { left: -10px; top: 2px; height: 2px; width: 26px; transform: translateY(-1px); }
         
         #magnifier-score {
             position: absolute;
@@ -198,148 +314,80 @@
         #dart-dock {
             display: flex;
             justify-content: center;
-            gap: 30px; /* Space between darts */
+            gap: 30px; 
             background: rgba(0,0,0,0.3);
             border-radius: 12px;
-            height: 100px; /* Taller for realistic darts */
+            height: 100px;
             border: 2px dashed #333;
             position: relative;
-            align-items: flex-end; /* Align darts to bottom */
+            align-items: flex-end; 
             padding-bottom: 10px;
+            /* Hide dock if using Grid? No, keep it for reference or just disable interaction */
         }
 
-        /* --- The Realistic Dart SVG Container --- */
         .dart-obj {
-            width: 40px;
-            height: 120px; /* Long dart */
-            position: absolute;
-            z-index: 1000;
+            width: 40px; height: 120px;
+            position: absolute; z-index: 1000;
             cursor: grab;
             filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
-            touch-action: none;
-            /* Transform Origin is critical: we want to rotate around the center of gravity roughly, 
-               but when checking position, we use the tip. */
-            transform-origin: 50% 95%; 
+            touch-action: none; transform-origin: 50% 95%; 
         }
-
-        .dart-obj:active { cursor: grabbing; }
-
-        /* Number badge on the flight */
         .dart-badge {
-            position: absolute;
-            top: 15px; left: 50%;
-            transform: translateX(-50%);
-            font-size: 10px; font-weight: bold; color: white;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
-            pointer-events: none;
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            font-size: 10px; font-weight: bold; color: white; text-shadow: 0 1px 2px black; pointer-events: none;
         }
 
         #action-btn {
-            width: 100%;
-            padding: 14px;
-            font-size: 1.1rem;
-            border-radius: 8px;
-            background: #333;
-            color: #777;
-            pointer-events: none;
+            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px; background: #333; color: #777; pointer-events: none;
         }
         #action-btn.ready {
-            background: var(--accent);
-            color: #000;
-            pointer-events: auto;
-            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+            background: var(--accent); color: #000; pointer-events: auto; box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
         }
 
         /* --- Tutorial Overlay --- */
         #tutorial-overlay {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none;
-            z-index: 1500;
-            display: none;
-        }
-        .hand-icon {
-            width: 60px; height: 60px;
-            position: absolute;
-            bottom: 120px; left: 50%;
-            margin-left: -30px;
-            filter: drop-shadow(0 0 10px black);
-            animation: dragDemo 2.5s infinite ease-in-out;
-            opacity: 0;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1500; display: none;
         }
         .tut-text {
-            position: absolute;
-            bottom: 200px; width: 100%;
-            text-align: center;
-            color: white; font-weight: bold;
-            font-size: 1.1rem;
-            text-shadow: 0 2px 4px black;
-            animation: fadeText 2.5s infinite;
+            position: absolute; width: 100%; text-align: center; color: white; font-weight: bold; font-size: 1.1rem;
+            text-shadow: 0 2px 4px black; animation: fadeText 2.5s infinite;
         }
-
-        @keyframes dragDemo {
-            0% { transform: translate(0, 0) scale(1); opacity: 0; }
-            20% { opacity: 1; transform: translate(0, 0) scale(0.9); } /* Press */
-            50% { transform: translate(0, -250px) scale(0.9); opacity: 1; } /* Drag Up */
-            70% { transform: translate(0, -250px) scale(1.1); opacity: 0; } /* Release */
-            100% { opacity: 0; }
-        }
-        @keyframes fadeText {
-            0%, 100% { opacity: 0; }
-            20%, 60% { opacity: 1; }
-        }
+        @keyframes pulse { 0%, 100% { opacity:0.5; } 50% { opacity:1; transform: scale(1.05); } }
+        @keyframes fadeText { 0%, 100% { opacity: 0; } 20%, 60% { opacity: 1; } }
 
         /* --- Modal --- */
         #setup-modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
-            z-index: 2000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            backdrop-filter: blur(5px);
+            background: rgba(0,0,0,0.9); z-index: 2000;
+            display: flex; justify-content: center; align-items: center; backdrop-filter: blur(5px);
         }
         .modal-content {
             background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px;
-            border: 1px solid #333;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         input {
-            width: 100%; padding: 12px; background: #111; border: 1px solid #444;
-            color: white; border-radius: 8px; box-sizing: border-box; margin-bottom: 12px;
-            font-size: 1rem;
+            width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box;
         }
-        input:focus { outline: 2px solid var(--accent); border-color: transparent; }
         .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
         .player-tag {
-            background: #333; padding: 6px 12px; border-radius: 20px;
-            font-size: 0.9rem; display: flex; align-items: center; gap: 8px;
-            border: 1px solid #444;
+            background: #333; padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; border: 1px solid #444;
         }
 
     </style>
 </head>
 <body>
 
-<div id="tutorial-overlay">
-    <div class="tut-text">Drag dart to board</div>
-    <svg class="hand-icon" viewBox="0 0 24 24" fill="white">
-        <path d="M21,14a1,1,0,0,0-1-1h-2V6a3,3,0,0,0-6,0V11H11V4a3,3,0,0,0-6,0v9a6,6,0,0,0,6,6h4.16l4.4,2.2a1,1,0,0,0,1.44-0.9Z"/>
-        </svg>
-</div>
-
 <div id="setup-modal">
     <div class="modal-content">
         <h2 id="modal-title" style="margin-top:0">New Game</h2>
         <input type="text" id="new-player-input" placeholder="Player Name" maxlength="10">
-        <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white;" id="btn-add">Add Player</button>
-        
+        <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white; border:none; padding:10px; border-radius:6px;" id="btn-add">Add Player</button>
         <div class="tag-container" id="player-list-display"></div>
-        
-        <div style="border-top: 1px solid #333; padding-top: 15px; margin-top: 10px;">
+        <div style="border-top: 1px solid #333; padding-top: 15px;">
              <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size: 0.9rem; color:#ccc;">
-                Starting Score (Double Out)
-                <select id="start-score-select" style="background:#111; color:white; border:1px solid #444; padding:5px 10px; border-radius:4px;">
+                Starting Score
+                <select id="start-score-select" style="background:#111; color:white; border:1px solid #444; padding:5px; border-radius:4px;">
                     <option value="301">301</option>
                     <option value="501" selected>501</option>
                     <option value="701">701</option>
@@ -357,25 +405,44 @@
 
 <div id="scoreboard"></div>
 
-<div id="game-area">
-    <div id="magnifier">
-        <div class="magnifier-crosshair"></div>
-        <div id="magnifier-score"></div>
+<div id="view-slider">
+    
+    <div class="view-section" id="section-visual">
+        <div id="game-area">
+            <div id="magnifier">
+                <div class="magnifier-crosshair"></div>
+                <div id="magnifier-score"></div>
+            </div>
+            <div id="dartboard-container"></div>
+            
+            <div id="tutorial-overlay">
+                <div class="tut-text" style="bottom: 200px;">Drag to Throw</div>
+            </div>
+        </div>
     </div>
-    <div id="dartboard-container"></div>
+
+    <div class="view-section" id="section-grid">
+        <div id="grid-area">
+            </div>
+    </div>
+
+</div>
+
+<div id="swipe-indicator">
+    <div class="swipe-hint-text">&larr; SWIPE TO CHANGE INPUT &rarr;</div>
+    <div class="dot active" id="dot-0"></div>
+    <div class="dot" id="dot-1"></div>
 </div>
 
 <div id="footer-controls">
-    <div id="dart-dock">
-        </div>
+    <div id="dart-dock"></div>
     <button onclick="manualNext()" id="action-btn">Next Player</button>
 </div>
 
 <script>
-    /* --- CONFIG & STATE --- */
     const i18n = {
-        en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?" },
-        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!", win: "Voitti!", confirm: "Lopeta peli?" }
+        en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?", miss: "Miss" },
+        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi" }
     };
     const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
     const txt = i18n[userLang];
@@ -383,172 +450,201 @@
     let players = [];
     let currentPlayerIndex = 0;
     let gameActive = false;
-    let dartState = [ {val:0, mult:1}, {val:0, mult:1}, {val:0, mult:1} ];
-    let dartsThrownCount = 0;
+    let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
+    let currentDartEditIndex = 0; // For Grid mode
 
     // --- SVG GENERATION ---
     const NS = "http://www.w3.org/2000/svg";
 
-    // 1. Realistic Dart SVG
     function createDartSVG(id, number) {
         const div = document.createElement('div');
-        div.className = 'dart-obj';
-        div.id = id;
-        
-        // The Graphic
-        // Viewbox 0 0 40 120. Tip is at (20, 120).
+        div.className = 'dart-obj'; div.id = id;
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 40 120");
-        svg.style.pointerEvents = "none"; // Clicks pass through to container
+        svg.style.pointerEvents = "none";
 
-        // Flight (Top)
         const flight = document.createElementNS(NS, "path");
-        flight.setAttribute("d", "M10,0 L30,0 L25,30 L15,30 Z");
-        flight.setAttribute("fill", "var(--dart-flight)");
+        flight.setAttribute("d", "M10,0 L30,0 L25,30 L15,30 Z"); flight.setAttribute("fill", "var(--dart-flight)");
         svg.appendChild(flight);
-        
-        const flightWing = document.createElementNS(NS, "path");
-        flightWing.setAttribute("d", "M20,0 L20,35");
-        flightWing.setAttribute("stroke", "rgba(0,0,0,0.3)");
-        flightWing.setAttribute("stroke-width", "1");
-        svg.appendChild(flightWing);
-
-        // Shaft (Middle)
         const shaft = document.createElementNS(NS, "rect");
-        shaft.setAttribute("x", "18"); shaft.setAttribute("y", "30");
-        shaft.setAttribute("width", "4"); shaft.setAttribute("height", "40");
-        shaft.setAttribute("fill", "var(--dart-shaft)");
+        shaft.setAttribute("x", "18"); shaft.setAttribute("y", "30"); shaft.setAttribute("width", "4"); shaft.setAttribute("height", "40"); shaft.setAttribute("fill", "var(--dart-shaft)");
         svg.appendChild(shaft);
-
-        // Barrel (Grip)
         const barrel = document.createElementNS(NS, "path");
-        barrel.setAttribute("d", "M16,70 L24,70 L23,100 L17,100 Z"); // Tapered
-        barrel.setAttribute("fill", "var(--dart-barrel)");
+        barrel.setAttribute("d", "M16,70 L24,70 L23,100 L17,100 Z"); barrel.setAttribute("fill", "var(--dart-barrel)");
         svg.appendChild(barrel);
-        
-        // Grip lines
-        for(let i=72; i<98; i+=4) {
-            const line = document.createElementNS(NS, "line");
-            line.setAttribute("x1", "16.5"); line.setAttribute("y1", i);
-            line.setAttribute("x2", "23.5"); line.setAttribute("y2", i);
-            line.setAttribute("stroke", "#555");
-            line.setAttribute("stroke-width", "1");
-            svg.appendChild(line);
-        }
-
-        // Tip (Needle) - The most important part for physics
         const tip = document.createElementNS(NS, "path");
-        tip.setAttribute("d", "M19,100 L21,100 L20,120 Z");
-        tip.setAttribute("fill", "var(--dart-tip)");
+        tip.setAttribute("d", "M19,100 L21,100 L20,120 Z"); tip.setAttribute("fill", "var(--dart-tip)");
         svg.appendChild(tip);
-
         div.appendChild(svg);
-
-        // Number Badge
-        const badge = document.createElement('div');
-        badge.className = 'dart-badge';
-        badge.innerText = number;
+        const badge = document.createElement('div'); badge.className = 'dart-badge'; badge.innerText = number;
         div.appendChild(badge);
-
         return div;
     }
 
-    // 2. Dartboard SVG
     function createBoardSVG() {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "-205 -205 410 410");
-        
-        const rTripleOuter=109, rDoubleOuter=172; // Dimensions
         const numbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
-
         for (let i=0; i<20; i++) {
             const rot = (i*18)-9;
             const g = document.createElementNS(NS, "g");
             g.setAttribute("transform", `rotate(${rot})`);
-            
-            const isBlack = i%2===0;
-            const c1 = isBlack?"#121212":"#e0e0e0";
-            const c2 = isBlack?"#d32f2f":"#388e3c"; // Red/Green
-
-            // Helper for segments
+            const c1 = i%2===0?"#121212":"#e0e0e0";
+            const c2 = i%2===0?"#d32f2f":"#388e3c";
             const seg = (r1,r2,m,c) => {
                 const p = document.createElementNS(NS,"path");
                 const rad = Math.PI/180, a=9*rad;
-                const x1=r1*Math.sin(-a), y1=-r1*Math.cos(-a);
-                const x2=r1*Math.sin(a), y2=-r1*Math.cos(a);
-                const x3=r2*Math.sin(a), y3=-r2*Math.cos(a);
-                const x4=r2*Math.sin(-a), y4=-r2*Math.cos(-a);
+                const x1=r1*Math.sin(-a), y1=-r1*Math.cos(-a); const x2=r1*Math.sin(a), y2=-r1*Math.cos(a);
+                const x3=r2*Math.sin(a), y3=-r2*Math.cos(a); const x4=r2*Math.sin(-a), y4=-r2*Math.cos(-a);
                 p.setAttribute("d", `M${x1},${y1} L${x4},${y4} A${r2},${r2} 0 0 1 ${x3},${y3} L${x2},${y2} A${r1},${r1} 0 0 0 ${x1},${y1} Z`);
                 p.setAttribute("fill", c); p.setAttribute("stroke", "#666"); p.setAttribute("stroke-width", "1");
-                p.setAttribute("class", "board-segment");
-                p.setAttribute("data-s", numbers[i]); p.setAttribute("data-m", m);
+                p.setAttribute("class", "board-segment"); p.setAttribute("data-s", numbers[i]); p.setAttribute("data-m", m);
                 return p;
             };
-
-            g.appendChild(seg(109,162,1,c1)); // Single Outer
-            g.appendChild(seg(162,172,2,c2)); // Double
-            g.appendChild(seg(32,99,1,c1));   // Single Inner
-            g.appendChild(seg(99,109,3,c2));  // Triple
-
-            // Number wire
+            g.appendChild(seg(109,162,1,c1)); g.appendChild(seg(162,172,2,c2));
+            g.appendChild(seg(32,99,1,c1)); g.appendChild(seg(99,109,3,c2));
             const txt = document.createElementNS(NS,"text");
-            txt.setAttribute("x",0); txt.setAttribute("y",-182);
-            txt.setAttribute("text-anchor","middle");
-            txt.setAttribute("fill","white");
-            txt.setAttribute("font-size", "22");
-            txt.setAttribute("font-weight","bold");
-            txt.setAttribute("transform", `rotate(${-rot} 0 -182)`);
-            txt.textContent = numbers[i];
-            txt.style.pointerEvents="none";
-            g.appendChild(txt);
+            txt.setAttribute("x",0); txt.setAttribute("y",-182); txt.setAttribute("text-anchor","middle");
+            txt.setAttribute("fill","white"); txt.setAttribute("font-size", "22"); txt.setAttribute("font-weight","bold");
+            txt.setAttribute("transform", `rotate(${-rot} 0 -182)`); txt.textContent = numbers[i];
+            txt.style.pointerEvents="none"; g.appendChild(txt);
             svg.appendChild(g);
         }
-
-        // Bullseye
         const bull = (r,s,c) => {
             const crc = document.createElementNS(NS,"circle");
             crc.setAttribute("r",r); crc.setAttribute("fill",c); crc.setAttribute("stroke","#666");
-            crc.setAttribute("class", "board-segment");
-            crc.setAttribute("data-s", s); crc.setAttribute("data-m", 1);
+            crc.setAttribute("class", "board-segment"); crc.setAttribute("data-s", s); crc.setAttribute("data-m", 1);
             return crc;
         };
-        svg.appendChild(bull(31.8, 25, "#388e3c"));
-        svg.appendChild(bull(12.7, 50, "#d32f2f"));
-
+        svg.appendChild(bull(31.8, 25, "#388e3c")); svg.appendChild(bull(12.7, 50, "#d32f2f"));
         return svg;
     }
 
-    // --- INITIALIZATION ---
     function init() {
-        // Build Board
-        const container = document.getElementById('dartboard-container');
-        const mainSVG = createBoardSVG();
-        mainSVG.id = "main-svg";
-        container.appendChild(mainSVG);
-
-        // Build Magnifier Board (copy)
+        document.getElementById('dartboard-container').appendChild(createBoardSVG().cloneNode(true)).id = "main-svg";
         const magWrap = document.getElementById('magnifier');
-        const magSVG = createBoardSVG();
-        magSVG.id = "mag-svg";
-        magWrap.insertBefore(magSVG, magWrap.firstChild);
+        magWrap.insertBefore(createBoardSVG().cloneNode(true), magWrap.firstChild).id = "mag-svg";
 
-        // Create Darts in Dock
         const dock = document.getElementById('dart-dock');
-        [1,2,3].forEach(i => {
-            dock.appendChild(createDartSVG(`dart-${i}`, i));
-        });
+        [1,2,3].forEach(i => dock.appendChild(createDartSVG(`dart-${i}`, i)));
 
-        // Initialize Logic
         document.getElementById('action-btn').innerText = txt.btnNext;
-        document.getElementById('new-player-input').addEventListener('keydown', (e)=>{
-            if(e.key==='Enter') addPlayer();
-        });
+        document.getElementById('new-player-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') addPlayer(); });
 
         setupDragAndDrop();
-        window.addEventListener('resize', () => { if(gameActive) resetDartsPosition(); });
+        setupSwipeObserver();
+        buildGridInterface();
     }
 
-    // --- DRAG & DROP LOGIC ---
+    // --- GRID INTERFACE LOGIC ---
+    function buildGridInterface() {
+        const container = document.getElementById('grid-area');
+        container.innerHTML = '';
+        
+        [0, 1, 2].forEach(dartIdx => {
+            // Accordion Header
+            const wrap = document.createElement('div');
+            wrap.className = 'dart-accordion';
+            wrap.id = `accordion-${dartIdx}`;
+            
+            const head = document.createElement('div');
+            head.className = 'accordion-header';
+            head.onclick = () => openAccordion(dartIdx);
+            head.innerHTML = `<span class="accordion-title">Dart ${dartIdx+1}</span> <span class="accordion-value" id="grid-val-${dartIdx}">-</span>`;
+            
+            // Accordion Body (Grid)
+            const body = document.createElement('div');
+            body.className = 'accordion-body';
+            
+            const grid = document.createElement('div');
+            grid.className = 'grid-matrix';
+            
+            // Generate Buttons 20 -> 1
+            for(let i=20; i>=1; i--) {
+                grid.innerHTML += `
+                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${i}</div>
+                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">D${i}</div>
+                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">T${i}</div>
+                `;
+            }
+            // Bull & Miss
+            grid.innerHTML += `
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">BULL (50)</div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">OUTER BULL (25)</div>
+                <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">${txt.miss.toUpperCase()} (0)</div>
+            `;
+            
+            body.appendChild(grid);
+            wrap.appendChild(head);
+            wrap.appendChild(body);
+            container.appendChild(wrap);
+        });
+        
+        // Open first accordion by default
+        openAccordion(0);
+    }
+
+    function openAccordion(idx) {
+        currentDartEditIndex = idx;
+        [0,1,2].forEach(i => {
+            const el = document.getElementById(`accordion-${i}`);
+            if(i === idx) el.classList.add('active');
+            else el.classList.remove('active');
+        });
+    }
+
+    function gridInput(dartIdx, score, mult) {
+        if(!gameActive) return;
+
+        // 1. Update State
+        dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
+
+        // 2. Update UI Text for this accordion
+        const lbl = document.getElementById(`grid-val-${dartIdx}`);
+        let txtVal = score === 0 ? txt.miss : score;
+        if(mult===2) txtVal = "D"+score;
+        if(mult===3) txtVal = "T"+score;
+        if(score===25) txtVal = "25";
+        if(score===50) txtVal = "BULL";
+        lbl.innerText = txtVal;
+        
+        // 3. Move visual dart to "hidden" or dock to indicate grid usage
+        // We will just place it in the dock to keep board clean
+        resetSingleDart(dartIdx); 
+
+        // 4. Update Game Score Logic
+        updateGameState();
+
+        // 5. Auto Advance
+        if(dartIdx < 2) {
+            openAccordion(dartIdx + 1);
+        } else {
+            // Close all if last dart
+            document.getElementById(`accordion-2`).classList.remove('active');
+        }
+    }
+
+    // --- SWIPE LOGIC ---
+    function setupSwipeObserver() {
+        const slider = document.getElementById('view-slider');
+        const dots = [document.getElementById('dot-0'), document.getElementById('dot-1')];
+        
+        slider.addEventListener('scroll', () => {
+            const scrollLeft = slider.scrollLeft;
+            const width = slider.offsetWidth;
+            const index = Math.round(scrollLeft / width);
+            
+            dots.forEach((d, i) => {
+                if(i === index) d.classList.add('active');
+                else d.classList.remove('active');
+            });
+            
+            // Hide hint on scroll
+            document.querySelector('.swipe-hint-text').style.opacity = '0';
+        });
+    }
+
+    // --- DRAG LOGIC (Preserved) ---
     function setupDragAndDrop() {
         const darts = [1,2,3].map(i => document.getElementById(`dart-${i}`));
         const magnifier = document.getElementById('magnifier');
@@ -556,181 +652,99 @@
         const magScore = document.getElementById('magnifier-score');
         const mainSVG = document.getElementById('main-svg');
 
-        let isTutorialShown = false;
-
         darts.forEach((dart, idx) => {
-            let startX, startY, initialRect;
-            
-            // Dart Dimensions: Width 40, Height 120. Tip is at bottom center (20, 120).
-            // When user grabs, we want the TIP to match the FINGER location eventually,
-            // but usually people grab the body.
-            // Strategy: 
-            // 1. User touches body. 
-            // 2. Dart jumps so TIP is at finger Y - Offset.
-            // ACTUALLY BEST UX: Tip tracks finger exactly, Dart image is above finger.
-
             const onStart = (e) => {
-                if(!gameActive || dartsThrownCount > idx) return; // Can't throw already thrown or out of order? Let's allow re-throw if not next player yet
-                if(dart.classList.contains('locked')) return;
+                if(!gameActive) return;
+                // Check if slider is on visual view (index 0)
+                const slider = document.getElementById('view-slider');
+                if(slider.scrollLeft > 100) return; // Disable drag on grid view
 
-                hideTutorial();
-
+                document.getElementById('tutorial-overlay').style.display='none';
                 e.preventDefault();
                 const cx = e.touches ? e.touches[0].clientX : e.clientX;
                 const cy = e.touches ? e.touches[0].clientY : e.clientY;
 
-                // Move dart to Fixed positioning for dragging
-                dart.style.position = 'fixed';
-                dart.style.zIndex = 9999;
-                dart.style.transition = 'none';
-                
-                // Visual Lift: Scale up slightly
+                dart.style.position = 'fixed'; dart.style.zIndex = 9999; dart.style.transition = 'none';
                 dart.style.transform = 'scale(1.2) rotate(-10deg)'; 
-                
-                // Make all darts transparent to pointer events so we can read the board below
                 darts.forEach(d => d.style.pointerEvents = 'none');
                 magnifier.style.display = 'block';
 
-                const updatePosition = (mx, my) => {
-                    // Logic: The TIP of the dart (bottom center) should be exactly at (mx, my)
-                    // Dart is 40x120. Tip is at x=20, y=120 relative to dart box.
-                    // So Left = mx - 20, Top = my - 120.
-                    
-                    dart.style.left = (mx - 20) + 'px';
-                    dart.style.top = (my - 120) + 'px';
-
-                    // Hit Test logic
+                const updatePos = (mx, my) => {
+                    dart.style.left = (mx - 20) + 'px'; dart.style.top = (my - 120) + 'px';
                     const hit = document.elementFromPoint(mx, my);
-                    
                     if(hit && hit.classList.contains('board-segment')) {
-                        // Magnifier Logic
-                        const pt = mainSVG.createSVGPoint();
-                        pt.x = mx; pt.y = my;
+                        const pt = mainSVG.createSVGPoint(); pt.x = mx; pt.y = my;
                         const svgP = pt.matrixTransform(mainSVG.getScreenCTM().inverse());
-                        
-                        // Zoom into SVG coordinates
                         magSVG.setAttribute("viewBox", `${svgP.x - 20} ${svgP.y - 20} 40 40`);
-
-                        const s = parseInt(hit.getAttribute('data-s'));
-                        const m = parseInt(hit.getAttribute('data-m'));
+                        const s = parseInt(hit.getAttribute('data-s')), m = parseInt(hit.getAttribute('data-m'));
                         magScore.innerText = (m===3?'T':(m===2?'D':'')) + s;
-                        magScore.style.color = (m===2||m===3) ? varColor(m) : 'yellow';
+                        magScore.style.color = (m===3?'#00e676':(m===2?'#ff4081':'white'));
                     } else {
-                        magScore.innerText = "MISS";
-                        magScore.style.color = '#aaa';
-                        magSVG.setAttribute("viewBox", "-205 -205 410 410"); // Reset
+                        magScore.innerText = txt.miss; magScore.style.color = '#aaa';
+                        magSVG.setAttribute("viewBox", "-205 -205 410 410");
                     }
                 };
+                updatePos(cx, cy);
 
-                updatePosition(cx, cy);
-
-                const onMove = (em) => {
-                    em.preventDefault();
-                    const mx = em.touches ? em.touches[0].clientX : em.clientX;
-                    const my = em.touches ? em.touches[0].clientY : em.clientY;
-                    updatePosition(mx, my);
-                };
-
+                const onMove = (em) => { em.preventDefault(); updatePos(em.touches?em.touches[0].clientX:em.clientX, em.touches?em.touches[0].clientY:em.clientY); };
                 const onEnd = (ee) => {
-                    removeListeners();
+                    document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd);
+                    document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd);
                     magnifier.style.display = 'none';
+                    const mx = ee.changedTouches?ee.changedTouches[0].clientX:ee.clientX;
+                    const my = ee.changedTouches?ee.changedTouches[0].clientY:ee.clientY;
                     
-                    const mx = ee.changedTouches ? ee.changedTouches[0].clientX : ee.clientX;
-                    const my = ee.changedTouches ? ee.changedTouches[0].clientY : ee.clientY;
-
-                    // Final Hit Check (Drill down if needed)
-                    // Temporarily hide the dragged dart to be sure (though pointer-events handled it)
-                    dart.hidden = true; 
-                    let el = document.elementFromPoint(mx, my);
-                    dart.hidden = false;
-
-                    // Restore pointer events
+                    dart.hidden = true; let el = document.elementFromPoint(mx, my); dart.hidden = false;
                     darts.forEach(d => d.style.pointerEvents = 'auto');
 
                     if(el && el.classList.contains('board-segment')) {
-                        const s = parseInt(el.getAttribute('data-s'));
-                        const m = parseInt(el.getAttribute('data-m'));
+                        const s = parseInt(el.getAttribute('data-s')), m = parseInt(el.getAttribute('data-m'));
+                        dart.style.transition = 'transform 0.1s ease-out'; dart.style.transform = 'scale(0.8) rotate(0deg)';
+                        dart.style.left = (mx - 20) + 'px'; dart.style.top = (my - 120) + 'px';
                         
-                        // Register Hit
-                        dartState[idx] = { val: s, mult: m };
-                        
-                        // Visual Stick
-                        dart.style.transition = 'transform 0.1s ease-out';
-                        dart.style.transform = 'scale(0.8) rotate(0deg)'; // Stick in straight
-                        // Keep position at drop point
-                        dart.style.left = (mx - 20) + 'px';
-                        dart.style.top = (my - 120) + 'px';
-                        
-                        updateGameState();
+                        // Sync with Grid UI
+                        updateGridUIFromDrag(idx, s, m);
                     } else {
-                        // Miss
-                        dartState[idx] = { val: 0, mult: 1 };
-                        resetSingleDart(idx); // Send back to dock
-                        updateGameState();
+                        resetSingleDart(idx);
+                        updateGridUIFromDrag(idx, 0, 1);
                     }
                 };
-
-                const removeListeners = () => {
-                    document.removeEventListener('touchmove', onMove);
-                    document.removeEventListener('touchend', onEnd);
-                    document.removeEventListener('mousemove', onMove);
-                    document.removeEventListener('mouseup', onEnd);
-                };
-
-                document.addEventListener('touchmove', onMove, {passive:false});
-                document.addEventListener('touchend', onEnd);
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onEnd);
+                document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
+                document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onEnd);
             };
-
-            dart.addEventListener('touchstart', onStart, {passive:false});
-            dart.addEventListener('mousedown', onStart);
+            dart.addEventListener('touchstart', onStart, {passive:false}); dart.addEventListener('mousedown', onStart);
         });
     }
 
-    function varColor(m) {
-        if(m===3) return '#00e676';
-        if(m===2) return '#ff4081';
-        return 'white';
+    function updateGridUIFromDrag(idx, s, m) {
+        dartState[idx] = { val: s, mult: m, missed: (s===0) };
+        const lbl = document.getElementById(`grid-val-${idx}`);
+        let txtVal = s === 0 ? txt.miss : s;
+        if(m===2) txtVal = "D"+s; if(m===3) txtVal = "T"+s; if(s===25) txtVal="25"; if(s===50) txtVal="BULL";
+        lbl.innerText = txtVal;
+        updateGameState();
     }
 
-    // --- GAME LOGIC ---
-
+    // --- GAME CORE ---
     function updateGameState() {
         const p = players[currentPlayerIndex];
         const res = calculateScore(p.score);
-        
-        // Update UI Text
         const projEl = document.getElementById(`proj-score-${currentPlayerIndex}`);
         if(projEl) {
             if(res.isBust) projEl.innerHTML = `<span class="next-score bust">${txt.bust}</span>`;
             else if(res.isWin) projEl.innerHTML = `<span class="next-score" style="color:gold">${txt.win}</span>`;
             else {
-                let w = (res.rem <= 1 && res.rem !== 0) ? `(${txt.bust})` : ''; // Bust if 1 left
+                let w = (res.rem <= 1 && res.rem !== 0) ? `(${txt.bust})` : '';
                 projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score">${res.rem} ${w}</span>`;
             }
         }
-
-        // Check if all 3 thrown or Win
-        const thrown = dartState.filter(d => d.val > 0 || d.missed).length; 
-        // Note: I need to track actual attempts. 
-        // Simply checking val > 0 isn't enough for misses. 
-        // Let's iterate darts visually.
         
-        let attempts = 0;
-        const darts = [1,2,3].map(i => document.getElementById(`dart-${i}`));
-        darts.forEach((d, i) => {
-            // Heuristic: If dart is NOT in dock, it counts as thrown
-            const rect = d.getBoundingClientRect();
-            const dock = document.getElementById('dart-dock').getBoundingClientRect();
-            if(rect.top < dock.top - 50) attempts++; 
-        });
-
-        // Enable "Next" button if 3 thrown or Win detected
+        // Count attempts (either placed on board or entered in grid)
+        const thrown = dartState.filter(d => d.val > 0 || d.missed).length;
         const btn = document.getElementById('action-btn');
-        if(attempts === 3 || res.isWin || res.isBust) {
+        if(thrown === 3 || res.isWin || res.isBust) {
             btn.classList.add('ready');
-            if(res.isWin) setTimeout(manualNext, 1000); // Auto win
+            if(res.isWin) setTimeout(manualNext, 1000);
         } else {
             btn.classList.remove('ready');
         }
@@ -738,36 +752,17 @@
 
     function calculateScore(currentScore) {
         let temp = currentScore;
-        let isBust = false;
-        let isWin = false;
-
-        // Reset tracking logic based on dart positions
-        // We only calculate based on darts that are "stuck" in board
-        // But for simplicity, we use dartState which updates on drop
-        // We must process in order 0,1,2
-        
+        let isBust = false, isWin = false;
         for(let i=0; i<3; i++) {
             const d = dartState[i];
-            if(d.val === 0 && !d.missed) continue; // Not thrown yet (or true miss, treat as 0)
-
+            if(d.val === 0 && !d.missed) continue;
             const pts = d.val * d.mult;
             const rem = temp - pts;
-
-            if(rem < 0 || rem === 1) {
-                isBust = true;
-                break; // Stop counting
-            } else if (rem === 0) {
-                if(d.mult === 2 || d.val === 50) {
-                    isWin = true;
-                    temp = 0;
-                    break;
-                } else {
-                    isBust = true;
-                    break;
-                }
-            } else {
-                temp = rem;
-            }
+            if(rem < 0 || rem === 1) { isBust = true; break; }
+            else if (rem === 0) {
+                if(d.mult === 2 || d.val === 50) { isWin = true; temp = 0; break; }
+                else { isBust = true; break; }
+            } else { temp = rem; }
         }
         return { rem: isBust ? currentScore : temp, isBust, isWin };
     }
@@ -776,143 +771,61 @@
         if(!gameActive) return;
         const p = players[currentPlayerIndex];
         const res = calculateScore(p.score);
+        if(res.isWin) { p.score = 0; p.finished = true; alert(`${p.name} ${txt.win}`); }
+        else if(!res.isBust) { p.score = res.rem; }
 
-        if(res.isWin) {
-            p.score = 0;
-            p.finished = true;
-            alert(`${p.name} ${txt.win}`);
-        } else if(!res.isBust) {
-            p.score = res.rem;
-        } // Else bust, score stays same
-
-        // Reset Darts
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
         document.getElementById('action-btn').classList.remove('ready');
+        
+        // Reset Grid UI labels
+        [0,1,2].forEach(i => document.getElementById(`grid-val-${i}`).innerText = '-');
+        openAccordion(0); // Reset accordion
 
-        // Check Game Over
-        if(players.every(pl => pl.finished)) {
-            renderScoreboard();
-            gameActive = false;
-            return;
-        }
+        if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
 
-        // Next Player Loop
         let loop=0;
-        do {
-            currentPlayerIndex = (currentPlayerIndex + 1) % players.length;
-            loop++;
-        } while(players[currentPlayerIndex].finished && loop < players.length);
+        do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
         renderScoreboard();
         resetDartsPosition();
-        showTutorial(); // Show tutorial again for new player? Or just once per game? Let's show once per game load.
+        
+        // Reset Slider to Visual view for new turn? Or keep preference? Let's keep preference.
+        // If we wanted to force visual: document.getElementById('view-slider').scrollLeft = 0;
     }
-
-    // --- SETUP & UI HELPERS ---
 
     function resetDartsPosition() {
         const dock = document.getElementById('dart-dock');
         const rect = dock.getBoundingClientRect();
-        const gap = 50; 
-        const centerX = rect.left + rect.width/2;
-        const bottomY = rect.bottom - 15; // 15px padding from bottom
-
+        const gap = 50, centerX = rect.left + rect.width/2, bottomY = rect.bottom - 15;
         [0,1,2].forEach(i => {
             const d = document.getElementById(`dart-${i+1}`);
-            d.style.position = 'fixed';
-            d.style.transition = 'all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)'; // Bouncy reset
-            // Calculate left based on i (-1, 0, 1)
-            const offset = (i-1)*gap; 
-            d.style.left = (centerX + offset - 20) + 'px'; // -20 is half dart width
-            // Dart height is 120. Tip is at 120. We want bottom of dart at bottomY
-            d.style.top = (bottomY - 120) + 'px';
-            d.style.transform = 'rotate(0deg)';
-            d.style.zIndex = 1000 + i;
+            d.style.position = 'fixed'; d.style.transition = 'all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            d.style.left = (centerX + (i-1)*gap - 20) + 'px'; d.style.top = (bottomY - 120) + 'px';
+            d.style.transform = 'rotate(0deg)'; d.style.zIndex = 1000 + i;
         });
     }
-
     function resetSingleDart(i) {
-        // Same logic as above but for one index
         const dock = document.getElementById('dart-dock');
         const rect = dock.getBoundingClientRect();
-        const gap = 50; 
-        const centerX = rect.left + rect.width/2;
-        const bottomY = rect.bottom - 15;
-
+        const gap = 50, centerX = rect.left + rect.width/2, bottomY = rect.bottom - 15;
         const d = document.getElementById(`dart-${i+1}`);
         d.style.transition = 'all 0.4s ease-out';
-        const offset = (i-1)*gap;
-        d.style.left = (centerX + offset - 20) + 'px';
-        d.style.top = (bottomY - 120) + 'px';
-        d.style.transform = 'rotate(0deg)';
+        d.style.left = (centerX + (i-1)*gap - 20) + 'px'; d.style.top = (bottomY - 120) + 'px'; d.style.transform = 'rotate(0deg)';
     }
 
-    function addPlayer() {
-        const inp = document.getElementById('new-player-input');
-        const name = inp.value.trim();
-        if(name) {
-            players.push({name, score:501, finished:false});
-            inp.value="";
-            renderList();
-            inp.focus();
-        }
-    }
-    function renderList() {
-        const c = document.getElementById('player-list-display');
-        c.innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList()" style="cursor:pointer">&times;</span></div>`).join('');
-    }
-
-    function startGame() {
-        if(players.length===0) return;
-        const s = parseInt(document.getElementById('start-score-select').value);
-        players.forEach(p => { p.score=s; p.finished=false; });
-        gameActive = true;
-        currentPlayerIndex = 0;
-        document.getElementById('setup-modal').style.display='none';
-        renderScoreboard();
-        
-        // Timeout to allow layout to settle before positioning darts
-        setTimeout(() => {
-            resetDartsPosition();
-            showTutorial();
-        }, 100);
-    }
-
-    function resetGame() {
-        if(confirm(txt.confirm)) {
-            location.reload();
-        }
-    }
-
+    function addPlayer() { const inp = document.getElementById('new-player-input'); if(inp.value.trim()){ players.push({name:inp.value.trim(), score:501, finished:false}); inp.value=""; renderList(); inp.focus(); } }
+    function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList()" style="cursor:pointer">&times;</span></div>`).join(''); }
+    function startGame() { if(players.length===0) return; const s = parseInt(document.getElementById('start-score-select').value); players.forEach(p => { p.score=s; p.finished=false; }); gameActive = true; currentPlayerIndex = 0; document.getElementById('setup-modal').style.display='none'; renderScoreboard(); setTimeout(() => { resetDartsPosition(); document.getElementById('tutorial-overlay').style.display='block'; }, 100); }
+    function resetGame() { if(confirm(txt.confirm)) location.reload(); }
     function renderScoreboard() {
-        const sb = document.getElementById('scoreboard');
-        sb.innerHTML = players.map((p,i) => {
+        document.getElementById('scoreboard').innerHTML = players.map((p,i) => {
             const active = (i===currentPlayerIndex && !p.finished);
-            return `
-            <div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}">
-                <div class="player-name">${p.name}</div>
-                <div class="current-score">${p.finished ? txt.win : p.score}</div>
-                ${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}
-            </div>`;
+            return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
         }).join('');
-        
-        const activeEl = document.querySelector('.player-column.active');
-        if(activeEl) activeEl.scrollIntoView({behavior:'smooth', inline:'center'});
+        const activeEl = document.querySelector('.player-column.active'); if(activeEl) activeEl.scrollIntoView({behavior:'smooth', inline:'center'});
     }
 
-    // --- TUTORIAL ---
-    function showTutorial() {
-        const overlay = document.getElementById('tutorial-overlay');
-        overlay.style.display = 'block';
-    }
-    function hideTutorial() {
-        const overlay = document.getElementById('tutorial-overlay');
-        overlay.style.display = 'none';
-    }
-
-    // Start
     init();
-
 </script>
 </body>
 </html>
