@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Darts Scorer / Tikkataulu</title>
+    <title>Darts Scorer</title>
     <style>
         :root {
             --bg-color: #121212;
@@ -30,64 +30,62 @@
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
-            touch-action: none; /* Prevent browser zooming/scrolling */
+            touch-action: none;
         }
 
         /* --- Header --- */
         header {
             flex: 0 0 auto;
-            padding: 10px 15px;
+            padding: 5px 10px;
             background: var(--card-bg);
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid #333;
-            z-index: 10;
+            height: 40px;
         }
-        h1 { margin: 0; font-size: 1.2rem; }
+        h1 { margin: 0; font-size: 1rem; }
         button {
             background: var(--accent);
             color: #000;
             border: none;
-            padding: 8px 16px;
+            padding: 5px 12px;
             border-radius: 4px;
             font-weight: bold;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.8rem;
         }
         button.danger { background: var(--danger); color: white; }
 
-        /* --- Scoreboard --- */
+        /* --- Scoreboard (Compact) --- */
         #scoreboard {
-            flex: 0 0 130px; /* Fixed height for scoreboard */
+            flex: 0 0 85px; /* Reduced height */
             display: flex;
             overflow-x: auto;
             background: var(--bg-color);
-            padding: 10px;
-            gap: 10px;
+            padding: 5px;
+            gap: 5px;
             border-bottom: 1px solid #333;
             scroll-snap-type: x mandatory;
         }
 
         .player-column {
-            min-width: 120px;
+            min-width: 100px;
             flex: 1;
             background: var(--card-bg);
-            border-radius: 8px;
+            border-radius: 6px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             border: 2px solid transparent;
             scroll-snap-align: center;
-            padding: 10px;
-            transition: all 0.3s ease;
+            padding: 5px;
         }
 
         .player-column.active {
             border-color: var(--accent);
             background: var(--highlight);
-            transform: scale(1.02);
         }
 
         .player-column.finished {
@@ -95,17 +93,16 @@
             border-color: gold;
         }
 
-        .player-name { font-size: 1rem; font-weight: bold; margin-bottom: 5px; text-align: center;}
-        .score-box { text-align: center; width: 100%; }
-        .current-score { font-size: 2.2rem; font-weight: 800; color: white; line-height: 1;}
+        .player-name { font-size: 0.9rem; font-weight: bold; margin-bottom: 2px; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 100%;}
+        .current-score { font-size: 1.8rem; font-weight: 800; color: white; line-height: 1;}
         
         .projected-row {
-            margin-top: 8px;
-            font-size: 0.9rem;
+            margin-top: 2px;
+            font-size: 0.75rem;
             color: #aaa;
             display: flex;
             justify-content: center;
-            gap: 5px;
+            gap: 3px;
         }
         .next-score { color: var(--accent); font-weight: bold; }
         .next-score.bust { color: var(--danger); text-decoration: line-through; }
@@ -117,8 +114,9 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center; /* Center board vertically */
+            justify-content: center;
             overflow: hidden;
+            width: 100%;
         }
 
         #dartboard-container {
@@ -134,42 +132,57 @@
             filter: drop-shadow(0px 5px 10px rgba(0,0,0,0.5));
         }
 
-        /* SVG Hit zones */
-        path, circle { transition: opacity 0.1s; }
-        .hover-zone { opacity: 0.6; fill: white !important; } /* Highlight on drag over */
+        .board-segment { transition: opacity 0.1s; }
+        .hover-zone { opacity: 0.5; fill: white !important; }
+
+        /* --- Magnifier (Zoom) --- */
+        #magnifier {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 100px;
+            height: 100px;
+            border: 3px solid var(--accent);
+            border-radius: 50%;
+            background: #000;
+            overflow: hidden;
+            display: none; /* Hidden until drag */
+            z-index: 500;
+            pointer-events: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.8);
+        }
+        #magnifier-svg {
+            width: 100%;
+            height: 100%;
+        }
 
         /* --- Footer / Controls --- */
         #footer-controls {
             flex: 0 0 auto;
             background: var(--card-bg);
-            padding: 10px;
+            padding: 5px 10px 10px 10px;
             width: 100%;
             box-sizing: border-box;
             border-top: 1px solid #333;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 5px;
             z-index: 20;
         }
 
-        .miss-zone-label {
-            color: #aaa; font-size: 0.8rem; margin-bottom: 5px; text-align: center; width: 100%;
-        }
-
-        /* The container for darts (the 0 zone) */
         #dart-dock {
             display: flex;
             justify-content: center;
             gap: 20px;
             background: rgba(255,255,255,0.05);
-            padding: 15px;
+            padding: 10px;
             border-radius: 10px;
             min-height: 50px;
             border: 2px dashed #444;
             position: relative;
+            align-items: center;
         }
 
-        /* The Draggable Darts */
         .dart-token {
             width: 40px;
             height: 40px;
@@ -178,57 +191,48 @@
             border-radius: 50% 50% 0 50%;
             transform: rotate(45deg);
             box-shadow: 0 4px 6px rgba(0,0,0,0.5);
-            touch-action: none; /* Critical for custom drag */
-            position: absolute; /* We will position them via JS or absolute in dock */
+            touch-action: none;
+            position: absolute;
             z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: bold;
             color: white;
+            white-space: nowrap;
         }
         /* Fix text rotation inside rotated dart */
-        .dart-token span { transform: rotate(-45deg); }
-
-        .dart-token.placed {
-            /* Style when on board? handled by JS positioning */
-            width: 20px; height: 20px; /* Shrink slightly on board */
-        }
+        .dart-token span { transform: rotate(-45deg); display: block; min-width: 20px; text-align: center; }
 
         #action-btn {
             width: 100%;
-            padding: 15px;
-            font-size: 1.1rem;
-            margin-top: 5px;
+            padding: 12px;
+            font-size: 1rem;
+            margin-top: 2px;
         }
 
         /* --- Modal --- */
         #setup-modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
+            background: rgba(0,0,0,0.95);
             z-index: 2000;
             display: flex;
             justify-content: center;
             align-items: center;
         }
         .modal-content {
-            background: var(--card-bg);
-            padding: 20px;
-            border-radius: 10px;
-            width: 90%;
-            max-width: 400px;
+            background: var(--card-bg); padding: 20px; border-radius: 10px; width: 90%; max-width: 400px;
         }
-        .input-group { margin-bottom: 15px; }
         input {
             width: 100%; padding: 10px; background: #333; border: 1px solid #555;
-            color: white; border-radius: 4px; box-sizing: border-box;
+            color: white; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px;
         }
-        .tag-container { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
         .player-tag {
             background: var(--accent-dim); padding: 5px 10px; border-radius: 15px;
-            font-size: 0.8rem; display: flex; alignItems: center; gap: 5px;
+            font-size: 0.8rem; display: flex; align-items: center; gap: 5px; margin: 3px;
         }
+        .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 10px; }
 
     </style>
 </head>
@@ -237,20 +241,20 @@
 <div id="setup-modal">
     <div class="modal-content">
         <h2 id="modal-title">New Game</h2>
-        <div class="input-group">
-            <input type="text" id="new-player-input" placeholder="Enter name" onkeydown="if(event.key === 'Enter') addPlayer()">
-            <button onclick="addPlayer()" style="margin-top:5px; width:100%" id="btn-add">Add Player</button>
-        </div>
+        <input type="text" id="new-player-input" placeholder="Enter name" onkeydown="if(event.key === 'Enter') addPlayer()">
+        <button onclick="addPlayer()" style="width:100%; margin-bottom:10px;" id="btn-add">Add Player</button>
+        
         <div class="tag-container" id="player-list-display"></div>
-        <div style="margin-top: 20px; border-top: 1px solid #444; padding-top: 10px;">
-             <label style="display:block; margin-bottom:10px;">
-                Start Score:
-                <select id="start-score-select" style="background:#333; color:white; border:none; padding:5px;">
+        
+        <div style="border-top: 1px solid #444; padding-top: 10px;">
+             <label style="display:block; margin-bottom:10px; font-size: 0.9rem; color:#aaa;">
+                Start Score (Double Out):
+                <select id="start-score-select" style="background:#333; color:white; border:none; padding:5px; margin-left:10px;">
                     <option value="301">301</option>
                     <option value="501" selected>501</option>
                 </select>
             </label>
-            <button onclick="startGame()" style="width:100%" id="btn-start">Start Game</button>
+            <button onclick="startGame()" style="width:100%; padding: 10px;" id="btn-start">Start Game</button>
         </div>
     </div>
 </div>
@@ -260,19 +264,15 @@
     <button onclick="resetGame()" class="danger" id="btn-reset">Reset</button>
 </header>
 
-<div id="scoreboard">
-    </div>
+<div id="scoreboard"></div>
 
 <div id="game-area">
-    <div id="dartboard-container">
-        </div>
-    </div>
+    <div id="magnifier"></div> <div id="dartboard-container"></div>
+</div>
 
 <div id="footer-controls">
-    <div class="miss-zone-label">Drag darts to board. Drop here for 0 / Miss.</div>
-    <div id="dart-dock">
-        </div>
-    <button onclick="submitTurn()" id="action-btn">Next Player</button>
+    <div id="dart-dock"></div>
+    <button onclick="manualNext()" id="action-btn">Next Player</button>
 </div>
 
 <div id="dart-1" class="dart-token"><span>1</span></div>
@@ -280,42 +280,23 @@
 <div id="dart-3" class="dart-token"><span>3</span></div>
 
 <script>
-    // --- Localization ---
     const i18n = {
         en: {
-            title: "Darts Scorer",
-            modalTitle: "New Game",
-            addBtn: "Add Player",
-            startBtn: "Start Game",
-            resetBtn: "Reset",
-            placeholder: "Enter name",
-            next: "Next: ",
-            bust: "BUST",
-            btnNext: "Next Player",
-            btnWin: "WINNER!",
-            win: "Wins!",
-            missLabel: "Drag darts to board. Drop here for 0 / Miss."
+            title: "Darts Scorer", modalTitle: "New Game", addBtn: "Add Player", startBtn: "Start Game", resetBtn: "Reset",
+            placeholder: "Enter name", next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!",
+            win: "Wins!", needDouble: "Need Double"
         },
         fi: {
-            title: "Tikkataulu",
-            modalTitle: "Uusi Peli",
-            addBtn: "Lisää Pelaaja",
-            startBtn: "Aloita Peli",
-            resetBtn: "Nollaa",
-            placeholder: "Syötä nimi",
-            next: "Tulos: ",
-            bust: "YLILYÖNTI",
-            btnNext: "Seuraava",
-            btnWin: "VOITTAJA!",
-            win: "Voitti!",
-            missLabel: "Raahaa tikat tauluun. Pudota tähän jos ohi / 0."
+            title: "Tikkataulu", modalTitle: "Uusi Peli", addBtn: "Lisää Pelaaja", startBtn: "Aloita Peli", resetBtn: "Nollaa",
+            placeholder: "Syötä nimi", next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!",
+            win: "Voitti!", needDouble: "Vaatii Tuplan"
         }
     };
 
     const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
     const txt = i18n[userLang];
 
-    // Apply translations
+    // DOM Elements
     document.getElementById('app-title').innerText = txt.title;
     document.getElementById('modal-title').innerText = txt.modalTitle;
     document.getElementById('btn-add').innerText = txt.addBtn;
@@ -323,42 +304,31 @@
     document.getElementById('btn-reset').innerText = txt.resetBtn;
     document.getElementById('new-player-input').placeholder = txt.placeholder;
     document.getElementById('action-btn').innerText = txt.btnNext;
-    document.querySelector('.miss-zone-label').innerText = txt.missLabel;
 
-    // --- State ---
+    // Game State
     let players = [];
     let currentPlayerIndex = 0;
-    let startScore = 501;
     let gameActive = false;
-    
-    // Dart positions state [score, multiplier, label]
-    // Default is 0 (Miss)
     let dartState = [
         { val: 0, mult: 1, label: "0" }, 
         { val: 0, mult: 1, label: "0" }, 
         { val: 0, mult: 1, label: "0" }
     ];
 
-    // --- Dartboard SVG ---
-    function createDartboard() {
-        const container = document.getElementById('dartboard-container');
-        const NS = "http://www.w3.org/2000/svg";
+    // SVG Construction
+    const NS = "http://www.w3.org/2000/svg";
+    
+    function createBoardSVG() {
         const svg = document.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "-205 -205 410 410");
-        svg.id = "svg-board";
-
-        const rBullInner = 6.35 * 2; 
-        const rBullOuter = 15.9 * 2;
-        const rInnerStart = rBullOuter;
-        const rTripleInner = 99;
-        const rTripleOuter = 109;
-        const rDoubleInner = 162;
+        
+        const rBullInner = 12.7; const rBullOuter = 31.8;
+        const rInnerStart = 31.8; const rTripleInner = 99;
+        const rTripleOuter = 109; const rDoubleInner = 162;
         const rDoubleOuter = 172;
-
         const numbers = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
 
         for (let i = 0; i < 20; i++) {
-            const angle = 18; 
             const rotation = (i * 18) - 9; 
             const g = document.createElementNS(NS, "g");
             g.setAttribute("transform", `rotate(${rotation})`);
@@ -368,7 +338,7 @@
             const cSingle = isBlack ? "var(--board-black)" : "var(--board-white)";
             const cSpecial = isBlack ? "var(--board-red)" : "var(--board-green)";
 
-            const createSegment = (rIn, rOut, mult, color, idSuffix) => {
+            const createSegment = (rIn, rOut, mult, color) => {
                 const path = document.createElementNS(NS, "path");
                 const rad = Math.PI / 180;
                 const a1 = -9 * rad; const a2 = 9 * rad;
@@ -376,13 +346,12 @@
                 const x2_in = rIn * Math.sin(a2); const y2_in = -rIn * Math.cos(a2);
                 const x1_out = rOut * Math.sin(a1); const y1_out = -rOut * Math.cos(a1);
                 const x2_out = rOut * Math.sin(a2); const y2_out = -rOut * Math.cos(a2);
-
                 const d = `M ${x1_in} ${y1_in} L ${x1_out} ${y1_out} A ${rOut} ${rOut} 0 0 1 ${x2_out} ${y2_out} L ${x2_in} ${y2_in} A ${rIn} ${rIn} 0 0 0 ${x1_in} ${y1_in} Z`;
+                
                 path.setAttribute("d", d);
                 path.setAttribute("fill", color);
                 path.setAttribute("stroke", "#555");
                 path.setAttribute("stroke-width", "1");
-                // Data attributes for hit detection
                 path.setAttribute("data-score", score);
                 path.setAttribute("data-mult", mult);
                 path.classList.add("board-segment");
@@ -394,7 +363,6 @@
             g.appendChild(createSegment(rInnerStart, rTripleInner, 1, cSingle));
             g.appendChild(createSegment(rTripleInner, rTripleOuter, 3, cSpecial));
             
-            // Text Label
             const text = document.createElementNS(NS, "text");
             text.setAttribute("x", 0); text.setAttribute("y", -185);
             text.setAttribute("text-anchor", "middle");
@@ -402,12 +370,12 @@
             text.setAttribute("font-weight", "bold");
             text.setAttribute("transform", `rotate(${-rotation} 0 -185)`);
             text.textContent = score;
+            text.style.pointerEvents = "none";
             g.appendChild(text);
 
             svg.appendChild(g);
         }
 
-        // Bullseyes
         const bullGroup = document.createElementNS(NS, "g");
         const outerBull = document.createElementNS(NS, "circle");
         outerBull.setAttribute("r", rBullOuter); outerBull.setAttribute("fill", "var(--board-green)");
@@ -419,316 +387,343 @@
         const innerBull = document.createElementNS(NS, "circle");
         innerBull.setAttribute("r", rBullInner); innerBull.setAttribute("fill", "var(--board-red)");
         innerBull.setAttribute("stroke", "#555");
-        innerBull.setAttribute("data-score", 50); innerBull.setAttribute("data-mult", 1);
+        innerBull.setAttribute("data-score", 50); innerBull.setAttribute("data-mult", 1); // 50 is treated as double 25 in rules logic
         innerBull.classList.add("board-segment");
         bullGroup.appendChild(innerBull);
 
         svg.appendChild(bullGroup);
-        container.appendChild(svg);
+        return svg;
     }
 
-    // --- Drag and Drop Logic ---
+    function initBoard() {
+        // Main Board
+        const container = document.getElementById('dartboard-container');
+        const mainSVG = createBoardSVG();
+        mainSVG.id = "main-svg";
+        container.appendChild(mainSVG);
 
-    function initDragAndDrop() {
-        const tokens = [document.getElementById('dart-1'), document.getElementById('dart-2'), document.getElementById('dart-3')];
+        // Magnifier SVG
+        const magContainer = document.getElementById('magnifier');
+        const magSVG = createBoardSVG(); // Duplicate for zoom
+        magSVG.id = "mag-svg";
+        magContainer.appendChild(magSVG);
+    }
+
+    // --- Interaction ---
+    function initDrag() {
+        const tokens = [1,2,3].map(i => document.getElementById(`dart-${i}`));
         const dock = document.getElementById('dart-dock');
-        
-        // Initial positioning in dock
+        const mainSVG = document.getElementById('main-svg');
+        const magnifier = document.getElementById('magnifier');
+        const magSVG = document.getElementById('mag-svg');
+
         resetDartsPosition();
 
         tokens.forEach((token, index) => {
             let startX, startY, initialLeft, initialTop;
+            const span = token.querySelector('span');
 
-            const onPointerDown = (e) => {
+            const onStart = (e) => {
                 if(!gameActive) return;
-                e.preventDefault();
+                e.preventDefault(); // Stop scroll
+                const cx = e.touches ? e.touches[0].clientX : e.clientX;
+                const cy = e.touches ? e.touches[0].clientY : e.clientY;
+                
+                startX = cx; startY = cy;
                 const rect = token.getBoundingClientRect();
-                
-                // For touch vs mouse normalization
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                initialLeft = rect.left; initialTop = rect.top;
 
-                startX = clientX;
-                startY = clientY;
-                initialLeft = rect.left;
-                initialTop = rect.top;
-
-                // Move token to body to ensure it's on top of everything
+                // Move to body for fixed positioning
                 token.style.position = 'fixed';
-                token.style.left = initialLeft + 'px';
-                token.style.top = initialTop + 'px';
                 token.style.zIndex = 9999;
-                token.style.transform = 'scale(1.2) rotate(45deg)'; // Pop up effect
-                token.style.transition = 'none'; // Instant movement
-
-                document.addEventListener('touchmove', onPointerMove, { passive: false });
-                document.addEventListener('touchend', onPointerUp);
-                document.addEventListener('mousemove', onPointerMove);
-                document.addEventListener('mouseup', onPointerUp);
-            };
-
-            const onPointerMove = (e) => {
-                e.preventDefault();
-                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-                const dx = clientX - startX;
-                const dy = clientY - startY;
-
-                token.style.left = (initialLeft + dx) + 'px';
-                token.style.top = (initialTop + dy) + 'px';
-
-                // Highlight underlying element logic
-                token.style.visibility = 'hidden'; // Hide to peek underneath
-                const elemBelow = document.elementFromPoint(clientX, clientY);
-                token.style.visibility = 'visible';
-
-                // Simple visual feedback if hovering board
-                document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
-                if(elemBelow && elemBelow.classList.contains('board-segment')) {
-                    elemBelow.classList.add('hover-zone');
-                }
-            };
-
-            const onPointerUp = (e) => {
-                document.removeEventListener('touchmove', onPointerMove);
-                document.removeEventListener('touchend', onPointerUp);
-                document.removeEventListener('mousemove', onPointerMove);
-                document.removeEventListener('mouseup', onPointerUp);
-
-                document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
-
-                const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-                const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
-
-                // Check what we dropped on
-                token.style.visibility = 'hidden';
-                const elemBelow = document.elementFromPoint(clientX, clientY);
-                token.style.visibility = 'visible';
-
-                let hitBoard = false;
+                token.style.transition = 'none';
+                // Pop up and Offset immediately
+                token.style.left = initialLeft + 'px';
+                token.style.top = (initialTop - 80) + 'px'; // Jump UP
+                token.style.transform = 'scale(1.2) rotate(45deg)'; 
                 
-                if (elemBelow && elemBelow.classList.contains('board-segment')) {
-                    hitBoard = true;
-                    const score = parseInt(elemBelow.getAttribute('data-score'));
-                    const mult = parseInt(elemBelow.getAttribute('data-mult'));
-                    
-                    // Update State
-                    dartState[index] = { val: score, mult: mult };
-                    
-                    // Visual Snap (Stay where dropped, just scale down)
-                    token.style.transition = 'transform 0.2s';
-                    token.style.transform = 'scale(0.6) rotate(45deg)'; // Shrink on board
-                    // It stays at the dropped fixed coordinates
-                } else {
-                    // Reset to Dock (Miss/0)
-                    dartState[index] = { val: 0, mult: 1 };
-                    resetSingleDartPosition(index);
-                }
+                magnifier.style.display = 'block';
 
-                updateScoreUI();
-                checkAutoWin();
+                const onMove = (em) => {
+                    em.preventDefault();
+                    const mx = em.touches ? em.touches[0].clientX : em.clientX;
+                    const my = em.touches ? em.touches[0].clientY : em.clientY;
+                    const dx = mx - startX;
+                    const dy = my - startY;
+
+                    // Update Dart Visual Position (Offset -80px Y from finger)
+                    token.style.left = (initialLeft + dx) + 'px';
+                    token.style.top = (initialTop + dy - 80) + 'px';
+
+                    // Hit Test at FINGER location (mx, my) not dart location
+                    token.style.visibility = 'hidden'; // Hide to peek below
+                    const elemBelow = document.elementFromPoint(mx, my);
+                    token.style.visibility = 'visible';
+
+                    // Update Board Highlight & Label
+                    document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
+                    let hitLabel = "0";
+
+                    if(elemBelow && elemBelow.classList.contains('board-segment')) {
+                        elemBelow.classList.add('hover-zone');
+                        
+                        // Update Magnifier ViewBox based on finger position relative to SVG
+                        // Convert screen coords to SVG coords
+                        let pt = mainSVG.createSVGPoint();
+                        pt.x = mx; pt.y = my;
+                        let svgP = pt.matrixTransform(mainSVG.getScreenCTM().inverse());
+                        // Zoom area: 60x60 units centered on finger
+                        magSVG.setAttribute("viewBox", `${svgP.x - 30} ${svgP.y - 30} 60 60`);
+
+                        // Calculate Label
+                        const s = parseInt(elemBelow.getAttribute('data-score'));
+                        const m = parseInt(elemBelow.getAttribute('data-mult'));
+                        if(s===50) hitLabel = "BULL";
+                        else if(s===25) hitLabel = "25";
+                        else if(m===3) hitLabel = "T" + s;
+                        else if(m===2) hitLabel = "D" + s;
+                        else hitLabel = s;
+                    } else {
+                        // Reset magnifier to center if off board
+                        magSVG.setAttribute("viewBox", "-205 -205 410 410");
+                    }
+                    span.innerText = hitLabel;
+                };
+
+                const onEnd = (ee) => {
+                    document.removeEventListener('touchmove', onMove);
+                    document.removeEventListener('touchend', onEnd);
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onEnd);
+                    
+                    magnifier.style.display = 'none';
+                    document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
+
+                    const endX = ee.changedTouches ? ee.changedTouches[0].clientX : ee.clientX;
+                    const endY = ee.changedTouches ? ee.changedTouches[0].clientY : ee.clientY;
+
+                    token.style.visibility = 'hidden';
+                    const elemBelow = document.elementFromPoint(endX, endY);
+                    token.style.visibility = 'visible';
+
+                    if (elemBelow && elemBelow.classList.contains('board-segment')) {
+                        const s = parseInt(elemBelow.getAttribute('data-score'));
+                        const m = parseInt(elemBelow.getAttribute('data-mult'));
+                        // It hit!
+                        dartState[index] = { val: s, mult: m, label: span.innerText };
+                        
+                        // Visual snap logic: Don't snap to finger, snap to where dragged
+                        // We leave it at the "Offset" position relative to finger drop
+                        // Actually, let's just leave it exactly where the finger left it (minus offset)
+                        token.style.left = (endX - 20) + 'px'; // Center horizontally (token width 40)
+                        token.style.top = (endY - 20 - 80) + 'px'; // Keep the visual offset style? No, snap to board
+                        // To look good, snap to finger location
+                        token.style.transition = 'top 0.2s, left 0.2s, transform 0.2s';
+                        token.style.left = (endX - 20) + 'px';
+                        token.style.top = (endY - 20) + 'px'; // Center on finger
+                        token.style.transform = 'scale(0.6) rotate(45deg)';
+                    } else {
+                        // Reset
+                        dartState[index] = { val: 0, mult: 1, label: (index+1).toString() };
+                        span.innerText = index+1;
+                        resetSingleDartPosition(index);
+                    }
+                    updateScoreUI();
+                    checkAutoWin();
+                };
+
+                document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('touchend', onEnd);
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onEnd);
             };
 
-            token.addEventListener('touchstart', onPointerDown, { passive: false });
-            token.addEventListener('mousedown', onPointerDown);
+            token.addEventListener('touchstart', onStart, { passive: false });
+            token.addEventListener('mousedown', onStart);
         });
     }
 
     function resetDartsPosition() {
-        // Place darts nicely in the dock area
         const dock = document.getElementById('dart-dock');
-        const dockRect = dock.getBoundingClientRect();
-        const tokens = [document.getElementById('dart-1'), document.getElementById('dart-2'), document.getElementById('dart-3')];
-        
+        const rect = dock.getBoundingClientRect();
+        const tokens = [1,2,3].map(i => document.getElementById(`dart-${i}`));
         const gap = 50;
-        const startX = dockRect.left + (dockRect.width / 2) - gap;
-        
+        const startX = rect.left + (rect.width/2) - gap;
+        const cy = rect.top + (rect.height/2) - 20;
+
         tokens.forEach((t, i) => {
             t.style.position = 'fixed';
             t.style.transition = 'all 0.3s ease';
-            t.style.left = (startX + (i * gap) - 20) + 'px'; // Center them
-            t.style.top = (dockRect.top + 10) + 'px';
+            t.style.left = (startX + (i*gap) - 20) + 'px';
+            t.style.top = cy + 'px';
             t.style.transform = 'rotate(45deg)';
-            t.style.zIndex = 1000;
+            t.querySelector('span').innerText = i+1;
         });
     }
 
-    function resetSingleDartPosition(index) {
-         const dock = document.getElementById('dart-dock');
-         const dockRect = dock.getBoundingClientRect();
-         const t = document.getElementById(`dart-${index+1}`);
-         const gap = 50;
-         const startX = dockRect.left + (dockRect.width / 2) - gap;
-         
-         t.style.transition = 'all 0.3s ease';
-         t.style.left = (startX + (index * gap) - 20) + 'px';
-         t.style.top = (dockRect.top + 10) + 'px';
-         t.style.transform = 'rotate(45deg)';
+    function resetSingleDartPosition(i) {
+        const dock = document.getElementById('dart-dock');
+        const rect = dock.getBoundingClientRect();
+        const t = document.getElementById(`dart-${i+1}`);
+        const gap = 50;
+        const startX = rect.left + (rect.width/2) - gap;
+        const cy = rect.top + (rect.height/2) - 20;
+        
+        t.style.transition = 'all 0.3s ease';
+        t.style.left = (startX + (i*gap) - 20) + 'px';
+        t.style.top = cy + 'px';
+        t.style.transform = 'rotate(45deg)';
     }
 
-    // --- Game Logic ---
+    // --- Logic ---
+    function calculateOutcome() {
+        const p = players[currentPlayerIndex];
+        let tempScore = p.score;
+        let isBust = false;
+        let isWin = false;
+        let pointsScored = 0;
 
-    function calculateCurrentTotal() {
-        return dartState.reduce((sum, d) => sum + (d.val * d.mult), 0);
+        for(let i=0; i<3; i++) {
+            const d = dartState[i];
+            const pts = d.val * d.mult;
+            
+            if (isBust || isWin) continue; // Stop processing if round ended
+
+            const rem = tempScore - pts;
+            
+            if (rem < 0) {
+                isBust = true;
+            } else if (rem === 1) {
+                isBust = true; // Cannot double out
+            } else if (rem === 0) {
+                // Check Double Out
+                if (d.mult === 2 || d.val === 50) {
+                    isWin = true;
+                    tempScore = 0;
+                } else {
+                    isBust = true; // Hit 0 on single
+                }
+            } else {
+                tempScore = rem;
+            }
+            pointsScored += pts;
+        }
+        
+        return { newScore: isBust ? p.score : tempScore, isBust, isWin, pointsScored };
     }
 
     function updateScoreUI() {
         if (!gameActive) return;
-        const p = players[currentPlayerIndex];
-        const turnTotal = calculateCurrentTotal();
-        const projected = p.score - turnTotal;
-
-        // Update Project Row in Scoreboard
-        const projEl = document.getElementById(`proj-score-${currentPlayerIndex}`);
-        if(projEl) {
-            if (projected < 0) {
-                projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score bust">${projected} (${txt.bust})</span>`;
-            } else if (projected === 0) {
-                projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score" style="color:gold">${txt.win}</span>`;
+        const res = calculateOutcome();
+        const el = document.getElementById(`proj-score-${currentPlayerIndex}`);
+        if(el) {
+            if (res.isBust) {
+                el.innerHTML = `<span class="next-score bust">${txt.bust}</span>`;
+            } else if (res.isWin) {
+                el.innerHTML = `<span class="next-score" style="color:gold">${txt.win}</span>`;
             } else {
-                projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score">${projected}</span>`;
+                // Check if remaining score is possible to double out later?
+                // Just show remainder
+                let warning = "";
+                if(res.newScore <= 1 && res.newScore > 0) warning = `(${txt.bust})`;
+                el.innerHTML = `<span>${txt.next}</span> <span class="next-score">${res.newScore} ${warning}</span>`;
             }
         }
     }
 
     function checkAutoWin() {
-        const p = players[currentPlayerIndex];
-        const turnTotal = calculateCurrentTotal();
-        const projected = p.score - turnTotal;
-
-        if (projected === 0) {
-            // Disable interaction temporarily
-            // Trigger win sequence after short delay to let user see the dart land
-            setTimeout(() => {
-                submitTurn();
-            }, 500);
+        const res = calculateOutcome();
+        if (res.isWin) {
+            setTimeout(() => manualNext(), 500);
         }
     }
 
-    function submitTurn() {
+    function manualNext() {
         if (!gameActive) return;
         const p = players[currentPlayerIndex];
-        const turnTotal = calculateCurrentTotal();
-        let newScore = p.score - turnTotal;
-        
-        // Logic
-        if (newScore < 0) {
-            // Bust - score stays same
-        } else if (newScore === 0) {
+        const res = calculateOutcome();
+
+        if (res.isWin) {
             p.score = 0;
             p.finished = true;
-            renderScoreboard();
-            // Check if game over logic could go here, for now just skip player
-        } else {
-            p.score = newScore;
+        } else if (!res.isBust) {
+            p.score = res.newScore;
         }
+        // If Bust, score stays same
 
         // Reset Darts
-        dartState = [{ val: 0, mult: 1 }, { val: 0, mult: 1 }, { val: 0, mult: 1 }];
+        dartState = [
+            { val: 0, mult: 1, label: "0" }, 
+            { val: 0, mult: 1, label: "0" }, 
+            { val: 0, mult: 1, label: "0" }
+        ];
         resetDartsPosition();
-        
-        // Find next player
-        let nextIndex = currentPlayerIndex;
-        let loopCount = 0;
-        
-        // Simple game over check
+
+        // Next Player Loop
         if (players.every(pl => pl.finished)) {
             renderScoreboard();
-            alert("Game Over");
+            alert("Game Over!");
             gameActive = false;
             return;
         }
 
+        let loop = 0;
         do {
-            nextIndex = (nextIndex + 1) % players.length;
-            loopCount++;
-        } while (players[nextIndex].finished && loopCount < players.length);
+            currentPlayerIndex = (currentPlayerIndex + 1) % players.length;
+            loop++;
+        } while(players[currentPlayerIndex].finished && loop < players.length);
 
-        currentPlayerIndex = nextIndex;
         renderScoreboard();
     }
 
-    function startGame() {
-        if (players.length === 0) {
-            alert("Add player"); return;
+    // --- Standard App Logic ---
+    function addPlayer() {
+        const input = document.getElementById('new-player-input');
+        if(input.value.trim()) {
+            players.push({name:input.value.trim(), score:501, finished:false});
+            input.value="";
+            renderList();
         }
-        startScore = parseInt(document.getElementById('start-score-select').value);
-        players.forEach(p => {
-            p.score = startScore;
-            p.finished = false;
-        });
-        gameActive = true;
-        currentPlayerIndex = 0;
-        document.getElementById('setup-modal').style.display = 'none';
-        
-        // Wait for layout to settle then position darts
+    }
+    function renderList() {
+        const d = document.getElementById('player-list-display');
+        d.innerHTML = players.map((p,i) => `<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList()">&times;</span></div>`).join('');
+    }
+    function startGame() {
+        if(players.length<1) return;
+        const s = parseInt(document.getElementById('start-score-select').value);
+        players.forEach(p => { p.score=s; p.finished=false; });
+        gameActive = true; currentPlayerIndex=0;
+        document.getElementById('setup-modal').style.display='none';
         setTimeout(resetDartsPosition, 100);
         renderScoreboard();
     }
-
-    function addPlayer() {
-        const input = document.getElementById('new-player-input');
-        const name = input.value.trim();
-        if(name) {
-            players.push({ name: name, score: 501, finished: false });
-            input.value = "";
-            renderPlayerList();
-        }
-    }
-
-    function renderPlayerList() {
-        const div = document.getElementById('player-list-display');
-        div.innerHTML = "";
-        players.forEach((p,i) => {
-            const span = document.createElement('div');
-            span.className = 'player-tag';
-            span.innerHTML = `${p.name} <span onclick="removePlayer(${i})">&times;</span>`;
-            div.appendChild(span);
-        });
-    }
-
-    function removePlayer(i) { players.splice(i, 1); renderPlayerList(); }
-
     function resetGame() {
-        if(confirm("Reset Game?")) {
-            players = [];
-            renderPlayerList();
-            document.getElementById('setup-modal').style.display = 'flex';
+        if(confirm("Reset?")) {
+            players=[]; renderList();
+            document.getElementById('setup-modal').style.display='flex';
         }
     }
-
     function renderScoreboard() {
-        const board = document.getElementById('scoreboard');
-        board.innerHTML = "";
-        players.forEach((p, idx) => {
-            const isActive = (idx === currentPlayerIndex && !p.finished);
-            const div = document.createElement('div');
-            div.className = `player-column ${isActive ? 'active' : ''} ${p.finished ? 'finished' : ''}`;
-            div.id = `p-col-${idx}`;
-            
-            div.innerHTML = `
+        const b = document.getElementById('scoreboard');
+        b.innerHTML = players.map((p,i) => {
+            const active = (i===currentPlayerIndex && !p.finished);
+            return `
+            <div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}">
                 <div class="player-name">${p.name}</div>
-                <div class="score-box">
-                    <div class="current-score">${p.finished ? txt.win : p.score}</div>
-                    ${!p.finished && isActive ? `<div class="projected-row" id="proj-score-${idx}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}
-                </div>
-            `;
-            board.appendChild(div);
-        });
-        
-        const active = document.querySelector('.player-column.active');
-        if(active) active.scrollIntoView({behavior:"smooth", inline:"center"});
+                <div class="current-score">${p.finished ? txt.win : p.score}</div>
+                ${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}
+            </div>`;
+        }).join('');
+        const a = document.querySelector('.player-column.active');
+        if(a) a.scrollIntoView({behavior:'smooth', inline:'center'});
     }
 
-    // Handle Window Resize to reset dart positions to dock
-    window.addEventListener('resize', () => {
-        if(gameActive) resetDartsPosition();
-    });
-
-    // Init
-    createDartboard();
-    initDragAndDrop();
+    window.addEventListener('resize', () => { if(gameActive) resetDartsPosition(); });
+    
+    // Boot
+    initBoard();
+    initDrag();
 
 </script>
 </body>
