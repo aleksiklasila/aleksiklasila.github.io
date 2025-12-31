@@ -708,6 +708,7 @@
             players.push({name:input.value.trim(), score:501, finished:false});
             input.value="";
             renderList();
+            input.focus(); // Keep focus for next entry
         }
     }
     function renderList() {
