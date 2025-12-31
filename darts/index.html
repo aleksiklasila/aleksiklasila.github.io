@@ -79,10 +79,20 @@
 
         /* --- View 1: Board --- */
         #section-visual { position: relative; }
+        
         #board-content-wrapper {
-            flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+            flex: 1; 
+            position: relative; 
+            display: flex; 
+            flex-direction: column; 
+            /* CHANGE: Move board down */
+            justify-content: flex-end; 
+            align-items: center;
+            /* Padding to keep it off the very bottom/Next button */
+            padding-bottom: 140px; 
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
         }
+        
         #dartboard-container {
             width: 90%; max-width: 420px; aspect-ratio: 1/1; position: relative;
             filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.6));
@@ -118,7 +128,6 @@
         .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
         .g-btn {
             padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
-            /* Smaller font to fit "60 (3x20)" */
             font-size: 0.8rem; font-weight: bold; color: #ddd; cursor: pointer;
             border: 1px solid #444; user-select: none;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -263,8 +272,7 @@
         </div>
         
         <div class="view-footer">
-            <div id="dart-dock"></div>
-        </div>
+            </div>
     </div>
 
     <div class="view-section" id="section-grid">
@@ -321,10 +329,16 @@
         return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
     }
 
-    // --- FORMATTER ---
     function formatScore(val, mult, style) {
         const total = val * mult;
-        // All styles now use verbose format
+        
+        if(style === 'button') {
+            if (val === 0) return "0";
+            if (val === 25) return "25 (1x25)";
+            if (val === 50) return "50 (1x50)";
+            return `${total} (${mult}x${val})`; // Always verbose on buttons too now
+        }
+
         if (val === 0) return "0";
         if (val === 25) return "25 (1x25)";
         if (val === 50) return "50 (1x50)";
@@ -424,9 +438,9 @@
             
             for(let i=20; i>=1; i--) {
                 grid.innerHTML += `
-                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'grid')}</div>
-                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'grid')}</div>
-                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'grid')}</div>
+                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'button')}</div>
+                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'button')}</div>
+                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'button')}</div>
                 `;
             }
             grid.innerHTML += `
@@ -575,7 +589,6 @@
                     
                     const hit = document.elementFromPoint(mx, my);
                     
-                    // Always Zoom Logic
                     const container = document.getElementById('dartboard-container');
                     const rect = container.getBoundingClientRect();
                     const scale = 410 / rect.width;
@@ -667,7 +680,7 @@
         let isBust = false, isWin = false;
         for(let i=0; i<3; i++) {
             const d = dartState[i];
-            // If missed, d.val is 0, so loop naturally adds 0. No special check needed.
+            if(d.val === 0 && !d.missed) continue;
             const pts = d.val * d.mult;
             const rem = temp - pts;
             if(rem < 0 || rem === 1) { isBust = true; break; }
@@ -691,11 +704,11 @@
             p.score = res.rem; 
         }
 
-        dartState = [{val:0, mult:1, missed:false},{val:0, mult:1, missed:false},{val:0, mult:1, missed:false}];
+        dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
         document.getElementById('btn-next').classList.remove('ready');
         
         [0,1,2].forEach(i => {
-            document.getElementById(`grid-val-${i}`).innerText = '0';
+            document.getElementById(`grid-val-${i}`).innerText = '-';
             const badge = document.getElementById(`badge-dart-${i+1}`);
             if(badge) badge.innerText = "0"; 
         });
@@ -708,6 +721,7 @@
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
+        // Scoreboard Manual Scroll
         const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
@@ -731,7 +745,6 @@
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
         
-        // Bottom Right position
         const startX = rect.width - 60; 
         const startY = rect.height - 100;
 
