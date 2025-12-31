@@ -65,7 +65,7 @@
             flex: 1; display: flex; overflow-x: auto; overflow-y: hidden;
             scroll-snap-type: x mandatory; scroll-behavior: smooth;
             width: 100%; background: #121212; position: relative;
-            -webkit-overflow-scrolling: touch; /* Smooth scroll iOS */
+            -webkit-overflow-scrolling: touch; 
         }
         .view-section {
             flex: 0 0 100%; width: 100%; height: 100%;
@@ -91,10 +91,14 @@
         }
 
         /* --- View 2: Grid --- */
-        #grid-content-wrapper { flex: 1; display: flex; flex-direction: column; background: #121212; padding: 10px; }
+        #grid-content-wrapper { 
+            flex: 1; display: flex; flex-direction: column; 
+            background: #121212; padding: 10px 10px 0 10px; 
+            overflow: hidden; /* Parent prevents scroll, child scrolls */
+        }
         
         /* Grid Tab Bar */
-        #grid-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+        #grid-tabs { display: flex; gap: 5px; margin-bottom: 10px; flex: 0 0 auto; }
         .grid-tab {
             flex: 1; background: #252525; padding: 10px; border-radius: 8px;
             text-align: center; border: 1px solid #333; cursor: pointer; transition: 0.2s;
@@ -104,12 +108,16 @@
         .grid-tab.active .grid-tab-label { color: rgba(255,255,255,0.8); }
         .grid-tab-val { font-size: 1.1rem; font-weight: 800; color: white; }
 
-        /* Grid Body */
-        #grid-body-container { flex: 1; overflow-y: auto; background: #181818; border-radius: 8px; padding: 5px; position: relative;}
-        .grid-page { display: none; height: 100%; overflow-y: auto; }
+        /* Grid Body - SCROLLABLE AREA */
+        #grid-body-container { 
+            flex: 1; overflow-y: auto; 
+            background: #181818; border-radius: 8px; 
+            padding: 5px; position: relative;
+        }
+        .grid-page { display: none; padding-bottom: 10px; }
         .grid-page.active { display: block; }
         
-        .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding-bottom: 20px; }
+        .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
         .g-btn {
             padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
             font-size: 0.9rem; font-weight: bold; color: #ddd; cursor: pointer;
@@ -137,10 +145,9 @@
             width: 40px; height: 120px; position: absolute; z-index: 1000;
             cursor: grab; filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
             touch-action: none; transform-origin: 50% 95%;
-            transition: opacity 0.2s; /* Fade out for grid view */
+            transition: opacity 0.2s;
         }
         .dart-obj.hidden-in-grid { display: none !important; }
-
         .dart-badge {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
             font-size: 11px; font-weight: 900; color: white; text-shadow: 0 1px 3px black;
@@ -174,27 +181,54 @@
             box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
         }
 
-        /* --- Indicators & Tutorials --- */
-        #swipe-indicator {
-            position: absolute; bottom: 150px; left: 0; width: 100%;
-            display: flex; justify-content: center; gap: 8px; pointer-events: none; z-index: 50;
-        }
-        .dot { width: 8px; height: 8px; background: #555; border-radius: 50%; transition: background 0.3s; }
-        .dot.active { background: var(--accent); }
-
+        /* --- Tutorials --- */
         .tutorial-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; z-index: 1500; display: none; justify-content: center; align-items: center;
+            pointer-events: none; z-index: 1500; display: none; 
+            justify-content: center; align-items: center; /* Center Content */
         }
         .tut-text {
-            position: absolute; width: 100%; text-align: center; color: white; 
-            font-weight: bold; font-size: 1.4rem; text-shadow: 0 3px 6px black;
+            position: absolute; text-align: center; color: white; 
+            font-weight: bold; font-size: 1.2rem; text-shadow: 0 3px 6px black;
+            white-space: nowrap;
+            /* Position relative to the hand */
+            transform: translateY(-50px); 
         }
-        /* Hand Animations */
-        #tut-drag .hand-icon { position: absolute; bottom: 250px; left: 50%; margin-left: -30px; width: 60px; height: 60px; filter: drop-shadow(0 0 10px black); animation: dragAnim 2s infinite ease-in-out; opacity: 0; }
-        @keyframes dragAnim { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; transform: translate(0, 0); } 60% { transform: translate(0, -200px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
-        #tut-swipe .hand-icon { position: absolute; bottom: 300px; right: 20%; width: 60px; height: 60px; filter: drop-shadow(0 0 10px black); animation: swipeAnim 2s infinite ease-in-out; opacity: 0; transform: rotate(-30deg); }
-        @keyframes swipeAnim { 0% { right: 20%; opacity: 0; } 20% { opacity: 1; } 60% { right: 70%; opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
+        .hand-emoji {
+            font-size: 3rem;
+            filter: drop-shadow(0 5px 10px rgba(0,0,0,0.8));
+        }
+
+        /* Animations */
+        #tut-drag .tut-wrapper {
+            position: absolute; 
+            /* Start at bottom (Tray) */
+            bottom: 120px; left: 50%; 
+            transform: translateX(-50%);
+            animation: dragToBoard 2s infinite ease-in-out;
+            opacity: 0;
+        }
+        /* Move from Tray (Bottom) to Center (Top: 50%) */
+        @keyframes dragToBoard {
+            0% { top: 85%; opacity: 0; }
+            20% { opacity: 1; }
+            60% { top: 50%; opacity: 1; } /* Center of board */
+            80% { opacity: 0; }
+            100% { top: 50%; opacity: 0; }
+        }
+
+        #tut-swipe .tut-wrapper {
+            position: absolute; top: 50%; right: 20%;
+            animation: swipeLeft 2s infinite ease-in-out;
+            opacity: 0;
+        }
+        @keyframes swipeLeft {
+            0% { right: 10%; opacity: 0; transform: rotate(10deg); }
+            20% { opacity: 1; }
+            60% { right: 80%; opacity: 1; transform: rotate(-10deg); }
+            80% { opacity: 0; }
+            100% { opacity: 0; }
+        }
 
         /* Modal */
         #setup-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
@@ -245,12 +279,16 @@
             <div id="dartboard-container"></div>
             
             <div id="tut-drag" class="tutorial-overlay">
-                <div class="tut-text" style="bottom: 320px;">Drag to Throw</div>
-                <svg class="hand-icon" viewBox="0 0 24 24" fill="white"><path d="M21,14a1,1,0,0,0-1-1h-2V6a3,3,0,0,0-6,0V11H11V4a3,3,0,0,0-6,0v9a6,6,0,0,0,6,6h4.16l4.4,2.2a1,1,0,0,0,1.44-0.9Z"/></svg>
+                <div class="tut-wrapper">
+                    <div class="tut-text">Drag to Throw</div>
+                    <div class="hand-emoji">👆</div>
+                </div>
             </div>
             <div id="tut-swipe" class="tutorial-overlay">
-                <div class="tut-text" style="bottom: 370px;">Swipe for Grid</div>
-                <svg class="hand-icon" viewBox="0 0 24 24" fill="white"><path d="M21,14a1,1,0,0,0-1-1h-2V6a3,3,0,0,0-6,0V11H11V4a3,3,0,0,0-6,0v9a6,6,0,0,0,6,6h4.16l4.4,2.2a1,1,0,0,0,1.44-0.9Z"/></svg>
+                <div class="tut-wrapper">
+                    <div class="tut-text">Swipe for Grid</div>
+                    <div class="hand-emoji">👆</div>
+                </div>
             </div>
         </div>
         
@@ -278,11 +316,6 @@
 
 </div>
 
-<div id="swipe-indicator">
-    <div class="dot active" id="dot-0"></div>
-    <div class="dot" id="dot-1"></div>
-</div>
-
 <script>
     const i18n = {
         en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?", miss: "Miss" },
@@ -301,19 +334,24 @@
     const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
 
     function getBoardCoordinates(score, mult) {
-        if(score === 0) return {x: 230, y: 230}; // Just off board
+        if(score === 0) return {x: 230, y: 230}; 
         if(score === 25) return {x:0, y:0, r: 25};
         if(score === 50) return {x:0, y:0, r: 0};
+        
         const numberIndex = boardNumbers.indexOf(score);
-        const angleDeg = numberIndex * 18;
-        const angleRad = (angleDeg - 90) * (Math.PI / 180);
+        // Correct math: 20 is index 0. 20 is at -90deg (12 o'clock).
+        // Each segment is 18deg.
+        const angleDeg = (numberIndex * 18) - 90;
+        const angleRad = angleDeg * (Math.PI / 180);
+        
         let r = 0;
+        // Mid-points of segments
         if(mult === 3) r = 104;
         else if(mult === 2) r = 167;
-        else r = 135;
-        const jitterX = (Math.random() - 0.5) * 8;
-        const jitterY = (Math.random() - 0.5) * 8;
-        return {x: (r * Math.cos(angleRad)) + jitterX, y: (r * Math.sin(angleRad)) + jitterY};
+        else r = 135; // Single Outer default
+        
+        // Exact center placement (No jitter) for Grid clicks
+        return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
     }
 
     function formatScore(val, mult, style) {
@@ -412,7 +450,6 @@
         buildGridInterface();
     }
 
-    // --- GRID INTERFACE ---
     function buildGridInterface() {
         const container = document.getElementById('grid-body-container');
         container.innerHTML = '';
@@ -445,7 +482,6 @@
 
     function switchGridTab(idx) {
         currentGridTab = idx;
-        // Update Tabs
         [0,1,2].forEach(i => {
             document.getElementById(`tab-${i}`).classList.toggle('active', i===idx);
             document.getElementById(`grid-page-${i}`).classList.toggle('active', i===idx);
@@ -455,19 +491,16 @@
     function gridInput(dartIdx, score, mult) {
         if(!gameActive) return;
         
-        // Disable Drag Tutorial if grid used
         if(tutorialState.dragShown) {
             document.getElementById('tut-drag').style.display = 'none';
             tutorialState.dragShown = false;
         }
 
-        // Logic
         dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
         moveDartToBoardLocation(dartIdx, score, mult);
         updateDartVisuals(dartIdx, score, mult);
         updateGameState();
         
-        // Auto Advance Tab
         if(dartIdx < 2) switchGridTab(dartIdx + 1);
     }
 
@@ -476,53 +509,37 @@
         const container = document.getElementById('dartboard-container');
         const rect = container.getBoundingClientRect();
         
-        const coords = getBoardCoordinates(score, mult);
-        
-        // If the board is currently hidden (we are in grid view), rect dimensions might be weird or off-screen.
-        // We need to calculate based on the 'virtual' board position in the other slide.
-        // However, since we are moving the ABSOLUTE position of the dart, 
-        // we need to know where the board WILL BE when we swipe back.
-        // The board is centered in #board-content-wrapper.
-        
-        // Since board size is relative (90% width max 420px), we re-calc width
-        const sliderWidth = document.getElementById('view-slider').offsetWidth;
-        const boardWidth = Math.min(sliderWidth * 0.9, 420);
-        // Center of board in visual view:
-        const boardCenterX = sliderWidth / 2; // Center of first slide
-        
-        // Vertical center: The board wrapper takes up the flex space.
-        // Approx center based on header height. 
-        // Safer way: Get the boardRect regardless of scroll.
-        // But since we are likely scrolled to grid, the board is off screen left.
-        
-        // Simple Fix: We set top/left relative to the Container's offsetParent, 
-        // but since dart is fixed, we need screen coordinates.
-        // Let's assume standard layout.
-        
-        // BETTER FIX: The dart is hidden in grid view. We set its style.top/left
-        // such that when it becomes visible in board view, it's correct.
-        // The easiest way is to use calculation based on board width and center it relative to the board container's offset.
-        
-        const scale = boardWidth / 410;
-        
-        // We need to find the board's bounding rect relative to the viewport IF it were visible.
-        // Since we are in horizontal scroll, the board is at scrollLeft 0.
-        // The Grid is at scrollLeft = width.
-        // If we are currently at Grid, the Board is at left = -width.
-        // BUT, Fixed positioning disregards scroll. 
-        
-        // So, we just need the Board's position relative to the screen when Scrolled to 0.
-        // Board Center X = Screen Width / 2.
-        // Board Center Y: Let's grab the board container vertical position.
-        const boardContainer = document.getElementById('dartboard-container');
-        const boardRect = boardContainer.getBoundingClientRect(); 
-        // Note: top/height are usually correct even if scrolled off horizontally. Left is wrong.
-        
-        const trueBoardCenterX = window.innerWidth / 2; 
-        const trueBoardCenterY = boardRect.top + (boardRect.height/2);
+        // Ensure we work with visual board dimensions even if hidden
+        // Board is 90% of screen width (max 420)
+        // Center is typically window width / 2
+        let containerWidth = rect.width;
+        let containerLeft = rect.left;
+        let containerTop = rect.top;
 
-        const pixelX = (coords.x * scale) + trueBoardCenterX;
-        const pixelY = (coords.y * scale) + trueBoardCenterY;
+        if (containerWidth === 0 || document.getElementById('view-slider').scrollLeft > 50) {
+            // Board is hidden/scrolled away. Estimate location based on screen.
+            containerWidth = Math.min(window.innerWidth * 0.9, 420);
+            containerLeft = (window.innerWidth - containerWidth) / 2;
+            // The visual board is centered vertically in #board-content-wrapper (flex).
+            // Approximate vertical center:
+            const headerHeight = 45;
+            const scoreHeight = 90;
+            const footerHeight = 110;
+            const availableH = window.innerHeight - headerHeight - scoreHeight - footerHeight;
+            containerTop = headerHeight + scoreHeight + (availableH - containerWidth)/2;
+            // Fallback if aspect ratio 1/1 fits
+            if(containerWidth > availableH) {
+                 containerWidth = availableH;
+                 containerLeft = (window.innerWidth - containerWidth) / 2;
+                 containerTop = headerHeight + scoreHeight;
+            }
+        }
+
+        const coords = getBoardCoordinates(score, mult);
+        const scale = containerWidth / 410; 
+        
+        const pixelX = (coords.x * scale) + (containerLeft + containerWidth/2);
+        const pixelY = (coords.y * scale) + (containerTop + containerWidth/2);
 
         d.style.left = (pixelX - 20) + 'px'; 
         d.style.top = (pixelY - 120) + 'px';
@@ -536,19 +553,15 @@
         if(badge) badge.innerText = formatScore(score, mult, 'badge');
     }
 
-    // --- VIEW / SWIPE ---
     function setupSwipeObserver() {
         const slider = document.getElementById('view-slider');
-        const dots = [document.getElementById('dot-0'), document.getElementById('dot-1')];
         slider.addEventListener('scroll', () => {
             const index = Math.round(slider.scrollLeft / slider.offsetWidth);
-            dots.forEach((d, i) => d.classList.toggle('active', i===index));
             
-            // Toggle Dart Visibility based on View
             const darts = document.querySelectorAll('.dart-obj');
             darts.forEach(d => {
-                if(index === 1) d.classList.add('hidden-in-grid'); // Grid View
-                else d.classList.remove('hidden-in-grid'); // Board View
+                if(index === 1) d.classList.add('hidden-in-grid');
+                else d.classList.remove('hidden-in-grid');
             });
 
             if(index > 0 && tutorialState.swipeShown) {
@@ -558,7 +571,6 @@
         });
     }
 
-    // --- DRAG ---
     function setupDragAndDrop() {
         const darts = [1,2,3].map(i => document.getElementById(`dart-${i}`));
         const magnifier = document.getElementById('magnifier');
@@ -569,7 +581,6 @@
         darts.forEach((dart, idx) => {
             const onStart = (e) => {
                 if(!gameActive) return;
-                // Prevent drag if scrolled to grid
                 if(document.getElementById('view-slider').scrollLeft > 100) return;
 
                 if(tutorialState.dragShown) {
@@ -636,7 +647,6 @@
         });
     }
 
-    // --- GAME LOGIC ---
     function updateGameState() {
         const p = players[currentPlayerIndex];
         const res = calculateScore(p.score);
@@ -697,7 +707,6 @@
         });
         switchGridTab(0);
         
-        // Hide tutorials after first turn
         tutorialState.dragShown = false; tutorialState.swipeShown = false;
         document.getElementById('tut-drag').style.display = 'none';
         document.getElementById('tut-swipe').style.display = 'none';
@@ -715,12 +724,10 @@
         const dock = document.getElementById('dart-dock');
         const rect = dock.getBoundingClientRect();
         let centerX, bottomY;
-        // Even if hidden, calc based on window
-        centerX = window.innerWidth / 2;
-        bottomY = window.innerHeight - 80; // Above footer area approx
-
-        // If visual is active, rect is good.
-        if(rect.width > 0) {
+        if(rect.width === 0) {
+             centerX = window.innerWidth / 2;
+             bottomY = window.innerHeight - 80; 
+        } else {
              centerX = rect.left + rect.width/2;
              bottomY = rect.bottom - 15;
         }
@@ -735,7 +742,7 @@
     }
 
     function resetSingleDart(i) {
-        resetDartsPosition(); // Lazy reset all positions to dock to keep aligned
+        resetDartsPosition(); 
     }
 
     function addPlayer() { const inp = document.getElementById('new-player-input'); if(inp.value.trim()){ players.push({name:inp.value.trim(), score:501, finished:false}); inp.value=""; renderList(); inp.focus(); } }
