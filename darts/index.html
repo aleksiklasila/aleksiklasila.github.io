@@ -59,7 +59,7 @@
 
         /* --- Scoreboard (Compact) --- */
         #scoreboard {
-            flex: 0 0 85px; /* Reduced height */
+            flex: 0 0 85px;
             display: flex;
             overflow-x: auto;
             background: var(--bg-color);
@@ -133,15 +133,15 @@
         }
 
         .board-segment { transition: opacity 0.1s; }
-        .hover-zone { opacity: 0.5; fill: white !important; }
+        /* Removed hover-zone opacity change as magnifier now handles visual feedback */
 
         /* --- Magnifier (Zoom) --- */
         #magnifier {
             position: absolute;
             top: 10px;
             right: 10px;
-            width: 100px;
-            height: 100px;
+            width: 110px;
+            height: 110px;
             border: 3px solid var(--accent);
             border-radius: 50%;
             background: #000;
@@ -154,6 +154,30 @@
         #magnifier-svg {
             width: 100%;
             height: 100%;
+        }
+        /* The yellow center dot */
+        .magnifier-crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 6px;
+            height: 6px;
+            background: yellow;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 502;
+        }
+        /* Score inside magnifier */
+        #magnifier-score {
+            position: absolute;
+            bottom: 10px;
+            width: 100%;
+            text-align: center;
+            font-weight: bold;
+            color: white;
+            text-shadow: 1px 1px 2px black;
+            z-index: 502;
+            font-size: 1.2rem;
         }
 
         /* --- Footer / Controls --- */
@@ -197,13 +221,13 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: bold;
             color: white;
             white-space: nowrap;
         }
         /* Fix text rotation inside rotated dart */
-        .dart-token span { transform: rotate(-45deg); display: block; min-width: 20px; text-align: center; }
+        .dart-token span { transform: rotate(-45deg); display: block; min-width: 25px; text-align: center; }
 
         #action-btn {
             width: 100%;
@@ -267,7 +291,10 @@
 <div id="scoreboard"></div>
 
 <div id="game-area">
-    <div id="magnifier"></div> <div id="dartboard-container"></div>
+    <div id="magnifier">
+        <div class="magnifier-crosshair"></div>
+        <div id="magnifier-score">0</div>
+    </div> <div id="dartboard-container"></div>
 </div>
 
 <div id="footer-controls">
@@ -310,9 +337,9 @@
     let currentPlayerIndex = 0;
     let gameActive = false;
     let dartState = [
-        { val: 0, mult: 1, label: "0" }, 
-        { val: 0, mult: 1, label: "0" }, 
-        { val: 0, mult: 1, label: "0" }
+        { val: 0, mult: 1 }, 
+        { val: 0, mult: 1 }, 
+        { val: 0, mult: 1 }
     ];
 
     // SVG Construction
@@ -387,7 +414,8 @@
         const innerBull = document.createElementNS(NS, "circle");
         innerBull.setAttribute("r", rBullInner); innerBull.setAttribute("fill", "var(--board-red)");
         innerBull.setAttribute("stroke", "#555");
-        innerBull.setAttribute("data-score", 50); innerBull.setAttribute("data-mult", 1); // 50 is treated as double 25 in rules logic
+        // Note: Inner bull score is 50, mult is 1 for calculation simplicity, counts as double for rules.
+        innerBull.setAttribute("data-score", 50); innerBull.setAttribute("data-mult", 1); 
         innerBull.classList.add("board-segment");
         bullGroup.appendChild(innerBull);
 
@@ -396,26 +424,24 @@
     }
 
     function initBoard() {
-        // Main Board
         const container = document.getElementById('dartboard-container');
         const mainSVG = createBoardSVG();
         mainSVG.id = "main-svg";
         container.appendChild(mainSVG);
 
-        // Magnifier SVG
         const magContainer = document.getElementById('magnifier');
-        const magSVG = createBoardSVG(); // Duplicate for zoom
+        const magSVG = createBoardSVG(); 
         magSVG.id = "mag-svg";
-        magContainer.appendChild(magSVG);
+        magContainer.insertBefore(magSVG, magContainer.firstChild);
     }
 
     // --- Interaction ---
     function initDrag() {
         const tokens = [1,2,3].map(i => document.getElementById(`dart-${i}`));
-        const dock = document.getElementById('dart-dock');
         const mainSVG = document.getElementById('main-svg');
         const magnifier = document.getElementById('magnifier');
         const magSVG = document.getElementById('mag-svg');
+        const magScore = document.getElementById('magnifier-score');
 
         resetDartsPosition();
 
@@ -425,7 +451,7 @@
 
             const onStart = (e) => {
                 if(!gameActive) return;
-                e.preventDefault(); // Stop scroll
+                e.preventDefault();
                 const cx = e.touches ? e.touches[0].clientX : e.clientX;
                 const cy = e.touches ? e.touches[0].clientY : e.clientY;
                 
@@ -433,13 +459,15 @@
                 const rect = token.getBoundingClientRect();
                 initialLeft = rect.left; initialTop = rect.top;
 
-                // Move to body for fixed positioning
+                // Temp disable other darts so we can drag "through" them
+                tokens.forEach(t => { if(t !== token) t.style.pointerEvents = 'none'; });
+
                 token.style.position = 'fixed';
                 token.style.zIndex = 9999;
                 token.style.transition = 'none';
-                // Pop up and Offset immediately
+                // Offset Up from finger
                 token.style.left = initialLeft + 'px';
-                token.style.top = (initialTop - 80) + 'px'; // Jump UP
+                token.style.top = (initialTop - 90) + 'px'; 
                 token.style.transform = 'scale(1.2) rotate(45deg)'; 
                 
                 magnifier.style.display = 'block';
@@ -451,43 +479,35 @@
                     const dx = mx - startX;
                     const dy = my - startY;
 
-                    // Update Dart Visual Position (Offset -80px Y from finger)
+                    // Update Dart Visual Position (Offset Y from finger)
                     token.style.left = (initialLeft + dx) + 'px';
-                    token.style.top = (initialTop + dy - 80) + 'px';
+                    token.style.top = (initialTop + dy - 90) + 'px';
 
-                    // Hit Test at FINGER location (mx, my) not dart location
-                    token.style.visibility = 'hidden'; // Hide to peek below
+                    // Hit Test at FINGER location
+                    token.style.visibility = 'hidden'; 
                     const elemBelow = document.elementFromPoint(mx, my);
                     token.style.visibility = 'visible';
 
-                    // Update Board Highlight & Label
-                    document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
                     let hitLabel = "0";
 
                     if(elemBelow && elemBelow.classList.contains('board-segment')) {
-                        elemBelow.classList.add('hover-zone');
-                        
                         // Update Magnifier ViewBox based on finger position relative to SVG
-                        // Convert screen coords to SVG coords
                         let pt = mainSVG.createSVGPoint();
                         pt.x = mx; pt.y = my;
                         let svgP = pt.matrixTransform(mainSVG.getScreenCTM().inverse());
-                        // Zoom area: 60x60 units centered on finger
-                        magSVG.setAttribute("viewBox", `${svgP.x - 30} ${svgP.y - 30} 60 60`);
+                        // Zoom area: 50x50 units centered on finger
+                        magSVG.setAttribute("viewBox", `${svgP.x - 25} ${svgP.y - 25} 50 50`);
 
-                        // Calculate Label
+                        // Calculate Label (Actual Score)
                         const s = parseInt(elemBelow.getAttribute('data-score'));
                         const m = parseInt(elemBelow.getAttribute('data-mult'));
-                        if(s===50) hitLabel = "BULL";
-                        else if(s===25) hitLabel = "25";
-                        else if(m===3) hitLabel = "T" + s;
-                        else if(m===2) hitLabel = "D" + s;
-                        else hitLabel = s;
+                        hitLabel = (s * m).toString();
                     } else {
-                        // Reset magnifier to center if off board
+                        // Reset magnifier if off board
                         magSVG.setAttribute("viewBox", "-205 -205 410 410");
                     }
                     span.innerText = hitLabel;
+                    magScore.innerText = hitLabel;
                 };
 
                 const onEnd = (ee) => {
@@ -496,8 +516,9 @@
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onEnd);
                     
+                    // Re-enable other darts
+                    tokens.forEach(t => t.style.pointerEvents = 'auto');
                     magnifier.style.display = 'none';
-                    document.querySelectorAll('.hover-zone').forEach(el => el.classList.remove('hover-zone'));
 
                     const endX = ee.changedTouches ? ee.changedTouches[0].clientX : ee.clientX;
                     const endY = ee.changedTouches ? ee.changedTouches[0].clientY : ee.clientY;
@@ -510,21 +531,16 @@
                         const s = parseInt(elemBelow.getAttribute('data-score'));
                         const m = parseInt(elemBelow.getAttribute('data-mult'));
                         // It hit!
-                        dartState[index] = { val: s, mult: m, label: span.innerText };
+                        dartState[index] = { val: s, mult: m };
                         
-                        // Visual snap logic: Don't snap to finger, snap to where dragged
-                        // We leave it at the "Offset" position relative to finger drop
-                        // Actually, let's just leave it exactly where the finger left it (minus offset)
-                        token.style.left = (endX - 20) + 'px'; // Center horizontally (token width 40)
-                        token.style.top = (endY - 20 - 80) + 'px'; // Keep the visual offset style? No, snap to board
-                        // To look good, snap to finger location
+                        // Snap to finger location
                         token.style.transition = 'top 0.2s, left 0.2s, transform 0.2s';
                         token.style.left = (endX - 20) + 'px';
-                        token.style.top = (endY - 20) + 'px'; // Center on finger
+                        token.style.top = (endY - 20) + 'px'; 
                         token.style.transform = 'scale(0.6) rotate(45deg)';
                     } else {
-                        // Reset
-                        dartState[index] = { val: 0, mult: 1, label: (index+1).toString() };
+                        // Reset to dock (Miss)
+                        dartState[index] = { val: 0, mult: 1 };
                         span.innerText = index+1;
                         resetSingleDartPosition(index);
                     }
@@ -587,7 +603,7 @@
             const d = dartState[i];
             const pts = d.val * d.mult;
             
-            if (isBust || isWin) continue; // Stop processing if round ended
+            if (isBust || isWin) continue; 
 
             const rem = tempScore - pts;
             
@@ -596,7 +612,7 @@
             } else if (rem === 1) {
                 isBust = true; // Cannot double out
             } else if (rem === 0) {
-                // Check Double Out
+                // Check Double Out (mult 2 OR inner bull 50)
                 if (d.mult === 2 || d.val === 50) {
                     isWin = true;
                     tempScore = 0;
@@ -622,8 +638,6 @@
             } else if (res.isWin) {
                 el.innerHTML = `<span class="next-score" style="color:gold">${txt.win}</span>`;
             } else {
-                // Check if remaining score is possible to double out later?
-                // Just show remainder
                 let warning = "";
                 if(res.newScore <= 1 && res.newScore > 0) warning = `(${txt.bust})`;
                 el.innerHTML = `<span>${txt.next}</span> <span class="next-score">${res.newScore} ${warning}</span>`;
@@ -649,17 +663,11 @@
         } else if (!res.isBust) {
             p.score = res.newScore;
         }
-        // If Bust, score stays same
 
         // Reset Darts
-        dartState = [
-            { val: 0, mult: 1, label: "0" }, 
-            { val: 0, mult: 1, label: "0" }, 
-            { val: 0, mult: 1, label: "0" }
-        ];
+        dartState = [{ val: 0, mult: 1 }, { val: 0, mult: 1 }, { val: 0, mult: 1 }];
         resetDartsPosition();
 
-        // Next Player Loop
         if (players.every(pl => pl.finished)) {
             renderScoreboard();
             alert("Game Over!");
@@ -721,7 +729,6 @@
 
     window.addEventListener('resize', () => { if(gameActive) resetDartsPosition(); });
     
-    // Boot
     initBoard();
     initDrag();
 
