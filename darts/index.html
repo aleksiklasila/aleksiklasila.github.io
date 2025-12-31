@@ -224,15 +224,10 @@
             font-weight: bold;
             color: white;
             white-space: nowrap;
-            transition: opacity 0.2s; /* Smooth fade if used */
+            cursor: grab;
         }
         
         .dart-token span { transform: rotate(-45deg); display: block; min-width: 25px; text-align: center; }
-
-        /* HIDE OTHER DARTS DURING DRAG */
-        .dart-token.ghosted {
-            display: none !important;
-        }
 
         #action-btn {
             width: 100%;
@@ -464,15 +459,12 @@
                 const rect = token.getBoundingClientRect();
                 initialLeft = rect.left; initialTop = rect.top;
 
-                // KEY CHANGE: Hide other darts from DOM layout/rendering entirely during drag
-                tokens.forEach(t => { 
-                    if(t !== token) t.classList.add('ghosted'); 
-                });
+                // Disable pointer events on ALL darts to allow click-through
+                tokens.forEach(t => t.style.pointerEvents = 'none');
 
                 token.style.position = 'fixed';
                 token.style.zIndex = 9999;
                 token.style.transition = 'none';
-                // Offset Up from finger
                 token.style.left = initialLeft + 'px';
                 token.style.top = (initialTop - 90) + 'px'; 
                 token.style.transform = 'scale(1.2) rotate(45deg)'; 
@@ -489,10 +481,9 @@
                     token.style.left = (initialLeft + dx) + 'px';
                     token.style.top = (initialTop + dy - 90) + 'px';
 
-                    // Hit Test at FINGER location
-                    token.style.visibility = 'hidden'; 
+                    // Hit Test: Since all darts have pointer-events: none, this should hit board
+                    // But we will use the drill-down logic in onEnd to be 100% sure
                     const elemBelow = document.elementFromPoint(mx, my);
-                    token.style.visibility = 'visible';
                     
                     let hitLabel = "0";
 
@@ -518,17 +509,26 @@
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onEnd);
                     
-                    // Show other darts again
-                    tokens.forEach(t => t.classList.remove('ghosted'));
                     magnifier.style.display = 'none';
 
                     const endX = ee.changedTouches ? ee.changedTouches[0].clientX : ee.clientX;
                     const endY = ee.changedTouches ? ee.changedTouches[0].clientY : ee.clientY;
 
-                    token.style.visibility = 'hidden';
-                    const elemBelow = document.elementFromPoint(endX, endY);
-                    token.style.visibility = 'visible';
+                    // --- DRILL DOWN LOGIC ---
+                    // Even if pointer-events failed, this loop manually hides blocking darts to find the board
+                    let elemBelow = document.elementFromPoint(endX, endY);
+                    const hiddenStack = [];
 
+                    // Loop until we find something that is NOT a dart token, or we run out of elements
+                    while (elemBelow && (elemBelow.classList.contains('dart-token') || elemBelow.closest('.dart-token'))) {
+                        const target = elemBelow.classList.contains('dart-token') ? elemBelow : elemBelow.closest('.dart-token');
+                        if(!target) break; // sanity check
+                        target.style.visibility = 'hidden';
+                        hiddenStack.push(target);
+                        elemBelow = document.elementFromPoint(endX, endY);
+                    }
+
+                    // We found what is underneath
                     if (elemBelow && elemBelow.classList.contains('board-segment')) {
                         const s = parseInt(elemBelow.getAttribute('data-score'));
                         const m = parseInt(elemBelow.getAttribute('data-mult'));
@@ -539,10 +539,18 @@
                         token.style.top = (endY - 20) + 'px'; 
                         token.style.transform = 'scale(0.6) rotate(45deg)';
                     } else {
+                        // Miss
                         dartState[index] = { val: 0, mult: 1 };
                         span.innerText = index+1;
                         resetSingleDartPosition(index);
                     }
+
+                    // Restore visibility of drilled items
+                    hiddenStack.forEach(el => el.style.visibility = 'visible');
+                    
+                    // Re-enable pointer events for next interaction
+                    tokens.forEach(t => t.style.pointerEvents = 'auto');
+
                     updateScoreUI();
                     checkAutoWin();
                 };
@@ -573,7 +581,7 @@
             t.style.top = cy + 'px';
             t.style.transform = 'rotate(45deg)';
             t.querySelector('span').innerText = i+1;
-            t.classList.remove('ghosted'); // ensure visible
+            t.style.pointerEvents = 'auto'; // Ensure clickable
         });
     }
 
