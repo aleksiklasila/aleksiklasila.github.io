@@ -19,10 +19,8 @@
         }
 
         html, body {
-            margin: 0; padding: 0;
-            width: 100%; height: 100%; /* Rigid dimensions */
-            overflow: hidden; /* Prevent body scroll */
-            position: fixed; /* Lock viewport on iOS */
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; position: fixed;
         }
 
         body {
@@ -51,16 +49,12 @@
         #scoreboard {
             flex: 0 0 90px; display: flex; overflow-x: auto; background: #000;
             padding: 8px; gap: 8px; border-bottom: 1px solid #333; 
-            /* scroll-snap-type: x mandatory; <- Removed to prevent snapping fights with JS scroll */
             -webkit-overflow-scrolling: touch;
         }
         .player-column {
             min-width: 100px; flex: 1; background: var(--card-bg); border-radius: 8px;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            border: 2px solid transparent; 
-            /* scroll-snap-align: center; */
-            padding: 5px; position: relative;
-            flex-shrink: 0; /* Prevent shrinking */
+            border: 2px solid transparent; padding: 5px; position: relative; flex-shrink: 0;
         }
         .player-column.active { border-color: var(--accent); background: #252525; box-shadow: 0 0 15px rgba(0, 230, 118, 0.1); }
         .player-column.finished { opacity: 0.6; border-color: gold; }
@@ -85,7 +79,6 @@
 
         /* --- View 1: Board --- */
         #section-visual { position: relative; }
-
         #board-content-wrapper {
             flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
@@ -109,7 +102,6 @@
             background: #121212; padding: 10px 10px 0 10px; 
             overflow: hidden; 
         }
-        
         #grid-tabs { display: flex; gap: 5px; margin-bottom: 10px; flex: 0 0 auto; }
         .grid-tab {
             flex: 1; background: #252525; padding: 10px; border-radius: 8px;
@@ -121,13 +113,10 @@
         .grid-tab-val { font-size: 1.1rem; font-weight: 800; color: white; }
 
         #grid-body-container { 
-            flex: 1; overflow-y: auto; 
-            background: #181818; border-radius: 8px; 
-            padding: 5px; position: relative;
+            flex: 1; overflow-y: auto; background: #181818; border-radius: 8px; padding: 5px; position: relative;
         }
         .grid-page { display: none; padding-bottom: 10px; }
         .grid-page.active { display: block; }
-        
         .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
         .g-btn {
             padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
@@ -141,22 +130,15 @@
         .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; }
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; }
 
-        #grid-footer {
-            flex: 0 0 auto; background: var(--card-bg); border-top: 1px solid #333;
-            padding: 10px 15px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
-        }
-
         /* --- Darts --- */
         #dart-dock {
             display: flex; justify-content: center; gap: 30px;
             background: rgba(0,0,0,0.3); border-radius: 12px; height: 100px;
             border: 2px dashed #333; position: relative; align-items: flex-end; padding-bottom: 10px;
         }
-        
         .dart-obj {
             width: 40px; height: 120px; 
-            position: absolute; 
-            z-index: 1000;
+            position: absolute; z-index: 1000;
             cursor: grab; filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
             touch-action: none; transform-origin: 50% 95%;
             transition: transform 0.2s; 
@@ -214,8 +196,10 @@
             white-space: nowrap; transform: translateY(-50px); 
         }
         .hand-emoji { font-size: 3rem; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.8)); }
+        
         #tut-drag .tut-wrapper { position: absolute; bottom: 120px; right: 60px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
         @keyframes dragToBoard { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 60% { transform: translate(-150px, -250px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
+        
         #tut-swipe .tut-wrapper { position: absolute; top: 50%; right: 20%; animation: swipeLeft 2s infinite ease-in-out; opacity: 0; }
         @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
 
@@ -280,6 +264,10 @@
                 </div>
             </div>
         </div>
+        
+        <div class="view-footer">
+            <div id="dart-dock"></div>
+        </div>
     </div>
 
     <div class="view-section" id="section-grid">
@@ -311,7 +299,10 @@
     let currentPlayerIndex = 0;
     let gameActive = false;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
-    let tutorialState = { dragShown: true, swipeShown: true };
+    
+    // Tutorial Logic
+    let tutorialInterval = null;
+    let tutorialsActive = false;
     let currentGridTab = 0;
 
     const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
@@ -462,11 +453,7 @@
 
     function gridInput(dartIdx, score, mult) {
         if(!gameActive) return;
-        
-        if(tutorialState.dragShown) {
-            document.getElementById('tut-drag').style.display = 'none';
-            tutorialState.dragShown = false;
-        }
+        endTutorials();
 
         dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
         
@@ -512,6 +499,42 @@
         if(badge) badge.innerText = formatScore(score, mult, 'badge');
     }
 
+    /* --- TUTORIAL LOGIC --- */
+    function startTutorialLoop() {
+        tutorialsActive = true;
+        let phase = 0; // 0=Drag, 1=Swipe
+        const drag = document.getElementById('tut-drag');
+        const swipe = document.getElementById('tut-swipe');
+        
+        drag.style.display = 'flex';
+        swipe.style.display = 'none';
+
+        if(tutorialInterval) clearInterval(tutorialInterval);
+        
+        tutorialInterval = setInterval(() => {
+            if(!tutorialsActive) return;
+            if(phase === 0) {
+                // Switch to Swipe
+                drag.style.display = 'none';
+                swipe.style.display = 'flex';
+                phase = 1;
+            } else {
+                // Switch to Drag
+                swipe.style.display = 'none';
+                drag.style.display = 'flex';
+                phase = 0;
+            }
+        }, 3000);
+    }
+
+    function endTutorials() {
+        if(!tutorialsActive) return;
+        tutorialsActive = false;
+        if(tutorialInterval) clearInterval(tutorialInterval);
+        document.getElementById('tut-drag').style.display = 'none';
+        document.getElementById('tut-swipe').style.display = 'none';
+    }
+
     function setupSwipeObserver() {
         const slider = document.getElementById('view-slider');
         slider.addEventListener('scroll', () => {
@@ -523,10 +546,8 @@
                 else d.classList.remove('hidden-in-grid');
             });
 
-            if(index > 0 && tutorialState.swipeShown) {
-                document.getElementById('tut-swipe').style.display = 'none';
-                tutorialState.swipeShown = false;
-            }
+            // End tutorials on swipe
+            if(slider.scrollLeft > 10) endTutorials();
         });
     }
 
@@ -544,11 +565,7 @@
                 // Prevent drag if in grid view
                 if(document.getElementById('view-slider').scrollLeft > 100) return;
 
-                if(tutorialState.dragShown) {
-                    document.getElementById('tut-drag').style.display = 'none';
-                    tutorialState.dragShown = false;
-                    if(tutorialState.swipeShown) document.getElementById('tut-swipe').style.display = 'flex';
-                }
+                endTutorials();
 
                 e.preventDefault();
                 const cx = e.touches ? e.touches[0].clientX : e.clientX;
@@ -687,24 +704,21 @@
         });
         switchGridTab(0);
         
-        tutorialState.dragShown = false; tutorialState.swipeShown = false;
-        document.getElementById('tut-drag').style.display = 'none';
-        document.getElementById('tut-swipe').style.display = 'none';
+        // Hide tutorials after first turn (double check)
+        endTutorials();
 
         if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
 
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
-        // MANUAL SCROLL FIX for Scoreboard
-        // We use scrollTo instead of scrollIntoView to avoid shifting the main window
         const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
             const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
             sb.scrollTo({ left: center, behavior: 'smooth' });
         }
-        
+
         renderScoreboard();
         resetDartsPosition();
     }
@@ -723,7 +737,6 @@
         const rect = section.getBoundingClientRect();
         
         // "Dock" coordinates relative to section
-        // Place in bottom right corner
         const startX = rect.width - 60; // 60px from right
         const startY = rect.height - 100; // 100px from bottom (above footer)
 
@@ -740,7 +753,6 @@
     }
 
     function resetSingleDart(i) {
-        // Recalculate just for one dart
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
         const startX = rect.width - 60; 
@@ -763,10 +775,10 @@
         gameActive = true; currentPlayerIndex = 0; 
         document.getElementById('setup-modal').style.display='none'; 
         renderScoreboard(); 
-        tutorialState.dragShown = true; tutorialState.swipeShown = true;
+        
         setTimeout(() => { 
             resetDartsPosition(); 
-            document.getElementById('tut-drag').style.display = 'flex';
+            startTutorialLoop();
         }, 100); 
     }
     
@@ -776,7 +788,6 @@
             return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
         }).join('');
         
-        // Ensure active player is visible without shifting the board
         const activeEl = document.querySelector(`.player-column.active`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
