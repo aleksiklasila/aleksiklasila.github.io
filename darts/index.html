@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Darts Scorer / Tikkataulu</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-color: #e0e0e0;
+            --accent: #00e676;
+            --accent-dim: #00a856;
+            --danger: #cf6679;
+            --board-black: #121212;
+            --board-white: #e0e0e0;
+            --board-red: #d32f2f;
+            --board-green: #388e3c;
+            --highlight: #2c2c2c;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- Header & Setup --- */
+        header {
+            padding: 10px 15px;
+            background: var(--card-bg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 { margin: 0; font-size: 1.2rem; }
+        
+        button {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.danger { background: var(--danger); color: white; }
+
+        /* --- Scoreboard Area (Top Half) --- */
+        #scoreboard {
+            flex: 1;
+            display: flex;
+            overflow-x: auto;
+            background: var(--bg-color);
+            padding: 10px;
+            gap: 5px;
+            border-bottom: 1px solid #333;
+            /* Scroll snap for smooth mobile experience */
+            scroll-snap-type: x mandatory;
+        }
+
+        .player-column {
+            min-width: 80px;
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            text-align: center;
+            border: 2px solid transparent;
+            scroll-snap-align: start;
+            max-width: 120px;
+        }
+
+        .player-column.active {
+            border-color: var(--accent);
+            background: var(--highlight);
+        }
+
+        .player-column.finished {
+            opacity: 0.5;
+            border-color: gold;
+        }
+
+        .player-header {
+            padding: 10px 5px;
+            background: rgba(255,255,255,0.05);
+            border-bottom: 1px solid #333;
+        }
+
+        .player-name { font-weight: bold; display: block; overflow: hidden; text-overflow: ellipsis; }
+        .current-score { font-size: 1.5rem; font-weight: 800; color: var(--accent); margin-top: 5px; }
+
+        .score-history {
+            flex: 1;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            padding: 5px 0;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+        .history-item { padding: 2px 0; border-bottom: 1px solid #333; }
+        .history-item.bust { text-decoration: line-through; color: var(--danger); }
+
+        /* --- Interaction Area (Bottom Half) --- */
+        #interaction-area {
+            flex: 0 0 auto; /* Don't shrink */
+            background: var(--card-bg);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
+        }
+
+        /* Current Turn Status */
+        #turn-status {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+        }
+        .dart-slots { display: flex; gap: 5px; }
+        .dart-dot {
+            width: 25px; height: 25px;
+            background: #333;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+        }
+        .dart-dot.filled { background: var(--accent); color: #000; }
+
+        /* The Board */
+        #dartboard-container {
+            width: 100%;
+            max-width: 350px;
+            aspect-ratio: 1/1;
+            margin-bottom: 10px;
+            position: relative;
+        }
+        
+        svg {
+            width: 100%;
+            height: 100%;
+            touch-action: none; /* Prevent scrolling while touching board */
+            filter: drop-shadow(0px 4px 6px rgba(0,0,0,0.5));
+        }
+
+        /* Board interaction styles */
+        path { cursor: pointer; transition: opacity 0.1s; }
+        path:active { opacity: 0.7; }
+        text { pointer-events: none; font-family: sans-serif; font-weight: bold; fill: #fff; font-size: 14px;}
+
+        /* Controls */
+        #controls {
+            width: 100%;
+            display: flex;
+            gap: 10px;
+        }
+        #controls button { flex: 1; padding: 12px; font-size: 1rem; }
+
+        /* Modal */
+        #setup-modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+        }
+        .input-group { margin-bottom: 15px; }
+        input {
+            width: 100%;
+            padding: 10px;
+            background: #333;
+            border: 1px solid #555;
+            color: white;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .tag-container { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+        .player-tag {
+            background: var(--accent-dim);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .player-tag span { cursor: pointer; font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+<div id="setup-modal">
+    <div class="modal-content">
+        <h2 id="modal-title">New Game / Uusi Peli</h2>
+        <div class="input-group">
+            <input type="text" id="new-player-input" placeholder="Enter player name..." onkeydown="if(event.key === 'Enter') addPlayer()">
+            <button onclick="addPlayer()" style="margin-top:5px; width:100%" id="btn-add">Add Player / Lisää Pelaaja</button>
+        </div>
+        <div class="tag-container" id="player-list-display"></div>
+        <div style="margin-top: 20px; border-top: 1px solid #444; padding-top: 10px;">
+             <label style="display:block; margin-bottom:10px;">
+                Start Score / Aloituspisteet:
+                <select id="start-score-select" style="background:#333; color:white; border:none; padding:5px;">
+                    <option value="301">301</option>
+                    <option value="501" selected>501</option>
+                </select>
+            </label>
+            <button onclick="startGame()" style="width:100%" id="btn-start">Start Game / Aloita</button>
+        </div>
+    </div>
+</div>
+
+<header>
+    <h1 id="app-title">Darts Scorer</h1>
+    <button onclick="resetGame()" class="danger" id="btn-reset">Reset</button>
+</header>
+
+<div id="scoreboard">
+    </div>
+
+<div id="interaction-area">
+    <div id="turn-status">
+        <span id="turn-info">Player 1</span>
+        <div class="dart-slots">
+            <div class="dart-dot" id="d1"></div>
+            <div class="dart-dot" id="d2"></div>
+            <div class="dart-dot" id="d3"></div>
+        </div>
+        <span id="turn-total">0</span>
+    </div>
+
+    <div id="dartboard-container">
+        </div>
+
+    <div id="controls">
+        <button onclick="undoLastDart()" class="danger" id="btn-undo">Undo</button>
+        <button onclick="submitTurn()" id="btn-submit">Submit</button>
+    </div>
+</div>
+
+<script>
+    // --- Localization ---
+    const i18n = {
+        en: {
+            title: "Darts Scorer",
+            modalTitle: "New Game",
+            addBtn: "Add Player",
+            startBtn: "Start Game",
+            resetBtn: "Reset",
+            placeholder: "Enter name",
+            turnInfo: "'s Turn",
+            undo: "Undo",
+            submit: "Submit",
+            win: "Wins!",
+            bust: "BUST!",
+            skip: "Skipping finished player",
+            finish: "Finished"
+        },
+        fi: {
+            title: "Tikkataulu",
+            modalTitle: "Uusi Peli",
+            addBtn: "Lisää Pelaaja",
+            startBtn: "Aloita Peli",
+            resetBtn: "Nollaa",
+            placeholder: "Syötä nimi",
+            turnInfo: "vuoro",
+            undo: "Peru",
+            submit: "Hyväksy",
+            win: "Voitti!",
+            bust: "YLILYÖNTI!",
+            skip: "Ohitetaan valmistunut",
+            finish: "Valmis"
+        }
+    };
+
+    // Detect Language
+    const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
+    const txt = i18n[userLang];
+
+    // Apply translations
+    document.getElementById('app-title').innerText = txt.title;
+    document.getElementById('modal-title').innerText = txt.modalTitle;
+    document.getElementById('btn-add').innerText = txt.addBtn;
+    document.getElementById('btn-start').innerText = txt.startBtn;
+    document.getElementById('btn-reset').innerText = txt.resetBtn;
+    document.getElementById('new-player-input').placeholder = txt.placeholder;
+    document.getElementById('btn-undo').innerText = txt.undo;
+    document.getElementById('btn-submit').innerText = txt.submit;
+
+    // --- Game State ---
+    let players = [];
+    let currentPlayerIndex = 0;
+    let currentTurnDarts = []; // Array of scores for current turn
+    let startScore = 501;
+    let gameActive = false;
+
+    // --- Dartboard SVG Generation ---
+    function createDartboard() {
+        const container = document.getElementById('dartboard-container');
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "-205 -205 410 410");
+
+        // Radii
+        const rBullInner = 6.35 * 2; // Scaled up slightly for touch
+        const rBullOuter = 15.9 * 2;
+        const rInnerStart = rBullOuter;
+        const rTripleInner = 99;
+        const rTripleOuter = 109;
+        const rDoubleInner = 162;
+        const rDoubleOuter = 172;
+
+        const numbers = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
+
+        // Draw Slices
+        for (let i = 0; i < 20; i++) {
+            const angle = 18; // 360 / 20
+            const rotation = (i * 18) - 9; // Rotate so 20 is at top (-9 deg offset)
+            
+            const g = document.createElementNS(NS, "g");
+            g.setAttribute("transform", `rotate(${rotation})`);
+            
+            const score = numbers[i];
+
+            // Helper to draw arc segment
+            const createSegment = (rIn, rOut, multiplier, color) => {
+                const path = document.createElementNS(NS, "path");
+                // Calculate coordinates for 18 degree slice
+                // Convert polar to cartesian
+                const rad = Math.PI / 180;
+                // Points: (rOut, -9deg), (rOut, 9deg), (rIn, 9deg), (rIn, -9deg)
+                // Actually since we rotate group, we just draw from -9 to +9 around 0
+                // Simplified: SVG Path Arc command
+                // x = r * cos(a), y = r * sin(a) -> but here we rotate group, so angles are fixed 0-18? 
+                // Let's rely on standard geometry: x = r * sin(a), y = -r * cos(a)
+                // Since group is rotated, we draw a wedge from -9 to 9 degrees relative to Y axis?
+                // Easier: Draw wedge pointing UP (0 deg), width +/- 9 deg.
+                
+                const a1 = -9 * rad;
+                const a2 = 9 * rad;
+                
+                const x1_in = rIn * Math.sin(a1);
+                const y1_in = -rIn * Math.cos(a1);
+                const x2_in = rIn * Math.sin(a2);
+                const y2_in = -rIn * Math.cos(a2);
+                
+                const x1_out = rOut * Math.sin(a1);
+                const y1_out = -rOut * Math.cos(a1);
+                const x2_out = rOut * Math.sin(a2);
+                const y2_out = -rOut * Math.cos(a2);
+
+                const d = `
+                    M ${x1_in} ${y1_in}
+                    L ${x1_out} ${y1_out}
+                    A ${rOut} ${rOut} 0 0 1 ${x2_out} ${y2_out}
+                    L ${x2_in} ${y2_in}
+                    A ${rIn} ${rIn} 0 0 0 ${x1_in} ${y1_in}
+                    Z
+                `;
+                
+                path.setAttribute("d", d);
+                path.setAttribute("fill", color);
+                path.setAttribute("stroke", "#333");
+                path.setAttribute("stroke-width", "1");
+                path.addEventListener("click", () => handleHit(score, multiplier, `${getLabel(multiplier)} ${score}`));
+                return path;
+            };
+
+            const isBlack = i % 2 === 0; // 20 is black(dark), 1 is white(light)
+            // Color logic standard dartboard: 
+            // 20(dark), 1(light)...
+            // Singles: Black/White (Cream). Triples/Doubles: Red/Green.
+            const cSingle = isBlack ? "var(--board-black)" : "var(--board-white)";
+            const cSpecial = isBlack ? "var(--board-red)" : "var(--board-green)";
+
+            // Outer Single
+            g.appendChild(createSegment(rTripleOuter, rDoubleInner, 1, cSingle));
+            // Double Ring
+            g.appendChild(createSegment(rDoubleInner, rDoubleOuter, 2, cSpecial));
+            // Inner Single
+            g.appendChild(createSegment(rInnerStart, rTripleInner, 1, cSingle));
+            // Triple Ring
+            g.appendChild(createSegment(rTripleInner, rTripleOuter, 3, cSpecial));
+
+            // Text Label (Numbers)
+            const text = document.createElementNS(NS, "text");
+            text.setAttribute("x", 0);
+            text.setAttribute("y", -185);
+            text.setAttribute("text-anchor", "middle");
+            text.setAttribute("fill", "white");
+            text.setAttribute("transform", `rotate(${-rotation} 0 -185)`); // Counter-rotate text
+            text.textContent = score;
+            g.appendChild(text);
+
+            svg.appendChild(g);
+        }
+
+        // Bullseyes
+        const bullGroup = document.createElementNS(NS, "g");
+        
+        // Outer Bull (25)
+        const outerBull = document.createElementNS(NS, "circle");
+        outerBull.setAttribute("r", rBullOuter);
+        outerBull.setAttribute("fill", "var(--board-green)");
+        outerBull.setAttribute("stroke", "#333");
+        outerBull.addEventListener("click", () => handleHit(25, 1, "Outer Bull"));
+        bullGroup.appendChild(outerBull);
+
+        // Inner Bull (50)
+        const innerBull = document.createElementNS(NS, "circle");
+        innerBull.setAttribute("r", rBullInner);
+        innerBull.setAttribute("fill", "var(--board-red)");
+        innerBull.setAttribute("stroke", "#333");
+        innerBull.addEventListener("click", () => handleHit(50, 1, "BULLSEYE"));
+        bullGroup.appendChild(innerBull);
+
+        svg.appendChild(bullGroup);
+        container.appendChild(svg);
+    }
+
+    function getLabel(mult) {
+        if(mult===3) return "T";
+        if(mult===2) return "D";
+        return "";
+    }
+
+    // --- Logic ---
+
+    function addPlayer() {
+        const input = document.getElementById('new-player-input');
+        const name = input.value.trim();
+        if (name) {
+            players.push({
+                name: name,
+                score: 501, // default, updated on start
+                history: [],
+                finished: false
+            });
+            input.value = "";
+            renderPlayerList();
+        }
+    }
+
+    function renderPlayerList() {
+        const container = document.getElementById('player-list-display');
+        container.innerHTML = "";
+        players.forEach((p, idx) => {
+            const tag = document.createElement('div');
+            tag.className = 'player-tag';
+            tag.innerHTML = `${p.name} <span onclick="removePlayer(${idx})">&times;</span>`;
+            container.appendChild(tag);
+        });
+    }
+
+    function removePlayer(idx) {
+        players.splice(idx, 1);
+        renderPlayerList();
+    }
+
+    function startGame() {
+        if (players.length === 0) {
+            alert("Add at least one player!");
+            return;
+        }
+        startScore = parseInt(document.getElementById('start-score-select').value);
+        players.forEach(p => {
+            p.score = startScore;
+            p.history = [];
+            p.finished = false;
+        });
+        
+        gameActive = true;
+        currentPlayerIndex = 0;
+        currentTurnDarts = [];
+        
+        document.getElementById('setup-modal').style.display = 'none';
+        renderScoreboard();
+        updateTurnUI();
+    }
+
+    function resetGame() {
+        if(confirm(userLang === 'fi' ? "Lopeta peli?" : "End current game?")) {
+            document.getElementById('setup-modal').style.display = 'flex';
+            players = [];
+            renderPlayerList();
+            document.getElementById('scoreboard').innerHTML = "";
+        }
+    }
+
+    function renderScoreboard() {
+        const board = document.getElementById('scoreboard');
+        board.innerHTML = "";
+        players.forEach((p, idx) => {
+            const col = document.createElement('div');
+            col.className = `player-column ${idx === currentPlayerIndex ? 'active' : ''} ${p.finished ? 'finished' : ''}`;
+            col.id = `p-col-${idx}`;
+            
+            // Header
+            const header = document.createElement('div');
+            header.className = 'player-header';
+            header.innerHTML = `
+                <span class="player-name">${p.name}</span>
+                <div class="current-score">${p.finished ? txt.win : p.score}</div>
+            `;
+            
+            // History
+            const history = document.createElement('div');
+            history.className = 'score-history';
+            // Show history in reverse (newest top)
+            [...p.history].reverse().forEach(h => {
+                const row = document.createElement('div');
+                row.className = `history-item ${h.bust ? 'bust' : ''}`;
+                row.innerText = h.bust ? `${h.thrown} (0)` : `${h.thrown} -> ${h.remaining}`;
+                history.appendChild(row);
+            });
+
+            col.appendChild(header);
+            col.appendChild(history);
+            board.appendChild(col);
+        });
+
+        // Auto scroll to active player
+        const activeCol = document.getElementById(`p-col-${currentPlayerIndex}`);
+        if(activeCol) activeCol.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+
+    function handleHit(val, mult, label) {
+        if (!gameActive) return;
+        if (currentTurnDarts.length >= 3) return;
+
+        const points = val * mult;
+        currentTurnDarts.push({ points: points, label: label });
+        
+        // Vibration for tactile feedback
+        if (navigator.vibrate) navigator.vibrate(50);
+        
+        updateTurnUI();
+        
+        // Auto submit logic? No, user might want to undo.
+        // But we enable the submit button.
+    }
+
+    function undoLastDart() {
+        if (currentTurnDarts.length > 0) {
+            currentTurnDarts.pop();
+            updateTurnUI();
+        }
+    }
+
+    function updateTurnUI() {
+        const p = players[currentPlayerIndex];
+        
+        // Update Info Text
+        document.getElementById('turn-info').innerText = `${p.name} ${txt.turnInfo}`;
+
+        // Update Dots
+        for(let i=1; i<=3; i++) {
+            const dot = document.getElementById(`d${i}`);
+            if (currentTurnDarts[i-1]) {
+                dot.classList.add('filled');
+                dot.innerText = currentTurnDarts[i-1].label;
+            } else {
+                dot.classList.remove('filled');
+                dot.innerText = "";
+            }
+        }
+
+        // Update Total
+        const turnTotal = currentTurnDarts.reduce((sum, d) => sum + d.points, 0);
+        const projectedScore = p.score - turnTotal;
+        
+        let displayTotal = `${turnTotal}`;
+        if (projectedScore < 0) displayTotal += ` (${txt.bust})`;
+        if (projectedScore === 0) displayTotal += ` (${txt.win})`;
+        
+        document.getElementById('turn-total').innerText = displayTotal;
+
+        // Enable/Disable Submit
+        const btnSubmit = document.getElementById('btn-submit');
+        // Allow submitting fewer than 3 darts if winning
+        if (projectedScore === 0) {
+            btnSubmit.disabled = false;
+            btnSubmit.classList.add('active');
+        } else {
+            // Standard: Need 3 darts OR bust
+            btnSubmit.disabled = (currentTurnDarts.length !== 3 && projectedScore >= 0);
+        }
+    }
+
+    function submitTurn() {
+        if (!gameActive) return;
+        
+        const p = players[currentPlayerIndex];
+        const turnTotal = currentTurnDarts.reduce((sum, d) => sum + d.points, 0);
+        let newScore = p.score - turnTotal;
+        let bust = false;
+
+        // Win/Bust Logic (Straight Out)
+        if (newScore < 0) {
+            bust = true;
+            newScore = p.score; // Reset to start of turn
+        } else if (newScore === 0) {
+            p.finished = true;
+            gameActive = players.some(pl => !pl.finished); // Game continues if others playing? Usually ends.
+            // Let's assume game continues for rankings, or stops.
+            // For simple usage, mark finished.
+        }
+
+        // Record History
+        p.history.push({
+            thrown: turnTotal,
+            remaining: newScore,
+            bust: bust
+        });
+        
+        p.score = newScore;
+        
+        // Next Player Logic
+        currentTurnDarts = [];
+        
+        // Find next unfinished player
+        let nextIndex = currentPlayerIndex;
+        let attempts = 0;
+        
+        // If everyone finished, game over
+        if (players.every(pl => pl.finished)) {
+            renderScoreboard();
+            alert("Game Over!");
+            gameActive = false;
+            return;
+        }
+
+        do {
+            nextIndex = (nextIndex + 1) % players.length;
+            attempts++;
+        } while (players[nextIndex].finished && attempts < players.length);
+
+        currentPlayerIndex = nextIndex;
+        
+        renderScoreboard();
+        updateTurnUI();
+    }
+
+    // Init
+    createDartboard();
+
+</script>
+</body>
+</html>
