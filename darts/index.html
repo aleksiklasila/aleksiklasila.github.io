@@ -18,17 +18,22 @@
             --dart-tip: #aaa;
         }
 
+        html, body {
+            margin: 0; padding: 0;
+            width: 100%; height: 100%; /* Rigid dimensions */
+            overflow: hidden; /* Prevent body scroll */
+            position: fixed; /* Lock viewport on iOS */
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
-            margin: 0; padding: 0;
             display: flex; flex-direction: column;
-            height: 100vh; height: 100dvh;
-            overflow: hidden; touch-action: none; user-select: none;
+            touch-action: none; user-select: none;
         }
 
-        /* --- Fixed Header --- */
+        /* --- Header --- */
         header {
             flex: 0 0 auto; padding: 5px 15px; background: var(--card-bg);
             display: flex; justify-content: space-between; align-items: center;
@@ -42,15 +47,20 @@
         }
         button.danger { background: var(--danger); color: white; }
 
-        /* --- Fixed Scoreboard --- */
+        /* --- Scoreboard --- */
         #scoreboard {
             flex: 0 0 90px; display: flex; overflow-x: auto; background: #000;
-            padding: 8px; gap: 8px; border-bottom: 1px solid #333; scroll-snap-type: x mandatory;
+            padding: 8px; gap: 8px; border-bottom: 1px solid #333; 
+            /* scroll-snap-type: x mandatory; <- Removed to prevent snapping fights with JS scroll */
+            -webkit-overflow-scrolling: touch;
         }
         .player-column {
             min-width: 100px; flex: 1; background: var(--card-bg); border-radius: 8px;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            border: 2px solid transparent; scroll-snap-align: center; padding: 5px; position: relative;
+            border: 2px solid transparent; 
+            /* scroll-snap-align: center; */
+            padding: 5px; position: relative;
+            flex-shrink: 0; /* Prevent shrinking */
         }
         .player-column.active { border-color: var(--accent); background: #252525; box-shadow: 0 0 15px rgba(0, 230, 118, 0.1); }
         .player-column.finished { opacity: 0.6; border-color: gold; }
@@ -60,7 +70,7 @@
         .next-score { color: var(--accent); font-weight: bold; }
         .next-score.bust { color: var(--danger); text-decoration: line-through; }
 
-        /* --- Swipeable Middle Section --- */
+        /* --- View Slider --- */
         #view-slider {
             flex: 1; display: flex; overflow-x: auto; overflow-y: hidden;
             scroll-snap-type: x mandatory; scroll-behavior: smooth;
@@ -73,9 +83,9 @@
             display: flex; flex-direction: column;
         }
 
-        /* --- Visual Board View --- */
+        /* --- View 1: Board --- */
         #section-visual { position: relative; }
-        
+
         #board-content-wrapper {
             flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
@@ -85,13 +95,21 @@
             filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.6));
         }
         svg { width: 100%; height: 100%; }
+        .view-footer {
+            flex: 0 0 auto; background: var(--card-bg); width: 100%;
+            border-top: 1px solid #333; padding: 10px 15px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            display: flex; flex-direction: column; gap: 10px; box-sizing: border-box;
+            position: relative; z-index: 10;
+        }
 
-        /* --- Grid View --- */
+        /* --- View 2: Grid --- */
         #grid-content-wrapper { 
             flex: 1; display: flex; flex-direction: column; 
-            background: #121212; padding: 10px; 
+            background: #121212; padding: 10px 10px 0 10px; 
             overflow: hidden; 
         }
+        
         #grid-tabs { display: flex; gap: 5px; margin-bottom: 10px; flex: 0 0 auto; }
         .grid-tab {
             flex: 1; background: #252525; padding: 10px; border-radius: 8px;
@@ -102,9 +120,14 @@
         .grid-tab.active .grid-tab-label { color: rgba(255,255,255,0.8); }
         .grid-tab-val { font-size: 1.1rem; font-weight: 800; color: white; }
 
-        #grid-body-container { flex: 1; overflow-y: auto; background: #181818; border-radius: 8px; padding: 5px; }
-        .grid-page { display: none; padding-bottom: 20px; }
+        #grid-body-container { 
+            flex: 1; overflow-y: auto; 
+            background: #181818; border-radius: 8px; 
+            padding: 5px; position: relative;
+        }
+        .grid-page { display: none; padding-bottom: 10px; }
         .grid-page.active { display: block; }
+        
         .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
         .g-btn {
             padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
@@ -118,23 +141,18 @@
         .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; }
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; }
 
-        /* --- Fixed Footer --- */
-        #footer-fixed {
-            flex: 0 0 auto; background: var(--card-bg); width: 100%;
-            border-top: 1px solid #333; padding: 10px 15px;
-            padding-bottom: calc(10px + env(safe-area-inset-bottom));
-            z-index: 200;
-        }
-        .action-btn {
-            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px;
-            background: #333; color: #777; pointer-events: none; border: none; font-weight: bold;
-        }
-        .action-btn.ready {
-            background: var(--accent); color: #000; pointer-events: auto;
-            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+        #grid-footer {
+            flex: 0 0 auto; background: var(--card-bg); border-top: 1px solid #333;
+            padding: 10px 15px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
         }
 
         /* --- Darts --- */
+        #dart-dock {
+            display: flex; justify-content: center; gap: 30px;
+            background: rgba(0,0,0,0.3); border-radius: 12px; height: 100px;
+            border: 2px dashed #333; position: relative; align-items: flex-end; padding-bottom: 10px;
+        }
+        
         .dart-obj {
             width: 40px; height: 120px; 
             position: absolute; 
@@ -168,6 +186,22 @@
             z-index: 502; font-size: 1.5rem;
         }
 
+        /* --- Fixed Footer --- */
+        #footer-fixed {
+            flex: 0 0 auto; background: var(--card-bg); width: 100%;
+            border-top: 1px solid #333; padding: 10px 15px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            z-index: 200;
+        }
+        .action-btn {
+            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px;
+            background: #333; color: #777; pointer-events: none; border: none; font-weight: bold;
+        }
+        .action-btn.ready {
+            background: var(--accent); color: #000; pointer-events: auto;
+            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+        }
+
         /* --- Tutorials --- */
         .tutorial-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -180,17 +214,8 @@
             white-space: nowrap; transform: translateY(-50px); 
         }
         .hand-emoji { font-size: 3rem; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.8)); }
-        
-        /* Animation: Bottom Right -> Center */
-        #tut-drag .tut-wrapper { position: absolute; bottom: 80px; right: 60px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
-        @keyframes dragToBoard { 
-            0% { transform: translate(0, 0); opacity: 0; } 
-            20% { opacity: 1; } 
-            60% { transform: translate(-150px, -250px); opacity: 1; } 
-            80% { opacity: 0; } 
-            100% { opacity: 0; } 
-        }
-        
+        #tut-drag .tut-wrapper { position: absolute; bottom: 120px; right: 60px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
+        @keyframes dragToBoard { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 60% { transform: translate(-150px, -250px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
         #tut-swipe .tut-wrapper { position: absolute; top: 50%; right: 20%; animation: swipeLeft 2s infinite ease-in-out; opacity: 0; }
         @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
 
@@ -337,7 +362,7 @@
         tip.setAttribute("d", "M19,100 L21,100 L20,120 Z"); tip.setAttribute("fill", "var(--dart-tip)"); svg.appendChild(tip);
         div.appendChild(svg);
         const badge = document.createElement('div'); 
-        badge.className = 'dart-badge'; badge.id = `badge-${id}`; badge.innerText = "0"; // Default 0
+        badge.className = 'dart-badge'; badge.id = `badge-${id}`; badge.innerText = "0"; 
         div.appendChild(badge);
         return div;
     }
@@ -671,6 +696,15 @@
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
+        // MANUAL SCROLL FIX for Scoreboard
+        // We use scrollTo instead of scrollIntoView to avoid shifting the main window
+        const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
+        const sb = document.getElementById('scoreboard');
+        if(activeEl && sb) {
+            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
+            sb.scrollTo({ left: center, behavior: 'smooth' });
+        }
+        
         renderScoreboard();
         resetDartsPosition();
     }
@@ -691,7 +725,7 @@
         // "Dock" coordinates relative to section
         // Place in bottom right corner
         const startX = rect.width - 60; // 60px from right
-        const startY = rect.height - 140; // 140px from bottom (above footer)
+        const startY = rect.height - 100; // 100px from bottom (above footer)
 
         [0,1,2].forEach(i => {
             const d = document.getElementById(`dart-${i+1}`);
@@ -710,7 +744,7 @@
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
         const startX = rect.width - 60; 
-        const startY = rect.height - 140;
+        const startY = rect.height - 100;
 
         const d = document.getElementById(`dart-${i+1}`);
         d.style.transition = 'all 0.4s ease-out';
@@ -741,7 +775,14 @@
             const active = (i===currentPlayerIndex && !p.finished);
             return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
         }).join('');
-        const activeEl = document.querySelector('.player-column.active'); if(activeEl) activeEl.scrollIntoView({behavior:'smooth', inline:'center'});
+        
+        // Ensure active player is visible without shifting the board
+        const activeEl = document.querySelector(`.player-column.active`);
+        const sb = document.getElementById('scoreboard');
+        if(activeEl && sb) {
+            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
+            sb.scrollTo({ left: center, behavior: 'smooth' });
+        }
     }
 
     init();
