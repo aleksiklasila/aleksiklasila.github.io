@@ -85,11 +85,11 @@
             position: relative; 
             display: flex; 
             flex-direction: column; 
-            /* Center vertically (moves board down from top) */
-            justify-content: center; 
+            /* CHANGE: Move board down */
+            justify-content: flex-end; 
             align-items: center;
-            /* Small padding bottom to respect footer */
-            padding-bottom: 70px; 
+            /* Padding to keep it off the very bottom/Next button */
+            padding-bottom: 140px; 
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
         }
         
@@ -101,7 +101,7 @@
         
         /* Footer Spacer */
         .view-footer {
-            flex: 0 0 auto; width: 100%; height: 1px; pointer-events: none;
+            flex: 0 0 auto; width: 100%; height: 60px; pointer-events: none;
         }
 
         /* --- View 2: Grid --- */
@@ -203,8 +203,8 @@
         }
         .hand-emoji { font-size: 3rem; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.8)); }
         
-        #tut-drag .tut-wrapper { position: absolute; bottom: 100px; right: 50px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
-        @keyframes dragToBoard { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 60% { transform: translate(-100px, -200px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
+        #tut-drag .tut-wrapper { position: absolute; bottom: 120px; right: 60px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
+        @keyframes dragToBoard { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 60% { transform: translate(-150px, -250px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
         
         #tut-swipe .tut-wrapper { position: absolute; top: 50%; right: 20%; animation: swipeLeft 2s infinite ease-in-out; opacity: 0; }
         @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
@@ -270,7 +270,9 @@
                 </div>
             </div>
         </div>
-        <div class="view-footer"></div>
+        
+        <div class="view-footer">
+            </div>
     </div>
 
     <div class="view-section" id="section-grid">
@@ -327,7 +329,6 @@
         return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
     }
 
-    // --- FORMATTER ---
     function formatScore(val, mult, style) {
         const total = val * mult;
         
@@ -335,7 +336,7 @@
             if (val === 0) return "0";
             if (val === 25) return "25 (1x25)";
             if (val === 50) return "50 (1x50)";
-            return `${total} (${mult}x${val})`; 
+            return `${total} (${mult}x${val})`; // Always verbose on buttons too now
         }
 
         if (val === 0) return "0";
@@ -713,15 +714,14 @@
         });
         switchGridTab(0);
         
-        tutorialState.dragShown = false; tutorialState.swipeShown = false;
-        document.getElementById('tut-drag').style.display = 'none';
-        document.getElementById('tut-swipe').style.display = 'none';
+        endTutorials();
 
         if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
 
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
+        // Scoreboard Manual Scroll
         const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
@@ -760,7 +760,6 @@
     }
 
     function resetSingleDart(i) {
-        // Recalculate just for one dart
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
         const startX = rect.width - 60; 
@@ -783,7 +782,7 @@
         gameActive = true; currentPlayerIndex = 0; 
         document.getElementById('setup-modal').style.display='none'; 
         renderScoreboard(); 
-        tutorialState.dragShown = true; tutorialState.swipeShown = true;
+        
         setTimeout(() => { 
             resetDartsPosition(); 
             startTutorialLoop();
