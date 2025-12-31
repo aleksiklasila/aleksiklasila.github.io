@@ -57,7 +57,7 @@
         }
         button.danger { background: var(--danger); color: white; }
 
-        /* --- Scoreboard (Compact) --- */
+        /* --- Scoreboard --- */
         #scoreboard {
             flex: 0 0 85px;
             display: flex;
@@ -133,7 +133,6 @@
         }
 
         .board-segment { transition: opacity 0.1s; }
-        /* Removed hover-zone opacity change as magnifier now handles visual feedback */
 
         /* --- Magnifier (Zoom) --- */
         #magnifier {
@@ -151,10 +150,8 @@
             pointer-events: none;
             box-shadow: 0 4px 15px rgba(0,0,0,0.8);
         }
-        #magnifier-svg {
-            width: 100%;
-            height: 100%;
-        }
+        #magnifier-svg { width: 100%; height: 100%; }
+        
         /* The yellow center dot */
         .magnifier-crosshair {
             position: absolute;
@@ -163,21 +160,23 @@
             width: 6px;
             height: 6px;
             background: yellow;
+            border: 1px solid rgba(0,0,0,0.5);
             border-radius: 50%;
             transform: translate(-50%, -50%);
             z-index: 502;
         }
+        
         /* Score inside magnifier */
         #magnifier-score {
             position: absolute;
-            bottom: 10px;
+            bottom: 15px;
             width: 100%;
             text-align: center;
-            font-weight: bold;
-            color: white;
-            text-shadow: 1px 1px 2px black;
+            font-weight: 800;
+            color: yellow;
+            text-shadow: 0px 2px 2px rgba(0,0,0,1);
             z-index: 502;
-            font-size: 1.2rem;
+            font-size: 1.4rem;
         }
 
         /* --- Footer / Controls --- */
@@ -226,8 +225,13 @@
             color: white;
             white-space: nowrap;
         }
-        /* Fix text rotation inside rotated dart */
+        
         .dart-token span { transform: rotate(-45deg); display: block; min-width: 25px; text-align: center; }
+
+        /* Important for stacking darts */
+        .dart-token.ignore-clicks {
+            pointer-events: none !important;
+        }
 
         #action-btn {
             width: 100%;
@@ -294,7 +298,8 @@
     <div id="magnifier">
         <div class="magnifier-crosshair"></div>
         <div id="magnifier-score">0</div>
-    </div> <div id="dartboard-container"></div>
+    </div>
+    <div id="dartboard-container"></div>
 </div>
 
 <div id="footer-controls">
@@ -414,7 +419,6 @@
         const innerBull = document.createElementNS(NS, "circle");
         innerBull.setAttribute("r", rBullInner); innerBull.setAttribute("fill", "var(--board-red)");
         innerBull.setAttribute("stroke", "#555");
-        // Note: Inner bull score is 50, mult is 1 for calculation simplicity, counts as double for rules.
         innerBull.setAttribute("data-score", 50); innerBull.setAttribute("data-mult", 1); 
         innerBull.classList.add("board-segment");
         bullGroup.appendChild(innerBull);
@@ -459,8 +463,9 @@
                 const rect = token.getBoundingClientRect();
                 initialLeft = rect.left; initialTop = rect.top;
 
-                // Temp disable other darts so we can drag "through" them
-                tokens.forEach(t => { if(t !== token) t.style.pointerEvents = 'none'; });
+                // CRITICAL FIX: Make ALL darts ignore pointer events during drag
+                // This allows the elementFromPoint to see "through" stacked darts to the board
+                tokens.forEach(t => t.classList.add('ignore-clicks'));
 
                 token.style.position = 'fixed';
                 token.style.zIndex = 9999;
@@ -484,10 +489,9 @@
                     token.style.top = (initialTop + dy - 90) + 'px';
 
                     // Hit Test at FINGER location
-                    token.style.visibility = 'hidden'; 
+                    // Note: We don't need to hide token here because pointer-events:none is active on all tokens
                     const elemBelow = document.elementFromPoint(mx, my);
-                    token.style.visibility = 'visible';
-
+                    
                     let hitLabel = "0";
 
                     if(elemBelow && elemBelow.classList.contains('board-segment')) {
@@ -516,13 +520,16 @@
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onEnd);
                     
-                    // Re-enable other darts
-                    tokens.forEach(t => t.style.pointerEvents = 'auto');
+                    // Re-enable clicks on all darts
+                    tokens.forEach(t => t.classList.remove('ignore-clicks'));
                     magnifier.style.display = 'none';
 
                     const endX = ee.changedTouches ? ee.changedTouches[0].clientX : ee.clientX;
                     const endY = ee.changedTouches ? ee.changedTouches[0].clientY : ee.clientY;
 
+                    // With pointer-events:none removed, we might hit the token we just dropped if we check now.
+                    // But we want to know what was UNDER it. 
+                    // To do this cleanly, we temporarily hide this token for the check.
                     token.style.visibility = 'hidden';
                     const elemBelow = document.elementFromPoint(endX, endY);
                     token.style.visibility = 'visible';
