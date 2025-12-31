@@ -728,6 +728,8 @@
         if(confirm("Reset?")) {
             players=[]; renderList();
             document.getElementById('setup-modal').style.display='flex';
+            // Also refocus when resetting the game
+            setTimeout(() => document.getElementById('new-player-input').focus(), 100);
         }
     }
     function renderScoreboard() {
@@ -749,6 +751,9 @@
     
     initBoard();
     initDrag();
+
+    // Auto-focus input on page load
+    document.getElementById('new-player-input').focus();
 
 </script>
 </body>
