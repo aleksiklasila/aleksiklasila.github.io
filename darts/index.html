@@ -194,17 +194,15 @@
             border: 1px solid #333; cursor: pointer; position: relative; overflow: hidden;
         }
         .hist-card:active { background: #333; }
-        .hist-card::after {
-            content: "Tap to Load"; position: absolute; right: 10px; top: 10px;
-            font-size: 0.65rem; color: #555; border: 1px solid #444; padding: 2px 5px; border-radius: 4px;
-        }
         
         .hist-card-row { display: flex; justify-content: space-between; align-items: center; }
         .hist-date { font-size: 0.75rem; color: #888; }
         .hist-mode { font-size: 0.75rem; background: #333; padding: 2px 6px; border-radius: 4px; color: #ccc; }
         .hist-winner { color: var(--accent); font-weight: bold; font-size: 1rem; margin: 5px 0; }
-        .hist-darts { font-size: 0.85rem; color: #ccc; }
-        .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; }
+        .hist-darts { font-size: 0.85rem; color: #ccc; margin-left: 5px;}
+        .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; line-height: 1.4; }
+        .finish-badge { color: gold; font-weight: bold; margin-right: 4px; }
+        .finish-stat { color: #888; font-size: 0.8em; margin-left: 5px; }
 
         /* Player Details in History */
         .player-list-item { 
@@ -371,12 +369,12 @@
 
         <div class="hist-content active" id="hc-games">
             <div class="hist-section-header" onclick="toggleHistSection('unfinished')">
-                <span>Unfinished Games</span> <span id="arrow-unfinished">▶</span>
+                <span>In Progress / Aborted</span> <span id="arrow-unfinished">▶</span>
             </div>
             <div id="list-unfinished" class="hist-section-body"></div>
 
             <div class="hist-section-header" onclick="toggleHistSection('finished')">
-                <span>Finished Games</span> <span id="arrow-finished">▶</span>
+                <span>Finished Games (At least 1 winner)</span> <span id="arrow-finished">▶</span>
             </div>
             <div id="list-finished" class="hist-section-body"></div>
         </div>
@@ -387,12 +385,12 @@
                 <button onclick="backToPlayerList()" style="align-self: flex-start; margin-bottom: 10px; background:#444;">&larr; Back</button>
                 <h2 id="pd-name" style="margin:0 0 10px 0;"></h2>
                 <div class="stat-grid">
-                    <div class="stat-box"><span id="pd-total" class="stat-val">0</span><span class="stat-lbl">Games Won</span></div>
+                    <div class="stat-box"><span id="pd-total" class="stat-val">0</span><span class="stat-lbl">1st Place Wins</span></div>
                     <div class="stat-box"><span id="pd-best" class="stat-val">-</span><span class="stat-lbl">Best Darts</span></div>
                     <div class="stat-box"><span id="pd-avg" class="stat-val">-</span><span class="stat-lbl">Avg Darts</span></div>
                     <div class="stat-box"><span id="pd-winrate" class="stat-val">0%</span><span class="stat-lbl">Win Rate</span></div>
                 </div>
-                <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Win (Over Time)</div>
+                <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Finish (Over Time)</div>
                 <div id="player-graph-wrapper">
                     <div id="player-graph-container"></div>
                 </div>
@@ -501,8 +499,13 @@
         if(gameHistory.length > 0) {
             const idx = gameHistory.findIndex(g => g.id === currentGameId);
             if(idx !== -1) {
+                // Determine if "finished" (at least one player won)
+                const anyWon = players.some(p => p.finished);
+                
                 gameHistory[idx].players = JSON.parse(JSON.stringify(players)); // deep copy
                 gameHistory[idx].currentPlayerIndex = currentPlayerIndex;
+                gameHistory[idx].dartState = dartState; 
+                gameHistory[idx].finished = anyWon; // Marked as finished in list if at least 1 person won
                 localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
             }
         }
@@ -531,23 +534,25 @@
     function restoreGameState(s) {
         players = s.players;
         currentPlayerIndex = s.currentPlayerIndex;
-        gameActive = s.gameActive;
         startScoreVal = s.startScoreVal;
         dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
         currentGameId = s.currentGameId;
+
+        // CRITICAL: Determine gameActive based on whether ALL players are done
+        // If everyone finished, game over. If some pending, active.
+        if(players.every(p => p.finished)) gameActive = false;
+        else gameActive = true;
 
         document.getElementById('setup-modal').style.display = 'none';
         
         // Reset UI Buttons
         const btn = document.getElementById('btn-next');
-        if(players.every(p => p.finished)) {
+        if(!gameActive) {
             btn.innerText = txt.gameOver;
             btn.classList.add('game-over');
-            gameActive = false;
         } else {
             btn.innerText = "Next"; 
             btn.classList.remove('game-over');
-            gameActive = true;
         }
 
         renderScoreboard();
@@ -577,32 +582,13 @@
             id: currentGameId,
             date: new Date().toISOString(),
             startScore: startScoreVal,
-            players: JSON.parse(JSON.stringify(players)), // Full player state
+            players: JSON.parse(JSON.stringify(players)), 
             currentPlayerIndex: 0,
-            winner: null,
-            dartsThrown: 0,
-            finished: false
+            dartState: [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}],
+            finished: false // Initially false
         };
         gameHistory.unshift(newGame);
         localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
-    }
-
-    function recordGameWin(winnerName, winningDartIndex) {
-        const game = gameHistory.find(g => g.id === currentGameId);
-        if(game) {
-            game.finished = true;
-            game.winner = winnerName;
-            
-            const p = players.find(pl => pl.name === winnerName);
-            const turns = p.history.length - 1; 
-            const totalDarts = (turns * 3) + (winningDartIndex + 1);
-            
-            game.dartsThrown = totalDarts;
-            // Update history with final player states
-            game.players = JSON.parse(JSON.stringify(players));
-            
-            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
-        }
     }
 
     // --- VISUAL & GAME LOGIC ---
@@ -1048,7 +1034,11 @@
         const res = calculateScore(p.score);
         
         if(res.isWin) { 
-            recordGameWin(p.name, res.winningDartIndex);
+            // Calculate Darts Thrown to store in history
+            const turns = p.history.length - 1; 
+            p.dartsThrown = (turns * 3) + (res.winningDartIndex + 1);
+            p.finishTime = Date.now(); 
+            
             p.score = 0; 
             p.finished = true;
             p.history.push(0);
@@ -1222,7 +1212,6 @@
             const state = {
                 players: JSON.parse(JSON.stringify(game.players)),
                 currentPlayerIndex: game.currentPlayerIndex || 0,
-                gameActive: !game.finished,
                 startScoreVal: game.startScore,
                 dartState: [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}], // Reset darts hand
                 currentGameId: game.id
@@ -1238,8 +1227,9 @@
         const finishedEl = document.getElementById('list-finished');
         const unfinishedEl = document.getElementById('list-unfinished');
         
-        const finished = gameHistory.filter(g => g.finished);
-        const unfinished = gameHistory.filter(g => !g.finished);
+        // Definition: Finished if AT LEAST ONE player has finished
+        const finished = gameHistory.filter(g => g.players.some(p => p.finished));
+        const unfinished = gameHistory.filter(g => !g.players.some(p => p.finished));
         
         unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
@@ -1249,19 +1239,26 @@
                 </div>
                 <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
             </div>
-        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No unfinished games.</div>';
+        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No active games.</div>';
 
-        finishedEl.innerHTML = finished.length ? finished.map(g => `
+        finishedEl.innerHTML = finished.length ? finished.map(g => {
+            // Sort players by finish time (winners first)
+            const winners = g.players.filter(p => p.finished).sort((a,b) => (a.finishTime || 0) - (b.finishTime || 0));
+            const winnerHtml = winners.map((w, idx) => {
+                const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : '🥉');
+                return `<div><span class="finish-badge">${medal}</span> ${w.name} <span class="finish-stat">${w.dartsThrown} darts</span></div>`;
+            }).join('');
+
+            return `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
                 <div class="hist-card-row">
                     <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="hist-mode">${g.startScore}</span>
                 </div>
-                <div class="hist-winner">🏆 ${g.winner}</div>
-                <div class="hist-darts">${g.dartsThrown} darts thrown</div>
-                <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
+                <div class="hist-players" style="margin-top:8px;">${winnerHtml}</div>
+                ${!g.players.every(p=>p.finished) ? '<div style="color:#00e676; font-size:0.75rem; margin-top:5px;">• Resume for other players</div>' : ''}
             </div>
-        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No finished games.</div>';
+        `}).join('') : '<div style="padding:10px; color:#666; text-align:center">No finished games.</div>';
 
         // Render Players
         const playersEl = document.getElementById('player-list-view');
@@ -1279,26 +1276,48 @@
         document.getElementById('player-detail-view').style.display = 'flex';
         document.getElementById('pd-name').innerText = name;
         
-        // Calc Stats
-        const wins = gameHistory.filter(g => g.finished && g.winner === name);
-        const winCount = wins.length;
-        const totalGames = gameHistory.filter(g => g.finished && g.players.some(p => p.name === name)).length;
+        // Get all game instances for this player where they finished
+        let finishedGames = [];
+        let wins = 0;
+        let totalGames = 0;
+
+        gameHistory.forEach(g => {
+            const p = g.players.find(pl => pl.name === name);
+            if(p) {
+                totalGames++;
+                if(p.finished) {
+                    // Check if they were 1st (Win)
+                    // They are 1st if no one else finished OR their finishTime is earliest
+                    const othersFinished = g.players.filter(op => op.finished && op.name !== name);
+                    if(othersFinished.length === 0) wins++;
+                    else {
+                        const myTime = p.finishTime || 0;
+                        if(othersFinished.every(op => (op.finishTime || 0) > myTime)) wins++;
+                    }
+
+                    finishedGames.push({
+                        date: g.date,
+                        darts: p.dartsThrown
+                    });
+                }
+            }
+        });
         
-        document.getElementById('pd-total').innerText = winCount;
-        document.getElementById('pd-winrate').innerText = totalGames ? Math.round((winCount/totalGames)*100) + '%' : '0%';
+        document.getElementById('pd-total').innerText = wins;
+        document.getElementById('pd-winrate').innerText = totalGames ? Math.round((wins/totalGames)*100) + '%' : '0%';
         
         let best = '-';
         let avg = '-';
-        if(winCount > 0) {
-            const darts = wins.map(g => g.dartsThrown);
+        if(finishedGames.length > 0) {
+            const darts = finishedGames.map(g => g.darts);
             best = Math.min(...darts);
-            avg = Math.round(darts.reduce((a,b)=>a+b,0) / winCount);
+            avg = Math.round(darts.reduce((a,b)=>a+b,0) / finishedGames.length);
         }
         document.getElementById('pd-best').innerText = best;
         document.getElementById('pd-avg').innerText = avg;
         
         // Draw Graph
-        drawPlayerGraph(name, wins);
+        drawPlayerGraph(name, finishedGames);
     }
 
     function backToPlayerList() {
@@ -1306,10 +1325,10 @@
         document.getElementById('player-list-view').style.display = 'block';
     }
 
-    function drawPlayerGraph(name, winGames) {
+    function drawPlayerGraph(name, finishedGames) {
         const container = document.getElementById('player-graph-container');
         container.innerHTML = '';
-        if(winGames.length < 2) {
+        if(finishedGames.length < 2) {
              container.innerHTML = '<div style="color:#666;text-align:center;padding-top:80px;">Not enough data for graph</div>';
              return;
         }
@@ -1323,9 +1342,9 @@
         container.appendChild(svg);
         
         // Sort by date
-        winGames.sort((a,b) => new Date(a.date) - new Date(b.date));
+        finishedGames.sort((a,b) => new Date(a.date) - new Date(b.date));
         
-        const darts = winGames.map(g => g.dartsThrown);
+        const darts = finishedGames.map(g => g.darts);
         const maxDarts = Math.max(...darts) + 5;
         const minDarts = Math.max(0, Math.min(...darts) - 5);
         const range = maxDarts - minDarts;
