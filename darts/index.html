@@ -444,7 +444,7 @@
 <div id="scoreboard"></div>
 
 <div id="view-slider">
-   
+    
     <div class="view-section" id="section-visual">
         <div id="board-content-wrapper">
             <div id="magnifier">
@@ -452,7 +452,7 @@
                 <div id="magnifier-score"></div>
             </div>
             <div id="dartboard-container"></div>
-          
+         
             <div id="tut-drag" class="tutorial-overlay">
                 <div class="tut-wrapper">
                     <div class="tut-text">Drag to Throw</div>
@@ -506,7 +506,7 @@
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
     let currentGameId = Date.now();
     let knownPlayers = [];
-   
+    
     // -- History Data --
     let gameHistory = []; // Array of game objects
 
@@ -517,7 +517,7 @@
 
     const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
     const playerColors = ["#00e676", "#2979ff", "#ff4081", "#ff9100", "#e040fb", "#00bcd4", "#ffeb3b", "#ff1744"];
-   
+    
     // --- PERSISTENCE ---
     function saveGame() {
         // Save Active Game
@@ -548,7 +548,7 @@
             const h = localStorage.getItem('darts_pro_history_games');
             if(h) gameHistory = JSON.parse(h);
         } catch(e) {}
-       
+      
         // Load Known Players
         try {
             const kp = localStorage.getItem('darts_pro_known_players');
@@ -564,7 +564,7 @@
                      renderQuickAdd();
                      return;
                 }
-              
+             
                 restoreGameState(s);
 
             } catch(e) { console.error("Save load error", e); }
@@ -639,7 +639,7 @@
         gameHistory.unshift(newGame);
         localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
     }
-   
+    
     // --- QUICK ADD ---
     function renderQuickAdd() {
         const area = document.getElementById('quick-add-area');
@@ -654,13 +654,13 @@
             </div>
         `).join('');
     }
-   
+    
     function addPlayerByName(name) {
         players.push({name:name, score:501, finished:false, history:[]}); 
         renderList(); 
         saveGame();
     }
-   
+    
     function deleteQuickAdd(name, e) {
         e.stopPropagation();
         if(confirm(`Remove "${name}" from shortcuts?`)) {
@@ -676,22 +676,22 @@
         if(score === 0) return null; 
         if(score === 25) return {x:0, y:0};
         if(score === 50) return {x:0, y:0};
-      
+     
         const numberIndex = boardNumbers.indexOf(score);
         const angleDeg = (numberIndex * 18) - 90;
         const angleRad = angleDeg * (Math.PI / 180);
-      
+     
         let r = 0;
         if(mult === 3) r = 104;
         else if(mult === 2) r = 167;
         else r = 135; 
-      
+     
         return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
     }
 
     function formatScore(val, mult, style) {
         const total = val * mult;
-      
+     
         if(style === 'button') {
             if (val === 0) return `0`;
             if (val === 25) return `1x25 <span class="grid-dim-text">(${total})</span>`;
@@ -702,7 +702,7 @@
         if (val === 0) return "0";
         if (val === 25) return "1x25 (25)";
         if (val === 50) return "1x50 (50)";
-      
+     
         return `${mult}x${val} (${total})`;
     }
 
@@ -782,22 +782,22 @@
         setupDragAndDrop();
         setupSwipeObserver();
         buildGridInterface();
-       
+      
         loadGame(); 
     }
 
     function buildGridInterface() {
         const container = document.getElementById('grid-body-container');
         container.innerHTML = '';
-       
+      
         [0, 1, 2].forEach(dartIdx => {
             const page = document.createElement('div');
             page.className = 'grid-page';
             page.id = `grid-page-${dartIdx}`;
-           
+          
             const grid = document.createElement('div');
             grid.className = 'grid-matrix';
-           
+          
             for(let i=20; i>=1; i--) {
                 grid.innerHTML += `
                     <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'button')}</div>
@@ -829,17 +829,17 @@
         endTutorials();
 
         dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
-       
+      
         if(score === 0) {
             resetSingleDart(dartIdx);
         } else {
             moveDartToBoardLocation(dartIdx, score, mult);
         }
-       
+      
         updateDartVisuals(dartIdx, score, mult);
         updateGameState();
         saveGame();
-       
+      
         if(dartIdx < 2) switchGridTab(dartIdx + 1);
     }
 
@@ -848,14 +848,14 @@
         const container = document.getElementById('dartboard-container');
         const boardRect = container.getBoundingClientRect();
         const sectionRect = document.getElementById('section-visual').getBoundingClientRect();
-       
+      
         const relativeLeft = boardRect.left - sectionRect.left;
         const relativeTop = boardRect.top - sectionRect.top;
         const boardW = boardRect.width;
 
         const coords = getBoardCoordinates(score, mult);
         const scale = boardW / 410; 
-       
+      
         const pixelX = (coords.x * scale) + (relativeLeft + boardW/2);
         const pixelY = (coords.y * scale) + (relativeTop + boardW/2);
 
@@ -877,12 +877,12 @@
         let phase = 0; 
         const drag = document.getElementById('tut-drag');
         const swipe = document.getElementById('tut-swipe');
-       
+      
         drag.style.display = 'flex';
         swipe.style.display = 'none';
 
         if(tutorialInterval) clearInterval(tutorialInterval);
-       
+      
         tutorialInterval = setInterval(() => {
             if(!tutorialsActive) return;
             if(phase === 0) {
@@ -909,7 +909,7 @@
         const slider = document.getElementById('view-slider');
         slider.addEventListener('scroll', () => {
             const index = Math.round(slider.scrollLeft / slider.offsetWidth);
-           
+          
             const darts = document.querySelectorAll('.dart-obj');
             darts.forEach(d => {
                 if(index > 0) d.classList.add('hidden-in-grid');
@@ -927,13 +927,21 @@
         const magScore = document.getElementById('magnifier-score');
         const mainSVG = document.getElementById('main-svg');
         const visualSection = document.getElementById('section-visual');
+        const slider = document.getElementById('view-slider');
 
         darts.forEach((dart, idx) => {
             const onStart = (e) => {
                 if(!gameActive) return;
-                if(document.getElementById('view-slider').scrollLeft > 100) return;
+                // If we are already scrolled to grid, don't grab dart
+                if(slider.scrollLeft > 100) return;
 
                 endTutorials();
+                
+                // --- DISABLE SWIPE ---
+                // Reset scroll to 0 (revert swipe if slightly started)
+                slider.scrollLeft = 0;
+                // Lock horizontal scroll
+                slider.style.overflow = 'hidden';
 
                 e.preventDefault();
                 const cx = e.touches ? e.touches[0].clientX : e.clientX;
@@ -949,9 +957,9 @@
                 const updatePos = (mx, my) => {
                     dart.style.left = (mx - 20) + 'px'; 
                     dart.style.top = (my - 120) + 'px';
-                   
+                  
                     const hit = document.elementFromPoint(mx, my);
-                   
+                  
                     const container = document.getElementById('dartboard-container');
                     const rect = container.getBoundingClientRect();
                     const scale = 410 / rect.width;
@@ -970,15 +978,23 @@
                 };
                 updatePos(cx, cy);
 
-                const onMove = (em) => { em.preventDefault(); updatePos(em.touches?em.touches[0].clientX:em.clientX, em.touches?em.touches[0].clientY:em.clientY); };
+                const onMove = (em) => { 
+                    em.preventDefault(); 
+                    updatePos(em.touches?em.touches[0].clientX:em.clientX, em.touches?em.touches[0].clientY:em.clientY); 
+                };
+                
                 const onEnd = (ee) => {
                     document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd);
                     document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd);
                     magnifier.style.display = 'none';
-                   
+                    
+                    // --- RE-ENABLE SWIPE ---
+                    slider.style.overflowX = 'auto';
+                    slider.style.overflowY = 'hidden';
+                  
                     const mx = ee.changedTouches?ee.changedTouches[0].clientX:ee.clientX;
                     const my = ee.changedTouches?ee.changedTouches[0].clientY:ee.clientY;
-                   
+                  
                     dart.hidden = true; let el = document.elementFromPoint(mx, my); dart.hidden = false;
                     darts.forEach(d => d.style.pointerEvents = 'auto');
 
@@ -992,7 +1008,7 @@
 
                     if(el && el.classList.contains('board-segment')) {
                         const s = parseInt(el.getAttribute('data-s')), m = parseInt(el.getAttribute('data-m'));
-                       
+                      
                         requestAnimationFrame(() => {
                             dart.style.transition = 'transform 0.1s ease-out';
                             dart.style.transform = 'scale(0.8) rotate(0deg)';
@@ -1038,7 +1054,7 @@
 
         for(let i=0; i<3; i++) {
             const d = dartState[i];
-            
+           
             // NOTE: We no longer skip 0s here. Every dart index counts as a throw attempt.
             // if(d.val === 0 && !d.missed) continue; 
 
@@ -1077,7 +1093,7 @@
             // Update history to maintain graph continuity for this turn
             if(p.history.length > 0) p.history[p.history.length-1] = p.score;
             else p.history = [p.score];
-           
+          
             renderScoreboard();
             updateGameState();
             saveGame();
@@ -1095,17 +1111,17 @@
         if(prevPlayer.history.length <= 1) return;
 
         currentPlayerIndex = prevIndex;
-       
+      
         const p = players[currentPlayerIndex];
         p.finished = false; 
         p.history.pop(); 
         p.score = p.history[p.history.length - 1]; 
 
         dartState = [{val:0, mult:1, missed:false},{val:0, mult:1, missed:false},{val:0, mult:1, missed:false}];
-       
+      
         document.getElementById('btn-next').classList.remove('game-over');
         document.getElementById('btn-next').innerText = "Next"; 
-       
+      
         [0,1,2].forEach(i => {
             document.getElementById(`grid-val-${i}`).innerText = '-';
             const badge = document.getElementById(`badge-dart-${i+1}`);
@@ -1113,7 +1129,7 @@
         });
         switchGridTab(0);
         endTutorials();
-       
+      
         renderScoreboard();
         resetDartsPosition();
         saveGame();
@@ -1123,13 +1139,13 @@
         if(!gameActive) return;
         const p = players[currentPlayerIndex];
         const res = calculateScore(p.score);
-       
+      
         if(res.isWin) { 
             // Calculate Darts Thrown to store in history
             const turns = p.history.length - 1; 
             p.dartsThrown = (turns * 3) + (res.winningDartIndex + 1);
             p.finishTime = Date.now(); 
-           
+          
             p.score = 0; 
             p.finished = true;
             p.history.push(0);
@@ -1145,14 +1161,14 @@
             {val:0, mult:1, missed:false}, 
             {val:0, mult:1, missed:false}
         ];
-       
+      
         [0,1,2].forEach(i => {
             document.getElementById(`grid-val-${i}`).innerText = '-';
             const badge = document.getElementById(`badge-dart-${i+1}`);
             if(badge) badge.innerText = "0"; 
         });
         switchGridTab(0);
-       
+      
         endTutorials();
 
         if(players.every(pl => pl.finished)) { 
@@ -1203,7 +1219,7 @@
         let maxTurns = 0;
         players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
         if(maxTurns < 5) maxTurns = 5; 
-       
+      
         const xMax = maxTurns + 1; // Extend axis slightly
 
         const svgNS = "http://www.w3.org/2000/svg";
@@ -1246,7 +1262,7 @@
             const x = padL + (i / (xMax - 1)) * graphW;
             // Only draw some labels if too many
             if(xMax > 10 && i % 2 !== 0) continue;
-           
+          
             const txt = document.createElementNS(svgNS, "text");
             txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
             txt.setAttribute("text-anchor", "middle");
@@ -1268,7 +1284,7 @@
                 const x = padL + (turnIdx / (xMax - 1)) * graphW;
                 const y = graphH - ((score / startVal) * graphH);
                 points += `${x},${y} `;
-               
+              
                 const dot = document.createElementNS(svgNS, "circle");
                 dot.setAttribute("cx", x); dot.setAttribute("cy", y);
                 dot.setAttribute("r", 3); dot.setAttribute("fill", color);
@@ -1354,14 +1370,14 @@
             saveGame(); // Set as active
         }
     }
-   
+    
     function deleteGame(id, event) {
         event.stopPropagation();
         if(confirm("Are you sure you want to permanently delete this game?")) {
             gameHistory = gameHistory.filter(g => g.id !== id);
             localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
             renderHistoryModal(); // Re-render
-           
+          
             // If the deleted game was the active one, reset
             if(id === currentGameId) {
                 retryGame();
@@ -1369,7 +1385,7 @@
             }
         }
     }
-   
+    
     function deletePlayerFromHistory(name, event) {
         event.stopPropagation();
         if(confirm(`PERMANENTLY DELETE "${name}"?\n\nThis will remove them from shortcuts AND delete their presence from all past game records. This cannot be undone.`)) {
@@ -1383,7 +1399,7 @@
             });
             // Remove games that are now empty
             gameHistory = gameHistory.filter(g => g.players.length > 0);
-           
+          
             localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
 
             renderHistoryModal();
@@ -1395,11 +1411,11 @@
         // Render Games
         const finishedEl = document.getElementById('list-finished');
         const unfinishedEl = document.getElementById('list-unfinished');
-       
+      
         // Definition: Finished if AT LEAST ONE player has finished
         const finished = gameHistory.filter(g => g.players.some(p => p.finished));
         const unfinished = gameHistory.filter(g => !g.players.some(p => p.finished));
-       
+      
         unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
                 <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">&times;</button>
@@ -1435,10 +1451,10 @@
         const playersEl = document.getElementById('player-list-view');
         const allPlayers = new Set();
         gameHistory.forEach(g => g.players.forEach(p => allPlayers.add(p.name)));
-       
+      
         // Also include known players even if they haven't played a game yet (from shortcuts)
         knownPlayers.forEach(p => allPlayers.add(p));
-       
+      
         playersEl.innerHTML = Array.from(allPlayers).map(name => `
             <div class="player-accordion-header" onclick="togglePlayerAccordion('${name}')">
                 <span>${name}</span> 
@@ -1454,7 +1470,7 @@
 
     function renderPlayerDetailsInAccordion(name) {
         const container = document.getElementById('p-acc-body-' + name);
-       
+      
         // Get all game instances for this player where they finished
         let finishedGames = [];
         let wins = 0;
@@ -1479,7 +1495,7 @@
                 }
             }
         });
-       
+      
         let best = '-';
         let avg = '-';
         if(finishedGames.length > 0) {
@@ -1498,7 +1514,7 @@
             <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Finish (Over Time)</div>
             <div id="graph-container-${name}" style="height:200px; width:100%; position:relative; border-left:1px solid #444; border-bottom:1px solid #444;"></div>
         `;
-       
+      
         requestAnimationFrame(() => drawPlayerGraphInAccordion(name, finishedGames));
     }
 
@@ -1517,20 +1533,20 @@
         svg.setAttribute('width', '100%');
         svg.setAttribute('height', '100%');
         container.appendChild(svg);
-       
+      
         // Sort by date
         finishedGames.sort((a,b) => new Date(a.date) - new Date(b.date));
-       
+      
         const darts = finishedGames.map(g => g.darts);
         const maxDarts = Math.max(...darts);
         const minDarts = Math.max(0, Math.min(...darts) - 5);
-       
+      
         // Define Scale range with padding
         const yMax = maxDarts + 5; 
         const yRange = yMax - minDarts;
-       
+      
         const xMax = darts.length + 1; // Pad X axis
-       
+      
         // Padding for labels
         const padL = 25; const padB = 20;
         const graphW = w - padL;
@@ -1540,7 +1556,7 @@
         for(let i=0; i<=4; i++) {
              const val = Math.round(minDarts + (yRange * (i/4)));
              const y = graphH - (graphH * (i/4));
-            
+           
              // Label
             const txt = document.createElementNS(svgNS, "text");
             txt.setAttribute("x", 0); txt.setAttribute("y", y + 4);
@@ -1566,12 +1582,12 @@
             const x = padL + (i / (xMax - 1)) * graphW;
             const y = graphH - ((d - minDarts) / yRange) * graphH;
             points += `${x},${y} `;
-           
+          
             const dot = document.createElementNS(svgNS, "circle");
             dot.setAttribute("cx", x); dot.setAttribute("cy", y);
             dot.setAttribute("r", 4); dot.setAttribute("fill", "#00e676");
             svg.appendChild(dot);
-           
+          
             // Draw Value above point
             const valTxt = document.createElementNS(svgNS, "text");
             valTxt.setAttribute("x", x); valTxt.setAttribute("y", y - 8);
@@ -1604,7 +1620,7 @@
     function resetDartsPosition() {
         const section = document.getElementById('section-visual');
         const rect = section.getBoundingClientRect();
-       
+      
         const startX = rect.width - 60; 
         const startY = rect.height - 100;
 
@@ -1637,7 +1653,7 @@
         if(inp.value.trim()){ 
             const name = inp.value.trim();
             players.push({name:name, score:501, finished:false, history:[]}); 
-           
+          
             // Add to known players if not exists
             if(!knownPlayers.includes(name)) {
                 knownPlayers.push(name);
@@ -1651,9 +1667,9 @@
             saveGame();
         } 
     }
-   
+    
     function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList();saveGame()" style="cursor:pointer">&times;</span></div>`).join(''); }
-   
+    
     function startGame() { 
         if(players.length===0) return; 
         const s = parseInt(document.getElementById('start-score-select').value); 
@@ -1667,28 +1683,28 @@
         gameActive = true; currentPlayerIndex = 0; 
         document.getElementById('setup-modal').style.display='none'; 
         document.body.classList.remove('modal-open');
-       
+      
         const btn = document.getElementById('btn-next');
         btn.innerText = "Next"; 
         btn.classList.remove('game-over');
 
         recordGameStart(); // Log to history
         renderScoreboard(); 
-       
+      
         setTimeout(() => { 
             resetDartsPosition(); 
             startTutorialLoop();
         }, 100); 
         saveGame();
     }
-   
+    
     function renderScoreboard() {
         document.getElementById('scoreboard').innerHTML = players.map((p,i) => {
             const active = (i===currentPlayerIndex && !p.finished);
             // Added on dblclick to allow editing
             return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score" ondblclick="editPlayerScore(${i})">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
         }).join('');
-       
+      
         const activeEl = document.querySelector(`.player-column.active`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
