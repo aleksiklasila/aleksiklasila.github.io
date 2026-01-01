@@ -63,7 +63,13 @@
         .player-column.active { border-color: var(--accent); background: #252525; box-shadow: 0 0 15px rgba(0, 230, 118, 0.1); }
         .player-column.finished { opacity: 0.6; border-color: gold; }
         .player-name { font-size: 0.85rem; font-weight: 600; color: #aaa; margin-bottom: 2px; }
-        .current-score { font-size: 2.2rem; font-weight: 800; color: white; line-height: 1; letter-spacing: -1px; }
+        
+        .current-score { 
+            font-size: 2.2rem; font-weight: 800; color: white; line-height: 1; letter-spacing: -1px; 
+            cursor: pointer; /* Indicates clickable */
+        }
+        .current-score:active { transform: scale(0.95); color: #ccc; }
+
         .projected-row { margin-top: 4px; font-size: 0.75rem; color: #777; display: flex; justify-content: center; gap: 4px; }
         .next-score { color: var(--accent); font-weight: bold; }
         .next-score.bust { color: var(--danger); text-decoration: line-through; }
@@ -180,15 +186,10 @@
             background: rgba(0,0,0,0.3); padding: 1px 3px; border-radius: 4px;
         }
 
-        /* --- Magnifier (Updated Position) --- */
+        /* --- Magnifier --- */
         #magnifier {
             position: absolute; 
-            /* Lower Left Positioning */
-            top: auto; 
-            bottom: 20px; 
-            left: 20px;
-            right: auto;
-            
+            bottom: 20px; left: 20px;
             width: 120px; height: 120px;
             border: 3px solid var(--accent); border-radius: 50%; background: #000;
             overflow: hidden; display: none; z-index: 500; pointer-events: none;
@@ -276,9 +277,16 @@
              <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size: 0.9rem; color:#ccc;">
                 Starting Score
                 <select id="start-score-select" style="background:#111; color:white; border:1px solid #444; padding:5px; border-radius:4px;">
+                    <option value="101">101</option>
+                    <option value="201">201</option>
                     <option value="301">301</option>
+                    <option value="401">401</option>
                     <option value="501" selected>501</option>
+                    <option value="601">601</option>
                     <option value="701">701</option>
+                    <option value="801">801</option>
+                    <option value="901">901</option>
+                    <option value="1001">1001</option>
                 </select>
             </label>
             <button onclick="startGame()" style="width:100%; padding: 12px; font-size:1rem;">Start Game</button>
@@ -377,6 +385,44 @@
 
     const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
     const playerColors = ["#00e676", "#2979ff", "#ff4081", "#ff9100", "#e040fb", "#00bcd4", "#ffeb3b", "#ff1744"];
+    
+    // --- PERSISTENCE ---
+    function saveGame() {
+        const state = {
+            players, currentPlayerIndex, gameActive, startScoreVal, dartState
+        };
+        localStorage.setItem('darts_pro_save', JSON.stringify(state));
+    }
+
+    function loadGame() {
+        const saved = localStorage.getItem('darts_pro_save');
+        if(saved) {
+            try {
+                const s = JSON.parse(saved);
+                if(!s.players || s.players.length === 0) return;
+                
+                players = s.players;
+                currentPlayerIndex = s.currentPlayerIndex;
+                gameActive = s.gameActive;
+                startScoreVal = s.startScoreVal;
+                dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
+                
+                if(gameActive) {
+                    document.getElementById('setup-modal').style.display = 'none';
+                    renderScoreboard();
+                    // Restore visual state
+                    dartState.forEach((d, i) => {
+                       if(d.val !== 0 || d.missed) {
+                           updateDartVisuals(i, d.val, d.mult);
+                           if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
+                           if(i < 2 && d.val !== 0) switchGridTab(i+1);
+                       } 
+                    });
+                    updateGameState();
+                }
+            } catch(e) { console.error("Save load error", e); }
+        }
+    }
 
     function getBoardCoordinates(score, mult) {
         if(score === 0) return null; 
@@ -488,6 +534,8 @@
         setupDragAndDrop();
         setupSwipeObserver();
         buildGridInterface();
+        
+        loadGame(); // Load previous state
     }
 
     function buildGridInterface() {
@@ -542,6 +590,7 @@
         
         updateDartVisuals(dartIdx, score, mult);
         updateGameState();
+        saveGame();
         
         if(dartIdx < 2) switchGridTab(dartIdx + 1);
     }
@@ -704,11 +753,13 @@
                         dartState[idx] = { val: s, mult: m, missed: false };
                         updateDartVisuals(idx, s, m);
                         updateGameState();
+                        saveGame();
                     } else {
                         resetSingleDart(idx); 
                         dartState[idx] = { val: 0, mult: 1, missed: true };
                         updateDartVisuals(idx, 0, 1);
                         updateGameState();
+                        saveGame();
                     }
                 };
                 document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
@@ -749,6 +800,23 @@
         return { rem: isBust ? currentScore : temp, isBust, isWin };
     }
 
+    // --- MANUAL EDIT ---
+    function editPlayerScore(idx) {
+        if(!gameActive) return;
+        const p = players[idx];
+        const newScore = prompt(`Edit score for ${p.name}:`, p.score);
+        if(newScore !== null && !isNaN(newScore)) {
+            p.score = parseInt(newScore);
+            // Update history to maintain graph continuity for this turn
+            if(p.history.length > 0) p.history[p.history.length-1] = p.score;
+            else p.history = [p.score];
+            
+            renderScoreboard();
+            updateGameState();
+            saveGame();
+        }
+    }
+
     function manualPrev() {
         if(!gameActive) return;
 
@@ -781,6 +849,7 @@
         
         renderScoreboard();
         resetDartsPosition();
+        saveGame();
     }
 
     function manualNext() {
@@ -816,6 +885,7 @@
             const btn = document.getElementById('btn-next');
             btn.innerText = txt.gameOver;
             btn.classList.add('game-over');
+            saveGame();
             return; 
         }
 
@@ -831,6 +901,7 @@
 
         renderScoreboard();
         resetDartsPosition();
+        saveGame();
     }
 
     function toggleGraph() {
@@ -926,6 +997,7 @@
     function retryGame() {
         if(confirm("End current game and setup new one?")) {
             gameActive = false;
+            localStorage.removeItem('darts_pro_save'); // Clear save
             document.getElementById('setup-modal').style.display = 'flex';
             renderList(); 
         }
@@ -969,10 +1041,11 @@
             inp.value=""; 
             renderList(); 
             inp.focus(); 
+            saveGame();
         } 
     }
     
-    function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList()" style="cursor:pointer">&times;</span></div>`).join(''); }
+    function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList();saveGame()" style="cursor:pointer">&times;</span></div>`).join(''); }
     
     function startGame() { 
         if(players.length===0) return; 
@@ -996,12 +1069,14 @@
             resetDartsPosition(); 
             startTutorialLoop();
         }, 100); 
+        saveGame();
     }
     
     function renderScoreboard() {
         document.getElementById('scoreboard').innerHTML = players.map((p,i) => {
             const active = (i===currentPlayerIndex && !p.finished);
-            return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
+            // Added on dblclick to allow editing
+            return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score" ondblclick="editPlayerScore(${i})">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
         }).join('');
         
         const activeEl = document.querySelector(`.player-column.active`);
