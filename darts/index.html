@@ -46,7 +46,12 @@
             background: var(--accent); color: #000; border: none; padding: 6px 14px;
             border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.85rem;
         }
-        button.icon-btn { padding: 6px 10px; font-size: 1.2rem; line-height: 1; display: flex; align-items: center; justify-content: center; }
+        button.icon-btn { 
+            padding: 6px 10px; 
+            display: flex; align-items: center; justify-content: center; 
+            background: #333; color: #ccc; border: 1px solid #444;
+        }
+        button.icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
         button.danger { background: var(--danger); color: white; }
 
         /* --- Scoreboard --- */
@@ -66,7 +71,7 @@
         
         .current-score { 
             font-size: 2.2rem; font-weight: 800; color: white; line-height: 1; letter-spacing: -1px; 
-            cursor: pointer; /* Indicates clickable */
+            cursor: pointer;
         }
         .current-score:active { transform: scale(0.95); color: #ccc; }
 
@@ -311,7 +316,9 @@
 <header>
     <h1 id="app-title">Darts Scorer Pro</h1>
     <div class="header-controls">
-        <button onclick="toggleGraph()" class="icon-btn">📈</button>
+        <button onclick="toggleGraph()" class="icon-btn">
+            <svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>
+        </button>
         <button onclick="retryGame()" class="danger" id="btn-retry">Retry</button>
     </div>
 </header>
@@ -410,14 +417,27 @@
                 if(gameActive) {
                     document.getElementById('setup-modal').style.display = 'none';
                     renderScoreboard();
-                    // Restore visual state
-                    dartState.forEach((d, i) => {
-                       if(d.val !== 0 || d.missed) {
-                           updateDartVisuals(i, d.val, d.mult);
-                           if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
-                           if(i < 2 && d.val !== 0) switchGridTab(i+1);
-                       } 
-                    });
+                    
+                    // CRITICAL FIX: Reset all darts to hand FIRST, using setTimeout to ensure layout is ready
+                    setTimeout(() => {
+                        resetDartsPosition(); 
+                        
+                        // Then move ONLY thrown darts to board
+                        let thrownCount = 0;
+                        dartState.forEach((d, i) => {
+                           if(d.val !== 0 || d.missed) {
+                               thrownCount++;
+                               updateDartVisuals(i, d.val, d.mult);
+                               if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
+                           } 
+                        });
+                        
+                        // Restore proper tab
+                        if(thrownCount < 3) switchGridTab(thrownCount);
+                        else switchGridTab(2);
+                        
+                    }, 50);
+
                     updateGameState();
                 }
             } catch(e) { console.error("Save load error", e); }
