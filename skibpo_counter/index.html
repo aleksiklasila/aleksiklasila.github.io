@@ -3,316 +3,296 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mobile Skip-Bo Counter</title>
+    <title>Skip-Bo Counter</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            padding: 15px;
-            background-color: #f0f2f5;
-            color: #333;
-            text-align: center;
-        }
-        h1 { color: #d32f2f; margin-bottom: 10px; font-size: 1.8rem; }
-        .card {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        /* Mobile-friendly large button */
-        .camera-btn {
-            background-color: #d32f2f;
-            color: white;
-            border: none;
-            padding: 15px 0;
-            width: 100%;
-            border-radius: 8px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            cursor: pointer;
-            display: block;
-            margin: 10px 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        }
-        .camera-btn:active { background-color: #b71c1c; transform: translateY(2px); }
-        .camera-btn:disabled { background-color: #ccc; box-shadow: none; transform: none; }
+        body { font-family: sans-serif; background: #222; color: #fff; text-align: center; padding: 10px; }
+        h1 { color: #ff4444; margin: 10px 0; font-size: 1.5rem; }
         
-        /* Hidden file input */
-        #cameraInput { display: none; }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        .stat-box {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #e0e0e0;
-        }
-        .stat-label { font-size: 0.8rem; color: #666; text-transform: uppercase; letter-spacing: 1px; }
-        .stat-value { font-size: 1.5rem; font-weight: bold; color: #333; }
-        .total-score { color: #2e7d32; }
-
-        #status { margin-top: 10px; font-style: italic; color: #666; font-size: 0.9rem; min-height: 1.2em;}
+        .controls { background: #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
         
-        #previewContainer { margin-top: 15px; position: relative; }
-        #previewImg { width: 100%; border-radius: 8px; display: none; }
-        .overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .btn {
+            background: #ff4444; color: white; border: none; padding: 15px 30px;
+            font-size: 1.2rem; border-radius: 8px; cursor: pointer; width: 100%;
+            display: block; margin: 10px 0; font-weight: bold;
+        }
+        .btn:disabled { background: #666; }
         
-        .reset-link { color: #666; text-decoration: underline; font-size: 0.9rem; cursor: pointer; display: inline-block; margin-top: 20px; }
+        #status { color: #aaa; margin-bottom: 10px; font-style: italic; min-height: 20px; }
+        #totalScore { font-size: 2.5rem; color: #4caf50; font-weight: bold; margin: 10px 0; }
+        
+        /* Container for the image and the overlay drawings */
+        .canvas-container { position: relative; display: inline-block; max-width: 100%; }
+        #displayCanvas { max-width: 100%; border-radius: 8px; border: 2px solid #555; }
+        
+        /* Hide raw inputs and processing canvases */
+        .hidden { display: none; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@v3.0.3/dist/tesseract.min.js"></script>
+    <script async src="https://docs.opencv.org/4.5.0/opencv.js" onload="onOpenCvReady();"></script>
 </head>
 <body>
 
-    <h1>Skip-Bo Counter</h1>
+    <h1>Smart Skip-Bo Counter</h1>
 
-    <div class="card">
-        <div id="status">Initializing AI...</div>
+    <div class="controls">
+        <div id="status">Loading AI engines...</div>
+        <div id="totalScore">0</div>
+        <div>Total Points</div>
         
-        <label for="cameraInput" class="camera-btn" id="camBtn" style="opacity: 0.5; pointer-events: none;">
+        <label for="cameraInput" class="btn" id="camBtn" style="opacity: 0.5; pointer-events: none;">
             📷 Take Photo
         </label>
-        <input type="file" id="cameraInput" accept="image/*" capture="environment">
-
-        <div class="stats-grid">
-            <div class="stat-box">
-                <div class="stat-label">Last Photo</div>
-                <div class="stat-value" id="lastScore">0</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Grand Total</div>
-                <div class="stat-value total-score" id="totalScore">0</div>
-            </div>
-        </div>
-
-        <div id="previewContainer">
-            <img id="previewImg" alt="Preview">
-            <canvas id="overlayCanvas" class="overlay-canvas"></canvas>
-        </div>
-
-        <div class="reset-link" onclick="resetTotal()">Reset Grand Total</div>
+        <input type="file" id="cameraInput" accept="image/*" class="hidden" capture="environment">
+        <button class="btn" onclick="reset()" style="background:#555; font-size:1rem; padding:10px;">Reset</button>
     </div>
 
-    <canvas id="processCanvas" style="display:none;"></canvas>
+    <div class="canvas-container">
+        <canvas id="displayCanvas"></canvas>
+    </div>
 
-    <script async src="https://docs.opencv.org/4.5.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <canvas id="processCanvas" class="hidden"></canvas>
 
-    <script>
-        let openCvReady = false;
-        let tesseractWorker = null;
-        let grandTotal = 0;
+<script>
+    let cvReady = false;
+    let worker = null;
+    let grandTotal = 0;
 
-        const statusDiv = document.getElementById('status');
-        const camBtn = document.getElementById('camBtn');
-        const cameraInput = document.getElementById('cameraInput');
-        const lastScoreEl = document.getElementById('lastScore');
-        const totalScoreEl = document.getElementById('totalScore');
-        const previewImg = document.getElementById('previewImg');
-        const processCanvas = document.getElementById('processCanvas');
-        const overlayCanvas = document.getElementById('overlayCanvas');
-        const ctx = processCanvas.getContext('2d', { willReadFrequently: true });
+    const statusEl = document.getElementById('status');
+    const camBtn = document.getElementById('camBtn');
+    const displayCanvas = document.getElementById('displayCanvas');
+    const ctx = displayCanvas.getContext('2d');
 
-        function onOpenCvReady() {
-            openCvReady = true;
-            checkReady();
+    function onOpenCvReady() {
+        cvReady = true;
+        checkReady();
+    }
+
+    // Initialize Tesseract with settings optimized for big numbers
+    async function initTesseract() {
+        worker = Tesseract.createWorker();
+        await worker.load();
+        await worker.loadLanguage('eng');
+        await worker.initialize('eng');
+        await worker.setParameters({
+            tessedit_char_whitelist: '0123456789SKIPBO', // Only look for these chars
+            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK // Treat card as one block
+        });
+        checkReady();
+    }
+    initTesseract();
+
+    function checkReady() {
+        if (cvReady && worker) {
+            statusEl.innerText = "Ready. Tap camera to start.";
+            camBtn.style.opacity = "1";
+            camBtn.style.pointerEvents = "auto";
         }
+    }
 
-        async function initTesseract() {
-            try {
-                tesseractWorker = Tesseract.createWorker();
-                await tesseractWorker.load();
-                await tesseractWorker.loadLanguage('eng');
-                await tesseractWorker.initialize('eng');
-                // Optimize: Whitelist only numbers and SKIPBO letters
-                await tesseractWorker.setParameters({
-                    tessedit_char_whitelist: '0123456789SKIPBOskipbo',
-                    tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD 
-                });
-                checkReady();
-            } catch (err) {
-                statusDiv.textContent = "Error loading OCR. Try refreshing.";
-                console.error(err);
-            }
-        }
+    function reset() {
+        grandTotal = 0;
+        document.getElementById('totalScore').innerText = "0";
+        ctx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+        displayCanvas.height = 0;
+        statusEl.innerText = "Ready.";
+    }
 
-        function checkReady() {
-            if (openCvReady && tesseractWorker) {
-                statusDiv.textContent = 'Ready. Tap below to scan.';
-                camBtn.style.opacity = '1';
-                camBtn.style.pointerEvents = 'auto';
-            }
-        }
+    document.getElementById('cameraInput').addEventListener('change', async (e) => {
+        if (!e.target.files[0]) return;
+        
+        statusEl.innerText = "Processing... (This may take a moment)";
+        camBtn.style.opacity = "0.5"; 
+        
+        const img = new Image();
+        img.onload = () => processImage(img);
+        img.src = URL.createObjectURL(e.target.files[0]);
+    });
 
-        function resetTotal() {
-            grandTotal = 0;
-            lastScoreEl.textContent = '0';
-            totalScoreEl.textContent = '0';
-            previewImg.style.display = 'none';
-            statusDiv.textContent = 'Ready. Tap below to scan.';
-            // Clear overlay
-            const oCtx = overlayCanvas.getContext('2d');
-            oCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        }
+    async function processImage(img) {
+        // 1. Resize for performance (Max width 800px)
+        const scaleFactor = Math.min(800 / img.width, 1);
+        const w = img.width * scaleFactor;
+        const h = img.height * scaleFactor;
 
-        initTesseract();
+        displayCanvas.width = w;
+        displayCanvas.height = h;
+        ctx.drawImage(img, 0, 0, w, h);
 
-        cameraInput.addEventListener('change', async (e) => {
-            if (e.target.files && e.target.files[0]) {
-                const file = e.target.files[0];
-                statusDiv.textContent = "Processing image...";
-                camBtn.style.opacity = "0.5";
-                camBtn.style.pointerEvents = "none";
+        // 2. OpenCV Pre-processing
+        let src = cv.imread(displayCanvas);
+        let dst = new cv.Mat();
+        let gray = new cv.Mat();
+        
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        
+        // Blur heavily to remove puzzle noise but keep card shapes
+        cv.GaussianBlur(gray, gray, new cv.Size(9, 9), 0);
+        
+        // Canny Edge Detection (Better for outlines than Thresholding on busy backgrounds)
+        cv.Canny(gray, dst, 50, 150, 3, false);
+
+        // Find Contours
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let potentialCards = [];
+
+        // 3. Identify Card Candidates
+        for (let i = 0; i < contours.size(); ++i) {
+            let cnt = contours.get(i);
+            let area = cv.contourArea(cnt);
+            
+            // Filter by size (ignore small puzzle pieces)
+            if (area > 2000) { 
+                // Find rotated bounding box
+                let rotatedRect = cv.minAreaRect(cnt);
+                let vertices = cv.RotatedRect.points(rotatedRect);
                 
-                // Show preview immediately
-                previewImg.src = URL.createObjectURL(file);
-                previewImg.style.display = 'block';
+                // Aspect ratio check (Card should be roughly 2:3 or 3:2)
+                let rW = rotatedRect.size.width;
+                let rH = rotatedRect.size.height;
+                let aspectRatio = rW > rH ? rW / rH : rH / rW;
 
-                try {
-                    const roundScore = await processImage(file);
-                    grandTotal += roundScore;
-                    lastScoreEl.textContent = roundScore;
-                    totalScoreEl.textContent = grandTotal;
-                    statusDiv.textContent = `Found ${roundScore} points! Ready for next.`;
-                } catch (err) {
-                    console.error(err);
-                    statusDiv.textContent = "Error processing. Try better lighting.";
-                } finally {
-                    camBtn.style.opacity = "1";
-                    camBtn.style.pointerEvents = "auto";
-                    cameraInput.value = ''; // Allow re-selecting same file if needed
+                if (aspectRatio < 2.5 && aspectRatio > 1.2) {
+                    potentialCards.push(vertices);
                 }
             }
-        });
-
-        async function processImage(file) {
-            return new Promise((resolve, reject) => {
-                const img = new Image();
-                img.onload = async () => {
-                    try {
-                        // 1. Resize Image (Critical for Mobile Performance)
-                        // Mobile photos are huge (4000px+). We scale down to max 1000px width.
-                        const maxDim = 1000;
-                        let scale = 1;
-                        if (img.width > maxDim || img.height > maxDim) {
-                            scale = maxDim / Math.max(img.width, img.height);
-                        }
-                        
-                        processCanvas.width = img.width * scale;
-                        processCanvas.height = img.height * scale;
-                        ctx.drawImage(img, 0, 0, processCanvas.width, processCanvas.height);
-
-                        // Setup overlay canvas for drawing debug boxes
-                        overlayCanvas.width = img.width * scale;
-                        overlayCanvas.height = img.height * scale;
-                        const oCtx = overlayCanvas.getContext('2d');
-                        oCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-                        oCtx.lineWidth = 3;
-                        oCtx.strokeStyle = '#00FF00';
-
-                        // 2. OpenCV Pre-processing
-                        let src = cv.imread(processCanvas);
-                        let gray = new cv.Mat();
-                        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-
-                        // Blur to reduce noise
-                        let blurred = new cv.Mat();
-                        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-
-                        // Adaptive Threshold to find edges even in varying lighting
-                        let thresh = new cv.Mat();
-                        cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-
-                        // Find Contours
-                        let contours = new cv.MatVector();
-                        let hierarchy = new cv.Mat();
-                        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-                        let scoreTotal = 0;
-                        let cardPromises = [];
-
-                        // 3. Detect and Extract Cards
-                        for (let i = 0; i < contours.size(); ++i) {
-                            let cnt = contours.get(i);
-                            let rect = cv.boundingRect(cnt);
-                            let area = cv.contourArea(cnt);
-                            
-                            // Filter noise: Must be a reasonable size to be a card
-                            // Area > 2000 is a heuristic for resized 1000px images
-                            if (area > 2000) {
-                                let aspectRatio = rect.width / rect.height;
-                                // Cards shouldn't be extremely thin strips
-                                if (aspectRatio > 0.4 && aspectRatio < 2.5) {
-                                    
-                                    // Draw box on overlay
-                                    oCtx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-
-                                    // Extract the card
-                                    let cardRoi = src.roi(rect);
-                                    let cardCanvas = document.createElement('canvas');
-                                    cardCanvas.width = rect.width;
-                                    cardCanvas.height = rect.height;
-                                    cv.imshow(cardCanvas, cardRoi);
-                                    
-                                    cardPromises.push(recognizeCard(cardCanvas));
-                                    cardRoi.delete();
-                                }
-                            }
-                        }
-
-                        // 4. Run OCR
-                        statusDiv.textContent = `Analyzing ${cardPromises.length} potential cards...`;
-                        const results = await Promise.all(cardPromises);
-                        scoreTotal = results.reduce((a, b) => a + b, 0);
-
-                        // Cleanup
-                        src.delete(); gray.delete(); blurred.delete(); thresh.delete();
-                        contours.delete(); hierarchy.delete();
-
-                        resolve(scoreTotal);
-                    } catch (e) {
-                        reject(e);
-                    }
-                };
-                img.onerror = reject;
-                img.src = URL.createObjectURL(file);
-            });
         }
 
-        async function recognizeCard(cardCanvas) {
-            // Tesseract to read the cropped card
-            const { data: { text } } = await tesseractWorker.recognize(cardCanvas);
-            
-            // Clean string: Remove whitespace, make uppercase
-            const cleanText = text.toUpperCase().replace(/[^0-9A-Z]/g, '');
+        statusEl.innerText = `Found ${potentialCards.length} potential cards. Reading...`;
 
-            // Logic:
-            // 1. SKIPBO = 0
-            if (cleanText.includes('SKIP') || cleanText.includes('BO') || cleanText.includes('SK')) {
-                return 0;
-            }
-
-            // 2. Find Numbers
-            // We look for the largest number found in the blob, 
-            // as OCR often reads "12" as "1" and "2" separately if noisy.
-            // But usually, we just want to find a valid 1-12 match.
-            const matches = cleanText.match(/(1[0-2]|[1-9])/g);
+        let roundScore = 0;
+        
+        // 4. Warp and OCR each card
+        for (let j = 0; j < potentialCards.length; j++) {
+            let vertices = potentialCards[j];
             
-            if (matches && matches.length > 0) {
-                // Return the first valid integer found
-                // We prefer 2-digit numbers if present (to avoid reading 10 as 1 and 0)
-                const twoDigit = matches.find(m => parseInt(m) >= 10);
-                if (twoDigit) return parseInt(twoDigit);
+            // Warp perspective to get a flat, upright card image
+            let warpedCard = warpPerspective(src, vertices);
+            
+            // Pre-process specifically for OCR (Invert colors so white numbers become black)
+            cv.cvtColor(warpedCard, warpedCard, cv.COLOR_RGBA2GRAY);
+            cv.threshold(warpedCard, warpedCard, 120, 255, cv.THRESH_BINARY_INV); // Invert!
+            
+            // Render warped card to a temp canvas for Tesseract
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = warpedCard.cols;
+            tempCanvas.height = warpedCard.rows;
+            cv.imshow(tempCanvas, warpedCard);
+
+            // Run OCR
+            try {
+                const { data: { text } } = await worker.recognize(tempCanvas);
+                const val = parseCardValue(text);
                 
-                return parseInt(matches[0]);
+                if (val !== null) {
+                    roundScore += val;
+                    // Draw Success Box
+                    drawResult(ctx, vertices, val, 'lime');
+                } else {
+                    // Draw Failed Box (optional, helps debug)
+                    drawResult(ctx, vertices, "?", 'yellow');
+                }
+            } catch (err) {
+                console.error(err);
             }
-
-            return 0; // fallback
+            
+            warpedCard.delete();
         }
-    </script>
+
+        grandTotal += roundScore;
+        document.getElementById('totalScore').innerText = grandTotal;
+        statusEl.innerText = `Done! Added ${roundScore} points.`;
+        
+        // Cleanup
+        src.delete(); dst.delete(); gray.delete(); contours.delete(); hierarchy.delete();
+        camBtn.style.opacity = "1";
+    }
+
+    // Helper: Warp a rotated rectangle into a flat 200x300 image
+    function warpPerspective(src, vertices) {
+        // Order vertices: TL, TR, BR, BL
+        let sorted = sortVertices(vertices);
+        
+        // Destination points (standard card size)
+        let cardW = 200, cardH = 300;
+        
+        let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, sorted);
+        let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, cardW,0, cardW,cardH, 0,cardH]);
+        
+        let M = cv.getPerspectiveTransform(srcTri, dstTri);
+        let dst = new cv.Mat();
+        cv.warpPerspective(src, dst, M, new cv.Size(cardW, cardH));
+        
+        srcTri.delete(); dstTri.delete(); M.delete();
+        return dst;
+    }
+
+    // Helper: Sort 4 points to Top-Left, Top-Right, Bottom-Right, Bottom-Left
+    function sortVertices(v) {
+        // Flat array of coordinates
+        let points = [
+            {x: v[0].x, y: v[0].y}, {x: v[1].x, y: v[1].y},
+            {x: v[2].x, y: v[2].y}, {x: v[3].x, y: v[3].y}
+        ];
+        
+        // Sort by Y to separate top 2 and bottom 2
+        points.sort((a,b) => a.y - b.y);
+        let top = points.slice(0,2).sort((a,b) => a.x - b.x); // TL, TR
+        let bottom = points.slice(2,4).sort((a,b) => b.x - a.x); // BR, BL (Note: BR is usually rightmost)
+        // Re-sort bottom properly: bottom-right has higher X
+        bottom.sort((a,b) => a.x - b.x);
+        
+        // Return format for OpenCV: [TLx, TLy, TRx, TRy, BRx, BRy, BLx, BLy]
+        return [
+            top[0].x, top[0].y, 
+            top[1].x, top[1].y, 
+            bottom[1].x, bottom[1].y, 
+            bottom[0].x, bottom[0].y
+        ];
+    }
+
+    function parseCardValue(text) {
+        let clean = text.toUpperCase().replace(/[^0-9SKIPBO]/g, '');
+        
+        if (clean.includes('SKIP') || clean.includes('BO')) return 0; // Skip-bo is 0?
+        if (clean.includes('SB')) return 0;
+
+        // Look for largest number 1-12
+        let matches = clean.match(/(1[0-2]|[1-9])/g);
+        if (!matches) return null;
+        
+        // Filter out single digits if a double digit exists (e.g. "1 2" -> 12)
+        // Actually, just take the max value found, as OCR often reads "12" as "1", "2" and "12"
+        let nums = matches.map(m => parseInt(m));
+        return Math.max(...nums);
+    }
+
+    function drawResult(ctx, vertices, text, color) {
+        ctx.beginPath();
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = color;
+        ctx.moveTo(vertices[0].x, vertices[0].y);
+        ctx.lineTo(vertices[1].x, vertices[1].y);
+        ctx.lineTo(vertices[2].x, vertices[2].y);
+        ctx.lineTo(vertices[3].x, vertices[3].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Draw text background
+        let centerX = (vertices[0].x + vertices[2].x) / 2;
+        let centerY = (vertices[0].y + vertices[2].y) / 2;
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(centerX - 20, centerY - 20, 40, 40);
+        
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, centerX, centerY);
+    }
+</script>
 </body>
 </html>
