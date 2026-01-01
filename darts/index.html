@@ -1178,6 +1178,8 @@
         let maxTurns = 0;
         players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
         if(maxTurns < 5) maxTurns = 5; 
+        
+        const xMax = maxTurns + 1; // Extend axis slightly
 
         const svgNS = "http://www.w3.org/2000/svg";
         let svg = document.getElementById('graph-svg');
@@ -1215,10 +1217,10 @@
         }
 
         // X-Axis Labels (Turns)
-        for(let i=0; i<maxTurns; i++) {
-            const x = padL + (i / (maxTurns - 1)) * graphW;
+        for(let i=0; i<xMax; i++) {
+            const x = padL + (i / (xMax - 1)) * graphW;
             // Only draw some labels if too many
-            if(maxTurns > 10 && i % 2 !== 0) continue;
+            if(xMax > 10 && i % 2 !== 0) continue;
             
             const txt = document.createElementNS(svgNS, "text");
             txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
@@ -1238,7 +1240,7 @@
 
             let points = "";
             p.history.forEach((score, turnIdx) => {
-                const x = padL + (turnIdx / (maxTurns - 1)) * graphW;
+                const x = padL + (turnIdx / (xMax - 1)) * graphW;
                 const y = graphH - ((score / startVal) * graphH);
                 points += `${x},${y} `;
                 
@@ -1343,11 +1345,22 @@
     
     function deletePlayerFromHistory(name, event) {
         event.stopPropagation();
-        if(confirm(`Remove "${name}" from your known players (shortcuts)? This will not delete their historical game records.`)) {
+        if(confirm(`PERMANENTLY DELETE "${name}"?\n\nThis will remove them from shortcuts AND delete their presence from all past game records. This cannot be undone.`)) {
+            // 1. Remove from shortcuts
             knownPlayers = knownPlayers.filter(p => p !== name);
             localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+
+            // 2. Remove from Game History
+            gameHistory.forEach(g => {
+                g.players = g.players.filter(p => p.name !== name);
+            });
+            // Remove games that are now empty
+            gameHistory = gameHistory.filter(g => g.players.length > 0);
+            
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+
             renderHistoryModal();
-            renderQuickAdd(); // Update setup modal if open
+            renderQuickAdd();
         }
     }
 
@@ -1482,9 +1495,14 @@
         finishedGames.sort((a,b) => new Date(a.date) - new Date(b.date));
         
         const darts = finishedGames.map(g => g.darts);
-        const maxDarts = Math.max(...darts) + 5;
+        const maxDarts = Math.max(...darts);
         const minDarts = Math.max(0, Math.min(...darts) - 5);
-        const range = maxDarts - minDarts;
+        
+        // Define Scale range with padding
+        const yMax = maxDarts + 5; 
+        const yRange = yMax - minDarts;
+        
+        const xMax = darts.length + 1; // Pad X axis
         
         // Padding for labels
         const padL = 25; const padB = 20;
@@ -1493,7 +1511,7 @@
 
         // Y-Axis (Dart Count)
         for(let i=0; i<=4; i++) {
-             const val = Math.round(minDarts + (range * (i/4)));
+             const val = Math.round(minDarts + (yRange * (i/4)));
              const y = graphH - (graphH * (i/4));
              
              // Label
@@ -1505,9 +1523,9 @@
         }
 
         // X-Axis (Game Number)
-         for(let i=0; i<darts.length; i++) {
-            const x = padL + (i / (darts.length - 1)) * graphW;
-            if(darts.length > 10 && i % 2 !== 0) continue;
+         for(let i=0; i<xMax; i++) {
+            const x = padL + (i / (xMax - 1)) * graphW;
+            if(xMax > 10 && i % 2 !== 0) continue;
             const txt = document.createElementNS(svgNS, "text");
             txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
             txt.setAttribute("text-anchor", "middle");
@@ -1518,8 +1536,8 @@
 
         let points = "";
         darts.forEach((d, i) => {
-            const x = padL + (i / (darts.length - 1)) * graphW;
-            const y = graphH - ((d - minDarts) / range) * graphH;
+            const x = padL + (i / (xMax - 1)) * graphW;
+            const y = graphH - ((d - minDarts) / yRange) * graphH;
             points += `${x},${y} `;
             
             const dot = document.createElementNS(svgNS, "circle");
