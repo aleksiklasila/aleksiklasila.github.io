@@ -204,6 +204,13 @@
         .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; line-height: 1.4; }
         .finish-badge { color: gold; font-weight: bold; margin-right: 4px; }
         .finish-stat { color: #888; font-size: 0.8em; margin-left: 5px; }
+        
+        .hist-delete-btn {
+            position: absolute; right: 10px; top: 10px;
+            background: rgba(207, 102, 121, 0.2); color: var(--danger);
+            border: 1px solid var(--danger); border-radius: 4px;
+            padding: 4px 8px; font-size: 0.8rem; z-index: 10;
+        }
 
         /* Player Accordion Body Content */
         .player-accordion-body { background: #1a1a1a; padding: 10px; border-radius: 0 0 8px 8px; margin-top: -5px; border: 1px solid #333; border-top: none; }
@@ -310,6 +317,20 @@
         .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
         .player-tag { background: #333; padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; border: 1px solid #444; }
 
+        /* Quick Add Chips */
+        .quick-add-container {
+            display: flex; gap: 8px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 5px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .quick-add-chip {
+            background: #2a2a2a; border: 1px solid #444; color: #ccc;
+            padding: 5px 10px; border-radius: 16px; font-size: 0.85rem; white-space: nowrap;
+            cursor: pointer; display: flex; align-items: center; gap: 6px;
+        }
+        .quick-add-chip:active { background: #444; }
+        .chip-del { font-weight: bold; color: #888; padding: 0 4px; }
+        .chip-del:hover { color: var(--danger); }
+
     </style>
 </head>
 <body class="modal-open">
@@ -317,9 +338,15 @@
 <div id="setup-modal" style="display:flex;">
     <div class="modal-content">
         <h2 id="modal-title" style="margin-top:0">New Game</h2>
-        <input type="text" id="new-player-input" placeholder="Player Name" maxlength="10">
+        
+        <div style="font-size:0.8rem; color:#888; margin-bottom:5px;">Quick Add (Shortcuts)</div>
+        <div class="quick-add-container" id="quick-add-area"></div>
+        
+        <input type="text" id="new-player-input" placeholder="Type Player Name..." maxlength="10">
         <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white; border:none; padding:10px; border-radius:6px;">Add Player</button>
+        
         <div class="tag-container" id="player-list-display"></div>
+        
         <div style="border-top: 1px solid #333; padding-top: 15px;">
              <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size: 0.9rem; color:#ccc;">
                 Starting Score
@@ -460,6 +487,7 @@
     let startScoreVal = 501;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
     let currentGameId = Date.now();
+    let knownPlayers = [];
     
     // -- History Data --
     let gameHistory = []; // Array of game objects
@@ -502,17 +530,28 @@
             const h = localStorage.getItem('darts_pro_history_games');
             if(h) gameHistory = JSON.parse(h);
         } catch(e) {}
+        
+        // Load Known Players
+        try {
+            const kp = localStorage.getItem('darts_pro_known_players');
+            if(kp) knownPlayers = JSON.parse(kp);
+        } catch(e) {}
 
         // Load Active Game
         const saved = localStorage.getItem('darts_pro_save');
         if(saved) {
             try {
                 const s = JSON.parse(saved);
-                if(!s.players || s.players.length === 0) return;
+                if(!s.players || s.players.length === 0) {
+                     renderQuickAdd();
+                     return;
+                }
                
                 restoreGameState(s);
 
             } catch(e) { console.error("Save load error", e); }
+        } else {
+             renderQuickAdd();
         }
     }
 
@@ -575,6 +614,36 @@
         };
         gameHistory.unshift(newGame);
         localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+    }
+    
+    // --- QUICK ADD ---
+    function renderQuickAdd() {
+        const area = document.getElementById('quick-add-area');
+        if(knownPlayers.length === 0) {
+            area.innerHTML = '<span style="color:#555; font-size:0.8rem; padding:4px;">No saved players</span>';
+            return;
+        }
+        area.innerHTML = knownPlayers.map(name => `
+            <div class="quick-add-chip" onclick="addPlayerByName('${name}')">
+                ${name}
+                <span class="chip-del" onclick="deleteQuickAdd('${name}', event)">&times;</span>
+            </div>
+        `).join('');
+    }
+    
+    function addPlayerByName(name) {
+        players.push({name:name, score:501, finished:false, history:[]}); 
+        renderList(); 
+        saveGame();
+    }
+    
+    function deleteQuickAdd(name, e) {
+        e.stopPropagation();
+        if(confirm(`Remove "${name}" from shortcuts?`)) {
+            knownPlayers = knownPlayers.filter(p => p !== name);
+            localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+            renderQuickAdd();
+        }
     }
 
     // --- VISUAL & GAME LOGIC ---
@@ -1239,6 +1308,21 @@
             saveGame(); // Set as active
         }
     }
+    
+    function deleteGame(id, event) {
+        event.stopPropagation();
+        if(confirm("Are you sure you want to permanently delete this game?")) {
+            gameHistory = gameHistory.filter(g => g.id !== id);
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+            renderHistoryModal(); // Re-render
+            
+            // If the deleted game was the active one, reset
+            if(id === currentGameId) {
+                retryGame();
+                toggleHistory();
+            }
+        }
+    }
 
     function renderHistoryModal() {
         // Render Games
@@ -1251,6 +1335,7 @@
         
         unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
+                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">&times;</button>
                 <div class="hist-card-row">
                     <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="hist-mode">${g.startScore}</span>
@@ -1269,6 +1354,7 @@
 
             return `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
+                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">🗑️</button>
                 <div class="hist-card-row">
                     <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="hist-mode">${g.startScore}</span>
@@ -1432,6 +1518,7 @@
             document.getElementById('setup-modal').style.display = 'flex';
             document.body.classList.add('modal-open');
             renderList(); 
+            renderQuickAdd();
         }
     }
 
@@ -1469,7 +1556,16 @@
     function addPlayer() { 
         const inp = document.getElementById('new-player-input'); 
         if(inp.value.trim()){ 
-            players.push({name:inp.value.trim(), score:501, finished:false, history:[]}); 
+            const name = inp.value.trim();
+            players.push({name:name, score:501, finished:false, history:[]}); 
+            
+            // Add to known players if not exists
+            if(!knownPlayers.includes(name)) {
+                knownPlayers.push(name);
+                localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+                renderQuickAdd();
+            }
+
             inp.value=""; 
             renderList(); 
             inp.focus(); 
