@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile Skip-Bo Counter</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 15px;
+            background-color: #f0f2f5;
+            color: #333;
+            text-align: center;
+        }
+        h1 { color: #d32f2f; margin-bottom: 10px; font-size: 1.8rem; }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        /* Mobile-friendly large button */
+        .camera-btn {
+            background-color: #d32f2f;
+            color: white;
+            border: none;
+            padding: 15px 0;
+            width: 100%;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            cursor: pointer;
+            display: block;
+            margin: 10px 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .camera-btn:active { background-color: #b71c1c; transform: translateY(2px); }
+        .camera-btn:disabled { background-color: #ccc; box-shadow: none; transform: none; }
+        
+        /* Hidden file input */
+        #cameraInput { display: none; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .stat-box {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        .stat-label { font-size: 0.8rem; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 1.5rem; font-weight: bold; color: #333; }
+        .total-score { color: #2e7d32; }
+
+        #status { margin-top: 10px; font-style: italic; color: #666; font-size: 0.9rem; min-height: 1.2em;}
+        
+        #previewContainer { margin-top: 15px; position: relative; }
+        #previewImg { width: 100%; border-radius: 8px; display: none; }
+        .overlay-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        .reset-link { color: #666; text-decoration: underline; font-size: 0.9rem; cursor: pointer; display: inline-block; margin-top: 20px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@v3.0.3/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+    <h1>Skip-Bo Counter</h1>
+
+    <div class="card">
+        <div id="status">Initializing AI...</div>
+        
+        <label for="cameraInput" class="camera-btn" id="camBtn" style="opacity: 0.5; pointer-events: none;">
+            📷 Take Photo
+        </label>
+        <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Last Photo</div>
+                <div class="stat-value" id="lastScore">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Grand Total</div>
+                <div class="stat-value total-score" id="totalScore">0</div>
+            </div>
+        </div>
+
+        <div id="previewContainer">
+            <img id="previewImg" alt="Preview">
+            <canvas id="overlayCanvas" class="overlay-canvas"></canvas>
+        </div>
+
+        <div class="reset-link" onclick="resetTotal()">Reset Grand Total</div>
+    </div>
+
+    <canvas id="processCanvas" style="display:none;"></canvas>
+
+    <script async src="https://docs.opencv.org/4.5.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+
+    <script>
+        let openCvReady = false;
+        let tesseractWorker = null;
+        let grandTotal = 0;
+
+        const statusDiv = document.getElementById('status');
+        const camBtn = document.getElementById('camBtn');
+        const cameraInput = document.getElementById('cameraInput');
+        const lastScoreEl = document.getElementById('lastScore');
+        const totalScoreEl = document.getElementById('totalScore');
+        const previewImg = document.getElementById('previewImg');
+        const processCanvas = document.getElementById('processCanvas');
+        const overlayCanvas = document.getElementById('overlayCanvas');
+        const ctx = processCanvas.getContext('2d', { willReadFrequently: true });
+
+        function onOpenCvReady() {
+            openCvReady = true;
+            checkReady();
+        }
+
+        async function initTesseract() {
+            try {
+                tesseractWorker = Tesseract.createWorker();
+                await tesseractWorker.load();
+                await tesseractWorker.loadLanguage('eng');
+                await tesseractWorker.initialize('eng');
+                // Optimize: Whitelist only numbers and SKIPBO letters
+                await tesseractWorker.setParameters({
+                    tessedit_char_whitelist: '0123456789SKIPBOskipbo',
+                    tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD 
+                });
+                checkReady();
+            } catch (err) {
+                statusDiv.textContent = "Error loading OCR. Try refreshing.";
+                console.error(err);
+            }
+        }
+
+        function checkReady() {
+            if (openCvReady && tesseractWorker) {
+                statusDiv.textContent = 'Ready. Tap below to scan.';
+                camBtn.style.opacity = '1';
+                camBtn.style.pointerEvents = 'auto';
+            }
+        }
+
+        function resetTotal() {
+            grandTotal = 0;
+            lastScoreEl.textContent = '0';
+            totalScoreEl.textContent = '0';
+            previewImg.style.display = 'none';
+            statusDiv.textContent = 'Ready. Tap below to scan.';
+            // Clear overlay
+            const oCtx = overlayCanvas.getContext('2d');
+            oCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        }
+
+        initTesseract();
+
+        cameraInput.addEventListener('change', async (e) => {
+            if (e.target.files && e.target.files[0]) {
+                const file = e.target.files[0];
+                statusDiv.textContent = "Processing image...";
+                camBtn.style.opacity = "0.5";
+                camBtn.style.pointerEvents = "none";
+                
+                // Show preview immediately
+                previewImg.src = URL.createObjectURL(file);
+                previewImg.style.display = 'block';
+
+                try {
+                    const roundScore = await processImage(file);
+                    grandTotal += roundScore;
+                    lastScoreEl.textContent = roundScore;
+                    totalScoreEl.textContent = grandTotal;
+                    statusDiv.textContent = `Found ${roundScore} points! Ready for next.`;
+                } catch (err) {
+                    console.error(err);
+                    statusDiv.textContent = "Error processing. Try better lighting.";
+                } finally {
+                    camBtn.style.opacity = "1";
+                    camBtn.style.pointerEvents = "auto";
+                    cameraInput.value = ''; // Allow re-selecting same file if needed
+                }
+            }
+        });
+
+        async function processImage(file) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = async () => {
+                    try {
+                        // 1. Resize Image (Critical for Mobile Performance)
+                        // Mobile photos are huge (4000px+). We scale down to max 1000px width.
+                        const maxDim = 1000;
+                        let scale = 1;
+                        if (img.width > maxDim || img.height > maxDim) {
+                            scale = maxDim / Math.max(img.width, img.height);
+                        }
+                        
+                        processCanvas.width = img.width * scale;
+                        processCanvas.height = img.height * scale;
+                        ctx.drawImage(img, 0, 0, processCanvas.width, processCanvas.height);
+
+                        // Setup overlay canvas for drawing debug boxes
+                        overlayCanvas.width = img.width * scale;
+                        overlayCanvas.height = img.height * scale;
+                        const oCtx = overlayCanvas.getContext('2d');
+                        oCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                        oCtx.lineWidth = 3;
+                        oCtx.strokeStyle = '#00FF00';
+
+                        // 2. OpenCV Pre-processing
+                        let src = cv.imread(processCanvas);
+                        let gray = new cv.Mat();
+                        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+                        // Blur to reduce noise
+                        let blurred = new cv.Mat();
+                        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+
+                        // Adaptive Threshold to find edges even in varying lighting
+                        let thresh = new cv.Mat();
+                        cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+                        // Find Contours
+                        let contours = new cv.MatVector();
+                        let hierarchy = new cv.Mat();
+                        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                        let scoreTotal = 0;
+                        let cardPromises = [];
+
+                        // 3. Detect and Extract Cards
+                        for (let i = 0; i < contours.size(); ++i) {
+                            let cnt = contours.get(i);
+                            let rect = cv.boundingRect(cnt);
+                            let area = cv.contourArea(cnt);
+                            
+                            // Filter noise: Must be a reasonable size to be a card
+                            // Area > 2000 is a heuristic for resized 1000px images
+                            if (area > 2000) {
+                                let aspectRatio = rect.width / rect.height;
+                                // Cards shouldn't be extremely thin strips
+                                if (aspectRatio > 0.4 && aspectRatio < 2.5) {
+                                    
+                                    // Draw box on overlay
+                                    oCtx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+
+                                    // Extract the card
+                                    let cardRoi = src.roi(rect);
+                                    let cardCanvas = document.createElement('canvas');
+                                    cardCanvas.width = rect.width;
+                                    cardCanvas.height = rect.height;
+                                    cv.imshow(cardCanvas, cardRoi);
+                                    
+                                    cardPromises.push(recognizeCard(cardCanvas));
+                                    cardRoi.delete();
+                                }
+                            }
+                        }
+
+                        // 4. Run OCR
+                        statusDiv.textContent = `Analyzing ${cardPromises.length} potential cards...`;
+                        const results = await Promise.all(cardPromises);
+                        scoreTotal = results.reduce((a, b) => a + b, 0);
+
+                        // Cleanup
+                        src.delete(); gray.delete(); blurred.delete(); thresh.delete();
+                        contours.delete(); hierarchy.delete();
+
+                        resolve(scoreTotal);
+                    } catch (e) {
+                        reject(e);
+                    }
+                };
+                img.onerror = reject;
+                img.src = URL.createObjectURL(file);
+            });
+        }
+
+        async function recognizeCard(cardCanvas) {
+            // Tesseract to read the cropped card
+            const { data: { text } } = await tesseractWorker.recognize(cardCanvas);
+            
+            // Clean string: Remove whitespace, make uppercase
+            const cleanText = text.toUpperCase().replace(/[^0-9A-Z]/g, '');
+
+            // Logic:
+            // 1. SKIPBO = 0
+            if (cleanText.includes('SKIP') || cleanText.includes('BO') || cleanText.includes('SK')) {
+                return 0;
+            }
+
+            // 2. Find Numbers
+            // We look for the largest number found in the blob, 
+            // as OCR often reads "12" as "1" and "2" separately if noisy.
+            // But usually, we just want to find a valid 1-12 match.
+            const matches = cleanText.match(/(1[0-2]|[1-9])/g);
+            
+            if (matches && matches.length > 0) {
+                // Return the first valid integer found
+                // We prefer 2-digit numbers if present (to avoid reading 10 as 1 and 0)
+                const twoDigit = matches.find(m => parseInt(m) >= 10);
+                if (twoDigit) return parseInt(twoDigit);
+                
+                return parseInt(matches[0]);
+            }
+
+            return 0; // fallback
+        }
+    </script>
+</body>
+</html>
