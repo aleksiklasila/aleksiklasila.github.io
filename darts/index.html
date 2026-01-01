@@ -141,6 +141,11 @@
         .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; font-size: 0.9rem; }
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; font-size: 0.9rem; }
 
+        .grid-dim-text {
+            color: #777; font-size: 0.75em; font-weight: 500; margin-left: 4px;
+        }
+        .g-double .grid-dim-text, .g-triple .grid-dim-text { color: rgba(255,255,255,0.6); }
+
         /* --- Graph Modal Content --- */
         #graph-wrapper {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -199,18 +204,27 @@
             border-top: 1px solid #333; padding: 10px 15px;
             padding-bottom: calc(10px + env(safe-area-inset-bottom));
             z-index: 200;
+            display: flex; gap: 10px;
         }
+        
         .action-btn {
-            width: 100%; padding: 14px; font-size: 1.1rem; border-radius: 8px;
-            background: #333; color: #777; pointer-events: none; border: none; font-weight: bold;
+            padding: 14px; font-size: 1.1rem; border-radius: 8px; border: none; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: transform 0.1s;
         }
-        .action-btn.ready {
-            background: var(--accent); color: #000; pointer-events: auto;
+        .action-btn:active { transform: scale(0.98); }
+
+        .btn-prev {
+            width: 30%; background: #333; color: #ccc; border: 1px solid #444;
+        }
+
+        .btn-next {
+            flex: 1; background: var(--accent); color: #000;
             box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
         }
+        
         .action-btn.game-over {
-            background: #444; color: #ccc; pointer-events: none;
-            border: 1px solid #666;
+            background: #444; color: #ccc; pointer-events: none; border: 1px solid #666; width: 100%;
         }
 
         /* --- Tutorials --- */
@@ -273,7 +287,7 @@
         </div>
         <div id="graph-wrapper">
             <div id="graph-container">
-                </div>
+            </div>
             <div class="graph-legend" id="graph-legend"></div>
         </div>
     </div>
@@ -298,7 +312,7 @@
                 <div id="magnifier-score"></div>
             </div>
             <div id="dartboard-container"></div>
-            
+           
             <div id="tut-drag" class="tutorial-overlay">
                 <div class="tut-wrapper">
                     <div class="tut-text">Drag to Throw</div>
@@ -314,7 +328,7 @@
         </div>
         
         <div class="view-footer">
-            </div>
+        </div>
     </div>
 
     <div class="view-section" id="section-grid">
@@ -331,13 +345,14 @@
 </div>
 
 <div id="footer-fixed">
-    <button onclick="manualNext()" class="action-btn" id="btn-next">Next Player</button>
+    <button onclick="manualPrev()" class="action-btn btn-prev" id="btn-prev">Prev</button>
+    <button onclick="manualNext()" class="action-btn btn-next" id="btn-next">Next</button>
 </div>
 
 <script>
     const i18n = {
-        en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?", miss: "Miss", retry: "Retry", gameOver: "GAME OVER" },
-        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi", retry: "Uusi Peli", gameOver: "PELI OHI" }
+        en: { next: "Rem: ", bust: "BUST", win: "Wins!", confirm: "End current game?", miss: "Miss", retry: "Retry", gameOver: "GAME OVER" },
+        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi", retry: "Uusi Peli", gameOver: "PELI OHI" }
     };
     const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
     const txt = i18n[userLang];
@@ -377,10 +392,10 @@
         const total = val * mult;
         
         if(style === 'button') {
-            if (val === 0) return "0";
-            if (val === 25) return "25 (1x25)";
-            if (val === 50) return "50 (1x50)";
-            return `${total} (${mult}x${val})`; 
+            if (val === 0) return `0`;
+            if (val === 25) return `25 <span class="grid-dim-text">(1x25)</span>`;
+            if (val === 50) return `50 <span class="grid-dim-text">(1x50)</span>`;
+            return `${total} <span class="grid-dim-text">(${mult}x${val})</span>`; 
         }
 
         if (val === 0) return "0";
@@ -459,7 +474,7 @@
         const visSection = document.getElementById('section-visual');
         [1,2,3].forEach(i => visSection.appendChild(createDartSVG(`dart-${i}`, i)));
 
-        document.getElementById('btn-next').innerText = txt.btnNext;
+        document.getElementById('btn-next').innerText = "Next";
         document.getElementById('btn-retry').innerText = txt.retry;
         document.getElementById('new-player-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') addPlayer(); });
 
@@ -488,8 +503,8 @@
                 `;
             }
             grid.innerHTML += `
-                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">50 (1x50)</div>
-                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">25 (1x25)</div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">50 <span class="grid-dim-text">(1x50)</span></div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">25 <span class="grid-dim-text">(1x25)</span></div>
                 <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">0</div>
             `;
             page.appendChild(grid);
@@ -708,15 +723,6 @@
                 projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score">${res.rem} ${w}</span>`;
             }
         }
-        
-        const thrown = dartState.filter(d => d.val > 0 || d.missed).length;
-        const btn = document.getElementById('btn-next');
-        
-        if(thrown === 3 || res.isWin || res.isBust) {
-            btn.classList.add('ready');
-        } else {
-            btn.classList.remove('ready');
-        }
     }
 
     function calculateScore(currentScore) {
@@ -736,6 +742,40 @@
         return { rem: isBust ? currentScore : temp, isBust, isWin };
     }
 
+    function manualPrev() {
+        if(!gameActive) return;
+
+        let prevIndex = currentPlayerIndex - 1;
+        if(prevIndex < 0) prevIndex = players.length - 1;
+
+        const prevPlayer = players[prevIndex];
+
+        if(prevPlayer.history.length <= 1) return;
+
+        currentPlayerIndex = prevIndex;
+        
+        const p = players[currentPlayerIndex];
+        p.finished = false; 
+        p.history.pop(); 
+        p.score = p.history[p.history.length - 1]; 
+
+        dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
+        
+        document.getElementById('btn-next').classList.remove('game-over');
+        document.getElementById('btn-next').innerText = "Next"; 
+        
+        [0,1,2].forEach(i => {
+            document.getElementById(`grid-val-${i}`).innerText = '-';
+            const badge = document.getElementById(`badge-dart-${i+1}`);
+            if(badge) badge.innerText = "0"; 
+        });
+        switchGridTab(0);
+        endTutorials();
+        
+        renderScoreboard();
+        resetDartsPosition();
+    }
+
     function manualNext() {
         if(!gameActive) return;
         const p = players[currentPlayerIndex];
@@ -753,7 +793,6 @@
         }
 
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
-        document.getElementById('btn-next').classList.remove('ready');
         
         [0,1,2].forEach(i => {
             document.getElementById(`grid-val-${i}`).innerText = '-';
@@ -769,7 +808,6 @@
             gameActive = false; 
             const btn = document.getElementById('btn-next');
             btn.innerText = txt.gameOver;
-            btn.classList.remove('ready');
             btn.classList.add('game-over');
             return; 
         }
@@ -942,9 +980,8 @@
         document.getElementById('setup-modal').style.display='none'; 
         
         const btn = document.getElementById('btn-next');
-        btn.innerText = txt.btnNext;
+        btn.innerText = "Next"; 
         btn.classList.remove('game-over');
-        btn.classList.remove('ready');
 
         renderScoreboard(); 
         
