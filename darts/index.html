@@ -158,11 +158,11 @@
         .g-double .grid-dim-text, .g-triple .grid-dim-text { color: rgba(255,255,255,0.6); }
 
         /* --- Graph/History Modal Content --- */
-        #graph-wrapper {
+        #graph-wrapper, #player-graph-wrapper {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: #111; padding: 10px; width: 100%; height: 100%; box-sizing: border-box;
         }
-        #graph-container {
+        #graph-container, #player-graph-container {
             width: 100%; flex: 1; position: relative;
             border-left: 1px solid #444; border-bottom: 1px solid #444;
             margin-bottom: 10px; min-height: 200px;
@@ -180,9 +180,25 @@
         .hist-tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
         .hist-content { flex: 1; overflow-y: auto; display: none; }
         .hist-content.active { display: block; }
-        .hist-section-title { font-size: 0.8rem; color: #666; text-transform: uppercase; margin: 15px 0 5px 0; letter-spacing: 1px; font-weight: bold; }
         
-        .hist-card { background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px; border: 1px solid #333; }
+        .hist-section-header {
+            background: #252525; color: #e0e0e0; padding: 12px; margin-top: 10px; border-radius: 6px;
+            font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+            border: 1px solid #333;
+        }
+        .hist-section-body { display: none; padding-top: 5px; }
+        .hist-section-body.expanded { display: block; }
+        
+        .hist-card { 
+            background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 8px; 
+            border: 1px solid #333; cursor: pointer; position: relative; overflow: hidden;
+        }
+        .hist-card:active { background: #333; }
+        .hist-card::after {
+            content: "Tap to Load"; position: absolute; right: 10px; top: 10px;
+            font-size: 0.65rem; color: #555; border: 1px solid #444; padding: 2px 5px; border-radius: 4px;
+        }
+        
         .hist-card-row { display: flex; justify-content: space-between; align-items: center; }
         .hist-date { font-size: 0.75rem; color: #888; }
         .hist-mode { font-size: 0.75rem; background: #333; padding: 2px 6px; border-radius: 4px; color: #ccc; }
@@ -190,12 +206,18 @@
         .hist-darts { font-size: 0.85rem; color: #ccc; }
         .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; }
 
-        .stat-card { background: #1a1a1a; padding: 10px; margin-bottom: 10px; border-radius: 6px; border-left: 3px solid #444; }
-        .stat-name { font-weight: bold; font-size: 1.1rem; color: white; margin-bottom: 5px; }
-        .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-        .stat-box { background: #2a2a2a; padding: 5px; text-align: center; border-radius: 4px; }
-        .stat-label { font-size: 0.65rem; color: #888; display: block; }
-        .stat-val { font-size: 0.9rem; font-weight: bold; color: #eee; }
+        /* Player Details in History */
+        .player-list-item { 
+            padding: 15px; background: #222; border-bottom: 1px solid #333; 
+            font-size: 1.1rem; cursor: pointer; display: flex; justify-content: space-between;
+        }
+        .player-list-item:hover { background: #2a2a2a; }
+        
+        #player-detail-view { display: none; flex-direction: column; height: 100%; }
+        .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
+        .stat-box { background: #252525; padding: 10px; border-radius: 6px; text-align: center; }
+        .stat-val { display: block; font-size: 1.2rem; font-weight: bold; color: white; }
+        .stat-lbl { font-size: 0.75rem; color: #888; }
 
         /* --- Darts --- */
         .dart-obj {
@@ -347,8 +369,35 @@
             <div class="hist-tab" onclick="switchHistTab('players')" id="ht-players">Players</div>
         </div>
 
-        <div class="hist-content active" id="hc-games"></div>
-        <div class="hist-content" id="hc-players"></div>
+        <div class="hist-content active" id="hc-games">
+            <div class="hist-section-header" onclick="toggleHistSection('unfinished')">
+                <span>Unfinished Games</span> <span id="arrow-unfinished">▶</span>
+            </div>
+            <div id="list-unfinished" class="hist-section-body"></div>
+
+            <div class="hist-section-header" onclick="toggleHistSection('finished')">
+                <span>Finished Games</span> <span id="arrow-finished">▶</span>
+            </div>
+            <div id="list-finished" class="hist-section-body"></div>
+        </div>
+        
+        <div class="hist-content" id="hc-players">
+            <div id="player-list-view"></div>
+            <div id="player-detail-view">
+                <button onclick="backToPlayerList()" style="align-self: flex-start; margin-bottom: 10px; background:#444;">&larr; Back</button>
+                <h2 id="pd-name" style="margin:0 0 10px 0;"></h2>
+                <div class="stat-grid">
+                    <div class="stat-box"><span id="pd-total" class="stat-val">0</span><span class="stat-lbl">Games Won</span></div>
+                    <div class="stat-box"><span id="pd-best" class="stat-val">-</span><span class="stat-lbl">Best Darts</span></div>
+                    <div class="stat-box"><span id="pd-avg" class="stat-val">-</span><span class="stat-lbl">Avg Darts</span></div>
+                    <div class="stat-box"><span id="pd-winrate" class="stat-val">0%</span><span class="stat-lbl">Win Rate</span></div>
+                </div>
+                <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Win (Over Time)</div>
+                <div id="player-graph-wrapper">
+                    <div id="player-graph-container"></div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -431,7 +480,6 @@
     
     // -- History Data --
     let gameHistory = []; // Array of game objects
-    let playerStats = {}; // Object: { playerName: { startScore: [dartsCount1, dartsCount2...] } }
 
     // Tutorial Logic
     let tutorialInterval = null;
@@ -443,16 +491,21 @@
     
     // --- PERSISTENCE ---
     function saveGame() {
-        // Save current active game state
+        // Save Active Game
         const state = {
             players, currentPlayerIndex, gameActive, startScoreVal, dartState, currentGameId
         };
         localStorage.setItem('darts_pro_save', JSON.stringify(state));
-    }
-    
-    function saveHistoryData() {
-        localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
-        localStorage.setItem('darts_pro_history_stats', JSON.stringify(playerStats));
+
+        // Update History Entry for this game to ensure it has latest stats if resumed later
+        if(gameHistory.length > 0) {
+            const idx = gameHistory.findIndex(g => g.id === currentGameId);
+            if(idx !== -1) {
+                gameHistory[idx].players = JSON.parse(JSON.stringify(players)); // deep copy
+                gameHistory[idx].currentPlayerIndex = currentPlayerIndex;
+                localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+            }
+        }
     }
 
     function loadGame() {
@@ -460,8 +513,6 @@
         try {
             const h = localStorage.getItem('darts_pro_history_games');
             if(h) gameHistory = JSON.parse(h);
-            const s = localStorage.getItem('darts_pro_history_stats');
-            if(s) playerStats = JSON.parse(s);
         } catch(e) {}
 
         // Load Active Game
@@ -471,58 +522,69 @@
                 const s = JSON.parse(saved);
                 if(!s.players || s.players.length === 0) return;
                 
-                players = s.players;
-                currentPlayerIndex = s.currentPlayerIndex;
-                gameActive = s.gameActive;
-                startScoreVal = s.startScoreVal;
-                dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
-                currentGameId = s.currentGameId || Date.now();
-                
-                if(gameActive) {
-                    document.getElementById('setup-modal').style.display = 'none';
-                    renderScoreboard();
-                    
-                    // CRITICAL FIX: Reset all darts to hand FIRST, using setTimeout to ensure layout is ready
-                    setTimeout(() => {
-                        resetDartsPosition(); 
-                        
-                        // Then move ONLY thrown darts to board
-                        let thrownCount = 0;
-                        dartState.forEach((d, i) => {
-                           if(d.val !== 0 || d.missed) {
-                               thrownCount++;
-                               updateDartVisuals(i, d.val, d.mult);
-                               if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
-                           } 
-                        });
-                        
-                        // Restore proper tab
-                        if(thrownCount < 3) switchGridTab(thrownCount);
-                        else switchGridTab(2);
-                        
-                    }, 50);
+                restoreGameState(s);
 
-                    updateGameState();
-                }
             } catch(e) { console.error("Save load error", e); }
         }
     }
 
-    function recordGameStart() {
-        // Find if game exists in history (if resuming), else push new
-        const existing = gameHistory.find(g => g.id === currentGameId);
-        if(!existing) {
-            gameHistory.unshift({
-                id: currentGameId,
-                date: new Date().toISOString(),
-                startScore: startScoreVal,
-                players: players.map(p => p.name),
-                winner: null,
-                dartsThrown: 0,
-                finished: false
-            });
-            saveHistoryData();
+    function restoreGameState(s) {
+        players = s.players;
+        currentPlayerIndex = s.currentPlayerIndex;
+        gameActive = s.gameActive;
+        startScoreVal = s.startScoreVal;
+        dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
+        currentGameId = s.currentGameId;
+
+        document.getElementById('setup-modal').style.display = 'none';
+        
+        // Reset UI Buttons
+        const btn = document.getElementById('btn-next');
+        if(players.every(p => p.finished)) {
+            btn.innerText = txt.gameOver;
+            btn.classList.add('game-over');
+            gameActive = false;
+        } else {
+            btn.innerText = "Next"; 
+            btn.classList.remove('game-over');
+            gameActive = true;
         }
+
+        renderScoreboard();
+        
+        setTimeout(() => {
+            resetDartsPosition(); 
+            // Then move ONLY thrown darts to board
+            let thrownCount = 0;
+            dartState.forEach((d, i) => {
+               if(d.val !== 0 || d.missed) {
+                   thrownCount++;
+                   updateDartVisuals(i, d.val, d.mult);
+                   if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
+               } 
+            });
+            // Restore proper tab
+            if(thrownCount < 3) switchGridTab(thrownCount);
+            else switchGridTab(2);
+        }, 50);
+
+        updateGameState();
+    }
+
+    function recordGameStart() {
+        // Create full object for history
+        const newGame = {
+            id: currentGameId,
+            date: new Date().toISOString(),
+            startScore: startScoreVal,
+            players: JSON.parse(JSON.stringify(players)), // Full player state
+            currentPlayerIndex: 0,
+            winner: null,
+            dartsThrown: 0,
+            finished: false
+        };
+        gameHistory.unshift(newGame);
+        localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
     }
 
     function recordGameWin(winnerName, winningDartIndex) {
@@ -531,20 +593,15 @@
             game.finished = true;
             game.winner = winnerName;
             
-            // Calculate total darts thrown by winner
-            // Turns taken so far (history.length - 1) * 3 + current turn darts (winningDartIndex + 1)
             const p = players.find(pl => pl.name === winnerName);
-            const turns = p.history.length - 1; // Initial score is index 0
+            const turns = p.history.length - 1; 
             const totalDarts = (turns * 3) + (winningDartIndex + 1);
             
             game.dartsThrown = totalDarts;
+            // Update history with final player states
+            game.players = JSON.parse(JSON.stringify(players));
             
-            // Update Stats
-            if(!playerStats[winnerName]) playerStats[winnerName] = {};
-            if(!playerStats[winnerName][startScoreVal]) playerStats[winnerName][startScoreVal] = [];
-            playerStats[winnerName][startScoreVal].push(totalDarts);
-            
-            saveHistoryData();
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
         }
     }
 
@@ -661,7 +718,7 @@
         setupSwipeObserver();
         buildGridInterface();
         
-        loadGame(); // Load previous state
+        loadGame(); 
     }
 
     function buildGridInterface() {
@@ -1146,73 +1203,151 @@
         document.getElementById('hc-' + tab).classList.add('active');
     }
 
+    function toggleHistSection(sec) {
+        const el = document.getElementById('list-' + sec);
+        const arrow = document.getElementById('arrow-' + sec);
+        if(el.classList.contains('expanded')) {
+            el.classList.remove('expanded');
+            arrow.innerText = "▶";
+        } else {
+            el.classList.add('expanded');
+            arrow.innerText = "▼";
+        }
+    }
+
+    function loadHistoryGame(id) {
+        const game = gameHistory.find(g => g.id === id);
+        if(game) {
+            // Restore state
+            const state = {
+                players: JSON.parse(JSON.stringify(game.players)),
+                currentPlayerIndex: game.currentPlayerIndex || 0,
+                gameActive: !game.finished,
+                startScoreVal: game.startScore,
+                dartState: [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}], // Reset darts hand
+                currentGameId: game.id
+            };
+            restoreGameState(state);
+            toggleHistory(); // Close modal
+            saveGame(); // Set as active
+        }
+    }
+
     function renderHistoryModal() {
         // Render Games
-        const gamesEl = document.getElementById('hc-games');
+        const finishedEl = document.getElementById('list-finished');
+        const unfinishedEl = document.getElementById('list-unfinished');
+        
         const finished = gameHistory.filter(g => g.finished);
         const unfinished = gameHistory.filter(g => !g.finished);
         
-        let html = '';
-        
-        if(unfinished.length > 0) {
-            html += `<div class="hist-section-title">Unfinished / Aborted</div>`;
-            html += unfinished.map(g => `
-                <div class="hist-card">
-                    <div class="hist-card-row">
-                        <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                        <span class="hist-mode">${g.startScore}</span>
-                    </div>
-                    <div class="hist-players">${g.players.join(', ')}</div>
+        unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
+            <div class="hist-card" onclick="loadHistoryGame(${g.id})">
+                <div class="hist-card-row">
+                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    <span class="hist-mode">${g.startScore}</span>
                 </div>
-            `).join('');
-        }
+                <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
+            </div>
+        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No unfinished games.</div>';
 
-        html += `<div class="hist-section-title">Finished Games</div>`;
-        if(finished.length === 0) html += `<div style="text-align:center;color:#666;padding:20px;">No finished games yet.</div>`;
-        html += finished.map(g => `
-            <div class="hist-card">
+        finishedEl.innerHTML = finished.length ? finished.map(g => `
+            <div class="hist-card" onclick="loadHistoryGame(${g.id})">
                 <div class="hist-card-row">
                     <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     <span class="hist-mode">${g.startScore}</span>
                 </div>
                 <div class="hist-winner">🏆 ${g.winner}</div>
                 <div class="hist-darts">${g.dartsThrown} darts thrown</div>
-                <div class="hist-players">${g.players.join(', ')}</div>
+                <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
             </div>
-        `).join('');
-        gamesEl.innerHTML = html;
+        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No finished games.</div>';
 
-        // Render Stats
-        const statsEl = document.getElementById('hc-players');
-        const names = Object.keys(playerStats);
-        if(names.length === 0) {
-            statsEl.innerHTML = `<div style="text-align:center;color:#666;padding:20px;">No player statistics recorded.</div>`;
-        } else {
-            let statsHtml = '';
-            names.forEach(name => {
-                const p = playerStats[name];
-                statsHtml += `<div class="stat-card"><div class="stat-name">${name}</div>`;
-                
-                // Group by Mode
-                for(let mode in p) {
-                    const data = p[mode];
-                    const wins = data.length;
-                    const best = Math.min(...data);
-                    const avg = Math.round(data.reduce((a,b)=>a+b,0) / wins);
-                    
-                    statsHtml += `
-                        <div style="font-size:0.8rem; color:#aaa; margin-top:5px; border-bottom:1px solid #333; padding-bottom:2px;">${mode} Mode</div>
-                        <div class="stat-grid" style="margin-top:5px;">
-                            <div class="stat-box"><span class="stat-val">${wins}</span><span class="stat-label">Wins</span></div>
-                            <div class="stat-box"><span class="stat-val">${best}</span><span class="stat-label">Best Darts</span></div>
-                            <div class="stat-box"><span class="stat-val">${avg}</span><span class="stat-label">Avg Darts</span></div>
-                        </div>
-                    `;
-                }
-                statsHtml += `</div>`;
-            });
-            statsEl.innerHTML = statsHtml;
+        // Render Players
+        const playersEl = document.getElementById('player-list-view');
+        // Extract unique players
+        const allPlayers = new Set();
+        gameHistory.forEach(g => g.players.forEach(p => allPlayers.add(p.name)));
+        
+        playersEl.innerHTML = Array.from(allPlayers).map(name => 
+            `<div class="player-list-item" onclick="showPlayerDetails('${name}')">${name} <span>&rsaquo;</span></div>`
+        ).join('');
+    }
+
+    function showPlayerDetails(name) {
+        document.getElementById('player-list-view').style.display = 'none';
+        document.getElementById('player-detail-view').style.display = 'flex';
+        document.getElementById('pd-name').innerText = name;
+        
+        // Calc Stats
+        const wins = gameHistory.filter(g => g.finished && g.winner === name);
+        const winCount = wins.length;
+        const totalGames = gameHistory.filter(g => g.finished && g.players.some(p => p.name === name)).length;
+        
+        document.getElementById('pd-total').innerText = winCount;
+        document.getElementById('pd-winrate').innerText = totalGames ? Math.round((winCount/totalGames)*100) + '%' : '0%';
+        
+        let best = '-';
+        let avg = '-';
+        if(winCount > 0) {
+            const darts = wins.map(g => g.dartsThrown);
+            best = Math.min(...darts);
+            avg = Math.round(darts.reduce((a,b)=>a+b,0) / winCount);
         }
+        document.getElementById('pd-best').innerText = best;
+        document.getElementById('pd-avg').innerText = avg;
+        
+        // Draw Graph
+        drawPlayerGraph(name, wins);
+    }
+
+    function backToPlayerList() {
+        document.getElementById('player-detail-view').style.display = 'none';
+        document.getElementById('player-list-view').style.display = 'block';
+    }
+
+    function drawPlayerGraph(name, winGames) {
+        const container = document.getElementById('player-graph-container');
+        container.innerHTML = '';
+        if(winGames.length < 2) {
+             container.innerHTML = '<div style="color:#666;text-align:center;padding-top:80px;">Not enough data for graph</div>';
+             return;
+        }
+
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute('width', '100%');
+        svg.setAttribute('height', '100%');
+        container.appendChild(svg);
+        
+        // Sort by date
+        winGames.sort((a,b) => new Date(a.date) - new Date(b.date));
+        
+        const darts = winGames.map(g => g.dartsThrown);
+        const maxDarts = Math.max(...darts) + 5;
+        const minDarts = Math.max(0, Math.min(...darts) - 5);
+        const range = maxDarts - minDarts;
+        
+        let points = "";
+        darts.forEach((d, i) => {
+            const x = (i / (darts.length - 1)) * w;
+            const y = h - ((d - minDarts) / range) * h;
+            points += `${x},${y} `;
+            
+            const dot = document.createElementNS(svgNS, "circle");
+            dot.setAttribute("cx", x); dot.setAttribute("cy", y);
+            dot.setAttribute("r", 4); dot.setAttribute("fill", "#00e676");
+            svg.appendChild(dot);
+        });
+
+        const poly = document.createElementNS(svgNS, "polyline");
+        poly.setAttribute("points", points);
+        poly.setAttribute("fill", "none");
+        poly.setAttribute("stroke", "#00e676");
+        poly.setAttribute("stroke-width", "2");
+        svg.appendChild(poly);
     }
 
     function retryGame() {
