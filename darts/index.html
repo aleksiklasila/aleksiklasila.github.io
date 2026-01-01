@@ -39,10 +39,14 @@
             padding-top: max(5px, env(safe-area-inset-top)); z-index: 100;
         }
         h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.5px; }
+        
+        .header-controls { display: flex; gap: 10px; }
+        
         button {
             background: var(--accent); color: #000; border: none; padding: 6px 14px;
             border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.85rem;
         }
+        button.icon-btn { padding: 6px 10px; font-size: 1.2rem; line-height: 1; display: flex; align-items: center; justify-content: center; }
         button.danger { background: var(--danger); color: white; }
 
         /* --- Scoreboard --- */
@@ -137,18 +141,18 @@
         .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; font-size: 0.9rem; }
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; font-size: 0.9rem; }
 
-        /* --- View 3: Graph --- */
+        /* --- Graph Modal Content --- */
         #graph-wrapper {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: #111; padding: 20px;
+            background: #111; padding: 10px; width: 100%; height: 100%; box-sizing: border-box;
         }
         #graph-container {
-            width: 100%; height: 60%; position: relative;
+            width: 100%; flex: 1; position: relative;
             border-left: 1px solid #444; border-bottom: 1px solid #444;
-            margin-bottom: 20px;
+            margin-bottom: 10px; min-height: 200px;
         }
         .graph-legend {
-            display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; width: 100%;
+            display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; width: 100%; flex: 0 0 auto;
         }
         .legend-item { display: flex; align-items: center; font-size: 0.9rem; color: #ccc; }
         .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
@@ -229,8 +233,10 @@
         @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
 
         /* Modal */
-        #setup-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
-        .modal-content { background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        #setup-modal, #graph-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal-content { background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        .modal-wide { max-width: 600px; height: 70%; }
+        
         input { width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box; }
         .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
         .player-tag { background: #333; padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; border: 1px solid #444; }
@@ -239,7 +245,7 @@
 </head>
 <body>
 
-<div id="setup-modal">
+<div id="setup-modal" style="display:flex;">
     <div class="modal-content">
         <h2 id="modal-title" style="margin-top:0">New Game</h2>
         <input type="text" id="new-player-input" placeholder="Player Name" maxlength="10">
@@ -259,9 +265,26 @@
     </div>
 </div>
 
+<div id="graph-modal">
+    <div class="modal-content modal-wide">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 style="margin:0;">Timeline</h3>
+            <button onclick="toggleGraph()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
+        </div>
+        <div id="graph-wrapper">
+            <div id="graph-container">
+                </div>
+            <div class="graph-legend" id="graph-legend"></div>
+        </div>
+    </div>
+</div>
+
 <header>
     <h1 id="app-title">Darts Scorer Pro</h1>
-    <button onclick="retryGame()" class="danger" id="btn-retry">Retry</button>
+    <div class="header-controls">
+        <button onclick="toggleGraph()" class="icon-btn">📈</button>
+        <button onclick="retryGame()" class="danger" id="btn-retry">Retry</button>
+    </div>
 </header>
 
 <div id="scoreboard"></div>
@@ -302,15 +325,6 @@
                 <div class="grid-tab" onclick="switchGridTab(2)" id="tab-2"><span class="grid-tab-label">3rd</span><span class="grid-tab-val" id="grid-val-2">0</span></div>
             </div>
             <div id="grid-body-container"></div>
-        </div>
-    </div>
-
-    <div class="view-section" id="section-graph">
-        <div id="graph-wrapper">
-            <h3 style="margin-top:0; color:#aaa; font-size:0.9rem; text-transform:uppercase; letter-spacing:1px;">Game Timeline</h3>
-            <div id="graph-container">
-                </div>
-            <div class="graph-legend" id="graph-legend"></div>
         </div>
     </div>
 
@@ -584,11 +598,6 @@
             });
 
             if(slider.scrollLeft > 10) endTutorials();
-            
-            // Redraw graph if visual
-            if(index === 2) {
-                drawGraph();
-            }
         });
     }
 
@@ -735,14 +744,11 @@
         if(res.isWin) { 
             p.score = 0; 
             p.finished = true;
-            // Add final 0 to history
             p.history.push(0);
         } else if(!res.isBust) { 
             p.score = res.rem;
-            // Add new score to history
             p.history.push(res.rem);
         } else {
-             // Bust: add current score (no change) to history to show flat line
             p.history.push(p.score);
         }
 
@@ -757,9 +763,7 @@
         switchGridTab(0);
         
         endTutorials();
-        drawGraph(); // Update Graph with new data
 
-        // Check if everyone is finished
         if(players.every(pl => pl.finished)) { 
             renderScoreboard(); 
             gameActive = false; 
@@ -773,7 +777,6 @@
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
 
-        // Scoreboard Manual Scroll
         const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
         const sb = document.getElementById('scoreboard');
         if(activeEl && sb) {
@@ -785,17 +788,27 @@
         resetDartsPosition();
     }
 
+    function toggleGraph() {
+        const modal = document.getElementById('graph-modal');
+        if(modal.style.display === 'flex') {
+            modal.style.display = 'none';
+        } else {
+            modal.style.display = 'flex';
+            requestAnimationFrame(drawGraph); // Draw after layout
+        }
+    }
+
     function drawGraph() {
         const container = document.getElementById('graph-container');
         const legend = document.getElementById('graph-legend');
         const w = container.clientWidth;
         const h = container.clientHeight;
-        if(w === 0 || h === 0) return; // not visible yet
+        if(w === 0 || h === 0) return; 
 
         // Calculate max turns
         let maxTurns = 0;
         players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
-        if(maxTurns < 5) maxTurns = 5; // Minimum width
+        if(maxTurns < 5) maxTurns = 5; 
 
         const svgNS = "http://www.w3.org/2000/svg";
         let svg = document.getElementById('graph-svg');
@@ -806,12 +819,11 @@
             svg.setAttribute('height', '100%');
             container.appendChild(svg);
         }
-        svg.innerHTML = ''; // Clear
+        svg.innerHTML = ''; 
 
         // Axis
         const startVal = startScoreVal;
         
-        // Horizontal Lines (0, 25%, 50%, 75%, 100%)
         for(let i=0; i<=4; i++) {
             const y = h - (h * (i/4));
             const line = document.createElementNS(svgNS, "line");
@@ -819,20 +831,9 @@
             line.setAttribute("x2", w); line.setAttribute("y2", y);
             line.setAttribute("stroke", "#333"); line.setAttribute("stroke-width", "1");
             svg.appendChild(line);
-            
-            // Labels
-            const label = document.createElement("div");
-            label.className = 'graph-label';
-            label.style.left = '5px';
-            label.style.top = (y - 10) + 'px';
-            if(i === 0) label.style.top = (y - 15) + 'px'; // adjust bottom
-            label.innerText = Math.round(startVal * (i/4));
-            container.appendChild(label);
         }
-
-        // Remove old labels html
+        
         document.querySelectorAll('.graph-label').forEach(e => e.remove());
-        // Re-add labels (simple way for this snippet)
         for(let i=0; i<=4; i++) {
            const val = Math.round(startVal * (i/4));
            const yPct = (val / startVal);
@@ -852,8 +853,6 @@
         legend.innerHTML = '';
         players.forEach((p, idx) => {
             const color = playerColors[idx % playerColors.length];
-            
-            // Legend
             legend.innerHTML += `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div>${p.name}</div>`;
 
             if(p.history.length < 1) return;
@@ -864,7 +863,6 @@
                 const y = h - ((score / startVal) * h);
                 points += `${x},${y} `;
                 
-                // Dot
                 const dot = document.createElementNS(svgNS, "circle");
                 dot.setAttribute("cx", x); dot.setAttribute("cy", y);
                 dot.setAttribute("r", 3); dot.setAttribute("fill", color);
@@ -922,7 +920,6 @@
     function addPlayer() { 
         const inp = document.getElementById('new-player-input'); 
         if(inp.value.trim()){ 
-            // Initialize with empty history
             players.push({name:inp.value.trim(), score:501, finished:false, history:[]}); 
             inp.value=""; 
             renderList(); 
@@ -939,12 +936,11 @@
         players.forEach(p => { 
             p.score = s; 
             p.finished = false; 
-            p.history = [s]; // Initialize history with starting score
+            p.history = [s]; 
         }); 
         gameActive = true; currentPlayerIndex = 0; 
         document.getElementById('setup-modal').style.display='none'; 
         
-        // Reset Footer
         const btn = document.getElementById('btn-next');
         btn.innerText = txt.btnNext;
         btn.classList.remove('game-over');
@@ -955,7 +951,6 @@
         setTimeout(() => { 
             resetDartsPosition(); 
             startTutorialLoop();
-            drawGraph(); // Initial draw
         }, 100); 
     }
     
