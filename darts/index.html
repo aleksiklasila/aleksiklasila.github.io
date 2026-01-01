@@ -85,10 +85,8 @@
             position: relative; 
             display: flex; 
             flex-direction: column; 
-            /* CHANGE: Move board down */
             justify-content: flex-end; 
             align-items: center;
-            /* Padding to keep it off the very bottom/Next button */
             padding-bottom: 140px; 
             background: radial-gradient(circle at center, #222 0%, #121212 70%);
         }
@@ -139,6 +137,23 @@
         .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; font-size: 0.9rem; }
         .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; font-size: 0.9rem; }
 
+        /* --- View 3: Graph --- */
+        #graph-wrapper {
+            flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #111; padding: 20px;
+        }
+        #graph-container {
+            width: 100%; height: 60%; position: relative;
+            border-left: 1px solid #444; border-bottom: 1px solid #444;
+            margin-bottom: 20px;
+        }
+        .graph-legend {
+            display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; width: 100%;
+        }
+        .legend-item { display: flex; align-items: center; font-size: 0.9rem; color: #ccc; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        .graph-label { position: absolute; font-size: 0.7rem; color: #666; }
+        
         /* --- Darts --- */
         .dart-obj {
             width: 40px; height: 120px; 
@@ -188,6 +203,10 @@
         .action-btn.ready {
             background: var(--accent); color: #000; pointer-events: auto;
             box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+        }
+        .action-btn.game-over {
+            background: #444; color: #ccc; pointer-events: none;
+            border: 1px solid #666;
         }
 
         /* --- Tutorials --- */
@@ -286,6 +305,15 @@
         </div>
     </div>
 
+    <div class="view-section" id="section-graph">
+        <div id="graph-wrapper">
+            <h3 style="margin-top:0; color:#aaa; font-size:0.9rem; text-transform:uppercase; letter-spacing:1px;">Game Timeline</h3>
+            <div id="graph-container">
+                </div>
+            <div class="graph-legend" id="graph-legend"></div>
+        </div>
+    </div>
+
 </div>
 
 <div id="footer-fixed">
@@ -294,8 +322,8 @@
 
 <script>
     const i18n = {
-        en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?", miss: "Miss", retry: "Retry" },
-        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi", retry: "Uusi Peli" }
+        en: { next: "Rem: ", bust: "BUST", btnNext: "Next Player", btnWin: "WINNER!", win: "Wins!", confirm: "End current game?", miss: "Miss", retry: "Retry", gameOver: "GAME OVER" },
+        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", btnNext: "Seuraava", btnWin: "VOITTAJA!", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi", retry: "Uusi Peli", gameOver: "PELI OHI" }
     };
     const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
     const txt = i18n[userLang];
@@ -303,6 +331,7 @@
     let players = [];
     let currentPlayerIndex = 0;
     let gameActive = false;
+    let startScoreVal = 501;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
     
     // Tutorial Logic
@@ -311,6 +340,7 @@
     let currentGridTab = 0;
 
     const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+    const playerColors = ["#00e676", "#2979ff", "#ff4081", "#ff9100", "#e040fb", "#00bcd4", "#ffeb3b", "#ff1744"];
 
     function getBoardCoordinates(score, mult) {
         if(score === 0) return null; 
@@ -336,7 +366,7 @@
             if (val === 0) return "0";
             if (val === 25) return "25 (1x25)";
             if (val === 50) return "50 (1x50)";
-            return `${total} (${mult}x${val})`; // Always verbose on buttons too now
+            return `${total} (${mult}x${val})`; 
         }
 
         if (val === 0) return "0";
@@ -549,11 +579,16 @@
             
             const darts = document.querySelectorAll('.dart-obj');
             darts.forEach(d => {
-                if(index === 1) d.classList.add('hidden-in-grid');
+                if(index > 0) d.classList.add('hidden-in-grid');
                 else d.classList.remove('hidden-in-grid');
             });
 
             if(slider.scrollLeft > 10) endTutorials();
+            
+            // Redraw graph if visual
+            if(index === 2) {
+                drawGraph();
+            }
         });
     }
 
@@ -699,9 +734,16 @@
         
         if(res.isWin) { 
             p.score = 0; 
-            p.finished = true; 
+            p.finished = true;
+            // Add final 0 to history
+            p.history.push(0);
         } else if(!res.isBust) { 
-            p.score = res.rem; 
+            p.score = res.rem;
+            // Add new score to history
+            p.history.push(res.rem);
+        } else {
+             // Bust: add current score (no change) to history to show flat line
+            p.history.push(p.score);
         }
 
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
@@ -715,8 +757,18 @@
         switchGridTab(0);
         
         endTutorials();
+        drawGraph(); // Update Graph with new data
 
-        if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; return; }
+        // Check if everyone is finished
+        if(players.every(pl => pl.finished)) { 
+            renderScoreboard(); 
+            gameActive = false; 
+            const btn = document.getElementById('btn-next');
+            btn.innerText = txt.gameOver;
+            btn.classList.remove('ready');
+            btn.classList.add('game-over');
+            return; 
+        }
 
         let loop=0;
         do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
@@ -731,6 +783,101 @@
 
         renderScoreboard();
         resetDartsPosition();
+    }
+
+    function drawGraph() {
+        const container = document.getElementById('graph-container');
+        const legend = document.getElementById('graph-legend');
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if(w === 0 || h === 0) return; // not visible yet
+
+        // Calculate max turns
+        let maxTurns = 0;
+        players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
+        if(maxTurns < 5) maxTurns = 5; // Minimum width
+
+        const svgNS = "http://www.w3.org/2000/svg";
+        let svg = document.getElementById('graph-svg');
+        if(!svg) {
+            svg = document.createElementNS(svgNS, "svg");
+            svg.id = 'graph-svg';
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            container.appendChild(svg);
+        }
+        svg.innerHTML = ''; // Clear
+
+        // Axis
+        const startVal = startScoreVal;
+        
+        // Horizontal Lines (0, 25%, 50%, 75%, 100%)
+        for(let i=0; i<=4; i++) {
+            const y = h - (h * (i/4));
+            const line = document.createElementNS(svgNS, "line");
+            line.setAttribute("x1", 0); line.setAttribute("y1", y);
+            line.setAttribute("x2", w); line.setAttribute("y2", y);
+            line.setAttribute("stroke", "#333"); line.setAttribute("stroke-width", "1");
+            svg.appendChild(line);
+            
+            // Labels
+            const label = document.createElement("div");
+            label.className = 'graph-label';
+            label.style.left = '5px';
+            label.style.top = (y - 10) + 'px';
+            if(i === 0) label.style.top = (y - 15) + 'px'; // adjust bottom
+            label.innerText = Math.round(startVal * (i/4));
+            container.appendChild(label);
+        }
+
+        // Remove old labels html
+        document.querySelectorAll('.graph-label').forEach(e => e.remove());
+        // Re-add labels (simple way for this snippet)
+        for(let i=0; i<=4; i++) {
+           const val = Math.round(startVal * (i/4));
+           const yPct = (val / startVal);
+           const yPx = h - (h * yPct);
+           const txt = document.createElementNS(svgNS, "text");
+           txt.setAttribute("x", 5);
+           txt.setAttribute("y", yPx - 5);
+           txt.setAttribute("fill", "#666");
+           txt.setAttribute("font-size", "10");
+           txt.textContent = val;
+           if(val === 0) txt.setAttribute("y", h - 5);
+           svg.appendChild(txt);
+        }
+
+
+        // Draw Lines
+        legend.innerHTML = '';
+        players.forEach((p, idx) => {
+            const color = playerColors[idx % playerColors.length];
+            
+            // Legend
+            legend.innerHTML += `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div>${p.name}</div>`;
+
+            if(p.history.length < 1) return;
+
+            let points = "";
+            p.history.forEach((score, turnIdx) => {
+                const x = (turnIdx / (maxTurns - 1)) * w;
+                const y = h - ((score / startVal) * h);
+                points += `${x},${y} `;
+                
+                // Dot
+                const dot = document.createElementNS(svgNS, "circle");
+                dot.setAttribute("cx", x); dot.setAttribute("cy", y);
+                dot.setAttribute("r", 3); dot.setAttribute("fill", color);
+                svg.appendChild(dot);
+            });
+
+            const poly = document.createElementNS(svgNS, "polyline");
+            poly.setAttribute("points", points);
+            poly.setAttribute("fill", "none");
+            poly.setAttribute("stroke", color);
+            poly.setAttribute("stroke-width", "2");
+            svg.appendChild(poly);
+        });
     }
 
     function retryGame() {
@@ -772,20 +919,43 @@
         d.style.transform = 'rotate(10deg)';
     }
 
-    function addPlayer() { const inp = document.getElementById('new-player-input'); if(inp.value.trim()){ players.push({name:inp.value.trim(), score:501, finished:false}); inp.value=""; renderList(); inp.focus(); } }
+    function addPlayer() { 
+        const inp = document.getElementById('new-player-input'); 
+        if(inp.value.trim()){ 
+            // Initialize with empty history
+            players.push({name:inp.value.trim(), score:501, finished:false, history:[]}); 
+            inp.value=""; 
+            renderList(); 
+            inp.focus(); 
+        } 
+    }
+    
     function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList()" style="cursor:pointer">&times;</span></div>`).join(''); }
     
     function startGame() { 
         if(players.length===0) return; 
         const s = parseInt(document.getElementById('start-score-select').value); 
-        players.forEach(p => { p.score=s; p.finished=false; }); 
+        startScoreVal = s;
+        players.forEach(p => { 
+            p.score = s; 
+            p.finished = false; 
+            p.history = [s]; // Initialize history with starting score
+        }); 
         gameActive = true; currentPlayerIndex = 0; 
         document.getElementById('setup-modal').style.display='none'; 
+        
+        // Reset Footer
+        const btn = document.getElementById('btn-next');
+        btn.innerText = txt.btnNext;
+        btn.classList.remove('game-over');
+        btn.classList.remove('ready');
+
         renderScoreboard(); 
         
         setTimeout(() => { 
             resetDartsPosition(); 
             startTutorialLoop();
+            drawGraph(); // Initial draw
         }, 100); 
     }
     
