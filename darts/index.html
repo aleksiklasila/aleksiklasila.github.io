@@ -157,7 +157,7 @@
         }
         .g-double .grid-dim-text, .g-triple .grid-dim-text { color: rgba(255,255,255,0.6); }
 
-        /* --- Graph Modal Content --- */
+        /* --- Graph/History Modal Content --- */
         #graph-wrapper {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: #111; padding: 10px; width: 100%; height: 100%; box-sizing: border-box;
@@ -174,6 +174,29 @@
         .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
         .graph-label { position: absolute; font-size: 0.7rem; color: #666; }
         
+        /* History Styles */
+        .hist-nav { display: flex; border-bottom: 1px solid #444; margin-bottom: 15px; }
+        .hist-tab { flex: 1; padding: 10px; text-align: center; color: #888; cursor: pointer; font-weight: bold; }
+        .hist-tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+        .hist-content { flex: 1; overflow-y: auto; display: none; }
+        .hist-content.active { display: block; }
+        .hist-section-title { font-size: 0.8rem; color: #666; text-transform: uppercase; margin: 15px 0 5px 0; letter-spacing: 1px; font-weight: bold; }
+        
+        .hist-card { background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px; border: 1px solid #333; }
+        .hist-card-row { display: flex; justify-content: space-between; align-items: center; }
+        .hist-date { font-size: 0.75rem; color: #888; }
+        .hist-mode { font-size: 0.75rem; background: #333; padding: 2px 6px; border-radius: 4px; color: #ccc; }
+        .hist-winner { color: var(--accent); font-weight: bold; font-size: 1rem; margin: 5px 0; }
+        .hist-darts { font-size: 0.85rem; color: #ccc; }
+        .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; }
+
+        .stat-card { background: #1a1a1a; padding: 10px; margin-bottom: 10px; border-radius: 6px; border-left: 3px solid #444; }
+        .stat-name { font-weight: bold; font-size: 1.1rem; color: white; margin-bottom: 5px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+        .stat-box { background: #2a2a2a; padding: 5px; text-align: center; border-radius: 4px; }
+        .stat-label { font-size: 0.65rem; color: #888; display: block; }
+        .stat-val { font-size: 0.9rem; font-weight: bold; color: #eee; }
+
         /* --- Darts --- */
         .dart-obj {
             width: 40px; height: 120px; 
@@ -260,9 +283,9 @@
         @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
 
         /* Modal */
-        #setup-modal, #graph-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        #setup-modal, #graph-modal, #history-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
         .modal-content { background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
-        .modal-wide { max-width: 600px; height: 70%; }
+        .modal-wide { max-width: 600px; height: 75%; }
         
         input { width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box; }
         .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
@@ -306,17 +329,36 @@
             <button onclick="toggleGraph()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
         </div>
         <div id="graph-wrapper">
-            <div id="graph-container">
-            </div>
+            <div id="graph-container"></div>
             <div class="graph-legend" id="graph-legend"></div>
         </div>
+    </div>
+</div>
+
+<div id="history-modal">
+    <div class="modal-content modal-wide">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <h3 style="margin:0;">History</h3>
+            <button onclick="toggleHistory()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
+        </div>
+        
+        <div class="hist-nav">
+            <div class="hist-tab active" onclick="switchHistTab('games')" id="ht-games">Games</div>
+            <div class="hist-tab" onclick="switchHistTab('players')" id="ht-players">Players</div>
+        </div>
+
+        <div class="hist-content active" id="hc-games"></div>
+        <div class="hist-content" id="hc-players"></div>
     </div>
 </div>
 
 <header>
     <h1 id="app-title">Darts Scorer Pro</h1>
     <div class="header-controls">
-        <button onclick="toggleGraph()" class="icon-btn">
+        <button onclick="toggleHistory()" class="icon-btn" title="History">
+            <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        </button>
+        <button onclick="toggleGraph()" class="icon-btn" title="Graph">
             <svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>
         </button>
         <button onclick="retryGame()" class="danger" id="btn-retry">Retry</button>
@@ -379,12 +421,18 @@
     const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
     const txt = i18n[userLang];
 
+    // -- State --
     let players = [];
     let currentPlayerIndex = 0;
     let gameActive = false;
     let startScoreVal = 501;
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
+    let currentGameId = Date.now();
     
+    // -- History Data --
+    let gameHistory = []; // Array of game objects
+    let playerStats = {}; // Object: { playerName: { startScore: [dartsCount1, dartsCount2...] } }
+
     // Tutorial Logic
     let tutorialInterval = null;
     let tutorialsActive = false;
@@ -395,13 +443,28 @@
     
     // --- PERSISTENCE ---
     function saveGame() {
+        // Save current active game state
         const state = {
-            players, currentPlayerIndex, gameActive, startScoreVal, dartState
+            players, currentPlayerIndex, gameActive, startScoreVal, dartState, currentGameId
         };
         localStorage.setItem('darts_pro_save', JSON.stringify(state));
     }
+    
+    function saveHistoryData() {
+        localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+        localStorage.setItem('darts_pro_history_stats', JSON.stringify(playerStats));
+    }
 
     function loadGame() {
+        // Load Global History
+        try {
+            const h = localStorage.getItem('darts_pro_history_games');
+            if(h) gameHistory = JSON.parse(h);
+            const s = localStorage.getItem('darts_pro_history_stats');
+            if(s) playerStats = JSON.parse(s);
+        } catch(e) {}
+
+        // Load Active Game
         const saved = localStorage.getItem('darts_pro_save');
         if(saved) {
             try {
@@ -413,6 +476,7 @@
                 gameActive = s.gameActive;
                 startScoreVal = s.startScoreVal;
                 dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
+                currentGameId = s.currentGameId || Date.now();
                 
                 if(gameActive) {
                     document.getElementById('setup-modal').style.display = 'none';
@@ -443,6 +507,48 @@
             } catch(e) { console.error("Save load error", e); }
         }
     }
+
+    function recordGameStart() {
+        // Find if game exists in history (if resuming), else push new
+        const existing = gameHistory.find(g => g.id === currentGameId);
+        if(!existing) {
+            gameHistory.unshift({
+                id: currentGameId,
+                date: new Date().toISOString(),
+                startScore: startScoreVal,
+                players: players.map(p => p.name),
+                winner: null,
+                dartsThrown: 0,
+                finished: false
+            });
+            saveHistoryData();
+        }
+    }
+
+    function recordGameWin(winnerName, winningDartIndex) {
+        const game = gameHistory.find(g => g.id === currentGameId);
+        if(game) {
+            game.finished = true;
+            game.winner = winnerName;
+            
+            // Calculate total darts thrown by winner
+            // Turns taken so far (history.length - 1) * 3 + current turn darts (winningDartIndex + 1)
+            const p = players.find(pl => pl.name === winnerName);
+            const turns = p.history.length - 1; // Initial score is index 0
+            const totalDarts = (turns * 3) + (winningDartIndex + 1);
+            
+            game.dartsThrown = totalDarts;
+            
+            // Update Stats
+            if(!playerStats[winnerName]) playerStats[winnerName] = {};
+            if(!playerStats[winnerName][startScoreVal]) playerStats[winnerName][startScoreVal] = [];
+            playerStats[winnerName][startScoreVal].push(totalDarts);
+            
+            saveHistoryData();
+        }
+    }
+
+    // --- VISUAL & GAME LOGIC ---
 
     function getBoardCoordinates(score, mult) {
         if(score === 0) return null; 
@@ -806,6 +912,8 @@
     function calculateScore(currentScore) {
         let temp = currentScore;
         let isBust = false, isWin = false;
+        let winningDartIndex = -1;
+
         for(let i=0; i<3; i++) {
             const d = dartState[i];
             if(d.val === 0 && !d.missed) continue;
@@ -813,11 +921,16 @@
             const rem = temp - pts;
             if(rem < 0 || rem === 1) { isBust = true; break; }
             else if (rem === 0) {
-                if(d.mult === 2 || d.val === 50) { isWin = true; temp = 0; break; }
+                if(d.mult === 2 || d.val === 50) { 
+                    isWin = true; 
+                    temp = 0; 
+                    winningDartIndex = i;
+                    break; 
+                }
                 else { isBust = true; break; }
             } else { temp = rem; }
         }
-        return { rem: isBust ? currentScore : temp, isBust, isWin };
+        return { rem: isBust ? currentScore : temp, isBust, isWin, winningDartIndex };
     }
 
     // --- MANUAL EDIT ---
@@ -878,6 +991,7 @@
         const res = calculateScore(p.score);
         
         if(res.isWin) { 
+            recordGameWin(p.name, res.winningDartIndex);
             p.score = 0; 
             p.finished = true;
             p.history.push(0);
@@ -1014,10 +1128,99 @@
         });
     }
 
+    // --- HISTORY MODAL ---
+    function toggleHistory() {
+        const modal = document.getElementById('history-modal');
+        if(modal.style.display === 'flex') {
+            modal.style.display = 'none';
+        } else {
+            modal.style.display = 'flex';
+            renderHistoryModal();
+        }
+    }
+
+    function switchHistTab(tab) {
+        document.querySelectorAll('.hist-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.hist-content').forEach(c => c.classList.remove('active'));
+        document.getElementById('ht-' + tab).classList.add('active');
+        document.getElementById('hc-' + tab).classList.add('active');
+    }
+
+    function renderHistoryModal() {
+        // Render Games
+        const gamesEl = document.getElementById('hc-games');
+        const finished = gameHistory.filter(g => g.finished);
+        const unfinished = gameHistory.filter(g => !g.finished);
+        
+        let html = '';
+        
+        if(unfinished.length > 0) {
+            html += `<div class="hist-section-title">Unfinished / Aborted</div>`;
+            html += unfinished.map(g => `
+                <div class="hist-card">
+                    <div class="hist-card-row">
+                        <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                        <span class="hist-mode">${g.startScore}</span>
+                    </div>
+                    <div class="hist-players">${g.players.join(', ')}</div>
+                </div>
+            `).join('');
+        }
+
+        html += `<div class="hist-section-title">Finished Games</div>`;
+        if(finished.length === 0) html += `<div style="text-align:center;color:#666;padding:20px;">No finished games yet.</div>`;
+        html += finished.map(g => `
+            <div class="hist-card">
+                <div class="hist-card-row">
+                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    <span class="hist-mode">${g.startScore}</span>
+                </div>
+                <div class="hist-winner">🏆 ${g.winner}</div>
+                <div class="hist-darts">${g.dartsThrown} darts thrown</div>
+                <div class="hist-players">${g.players.join(', ')}</div>
+            </div>
+        `).join('');
+        gamesEl.innerHTML = html;
+
+        // Render Stats
+        const statsEl = document.getElementById('hc-players');
+        const names = Object.keys(playerStats);
+        if(names.length === 0) {
+            statsEl.innerHTML = `<div style="text-align:center;color:#666;padding:20px;">No player statistics recorded.</div>`;
+        } else {
+            let statsHtml = '';
+            names.forEach(name => {
+                const p = playerStats[name];
+                statsHtml += `<div class="stat-card"><div class="stat-name">${name}</div>`;
+                
+                // Group by Mode
+                for(let mode in p) {
+                    const data = p[mode];
+                    const wins = data.length;
+                    const best = Math.min(...data);
+                    const avg = Math.round(data.reduce((a,b)=>a+b,0) / wins);
+                    
+                    statsHtml += `
+                        <div style="font-size:0.8rem; color:#aaa; margin-top:5px; border-bottom:1px solid #333; padding-bottom:2px;">${mode} Mode</div>
+                        <div class="stat-grid" style="margin-top:5px;">
+                            <div class="stat-box"><span class="stat-val">${wins}</span><span class="stat-label">Wins</span></div>
+                            <div class="stat-box"><span class="stat-val">${best}</span><span class="stat-label">Best Darts</span></div>
+                            <div class="stat-box"><span class="stat-val">${avg}</span><span class="stat-label">Avg Darts</span></div>
+                        </div>
+                    `;
+                }
+                statsHtml += `</div>`;
+            });
+            statsEl.innerHTML = statsHtml;
+        }
+    }
+
     function retryGame() {
         if(confirm("End current game and setup new one?")) {
             gameActive = false;
-            localStorage.removeItem('darts_pro_save'); // Clear save
+            // Mark current game as abandoned if not finished
+            // We do nothing to gameHistory entry because it's already there as unfinished
+            localStorage.removeItem('darts_pro_save'); 
             document.getElementById('setup-modal').style.display = 'flex';
             renderList(); 
         }
@@ -1071,6 +1274,7 @@
         if(players.length===0) return; 
         const s = parseInt(document.getElementById('start-score-select').value); 
         startScoreVal = s;
+        currentGameId = Date.now();
         players.forEach(p => { 
             p.score = s; 
             p.finished = false; 
@@ -1083,6 +1287,7 @@
         btn.innerText = "Next"; 
         btn.classList.remove('game-over');
 
+        recordGameStart(); // Log to history
         renderScoreboard(); 
         
         setTimeout(() => { 
