@@ -213,6 +213,13 @@
             padding: 4px 8px; font-size: 0.8rem; z-index: 10;
         }
         .hist-delete-btn:active { background: var(--danger); color: white; }
+        .hist-recover-btn {
+            position: absolute; right: 10px; top: 10px;
+            background: rgba(0, 230, 118, 0.1); color: var(--accent);
+            border: 1px solid var(--accent); border-radius: 4px;
+            padding: 4px 8px; font-size: 0.8rem; z-index: 10;
+        }
+        .hist-recover-btn:active { background: var(--accent); color: black; }
 
         .player-delete-icon {
             padding: 5px 10px; color: #666; font-size: 1.1rem;
@@ -401,29 +408,41 @@
 <div id="history-modal">
     <div class="modal-content modal-wide">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <h3 style="margin:0;">History</h3>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <button onclick="toggleRubbishBin()" style="background:#333; color:#ccc; padding:6px 10px;">🗑️</button>
+                <h3 style="margin:0;" id="history-title">History</h3>
+            </div>
             <button onclick="toggleHistory()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
         </div>
         
         <div class="hist-nav">
             <div class="hist-tab active" onclick="switchHistTab('games')" id="ht-games">Games</div>
             <div class="hist-tab" onclick="switchHistTab('players')" id="ht-players">Players</div>
+            <div class="hist-tab" onclick="switchHistTab('shortcuts')" id="ht-shortcuts" style="display:none;">Shortcuts</div>
         </div>
 
         <div class="hist-content active" id="hc-games">
-            <div class="hist-section-header" onclick="toggleHistSection('unfinished')">
-                <span>In Progress / Aborted</span> <span id="arrow-unfinished">▶</span>
-            </div>
-            <div id="list-unfinished" class="hist-section-body"></div>
+            <div id="hist-games-list">
+                <div class="hist-section-header" onclick="toggleHistSection('unfinished')">
+                    <span>In Progress / Aborted</span> <span id="arrow-unfinished">▶</span>
+                </div>
+                <div id="list-unfinished" class="hist-section-body"></div>
 
-            <div class="hist-section-header" onclick="toggleHistSection('finished')">
-                <span>Finished Games (At least 1 winner)</span> <span id="arrow-finished">▶</span>
+                <div class="hist-section-header" onclick="toggleHistSection('finished')">
+                    <span>Finished Games (At least 1 winner)</span> <span id="arrow-finished">▶</span>
+                </div>
+                <div id="list-finished" class="hist-section-body"></div>
             </div>
-            <div id="list-finished" class="hist-section-body"></div>
+            <div id="bin-games-list" style="display:none;"></div>
         </div>
         
         <div class="hist-content" id="hc-players">
             <div id="player-list-view"></div>
+            <div id="bin-players-list" style="display:none;"></div>
+        </div>
+
+        <div class="hist-content" id="hc-shortcuts">
+             <div id="bin-shortcuts-list"></div>
         </div>
     </div>
 </div>
@@ -505,9 +524,13 @@
     let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
     let currentGameId = Date.now();
     let knownPlayers = [];
+    let gameHistory = []; 
     
-    // -- History Data --
-    let gameHistory = []; // Array of game objects
+    // -- Bin State --
+    let binGames = [];
+    let binPlayers = []; // Names of players hidden from history list
+    let binShortcuts = []; // Names of shortcuts removed
+    let isRubbishMode = false;
 
     // Tutorial Logic
     let tutorialInterval = null;
@@ -519,53 +542,35 @@
     
     // --- PERSISTENCE ---
     function saveGame() {
-        // Save Active Game
-        const state = {
-            players, currentPlayerIndex, gameActive, startScoreVal, dartState, currentGameId
-        };
+        const state = { players, currentPlayerIndex, gameActive, startScoreVal, dartState, currentGameId };
         localStorage.setItem('darts_pro_save', JSON.stringify(state));
 
-        // Update History Entry for this game to ensure it has latest stats if resumed later
         if(gameHistory.length > 0) {
             const idx = gameHistory.findIndex(g => g.id === currentGameId);
             if(idx !== -1) {
-                // Determine if "finished" (at least one player won)
                 const anyWon = players.some(p => p.finished);
-               
-                gameHistory[idx].players = JSON.parse(JSON.stringify(players)); // deep copy
+                gameHistory[idx].players = JSON.parse(JSON.stringify(players)); 
                 gameHistory[idx].currentPlayerIndex = currentPlayerIndex;
                 gameHistory[idx].dartState = dartState; 
-                gameHistory[idx].finished = anyWon; // Marked as finished in list if at least 1 person won
+                gameHistory[idx].finished = anyWon; 
                 localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
             }
         }
     }
 
     function loadGame() {
-        // Load Global History
-        try {
-            const h = localStorage.getItem('darts_pro_history_games');
-            if(h) gameHistory = JSON.parse(h);
-        } catch(e) {}
-        
-        // Load Known Players
-        try {
-            const kp = localStorage.getItem('darts_pro_known_players');
-            if(kp) knownPlayers = JSON.parse(kp);
-        } catch(e) {}
+        try { if(localStorage.getItem('darts_pro_history_games')) gameHistory = JSON.parse(localStorage.getItem('darts_pro_history_games')); } catch(e) {}
+        try { if(localStorage.getItem('darts_pro_known_players')) knownPlayers = JSON.parse(localStorage.getItem('darts_pro_known_players')); } catch(e) {}
+        try { if(localStorage.getItem('darts_pro_bin_games')) binGames = JSON.parse(localStorage.getItem('darts_pro_bin_games')); } catch(e) {}
+        try { if(localStorage.getItem('darts_pro_bin_players')) binPlayers = JSON.parse(localStorage.getItem('darts_pro_bin_players')); } catch(e) {}
+        try { if(localStorage.getItem('darts_pro_bin_shortcuts')) binShortcuts = JSON.parse(localStorage.getItem('darts_pro_bin_shortcuts')); } catch(e) {}
 
-        // Load Active Game
         const saved = localStorage.getItem('darts_pro_save');
         if(saved) {
             try {
                 const s = JSON.parse(saved);
-                if(!s.players || s.players.length === 0) {
-                     renderQuickAdd();
-                     return;
-                }
-               
+                if(!s.players || s.players.length === 0) { renderQuickAdd(); return; }
                 restoreGameState(s);
-
             } catch(e) { console.error("Save load error", e); }
         } else {
              renderQuickAdd();
@@ -579,15 +584,12 @@
         dartState = s.dartState || [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
         currentGameId = s.currentGameId;
 
-        // CRITICAL: Determine gameActive based on whether ALL players are done
-        // If everyone finished, game over. If some pending, active.
         if(players.every(p => p.finished)) gameActive = false;
         else gameActive = true;
 
         document.getElementById('setup-modal').style.display = 'none';
         document.body.classList.remove('modal-open');
         
-        // Reset UI Buttons
         const btn = document.getElementById('btn-next');
         if(!gameActive) {
             btn.innerText = txt.gameOver;
@@ -598,10 +600,8 @@
         }
 
         renderScoreboard();
-        
         setTimeout(() => {
             resetDartsPosition(); 
-            // Then move ONLY thrown darts to board
             let thrownCount = 0;
             dartState.forEach((d, i) => {
                if(d.val !== 0 || d.missed) {
@@ -610,16 +610,13 @@
                    if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
                } 
             });
-            // Restore proper tab
             if(thrownCount < 3) switchGridTab(thrownCount);
             else switchGridTab(2);
         }, 50);
-
         updateGameState();
     }
 
     function recordGameStart() {
-        // Create full object for history
         const newGame = {
             id: currentGameId,
             date: new Date().toISOString(),
@@ -627,7 +624,7 @@
             players: JSON.parse(JSON.stringify(players)), 
             currentPlayerIndex: 0,
             dartState: [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}],
-            finished: false // Initially false
+            finished: false 
         };
         gameHistory.unshift(newGame);
         localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
@@ -643,7 +640,7 @@
         area.innerHTML = knownPlayers.map(name => `
             <div class="quick-add-chip" onclick="addPlayerByName('${name}')">
                 ${name}
-                <span class="chip-del" onclick="deleteQuickAdd('${name}', event)">&times;</span>
+                <span class="chip-del" onclick="softDeleteShortcut('${name}', event)">&times;</span>
             </div>
         `).join('');
     }
@@ -654,53 +651,47 @@
         saveGame();
     }
     
-    function deleteQuickAdd(name, e) {
+    function softDeleteShortcut(name, e) {
         e.stopPropagation();
         if(confirm(`Remove "${name}" from shortcuts?`)) {
             knownPlayers = knownPlayers.filter(p => p !== name);
+            binShortcuts.push(name);
             localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+            localStorage.setItem('darts_pro_bin_shortcuts', JSON.stringify(binShortcuts));
             renderQuickAdd();
         }
     }
 
     // --- VISUAL & GAME LOGIC ---
-
     function getBoardCoordinates(score, mult) {
         if(score === 0) return null; 
         if(score === 25) return {x:0, y:0};
         if(score === 50) return {x:0, y:0};
-       
         const numberIndex = boardNumbers.indexOf(score);
         const angleDeg = (numberIndex * 18) - 90;
         const angleRad = angleDeg * (Math.PI / 180);
-       
         let r = 0;
         if(mult === 3) r = 104;
         else if(mult === 2) r = 167;
         else r = 135; 
-       
         return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
     }
 
     function formatScore(val, mult, style) {
         const total = val * mult;
-       
         if(style === 'button') {
             if (val === 0) return `0`;
             if (val === 25) return `1x25 <span class="grid-dim-text">(${total})</span>`;
             if (val === 50) return `1x50 <span class="grid-dim-text">(${total})</span>`;
             return `${mult}x${val} <span class="grid-dim-text">(${total})</span>`; 
         }
-
         if (val === 0) return "0";
         if (val === 25) return "1x25 (25)";
         if (val === 50) return "1x50 (50)";
-       
         return `${mult}x${val} (${total})`;
     }
 
     const NS = "http://www.w3.org/2000/svg";
-
     function createDartSVG(id, number) {
         const div = document.createElement('div');
         div.className = 'dart-obj'; div.id = id;
@@ -764,33 +755,20 @@
         document.getElementById('dartboard-container').appendChild(createBoardSVG().cloneNode(true)).id = "main-svg";
         const magWrap = document.getElementById('magnifier');
         magWrap.insertBefore(createBoardSVG().cloneNode(true), magWrap.firstChild).id = "mag-svg";
-
         const visSection = document.getElementById('section-visual');
         [1,2,3].forEach(i => visSection.appendChild(createDartSVG(`dart-${i}`, i)));
-
         document.getElementById('btn-next').innerText = "Next";
         document.getElementById('btn-retry').innerText = txt.retry;
         document.getElementById('new-player-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') addPlayer(); });
-
-        setupDragAndDrop();
-        setupSwipeObserver();
-        buildGridInterface();
-        
-        loadGame(); 
+        setupDragAndDrop(); setupSwipeObserver(); buildGridInterface(); loadGame(); 
     }
 
     function buildGridInterface() {
         const container = document.getElementById('grid-body-container');
         container.innerHTML = '';
-        
         [0, 1, 2].forEach(dartIdx => {
-            const page = document.createElement('div');
-            page.className = 'grid-page';
-            page.id = `grid-page-${dartIdx}`;
-            
-            const grid = document.createElement('div');
-            grid.className = 'grid-matrix';
-            
+            const page = document.createElement('div'); page.className = 'grid-page'; page.id = `grid-page-${dartIdx}`;
+            const grid = document.createElement('div'); grid.className = 'grid-matrix';
             for(let i=20; i>=1; i--) {
                 grid.innerHTML += `
                     <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'button')}</div>
@@ -803,8 +781,7 @@
                 <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">1x25 <span class="grid-dim-text">(25)</span></div>
                 <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">0</div>
             `;
-            page.appendChild(grid);
-            container.appendChild(page);
+            page.appendChild(grid); container.appendChild(page);
         });
         switchGridTab(0);
     }
@@ -820,19 +797,9 @@
     function gridInput(dartIdx, score, mult) {
         if(!gameActive) return;
         endTutorials();
-
         dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
-        
-        if(score === 0) {
-            resetSingleDart(dartIdx);
-        } else {
-            moveDartToBoardLocation(dartIdx, score, mult);
-        }
-        
-        updateDartVisuals(dartIdx, score, mult);
-        updateGameState();
-        saveGame();
-        
+        if(score === 0) resetSingleDart(dartIdx); else moveDartToBoardLocation(dartIdx, score, mult);
+        updateDartVisuals(dartIdx, score, mult); updateGameState(); saveGame();
         if(dartIdx < 2) switchGridTab(dartIdx + 1);
     }
 
@@ -841,22 +808,16 @@
         const container = document.getElementById('dartboard-container');
         const boardRect = container.getBoundingClientRect();
         const sectionRect = document.getElementById('section-visual').getBoundingClientRect();
-        
         const relativeLeft = boardRect.left - sectionRect.left;
         const relativeTop = boardRect.top - sectionRect.top;
         const boardW = boardRect.width;
-
         const coords = getBoardCoordinates(score, mult);
         const scale = boardW / 410; 
-        
         const pixelX = (coords.x * scale) + (relativeLeft + boardW/2);
         const pixelY = (coords.y * scale) + (relativeTop + boardW/2);
-
         d.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-        d.style.left = (pixelX - 20) + 'px'; 
-        d.style.top = (pixelY - 120) + 'px';
-        d.style.transform = 'scale(0.8) rotate(0deg)';
-        d.style.zIndex = 1000 + dartIdx;
+        d.style.left = (pixelX - 20) + 'px'; d.style.top = (pixelY - 120) + 'px';
+        d.style.transform = 'scale(0.8) rotate(0deg)'; d.style.zIndex = 1000 + dartIdx;
     }
 
     function updateDartVisuals(idx, score, mult) {
@@ -866,49 +827,29 @@
     }
 
     function startTutorialLoop() {
-        tutorialsActive = true;
-        let phase = 0; 
-        const drag = document.getElementById('tut-drag');
-        const swipe = document.getElementById('tut-swipe');
-        
-        drag.style.display = 'flex';
-        swipe.style.display = 'none';
-
+        tutorialsActive = true; let phase = 0; 
+        const drag = document.getElementById('tut-drag'); const swipe = document.getElementById('tut-swipe');
+        drag.style.display = 'flex'; swipe.style.display = 'none';
         if(tutorialInterval) clearInterval(tutorialInterval);
-        
         tutorialInterval = setInterval(() => {
             if(!tutorialsActive) return;
-            if(phase === 0) {
-                drag.style.display = 'none';
-                swipe.style.display = 'flex';
-                phase = 1;
-            } else {
-                swipe.style.display = 'none';
-                drag.style.display = 'flex';
-                phase = 0;
-            }
+            if(phase === 0) { drag.style.display = 'none'; swipe.style.display = 'flex'; phase = 1; } 
+            else { swipe.style.display = 'none'; drag.style.display = 'flex'; phase = 0; }
         }, 3000);
     }
 
     function endTutorials() {
         if(!tutorialsActive) return;
-        tutorialsActive = false;
-        if(tutorialInterval) clearInterval(tutorialInterval);
-        document.getElementById('tut-drag').style.display = 'none';
-        document.getElementById('tut-swipe').style.display = 'none';
+        tutorialsActive = false; if(tutorialInterval) clearInterval(tutorialInterval);
+        document.getElementById('tut-drag').style.display = 'none'; document.getElementById('tut-swipe').style.display = 'none';
     }
 
     function setupSwipeObserver() {
         const slider = document.getElementById('view-slider');
         slider.addEventListener('scroll', () => {
             const index = Math.round(slider.scrollLeft / slider.offsetWidth);
-            
             const darts = document.querySelectorAll('.dart-obj');
-            darts.forEach(d => {
-                if(index > 0) d.classList.add('hidden-in-grid');
-                else d.classList.remove('hidden-in-grid');
-            });
-
+            darts.forEach(d => { if(index > 0) d.classList.add('hidden-in-grid'); else d.classList.remove('hidden-in-grid'); });
             if(slider.scrollLeft > 10) endTutorials();
         });
     }
@@ -918,89 +859,58 @@
         const magnifier = document.getElementById('magnifier');
         const magSVG = document.getElementById('mag-svg');
         const magScore = document.getElementById('magnifier-score');
-        const mainSVG = document.getElementById('main-svg');
         const visualSection = document.getElementById('section-visual');
 
         darts.forEach((dart, idx) => {
             const onStart = (e) => {
                 if(!gameActive) return;
                 if(document.getElementById('view-slider').scrollLeft > 100) return;
-
                 endTutorials();
-
                 e.preventDefault();
                 const cx = e.touches ? e.touches[0].clientX : e.clientX;
                 const cy = e.touches ? e.touches[0].clientY : e.clientY;
-
-                dart.style.position = 'fixed'; 
-                dart.style.zIndex = 9999; 
-                dart.style.transition = 'none';
+                dart.style.position = 'fixed'; dart.style.zIndex = 9999; dart.style.transition = 'none';
                 dart.style.transform = 'scale(1.2) rotate(-10deg)'; 
                 darts.forEach(d => d.style.pointerEvents = 'none');
                 magnifier.style.display = 'block';
 
                 const updatePos = (mx, my) => {
-                    dart.style.left = (mx - 20) + 'px'; 
-                    dart.style.top = (my - 120) + 'px';
-                    
+                    dart.style.left = (mx - 20) + 'px'; dart.style.top = (my - 120) + 'px';
                     const hit = document.elementFromPoint(mx, my);
-                    
                     const container = document.getElementById('dartboard-container');
                     const rect = container.getBoundingClientRect();
                     const scale = 410 / rect.width;
                     const svgX = (mx - (rect.left + rect.width/2)) * scale;
                     const svgY = (my - (rect.top + rect.height/2)) * scale;
                     magSVG.setAttribute("viewBox", `${svgX - 20} ${svgY - 20} 40 40`);
-
                     if(hit && hit.classList.contains('board-segment')) {
                         const s = parseInt(hit.getAttribute('data-s')), m = parseInt(hit.getAttribute('data-m'));
                         magScore.innerText = formatScore(s, m, 'display');
                         magScore.style.color = (m===3?'#00e676':(m===2?'#ff4081':'white'));
-                    } else {
-                        magScore.innerText = "0"; 
-                        magScore.style.color = '#aaa';
-                    }
+                    } else { magScore.innerText = "0"; magScore.style.color = '#aaa'; }
                 };
                 updatePos(cx, cy);
-
                 const onMove = (em) => { em.preventDefault(); updatePos(em.touches?em.touches[0].clientX:em.clientX, em.touches?em.touches[0].clientY:em.clientY); };
                 const onEnd = (ee) => {
                     document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd);
                     document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd);
                     magnifier.style.display = 'none';
-                    
                     const mx = ee.changedTouches?ee.changedTouches[0].clientX:ee.clientX;
                     const my = ee.changedTouches?ee.changedTouches[0].clientY:ee.clientY;
-                    
                     dart.hidden = true; let el = document.elementFromPoint(mx, my); dart.hidden = false;
                     darts.forEach(d => d.style.pointerEvents = 'auto');
-
                     const sectionRect = visualSection.getBoundingClientRect();
                     const finalRelLeft = (mx - 20) - sectionRect.left;
                     const finalRelTop = (my - 120) - sectionRect.top;
-
-                    dart.style.position = 'absolute';
-                    dart.style.left = finalRelLeft + 'px';
-                    dart.style.top = finalRelTop + 'px';
-
+                    dart.style.position = 'absolute'; dart.style.left = finalRelLeft + 'px'; dart.style.top = finalRelTop + 'px';
                     if(el && el.classList.contains('board-segment')) {
                         const s = parseInt(el.getAttribute('data-s')), m = parseInt(el.getAttribute('data-m'));
-                        
-                        requestAnimationFrame(() => {
-                            dart.style.transition = 'transform 0.1s ease-out';
-                            dart.style.transform = 'scale(0.8) rotate(0deg)';
-                        });
-
+                        requestAnimationFrame(() => { dart.style.transition = 'transform 0.1s ease-out'; dart.style.transform = 'scale(0.8) rotate(0deg)'; });
                         dartState[idx] = { val: s, mult: m, missed: false };
-                        updateDartVisuals(idx, s, m);
-                        updateGameState();
-                        saveGame();
+                        updateDartVisuals(idx, s, m); updateGameState(); saveGame();
                     } else {
-                        resetSingleDart(idx); 
-                        dartState[idx] = { val: 0, mult: 1, missed: true };
-                        updateDartVisuals(idx, 0, 1);
-                        updateGameState();
-                        saveGame();
+                        resetSingleDart(idx); dartState[idx] = { val: 0, mult: 1, missed: true };
+                        updateDartVisuals(idx, 0, 1); updateGameState(); saveGame();
                     }
                 };
                 document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
@@ -1025,10 +935,7 @@
     }
 
     function calculateScore(currentScore) {
-        let temp = currentScore;
-        let isBust = false, isWin = false;
-        let winningDartIndex = -1;
-
+        let temp = currentScore; let isBust = false, isWin = false; let winningDartIndex = -1;
         for(let i=0; i<3; i++) {
             const d = dartState[i];
             if(d.val === 0 && !d.missed) continue;
@@ -1036,12 +943,7 @@
             const rem = temp - pts;
             if(rem < 0 || rem === 1) { isBust = true; break; }
             else if (rem === 0) {
-                if(d.mult === 2 || d.val === 50) { 
-                    isWin = true; 
-                    temp = 0; 
-                    winningDartIndex = i;
-                    break; 
-                }
+                if(d.mult === 2 || d.val === 50) { isWin = true; temp = 0; winningDartIndex = i; break; }
                 else { isBust = true; break; }
             } else { temp = rem; }
         }
@@ -1055,221 +957,239 @@
         const newScore = prompt(`Edit score for ${p.name}:`, p.score);
         if(newScore !== null && !isNaN(newScore)) {
             p.score = parseInt(newScore);
-            // Update history to maintain graph continuity for this turn
-            if(p.history.length > 0) p.history[p.history.length-1] = p.score;
-            else p.history = [p.score];
-            
-            renderScoreboard();
-            updateGameState();
-            saveGame();
+            if(p.history.length > 0) p.history[p.history.length-1] = p.score; else p.history = [p.score];
+            renderScoreboard(); updateGameState(); saveGame();
         }
     }
 
     function manualPrev() {
         if(!gameActive) return;
-
         let prevIndex = currentPlayerIndex - 1;
         if(prevIndex < 0) prevIndex = players.length - 1;
-
         const prevPlayer = players[prevIndex];
-
         if(prevPlayer.history.length <= 1) return;
-
         currentPlayerIndex = prevIndex;
-        
         const p = players[currentPlayerIndex];
-        p.finished = false; 
-        p.history.pop(); 
-        p.score = p.history[p.history.length - 1]; 
-
+        p.finished = false; p.history.pop(); p.score = p.history[p.history.length - 1]; 
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
-        
         document.getElementById('btn-next').classList.remove('game-over');
         document.getElementById('btn-next').innerText = "Next"; 
-        
-        [0,1,2].forEach(i => {
-            document.getElementById(`grid-val-${i}`).innerText = '-';
-            const badge = document.getElementById(`badge-dart-${i+1}`);
-            if(badge) badge.innerText = "0"; 
-        });
-        switchGridTab(0);
-        endTutorials();
-        
-        renderScoreboard();
-        resetDartsPosition();
-        saveGame();
+        [0,1,2].forEach(i => { document.getElementById(`grid-val-${i}`).innerText = '-'; const badge = document.getElementById(`badge-dart-${i+1}`); if(badge) badge.innerText = "0"; });
+        switchGridTab(0); endTutorials(); renderScoreboard(); resetDartsPosition(); saveGame();
     }
 
     function manualNext() {
         if(!gameActive) return;
         const p = players[currentPlayerIndex];
         const res = calculateScore(p.score);
-        
         if(res.isWin) { 
-            // Calculate Darts Thrown to store in history
-            const turns = p.history.length - 1; 
-            p.dartsThrown = (turns * 3) + (res.winningDartIndex + 1);
-            p.finishTime = Date.now(); 
-            
-            p.score = 0; 
-            p.finished = true;
-            p.history.push(0);
-        } else if(!res.isBust) { 
-            p.score = res.rem;
-            p.history.push(res.rem);
-        } else {
-            p.history.push(p.score);
-        }
-
+            const turns = p.history.length - 1; p.dartsThrown = (turns * 3) + (res.winningDartIndex + 1); p.finishTime = Date.now(); 
+            p.score = 0; p.finished = true; p.history.push(0);
+        } else if(!res.isBust) { p.score = res.rem; p.history.push(res.rem); } else { p.history.push(p.score); }
         dartState = [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}];
-        
-        [0,1,2].forEach(i => {
-            document.getElementById(`grid-val-${i}`).innerText = '-';
-            const badge = document.getElementById(`badge-dart-${i+1}`);
-            if(badge) badge.innerText = "0"; 
-        });
-        switchGridTab(0);
-        
-        endTutorials();
-
-        if(players.every(pl => pl.finished)) { 
-            renderScoreboard(); 
-            gameActive = false; 
-            const btn = document.getElementById('btn-next');
-            btn.innerText = txt.gameOver;
-            btn.classList.add('game-over');
-            saveGame();
-            return; 
-        }
-
-        let loop=0;
-        do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
-
-        const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
-        const sb = document.getElementById('scoreboard');
-        if(activeEl && sb) {
-            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
-            sb.scrollTo({ left: center, behavior: 'smooth' });
-        }
-
-        renderScoreboard();
-        resetDartsPosition();
-        saveGame();
+        [0,1,2].forEach(i => { document.getElementById(`grid-val-${i}`).innerText = '-'; const badge = document.getElementById(`badge-dart-${i+1}`); if(badge) badge.innerText = "0"; });
+        switchGridTab(0); endTutorials();
+        if(players.every(pl => pl.finished)) { renderScoreboard(); gameActive = false; const btn = document.getElementById('btn-next'); btn.innerText = txt.gameOver; btn.classList.add('game-over'); saveGame(); return; }
+        let loop=0; do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
+        const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`); const sb = document.getElementById('scoreboard');
+        if(activeEl && sb) { const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2); sb.scrollTo({ left: center, behavior: 'smooth' }); }
+        renderScoreboard(); resetDartsPosition(); saveGame();
     }
 
     function toggleGraph() {
         const modal = document.getElementById('graph-modal');
-        if(modal.style.display === 'flex') {
-            modal.style.display = 'none';
-            document.body.classList.remove('modal-open');
-        } else {
-            modal.style.display = 'flex';
-            document.body.classList.add('modal-open');
-            requestAnimationFrame(drawGraph); // Draw after layout
-        }
+        if(modal.style.display === 'flex') { modal.style.display = 'none'; document.body.classList.remove('modal-open'); } 
+        else { modal.style.display = 'flex'; document.body.classList.add('modal-open'); requestAnimationFrame(drawGraph); }
     }
 
     function drawGraph() {
         const container = document.getElementById('graph-container');
         const legend = document.getElementById('graph-legend');
-        const w = container.clientWidth;
-        const h = container.clientHeight;
+        const w = container.clientWidth; const h = container.clientHeight;
         if(w === 0 || h === 0) return; 
-
-        // Calculate max turns
-        let maxTurns = 0;
-        players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
+        let maxTurns = 0; players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
         if(maxTurns < 5) maxTurns = 5; 
-        
-        const xMax = maxTurns + 1; // Extend axis slightly
-
+        const xMax = maxTurns + 1; 
         const svgNS = "http://www.w3.org/2000/svg";
         let svg = document.getElementById('graph-svg');
-        if(!svg) {
-            svg = document.createElementNS(svgNS, "svg");
-            svg.id = 'graph-svg';
-            svg.setAttribute('width', '100%');
-            svg.setAttribute('height', '100%');
-            container.appendChild(svg);
-        }
+        if(!svg) { svg = document.createElementNS(svgNS, "svg"); svg.id = 'graph-svg'; svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); container.appendChild(svg); }
         svg.innerHTML = ''; 
-
-        // Padding for Axis Labels
-        const padL = 25; const padB = 20;
-        const graphW = w - padL;
-        const graphH = h - padB;
-
-        // Y-Axis Lines & Labels (Score)
+        const padL = 25; const padB = 20; const graphW = w - padL; const graphH = h - padB;
         const startVal = startScoreVal;
         for(let i=0; i<=4; i++) {
-            const val = Math.round(startVal * (i/4));
-            const y = graphH - (graphH * (i/4));
-            const line = document.createElementNS(svgNS, "line");
-            line.setAttribute("x1", padL); line.setAttribute("y1", y);
-            line.setAttribute("x2", w); line.setAttribute("y2", y);
-            line.setAttribute("stroke", "#333"); line.setAttribute("stroke-width", "1");
-            svg.appendChild(line);
-
-            // Label
-            const txt = document.createElementNS(svgNS, "text");
-            txt.setAttribute("x", 0); txt.setAttribute("y", y + 4);
-            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
-            txt.textContent = val;
-            svg.appendChild(txt);
+            const val = Math.round(startVal * (i/4)); const y = graphH - (graphH * (i/4));
+            const line = document.createElementNS(svgNS, "line"); line.setAttribute("x1", padL); line.setAttribute("y1", y); line.setAttribute("x2", w); line.setAttribute("y2", y); line.setAttribute("stroke", "#333"); line.setAttribute("stroke-width", "1"); svg.appendChild(line);
+            const txt = document.createElementNS(svgNS, "text"); txt.setAttribute("x", 0); txt.setAttribute("y", y + 4); txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10"); txt.textContent = val; svg.appendChild(txt);
         }
-
-        // X-Axis Labels (Turns)
         for(let i=0; i<xMax; i++) {
-            const x = padL + (i / (xMax - 1)) * graphW;
-            // Only draw some labels if too many
-            if(xMax > 10 && i % 2 !== 0) continue;
-            
-            const txt = document.createElementNS(svgNS, "text");
-            txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
-            txt.setAttribute("text-anchor", "middle");
-            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
-            txt.textContent = (i + 1);
-            svg.appendChild(txt);
+            const x = padL + (i / (xMax - 1)) * graphW; if(xMax > 10 && i % 2 !== 0) continue;
+            const txt = document.createElementNS(svgNS, "text"); txt.setAttribute("x", x); txt.setAttribute("y", h - 2); txt.setAttribute("text-anchor", "middle"); txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10"); txt.textContent = (i + 1); svg.appendChild(txt);
         }
-
-        // Draw Lines
         legend.innerHTML = '';
         players.forEach((p, idx) => {
             const color = playerColors[idx % playerColors.length];
             legend.innerHTML += `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div>${p.name}</div>`;
-
             if(p.history.length < 1) return;
-
             let points = "";
             p.history.forEach((score, turnIdx) => {
-                const x = padL + (turnIdx / (xMax - 1)) * graphW;
-                const y = graphH - ((score / startVal) * graphH);
-                points += `${x},${y} `;
-                
-                const dot = document.createElementNS(svgNS, "circle");
-                dot.setAttribute("cx", x); dot.setAttribute("cy", y);
-                dot.setAttribute("r", 3); dot.setAttribute("fill", color);
-                svg.appendChild(dot);
+                const x = padL + (turnIdx / (xMax - 1)) * graphW; const y = graphH - ((score / startVal) * graphH); points += `${x},${y} `;
+                const dot = document.createElementNS(svgNS, "circle"); dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 3); dot.setAttribute("fill", color); svg.appendChild(dot);
             });
-
-            const poly = document.createElementNS(svgNS, "polyline");
-            poly.setAttribute("points", points);
-            poly.setAttribute("fill", "none");
-            poly.setAttribute("stroke", color);
-            poly.setAttribute("stroke-width", "2");
-            svg.appendChild(poly);
+            const poly = document.createElementNS(svgNS, "polyline"); poly.setAttribute("points", points); poly.setAttribute("fill", "none"); poly.setAttribute("stroke", color); poly.setAttribute("stroke-width", "2"); svg.appendChild(poly);
         });
     }
 
-    // --- HISTORY MODAL ---
+    // --- RUBBISH BIN & DELETION LOGIC ---
+    function toggleRubbishBin() {
+        const title = document.getElementById('history-title');
+        const gamesTab = document.getElementById('ht-games');
+        const playersTab = document.getElementById('ht-players');
+        const shortTab = document.getElementById('ht-shortcuts');
+        
+        // Hide regular content, show bin content containers (managed by tab switch)
+        isRubbishMode = !isRubbishMode;
+        
+        if(isRubbishMode) {
+            title.innerHTML = "<span style='color:var(--danger)'>Rubbish Bin</span>";
+            shortTab.style.display = 'block';
+            renderRubbishBin();
+        } else {
+            title.innerText = "History";
+            shortTab.style.display = 'none';
+            // If we were on shortcuts tab, go back to games
+            if(shortTab.classList.contains('active')) switchHistTab('games');
+            else renderHistoryModal(); // Refresh normal view
+        }
+        // Force refresh of current tab content
+        const activeTab = document.querySelector('.hist-tab.active').id.replace('ht-', '');
+        switchHistTab(activeTab);
+    }
+
+    function renderRubbishBin() {
+        // Games
+        const binGamesList = document.getElementById('bin-games-list');
+        if(binGames.length === 0) binGamesList.innerHTML = '<div style="padding:10px;color:#666;text-align:center">Bin Empty</div>';
+        else {
+            binGamesList.innerHTML = binGames.map(g => `
+                <div class="hist-card" style="border-color:var(--danger)">
+                    <button class="hist-recover-btn" onclick="restoreGame(${g.id})">♻️</button>
+                    <div class="hist-card-row">
+                        <span class="hist-date">${new Date(g.date).toLocaleDateString()}</span>
+                        <span class="hist-mode">${g.startScore}</span>
+                    </div>
+                    <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
+                </div>
+            `).join('');
+        }
+
+        // Players
+        const binPlayersList = document.getElementById('bin-players-list');
+        if(binPlayers.length === 0) binPlayersList.innerHTML = '<div style="padding:10px;color:#666;text-align:center">Bin Empty</div>';
+        else {
+            binPlayersList.innerHTML = binPlayers.map(name => `
+                <div class="player-list-item" style="border-color:var(--danger)">
+                    ${name}
+                    <button class="hist-recover-btn" style="position:static" onclick="restorePlayer('${name}')">♻️</button>
+                </div>
+            `).join('');
+        }
+
+        // Shortcuts
+        const binShortList = document.getElementById('bin-shortcuts-list');
+        if(binShortcuts.length === 0) binShortList.innerHTML = '<div style="padding:10px;color:#666;text-align:center">Bin Empty</div>';
+        else {
+            binShortList.innerHTML = binShortcuts.map(name => `
+                <div class="player-list-item" style="border-color:var(--danger)">
+                    ${name}
+                    <button class="hist-recover-btn" style="position:static" onclick="restoreShortcut('${name}')">♻️</button>
+                </div>
+            `).join('');
+        }
+    }
+
+    // Soft Deletes
+    function softDeleteGame(id, e) {
+        e.stopPropagation();
+        if(confirm("Move game to Rubbish Bin?")) {
+            const g = gameHistory.find(x => x.id === id);
+            if(g) {
+                binGames.push(g);
+                gameHistory = gameHistory.filter(x => x.id !== id);
+                localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+                localStorage.setItem('darts_pro_bin_games', JSON.stringify(binGames));
+                renderHistoryModal();
+                if(id === currentGameId) { retryGame(); toggleHistory(); }
+            }
+        }
+    }
+
+    function softDeletePlayer(name, e) {
+        e.stopPropagation();
+        if(confirm(`Hide "${name}" from History list? (Moves to Bin)`)) {
+            if(!binPlayers.includes(name)) {
+                binPlayers.push(name);
+                localStorage.setItem('darts_pro_bin_players', JSON.stringify(binPlayers));
+                renderHistoryModal();
+            }
+        }
+    }
+
+    function softDeleteShortcut(name, e) {
+        e.stopPropagation();
+        if(confirm(`Remove "${name}" from shortcuts?`)) {
+            knownPlayers = knownPlayers.filter(p => p !== name);
+            if(!binShortcuts.includes(name)) binShortcuts.push(name);
+            localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+            localStorage.setItem('darts_pro_bin_shortcuts', JSON.stringify(binShortcuts));
+            renderQuickAdd();
+        }
+    }
+
+    // Restores
+    function restoreGame(id) {
+        const g = binGames.find(x => x.id === id);
+        if(g) {
+            gameHistory.push(g);
+            // sort by date desc
+            gameHistory.sort((a,b) => new Date(b.date) - new Date(a.date));
+            binGames = binGames.filter(x => x.id !== id);
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+            localStorage.setItem('darts_pro_bin_games', JSON.stringify(binGames));
+            renderRubbishBin();
+        }
+    }
+
+    function restorePlayer(name) {
+        binPlayers = binPlayers.filter(n => n !== name);
+        localStorage.setItem('darts_pro_bin_players', JSON.stringify(binPlayers));
+        renderRubbishBin();
+    }
+
+    function restoreShortcut(name) {
+        if(!knownPlayers.includes(name)) knownPlayers.push(name);
+        binShortcuts = binShortcuts.filter(n => n !== name);
+        localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+        localStorage.setItem('darts_pro_bin_shortcuts', JSON.stringify(binShortcuts));
+        renderRubbishBin();
+        renderQuickAdd();
+    }
+
+    // --- HISTORY UI ---
     function toggleHistory() {
         const modal = document.getElementById('history-modal');
         if(modal.style.display === 'flex') {
             modal.style.display = 'none';
             document.body.classList.remove('modal-open');
+            // Reset state
+            isRubbishMode = false;
+            document.getElementById('history-title').innerText = "History";
+            document.getElementById('ht-shortcuts').style.display = 'none';
         } else {
             modal.style.display = 'flex';
             document.body.classList.add('modal-open');
+            isRubbishMode = false; // ensure we start in normal mode
+            document.getElementById('history-title').innerText = "History";
+            document.getElementById('ht-shortcuts').style.display = 'none';
             renderHistoryModal();
         }
     }
@@ -1279,164 +1199,81 @@
         document.querySelectorAll('.hist-content').forEach(c => c.classList.remove('active'));
         document.getElementById('ht-' + tab).classList.add('active');
         document.getElementById('hc-' + tab).classList.add('active');
+
+        // Logic to show correct content based on Mode
+        if(isRubbishMode) {
+            document.getElementById('hist-games-list').style.display = 'none';
+            document.getElementById('bin-games-list').style.display = 'block';
+            document.getElementById('player-list-view').style.display = 'none';
+            document.getElementById('bin-players-list').style.display = 'block';
+        } else {
+            document.getElementById('hist-games-list').style.display = 'block';
+            document.getElementById('bin-games-list').style.display = 'none';
+            document.getElementById('player-list-view').style.display = 'block';
+            document.getElementById('bin-players-list').style.display = 'none';
+        }
     }
 
     function toggleHistSection(sec) {
         const el = document.getElementById('list-' + sec);
         const arrow = document.getElementById('arrow-' + sec);
-        if(el.classList.contains('expanded')) {
-            el.classList.remove('expanded');
-            arrow.innerText = "▶";
-        } else {
-            el.classList.add('expanded');
-            arrow.innerText = "▼";
-        }
+        if(el.classList.contains('expanded')) { el.classList.remove('expanded'); arrow.innerText = "▶"; } 
+        else { el.classList.add('expanded'); arrow.innerText = "▼"; }
     }
 
     function togglePlayerAccordion(name) {
         const el = document.getElementById('p-acc-body-' + name);
         const arrow = document.getElementById('p-arrow-' + name);
-        // Collapse all others
-        document.querySelectorAll('.player-accordion-body').forEach(b => {
-            if(b.id !== 'p-acc-body-' + name) b.classList.remove('expanded');
-        });
-        document.querySelectorAll('.player-accordion-header span:last-child').forEach(a => {
-             if(a.id !== 'p-arrow-' + name && a.innerText !== '🗑️') a.innerText = "▶";
-        });
-
-        if(el.classList.contains('expanded')) {
-            el.classList.remove('expanded');
-            arrow.innerText = "▶";
-        } else {
-            el.classList.add('expanded');
-            arrow.innerText = "▼";
-            // Render details immediately
-            renderPlayerDetailsInAccordion(name);
-        }
-    }
-
-    function loadHistoryGame(id) {
-        const game = gameHistory.find(g => g.id === id);
-        if(game) {
-            // Restore state
-            const state = {
-                players: JSON.parse(JSON.stringify(game.players)),
-                currentPlayerIndex: game.currentPlayerIndex || 0,
-                startScoreVal: game.startScore,
-                dartState: [{val:0, mult:1},{val:0, mult:1},{val:0, mult:1}], // Reset darts hand
-                currentGameId: game.id
-            };
-            restoreGameState(state);
-            toggleHistory(); // Close modal
-            saveGame(); // Set as active
-        }
-    }
-    
-    function deleteGame(id, event) {
-        event.stopPropagation();
-        if(confirm("Are you sure you want to permanently delete this game?")) {
-            gameHistory = gameHistory.filter(g => g.id !== id);
-            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
-            renderHistoryModal(); // Re-render
-            
-            // If the deleted game was the active one, reset
-            if(id === currentGameId) {
-                retryGame();
-                toggleHistory();
-            }
-        }
-    }
-    
-    function deletePlayerFromHistory(name, event) {
-        event.stopPropagation();
-        if(confirm(`PERMANENTLY DELETE "${name}"?\n\nThis will remove them from shortcuts AND delete their presence from all past game records. This cannot be undone.`)) {
-            // 1. Remove from shortcuts
-            knownPlayers = knownPlayers.filter(p => p !== name);
-            localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
-
-            // 2. Remove from Game History
-            gameHistory.forEach(g => {
-                g.players = g.players.filter(p => p.name !== name);
-            });
-            // Remove games that are now empty
-            gameHistory = gameHistory.filter(g => g.players.length > 0);
-            
-            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
-
-            renderHistoryModal();
-            renderQuickAdd();
-        }
+        document.querySelectorAll('.player-accordion-body').forEach(b => { if(b.id !== 'p-acc-body-' + name) b.classList.remove('expanded'); });
+        document.querySelectorAll('.player-accordion-header span:last-child').forEach(a => { if(a.id !== 'p-arrow-' + name) a.innerText = "▶"; });
+        if(el.classList.contains('expanded')) { el.classList.remove('expanded'); arrow.innerText = "▶"; } 
+        else { el.classList.add('expanded'); arrow.innerText = "▼"; renderPlayerDetailsInAccordion(name); }
     }
 
     function renderHistoryModal() {
-        // Render Games
-        const finishedEl = document.getElementById('list-finished');
-        const unfinishedEl = document.getElementById('list-unfinished');
-        
-        // Definition: Finished if AT LEAST ONE player has finished
         const finished = gameHistory.filter(g => g.players.some(p => p.finished));
         const unfinished = gameHistory.filter(g => !g.players.some(p => p.finished));
         
-        unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
+        document.getElementById('list-unfinished').innerHTML = unfinished.length ? unfinished.map(g => `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
-                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">&times;</button>
-                <div class="hist-card-row">
-                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                    <span class="hist-mode">${g.startScore}</span>
-                </div>
+                <button class="hist-delete-btn" onclick="softDeleteGame(${g.id}, event)">&times;</button>
+                <div class="hist-card-row"><span class="hist-date">${new Date(g.date).toLocaleDateString()}</span><span class="hist-mode">${g.startScore}</span></div>
                 <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
-            </div>
-        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No active games.</div>';
+            </div>`).join('') : '<div style="padding:10px;text-align:center;color:#666">No active games.</div>';
 
-        finishedEl.innerHTML = finished.length ? finished.map(g => {
-            // Sort players by finish time (winners first)
+        document.getElementById('list-finished').innerHTML = finished.length ? finished.map(g => {
             const winners = g.players.filter(p => p.finished).sort((a,b) => (a.finishTime || 0) - (b.finishTime || 0));
-            const winnerHtml = winners.map((w, idx) => {
-                const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : '🥉');
-                return `<div><span class="finish-badge">${medal}</span> ${w.name} <span class="finish-stat">${w.dartsThrown} darts</span></div>`;
-            }).join('');
-
+            const winnerHtml = winners.map((w, idx) => `<div><span class="finish-badge">${idx===0?'🥇':(idx===1?'🥈':'🥉')}</span> ${w.name} <span class="finish-stat">${w.dartsThrown} darts</span></div>`).join('');
             return `
             <div class="hist-card" onclick="loadHistoryGame(${g.id})">
-                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">🗑️</button>
-                <div class="hist-card-row">
-                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                    <span class="hist-mode">${g.startScore}</span>
-                </div>
+                <button class="hist-delete-btn" onclick="softDeleteGame(${g.id}, event)">🗑️</button>
+                <div class="hist-card-row"><span class="hist-date">${new Date(g.date).toLocaleDateString()}</span><span class="hist-mode">${g.startScore}</span></div>
                 <div class="hist-players" style="margin-top:8px;">${winnerHtml}</div>
-                ${!g.players.every(p=>p.finished) ? '<div style="color:#00e676; font-size:0.75rem; margin-top:5px;">• Resume for other players</div>' : ''}
-            </div>
-        `}).join('') : '<div style="padding:10px; color:#666; text-align:center">No finished games.</div>';
+                ${!g.players.every(p=>p.finished) ? '<div style="color:#00e676;font-size:0.75rem;margin-top:5px;">• Resume for other players</div>' : ''}
+            </div>`;
+        }).join('') : '<div style="padding:10px;text-align:center;color:#666">No finished games.</div>';
 
-        // Render Players (Accordion Style)
-        const playersEl = document.getElementById('player-list-view');
         const allPlayers = new Set();
         gameHistory.forEach(g => g.players.forEach(p => allPlayers.add(p.name)));
-        
-        // Also include known players even if they haven't played a game yet (from shortcuts)
         knownPlayers.forEach(p => allPlayers.add(p));
-        
-        playersEl.innerHTML = Array.from(allPlayers).map(name => `
+        // Filter out deleted players
+        const visiblePlayers = Array.from(allPlayers).filter(n => !binPlayers.includes(n));
+
+        document.getElementById('player-list-view').innerHTML = visiblePlayers.map(name => `
             <div class="player-accordion-header" onclick="togglePlayerAccordion('${name}')">
                 <span>${name}</span> 
-                <div style="display:flex; align-items:center;">
-                    <span class="player-delete-icon" onclick="deletePlayerFromHistory('${name}', event)">🗑️</span>
+                <div style="display:flex;align-items:center;">
+                    <span class="player-delete-icon" onclick="softDeletePlayer('${name}', event)">🗑️</span>
                     <span id="p-arrow-${name}">▶</span>
                 </div>
             </div>
-            <div class="player-accordion-body" id="p-acc-body-${name}">
-                </div>
+            <div class="player-accordion-body" id="p-acc-body-${name}"></div>
         `).join('');
     }
 
     function renderPlayerDetailsInAccordion(name) {
         const container = document.getElementById('p-acc-body-' + name);
-        
-        // Get all game instances for this player where they finished
-        let finishedGames = [];
-        let wins = 0;
-        let totalGames = 0;
-
+        let finishedGames = []; let wins = 0; let totalGames = 0;
         gameHistory.forEach(g => {
             const p = g.players.find(pl => pl.name === name);
             if(p) {
@@ -1444,26 +1281,13 @@
                 if(p.finished) {
                     const othersFinished = g.players.filter(op => op.finished && op.name !== name);
                     if(othersFinished.length === 0) wins++;
-                    else {
-                        const myTime = p.finishTime || 0;
-                        if(othersFinished.every(op => (op.finishTime || 0) > myTime)) wins++;
-                    }
-
-                    finishedGames.push({
-                        date: g.date,
-                        darts: p.dartsThrown
-                    });
+                    else { const myTime = p.finishTime || 0; if(othersFinished.every(op => (op.finishTime || 0) > myTime)) wins++; }
+                    finishedGames.push({ date: g.date, darts: p.dartsThrown });
                 }
             }
         });
-        
-        let best = '-';
-        let avg = '-';
-        if(finishedGames.length > 0) {
-            const darts = finishedGames.map(g => g.darts);
-            best = Math.min(...darts);
-            avg = Math.round(darts.reduce((a,b)=>a+b,0) / finishedGames.length);
-        }
+        let best = finishedGames.length ? Math.min(...finishedGames.map(g=>g.darts)) : '-';
+        let avg = finishedGames.length ? Math.round(finishedGames.map(g=>g.darts).reduce((a,b)=>a+b,0) / finishedGames.length) : '-';
 
         container.innerHTML = `
             <div class="stat-grid">
@@ -1475,203 +1299,40 @@
             <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Finish (Over Time)</div>
             <div id="graph-container-${name}" style="height:200px; width:100%; position:relative; border-left:1px solid #444; border-bottom:1px solid #444;"></div>
         `;
-        
         requestAnimationFrame(() => drawPlayerGraphInAccordion(name, finishedGames));
     }
 
     function drawPlayerGraphInAccordion(name, finishedGames) {
         const container = document.getElementById(`graph-container-${name}`);
         container.innerHTML = '';
-        if(finishedGames.length < 2) {
-             container.innerHTML = '<div style="color:#666;text-align:center;padding-top:80px;">Not enough data for graph</div>';
-             return;
-        }
-
-        const w = container.clientWidth;
-        const h = container.clientHeight;
+        if(finishedGames.length < 2) { container.innerHTML = '<div style="color:#666;text-align:center;padding-top:80px;">Not enough data for graph</div>'; return; }
+        const w = container.clientWidth; const h = container.clientHeight;
         const svgNS = "http://www.w3.org/2000/svg";
-        const svg = document.createElementNS(svgNS, "svg");
-        svg.setAttribute('width', '100%');
-        svg.setAttribute('height', '100%');
-        container.appendChild(svg);
+        const svg = document.createElementNS(svgNS, "svg"); svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%'); container.appendChild(svg);
         
-        // Sort by date
         finishedGames.sort((a,b) => new Date(a.date) - new Date(b.date));
-        
         const darts = finishedGames.map(g => g.darts);
-        const maxDarts = Math.max(...darts);
+        const maxDarts = Math.max(...darts); 
         const minDarts = Math.max(0, Math.min(...darts) - 5);
-        
-        // Define Scale range with padding
-        const yMax = maxDarts + 5; 
-        const yRange = yMax - minDarts;
-        
-        const xMax = darts.length + 1; // Pad X axis
-        
-        // Padding for labels
-        const padL = 25; const padB = 20;
-        const graphW = w - padL;
-        const graphH = h - padB;
+        const yMax = maxDarts + 5; const yRange = yMax - minDarts;
+        const xMax = darts.length + 1; 
+        const padL = 25; const padB = 20; const graphW = w - padL; const graphH = h - padB;
 
-        // Y-Axis (Dart Count)
         for(let i=0; i<=4; i++) {
-             const val = Math.round(minDarts + (yRange * (i/4)));
-             const y = graphH - (graphH * (i/4));
-             
-             // Label
-            const txt = document.createElementNS(svgNS, "text");
-            txt.setAttribute("x", 0); txt.setAttribute("y", y + 4);
-            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
-            txt.textContent = val;
-            svg.appendChild(txt);
+             const val = Math.round(minDarts + (yRange * (i/4))); const y = graphH - (graphH * (i/4));
+            const txt = document.createElementNS(svgNS, "text"); txt.setAttribute("x", 0); txt.setAttribute("y", y + 4); txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10"); txt.textContent = val; svg.appendChild(txt);
         }
-
-        // X-Axis (Game Number)
          for(let i=0; i<xMax; i++) {
-            const x = padL + (i / (xMax - 1)) * graphW;
-            if(xMax > 10 && i % 2 !== 0) continue;
-            const txt = document.createElementNS(svgNS, "text");
-            txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
-            txt.setAttribute("text-anchor", "middle");
-            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
-            txt.textContent = (i + 1);
-            svg.appendChild(txt);
+            const x = padL + (i / (xMax - 1)) * graphW; if(xMax > 10 && i % 2 !== 0) continue;
+            const txt = document.createElementNS(svgNS, "text"); txt.setAttribute("x", x); txt.setAttribute("y", h - 2); txt.setAttribute("text-anchor", "middle"); txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10"); txt.textContent = (i + 1); svg.appendChild(txt);
          }
-
         let points = "";
         darts.forEach((d, i) => {
-            const x = padL + (i / (xMax - 1)) * graphW;
-            const y = graphH - ((d - minDarts) / yRange) * graphH;
-            points += `${x},${y} `;
-            
-            const dot = document.createElementNS(svgNS, "circle");
-            dot.setAttribute("cx", x); dot.setAttribute("cy", y);
-            dot.setAttribute("r", 4); dot.setAttribute("fill", "#00e676");
-            svg.appendChild(dot);
-            
-            // Draw Value above point
-            const valTxt = document.createElementNS(svgNS, "text");
-            valTxt.setAttribute("x", x); valTxt.setAttribute("y", y - 8);
-            valTxt.setAttribute("text-anchor", "middle");
-            valTxt.setAttribute("fill", "#fff"); valTxt.setAttribute("font-size", "9");
-            valTxt.textContent = d;
-            svg.appendChild(valTxt);
+            const x = padL + (i / (xMax - 1)) * graphW; const y = graphH - ((d - minDarts) / yRange) * graphH; points += `${x},${y} `;
+            const dot = document.createElementNS(svgNS, "circle"); dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 4); dot.setAttribute("fill", "#00e676"); svg.appendChild(dot);
+            const valTxt = document.createElementNS(svgNS, "text"); valTxt.setAttribute("x", x); valTxt.setAttribute("y", y - 8); valTxt.setAttribute("text-anchor", "middle"); valTxt.setAttribute("fill", "#fff"); valTxt.setAttribute("font-size", "9"); valTxt.textContent = d; svg.appendChild(valTxt);
         });
-
-        const poly = document.createElementNS(svgNS, "polyline");
-        poly.setAttribute("points", points);
-        poly.setAttribute("fill", "none");
-        poly.setAttribute("stroke", "#00e676");
-        poly.setAttribute("stroke-width", "2");
-        svg.appendChild(poly);
-    }
-
-    function retryGame() {
-        if(confirm("End current game and setup new one?")) {
-            gameActive = false;
-            // Mark current game as abandoned if not finished
-            localStorage.removeItem('darts_pro_save'); 
-            document.getElementById('setup-modal').style.display = 'flex';
-            document.body.classList.add('modal-open');
-            renderList(); 
-            renderQuickAdd();
-        }
-    }
-
-    function resetDartsPosition() {
-        const section = document.getElementById('section-visual');
-        const rect = section.getBoundingClientRect();
-        
-        const startX = rect.width - 60; 
-        const startY = rect.height - 100;
-
-        [0,1,2].forEach(i => {
-            const d = document.getElementById(`dart-${i+1}`);
-            d.style.position = 'absolute'; 
-            d.style.transition = 'all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-            d.style.left = (startX - (i*15)) + 'px'; 
-            d.style.top = (startY + (i*5)) + 'px';
-            d.style.transform = 'rotate(10deg)'; 
-            d.style.zIndex = 1000 + i;
-        });
-    }
-
-    function resetSingleDart(i) {
-        const section = document.getElementById('section-visual');
-        const rect = section.getBoundingClientRect();
-        const startX = rect.width - 60; 
-        const startY = rect.height - 100;
-
-        const d = document.getElementById(`dart-${i+1}`);
-        d.style.transition = 'all 0.4s ease-out';
-        d.style.left = (startX - (i*15)) + 'px'; 
-        d.style.top = (startY + (i*5)) + 'px';
-        d.style.transform = 'rotate(10deg)';
-    }
-
-    function addPlayer() { 
-        const inp = document.getElementById('new-player-input'); 
-        if(inp.value.trim()){ 
-            const name = inp.value.trim();
-            players.push({name:name, score:501, finished:false, history:[]}); 
-            
-            // Add to known players if not exists
-            if(!knownPlayers.includes(name)) {
-                knownPlayers.push(name);
-                localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
-                renderQuickAdd();
-            }
-
-            inp.value=""; 
-            renderList(); 
-            inp.focus(); 
-            saveGame();
-        } 
-    }
-    
-    function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList();saveGame()" style="cursor:pointer">&times;</span></div>`).join(''); }
-    
-    function startGame() { 
-        if(players.length===0) return; 
-        const s = parseInt(document.getElementById('start-score-select').value); 
-        startScoreVal = s;
-        currentGameId = Date.now();
-        players.forEach(p => { 
-            p.score = s; 
-            p.finished = false; 
-            p.history = [s]; 
-        }); 
-        gameActive = true; currentPlayerIndex = 0; 
-        document.getElementById('setup-modal').style.display='none'; 
-        document.body.classList.remove('modal-open');
-        
-        const btn = document.getElementById('btn-next');
-        btn.innerText = "Next"; 
-        btn.classList.remove('game-over');
-
-        recordGameStart(); // Log to history
-        renderScoreboard(); 
-        
-        setTimeout(() => { 
-            resetDartsPosition(); 
-            startTutorialLoop();
-        }, 100); 
-        saveGame();
-    }
-    
-    function renderScoreboard() {
-        document.getElementById('scoreboard').innerHTML = players.map((p,i) => {
-            const active = (i===currentPlayerIndex && !p.finished);
-            // Added on dblclick to allow editing
-            return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score" ondblclick="editPlayerScore(${i})">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
-        }).join('');
-        
-        const activeEl = document.querySelector(`.player-column.active`);
-        const sb = document.getElementById('scoreboard');
-        if(activeEl && sb) {
-            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
-            sb.scrollTo({ left: center, behavior: 'smooth' });
-        }
+        const poly = document.createElementNS(svgNS, "polyline"); poly.setAttribute("points", points); poly.setAttribute("fill", "none"); poly.setAttribute("stroke", "#00e676"); poly.setAttribute("stroke-width", "2"); svg.appendChild(poly);
     }
 
     init();
