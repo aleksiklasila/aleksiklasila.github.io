@@ -3,54 +3,56 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Skip-Bo Counter</title>
-    <style>
-        body { font-family: sans-serif; background: #222; color: #fff; text-align: center; padding: 10px; }
-        h1 { color: #ff4444; margin: 10px 0; font-size: 1.5rem; }
-        
-        .controls { background: #333; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
-        
-        .btn {
-            background: #ff4444; color: white; border: none; padding: 15px 30px;
-            font-size: 1.2rem; border-radius: 8px; cursor: pointer; width: 100%;
-            display: block; margin: 10px 0; font-weight: bold;
-        }
-        .btn:disabled { background: #666; }
-        
-        #status { color: #aaa; margin-bottom: 10px; font-style: italic; min-height: 20px; }
-        #totalScore { font-size: 2.5rem; color: #4caf50; font-weight: bold; margin: 10px 0; }
-        
-        /* Container for the image and the overlay drawings */
-        .canvas-container { position: relative; display: inline-block; max-width: 100%; }
-        #displayCanvas { max-width: 100%; border-radius: 8px; border: 2px solid #555; }
-        
-        /* Hide raw inputs and processing canvases */
-        .hidden { display: none; }
-    </style>
+    <title>Skip-Bo Color Counter</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@v3.0.3/dist/tesseract.min.js"></script>
     <script async src="https://docs.opencv.org/4.5.0/opencv.js" onload="onOpenCvReady();"></script>
+    <style>
+        body { background: #1a1a1a; color: #fff; font-family: sans-serif; text-align: center; padding: 10px; margin: 0; }
+        h1 { color: #ff5722; margin: 10px 0; font-size: 1.5rem; }
+        
+        .controls { background: #333; padding: 15px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .score-box { font-size: 3rem; font-weight: bold; color: #4caf50; margin: 10px 0; }
+        .status { color: #aaa; font-style: italic; font-size: 0.9rem; margin-bottom: 15px; min-height: 1.2em; }
+        
+        .btn {
+            background: linear-gradient(135deg, #ff5722, #d84315);
+            color: white; border: none; padding: 15px; width: 100%;
+            border-radius: 8px; font-size: 1.2rem; font-weight: bold;
+            display: block; cursor: pointer; margin-bottom: 10px;
+        }
+        .btn:disabled { opacity: 0.5; filter: grayscale(1); }
+        
+        /* The canvas showing the result */
+        #displayCanvas {
+            max-width: 100%; height: auto;
+            border-radius: 8px; border: 2px solid #555;
+            background: #000;
+        }
+        
+        /* Debug section for individual cards */
+        #debugCards { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin-top: 10px; }
+        .debug-thumb { border: 1px solid #fff; max-width: 60px; }
+    </style>
 </head>
 <body>
 
-    <h1>Smart Skip-Bo Counter</h1>
+    <h1>Skip-Bo Color Counter</h1>
 
     <div class="controls">
-        <div id="status">Loading AI engines...</div>
-        <div id="totalScore">0</div>
-        <div>Total Points</div>
-        
-        <label for="cameraInput" class="btn" id="camBtn" style="opacity: 0.5; pointer-events: none;">
+        <div class="score-box" id="totalScore">0</div>
+        <div class="status" id="status">Loading AI Modules...</div>
+
+        <label class="btn" id="camBtn" style="opacity:0.5; pointer-events:none;">
             📷 Take Photo
+            <input type="file" id="cameraInput" accept="image/*" hidden capture="environment">
         </label>
-        <input type="file" id="cameraInput" accept="image/*" class="hidden" capture="environment">
-        <button class="btn" onclick="reset()" style="background:#555; font-size:1rem; padding:10px;">Reset</button>
+        
+        <button class="btn" style="background: #555; font-size: 1rem; padding: 10px;" onclick="reset()">Clear / Reset</button>
     </div>
 
-    <div class="canvas-container">
-        <canvas id="displayCanvas"></canvas>
-    </div>
-
-    <canvas id="processCanvas" class="hidden"></canvas>
+    <canvas id="displayCanvas"></canvas>
+    
+    <div id="debugCards"></div>
 
 <script>
     let cvReady = false;
@@ -61,21 +63,22 @@
     const camBtn = document.getElementById('camBtn');
     const displayCanvas = document.getElementById('displayCanvas');
     const ctx = displayCanvas.getContext('2d');
+    const debugContainer = document.getElementById('debugCards');
 
     function onOpenCvReady() {
         cvReady = true;
         checkReady();
     }
 
-    // Initialize Tesseract with settings optimized for big numbers
     async function initTesseract() {
         worker = Tesseract.createWorker();
         await worker.load();
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
+        // Limit OCR to just numbers for speed and accuracy
         await worker.setParameters({
-            tessedit_char_whitelist: '0123456789SKIPBO', // Only look for these chars
-            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK // Treat card as one block
+            tessedit_char_whitelist: '0123456789',
+            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD
         });
         checkReady();
     }
@@ -83,7 +86,7 @@
 
     function checkReady() {
         if (cvReady && worker) {
-            statusEl.innerText = "Ready. Tap camera to start.";
+            statusEl.innerText = "Ready. Tap camera to scan.";
             camBtn.style.opacity = "1";
             camBtn.style.pointerEvents = "auto";
         }
@@ -94,15 +97,17 @@
         document.getElementById('totalScore').innerText = "0";
         ctx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
         displayCanvas.height = 0;
+        debugContainer.innerHTML = '';
         statusEl.innerText = "Ready.";
     }
 
     document.getElementById('cameraInput').addEventListener('change', async (e) => {
         if (!e.target.files[0]) return;
         
-        statusEl.innerText = "Processing... (This may take a moment)";
+        statusEl.innerText = "Processing... do not close.";
         camBtn.style.opacity = "0.5"; 
-        
+        debugContainer.innerHTML = ''; // clear old debugs
+
         const img = new Image();
         img.onload = () => processImage(img);
         img.src = URL.createObjectURL(e.target.files[0]);
@@ -110,188 +115,221 @@
 
     async function processImage(img) {
         // 1. Resize for performance (Max width 800px)
-        const scaleFactor = Math.min(800 / img.width, 1);
-        const w = img.width * scaleFactor;
-        const h = img.height * scaleFactor;
+        const scale = Math.min(800 / img.width, 1);
+        displayCanvas.width = img.width * scale;
+        displayCanvas.height = img.height * scale;
+        ctx.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
 
-        displayCanvas.width = w;
-        displayCanvas.height = h;
-        ctx.drawImage(img, 0, 0, w, h);
-
-        // 2. OpenCV Pre-processing
         let src = cv.imread(displayCanvas);
-        let dst = new cv.Mat();
-        let gray = new cv.Mat();
+        let hsv = new cv.Mat();
         
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-        
-        // Blur heavily to remove puzzle noise but keep card shapes
-        cv.GaussianBlur(gray, gray, new cv.Size(9, 9), 0);
-        
-        // Canny Edge Detection (Better for outlines than Thresholding on busy backgrounds)
-        cv.Canny(gray, dst, 50, 150, 3, false);
-
-        // Find Contours
-        let contours = new cv.MatVector();
-        let hierarchy = new cv.Mat();
-        cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        let potentialCards = [];
-
-        // 3. Identify Card Candidates
-        for (let i = 0; i < contours.size(); ++i) {
-            let cnt = contours.get(i);
-            let area = cv.contourArea(cnt);
-            
-            // Filter by size (ignore small puzzle pieces)
-            if (area > 2000) { 
-                // Find rotated bounding box
-                let rotatedRect = cv.minAreaRect(cnt);
-                let vertices = cv.RotatedRect.points(rotatedRect);
-                
-                // Aspect ratio check (Card should be roughly 2:3 or 3:2)
-                let rW = rotatedRect.size.width;
-                let rH = rotatedRect.size.height;
-                let aspectRatio = rW > rH ? rW / rH : rH / rW;
-
-                if (aspectRatio < 2.5 && aspectRatio > 1.2) {
-                    potentialCards.push(vertices);
-                }
-            }
-        }
-
-        statusEl.innerText = `Found ${potentialCards.length} potential cards. Reading...`;
+        // Convert to HSV color space (better for color detection)
+        cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
+        cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
         let roundScore = 0;
-        
-        // 4. Warp and OCR each card
-        for (let j = 0; j < potentialCards.length; j++) {
-            let vertices = potentialCards[j];
-            
-            // Warp perspective to get a flat, upright card image
-            let warpedCard = warpPerspective(src, vertices);
-            
-            // Pre-process specifically for OCR (Invert colors so white numbers become black)
-            cv.cvtColor(warpedCard, warpedCard, cv.COLOR_RGBA2GRAY);
-            cv.threshold(warpedCard, warpedCard, 120, 255, cv.THRESH_BINARY_INV); // Invert!
-            
-            // Render warped card to a temp canvas for Tesseract
-            let tempCanvas = document.createElement('canvas');
-            tempCanvas.width = warpedCard.cols;
-            tempCanvas.height = warpedCard.rows;
-            cv.imshow(tempCanvas, warpedCard);
+        let cardsFound = 0;
 
-            // Run OCR
-            try {
-                const { data: { text } } = await worker.recognize(tempCanvas);
-                const val = parseCardValue(text);
-                
-                if (val !== null) {
-                    roundScore += val;
-                    // Draw Success Box
-                    drawResult(ctx, vertices, val, 'lime');
-                } else {
-                    // Draw Failed Box (optional, helps debug)
-                    drawResult(ctx, vertices, "?", 'yellow');
-                }
-            } catch (err) {
-                console.error(err);
-            }
+        // --- DEFINE COLOR RANGES (HSV) ---
+        // Note: OpenCV HSV ranges are H:0-179, S:0-255, V:0-255
+        // These ranges are tuned for standard playing card colors
+        const colors = [
+            { name: "Blue",   h: [90, 130], s: [100, 255], v: [60, 255], valid: [1,2,3,4] },
+            { name: "Green",  h: [35, 85],  s: [80, 255],  v: [60, 255], valid: [5,6,7,8] },
+            { name: "Orange", h: [5, 25],   s: [120, 255], v: [100, 255], valid: [0] }, // Skip-Bo
+            // Red needs two ranges because it wraps around 0/180
+            { name: "Red",    h: [0, 10],   s: [120, 255], v: [80, 255], valid: [9,10,11,12], h2: [160, 180] }
+        ];
+
+        for (let c of colors) {
+            let mask = new cv.Mat();
+            let low = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [c.h[0], c.s[0], c.v[0], 0]);
+            let high = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [c.h[1], c.s[1], c.v[1], 0]);
             
-            warpedCard.delete();
+            cv.inRange(hsv, low, high, mask);
+
+            // Handle Red Wrap-around
+            if (c.h2) {
+                let mask2 = new cv.Mat();
+                let low2 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [c.h2[0], c.s[0], c.v[0], 0]);
+                let high2 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [c.h2[1], c.s[1], c.v[1], 0]);
+                cv.inRange(hsv, low2, high2, mask2);
+                cv.add(mask, mask2, mask);
+                mask2.delete(); low2.delete(); high2.delete();
+            }
+
+            // Clean up noise (Morphological Open/Close)
+            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+            cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+
+            // Find Contours on the Mask
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            for (let i = 0; i < contours.size(); ++i) {
+                let cnt = contours.get(i);
+                let area = cv.contourArea(cnt);
+
+                // Ignore small noise (tuning: > 1500px area)
+                if (area > 1500) {
+                    let rect = cv.minAreaRect(cnt);
+                    
+                    // Filter by shape (roughly rectangular)
+                    let w = rect.size.width;
+                    let h = rect.size.height;
+                    let ar = w > h ? w/h : h/w; // Aspect ratio
+                    
+                    if (ar < 2.5) { // Cards aren't long strips
+                        cardsFound++;
+                        let vertices = cv.RotatedRect.points(rect);
+                        
+                        // 1. If Orange, it's a Skip-Bo (0 points)
+                        if (c.name === "Orange") {
+                            drawResult(ctx, vertices, "SB", "#FFA500");
+                        } 
+                        // 2. Otherwise, we need to read the number
+                        else {
+                            // Warp perspective to get a flat card image
+                            let warped = warpCard(src, vertices);
+                            
+                            // Debug: Show what the AI sees
+                            showDebugImage(warped);
+
+                            // Attempt OCR
+                            let val = await readNumberFromCard(warped, c.valid);
+                            
+                            // Draw result
+                            let colorHex = c.name === "Blue" ? "#2196F3" : c.name === "Green" ? "#4CAF50" : "#F44336";
+                            drawResult(ctx, vertices, val.toString(), colorHex);
+                            roundScore += val;
+                            warped.delete();
+                        }
+                    }
+                }
+            }
+
+            // Cleanup for this color loop
+            mask.delete(); low.delete(); high.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
         }
 
         grandTotal += roundScore;
         document.getElementById('totalScore').innerText = grandTotal;
-        statusEl.innerText = `Done! Added ${roundScore} points.`;
+        statusEl.innerText = `Finished! Found ${cardsFound} cards.`;
         
-        // Cleanup
-        src.delete(); dst.delete(); gray.delete(); contours.delete(); hierarchy.delete();
+        // Final cleanup
+        src.delete(); hsv.delete();
         camBtn.style.opacity = "1";
     }
 
-    // Helper: Warp a rotated rectangle into a flat 200x300 image
-    function warpPerspective(src, vertices) {
-        // Order vertices: TL, TR, BR, BL
+    // --- HELPER FUNCTIONS ---
+
+    function warpCard(src, vertices) {
+        // 1. Sort vertices to TL, TR, BR, BL
         let sorted = sortVertices(vertices);
         
-        // Destination points (standard card size)
-        let cardW = 200, cardH = 300;
-        
+        // 2. Warp to standard size (e.g. 150x220)
+        let w = 150, h = 220;
         let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, sorted);
-        let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, cardW,0, cardW,cardH, 0,cardH]);
+        let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, w,0, w,h, 0,h]);
         
         let M = cv.getPerspectiveTransform(srcTri, dstTri);
         let dst = new cv.Mat();
-        cv.warpPerspective(src, dst, M, new cv.Size(cardW, cardH));
+        cv.warpPerspective(src, dst, M, new cv.Size(w, h));
         
         srcTri.delete(); dstTri.delete(); M.delete();
         return dst;
     }
 
-    // Helper: Sort 4 points to Top-Left, Top-Right, Bottom-Right, Bottom-Left
+    async function readNumberFromCard(mat, validNumbers) {
+        // Pre-processing for OCR
+        let gray = new cv.Mat();
+        cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+        
+        // Threshold (Invert: White text on black background)
+        cv.threshold(gray, gray, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+        // Crop center (Skip-Bo numbers are big and in the middle)
+        // This removes corner numbers which might be upside down
+        let rect = new cv.Rect(30, 40, 90, 140); 
+        let cropped = gray.roi(rect);
+
+        // Put on canvas for Tesseract
+        let tempCanvas = document.createElement('canvas');
+        tempCanvas.width = cropped.cols;
+        tempCanvas.height = cropped.rows;
+        cv.imshow(tempCanvas, cropped);
+
+        // Run OCR
+        let { data: { text } } = await worker.recognize(tempCanvas);
+        
+        // Clean text
+        let clean = text.replace(/[^0-9]/g, '');
+        
+        // Heuristics based on Color
+        // If we found nothing, or something invalid, try to guess
+        let num = parseInt(clean);
+
+        gray.delete(); cropped.delete();
+
+        if (validNumbers.includes(num)) return num;
+
+        // Fallback / Correction Logic
+        if (clean.length > 0) {
+            // If we read "1" but it's a Red card (9-12), it might be "11" or "12" or "10"
+            // If text contains "1" and "0", it's 10.
+            if (clean.includes("1") && clean.includes("0") && validNumbers.includes(10)) return 10;
+            if (clean.includes("1") && clean.includes("2") && validNumbers.includes(12)) return 12;
+            if (clean.includes("1") && clean.includes("1") && validNumbers.includes(11)) return 11;
+        }
+
+        // Final fallback: Return the lowest valid number for that color? 
+        // Or just '?' if we really don't know.
+        // For now, return 0 or the first valid number to avoid "NaN" score
+        return 0; 
+    }
+
     function sortVertices(v) {
-        // Flat array of coordinates
-        let points = [
-            {x: v[0].x, y: v[0].y}, {x: v[1].x, y: v[1].y},
-            {x: v[2].x, y: v[2].y}, {x: v[3].x, y: v[3].y}
-        ];
-        
-        // Sort by Y to separate top 2 and bottom 2
-        points.sort((a,b) => a.y - b.y);
-        let top = points.slice(0,2).sort((a,b) => a.x - b.x); // TL, TR
-        let bottom = points.slice(2,4).sort((a,b) => b.x - a.x); // BR, BL (Note: BR is usually rightmost)
-        // Re-sort bottom properly: bottom-right has higher X
-        bottom.sort((a,b) => a.x - b.x);
-        
-        // Return format for OpenCV: [TLx, TLy, TRx, TRy, BRx, BRy, BLx, BLy]
-        return [
-            top[0].x, top[0].y, 
-            top[1].x, top[1].y, 
-            bottom[1].x, bottom[1].y, 
-            bottom[0].x, bottom[0].y
-        ];
+        // Helper to organize rotation points
+        let flat = [{x:v[0].x, y:v[0].y}, {x:v[1].x, y:v[1].y}, {x:v[2].x, y:v[2].y}, {x:v[3].x, y:v[3].y}];
+        flat.sort((a,b) => a.y - b.y);
+        let top = flat.slice(0,2).sort((a,b) => a.x - b.x);
+        let btm = flat.slice(2,4).sort((a,b) => a.x - b.x); // btm-left, btm-right
+        return [top[0].x, top[0].y, top[1].x, top[1].y, btm[1].x, btm[1].y, btm[0].x, btm[0].y];
     }
 
-    function parseCardValue(text) {
-        let clean = text.toUpperCase().replace(/[^0-9SKIPBO]/g, '');
-        
-        if (clean.includes('SKIP') || clean.includes('BO')) return 0; // Skip-bo is 0?
-        if (clean.includes('SB')) return 0;
-
-        // Look for largest number 1-12
-        let matches = clean.match(/(1[0-2]|[1-9])/g);
-        if (!matches) return null;
-        
-        // Filter out single digits if a double digit exists (e.g. "1 2" -> 12)
-        // Actually, just take the max value found, as OCR often reads "12" as "1", "2" and "12"
-        let nums = matches.map(m => parseInt(m));
-        return Math.max(...nums);
-    }
-
-    function drawResult(ctx, vertices, text, color) {
+    function drawResult(ctx, v, text, color) {
         ctx.beginPath();
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 5;
         ctx.strokeStyle = color;
-        ctx.moveTo(vertices[0].x, vertices[0].y);
-        ctx.lineTo(vertices[1].x, vertices[1].y);
-        ctx.lineTo(vertices[2].x, vertices[2].y);
-        ctx.lineTo(vertices[3].x, vertices[3].y);
+        // Connect the 4 corners
+        ctx.moveTo(v[0].x, v[0].y);
+        ctx.lineTo(v[1].x, v[1].y);
+        ctx.lineTo(v[2].x, v[2].y);
+        ctx.lineTo(v[3].x, v[3].y);
         ctx.closePath();
         ctx.stroke();
 
-        // Draw text background
-        let centerX = (vertices[0].x + vertices[2].x) / 2;
-        let centerY = (vertices[0].y + vertices[2].y) / 2;
-        
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(centerX - 20, centerY - 20, 40, 40);
-        
-        ctx.fillStyle = '#FFF';
-        ctx.font = 'bold 24px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, centerX, centerY);
+        // Draw Label
+        let cx = (v[0].x + v[2].x)/2;
+        let cy = (v[0].y + v[2].y)/2;
+        ctx.fillStyle = "rgba(0,0,0,0.8)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 25, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 24px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, cx, cy);
+    }
+    
+    function showDebugImage(mat) {
+        let canvas = document.createElement('canvas');
+        canvas.className = 'debug-thumb';
+        cv.imshow(canvas, mat);
+        debugContainer.appendChild(canvas);
     }
 </script>
 </body>
