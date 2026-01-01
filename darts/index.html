@@ -1161,8 +1161,10 @@
         const modal = document.getElementById('graph-modal');
         if(modal.style.display === 'flex') {
             modal.style.display = 'none';
+            document.body.classList.remove('modal-open');
         } else {
             modal.style.display = 'flex';
+            document.body.classList.add('modal-open');
             requestAnimationFrame(drawGraph); // Draw after layout
         }
     }
@@ -1264,8 +1266,10 @@
         const modal = document.getElementById('history-modal');
         if(modal.style.display === 'flex') {
             modal.style.display = 'none';
+            document.body.classList.remove('modal-open');
         } else {
             modal.style.display = 'flex';
+            document.body.classList.add('modal-open');
             renderHistoryModal();
         }
     }
