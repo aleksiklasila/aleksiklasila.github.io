@@ -697,6 +697,8 @@
                     layerMasks.set(layer.boneName, myScope);
                 });
 
+                this.currentLayerMasks = layerMasks;
+
                 // Color Visuals
                 if (this.updateBoneColors) this.updateBoneColors(layerMasks);
 
@@ -808,6 +810,17 @@
                 return newClip;
             }
 
+            getLayerForBone(boneName) {
+                if (!this.currentLayerMasks) return null;
+                // Find which layer owns this bone
+                // iterate activeLayers
+                for (const layer of this.activeLayers) {
+                    const mask = this.currentLayerMasks.get(layer.boneName);
+                    if (mask && mask.has(boneName)) return layer;
+                }
+                return null;
+            }
+
             stopGlobalActions() {
                 if (currentAction) {
                     currentAction.stop();
@@ -891,13 +904,31 @@
         let animations = [];
         let clock = new THREE.Clock();
         let isPlaying = true;
+
+        // Define togglePlay globally
+        window.togglePlay = function () {
+            isPlaying = !isPlaying;
+            document.getElementById('play-pause-btn').innerText = isPlaying ? "Pause" : "Play";
+
+            // Update individual track buttons only if they are syncing or we paused globally?
+            /* 
+               Actually, THREE.Action can be paused independently. 
+               If Global Pause: we skip mixer.update(). The actions remain as they are.
+               So 'isPlaying' controls GLOBAL time flow.
+               We DO NOT need to reset action times.
+               User issue: "it takes current animation times to the beginning".
+               Usually that happens if we stop() and play().
+               Here we just toggle isPlaying flag.
+            */
+            // Ensure no reset happens.
+        };
         let isScrubbing = false;
         let selectedBone = null;
         let duration = 0;
         let renderedTracks = [];
 
         // Multi-select for keyframes
-        let selectedKeyframes = new Set();
+        let selectedKeyframes = new Map(); // Map< ClipName, Set<Time> >
 
         // Box Selection
         let isBoxSelecting = false;
@@ -1057,13 +1088,15 @@
 
                         // 2. Apply Changes
                         if (mods.length > 0) {
-                            const useMulti = selectedKeyframes.size > 0;
+                            // Clip-specific selection only
+                            const selTimes = selectedKeyframes.get(clip.name);
+                            const useMulti = selTimes && selTimes.size > 0;
                             let needRefresh = false;
 
                             if (useMulti) {
                                 // Multi-Keyframe Edit (Delta)
                                 mods.forEach(m => {
-                                    if (applyDeltaToKeyframes(clip, m.object, selectedKeyframes, m.dP, m.dQ, m.dS)) {
+                                    if (applyDeltaToKeyframes(clip, m.object, selTimes, m.dP, m.dQ, m.dS)) {
                                         needRefresh = true;
                                     }
                                 });
@@ -1744,7 +1777,7 @@
                     mk.style.left = pct + '%';
                     mk.style.height = '100%';
                     mk.style.width = '2px';
-                    mk.style.background = selectedKeyframes.has(t) ? 'orange' : '#ccc';
+                    mk.style.background = (selectedKeyframes.has(clip.name) && selectedKeyframes.get(clip.name).has(t)) ? 'orange' : '#ccc';
                     mk.onmousedown = (e) => {
                         e.stopPropagation();
                         selectKeyframe(t, e.ctrlKey || e.shiftKey, clip);
@@ -1782,23 +1815,55 @@
                     if (e.shiftKey) {
                         startBoxSelect(e, timeline, clip, clip.duration);
                     } else {
-                        // Click to seek independent track
+                        // Drag Scrub Logic
                         const rect = timeline.getBoundingClientRect();
-                        const x = e.clientX - rect.left;
-                        const pct = Math.max(0, Math.min(1, x / rect.width));
-                        let t = pct * clip.duration;
 
-                        // If active, update time
-                        if (isActive) {
-                            const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
-                            if (layer && layer.action) {
-                                layer.action.time = t;
-                                layer.action.paused = true; // Pause on seek?
-                                // Update button state
-                                const btnPlay = controls.querySelector('button[title="Play/Pause"]');
-                                if (btnPlay) btnPlay.innerText = '▶';
+                        const updateScrub = (clientX) => {
+                            const x = clientX - rect.left;
+                            const pct = Math.max(0, Math.min(1, x / rect.width));
+                            const t = pct * clip.duration;
+
+                            if (isActive) {
+                                const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                                if (layer && layer.action) {
+                                    layer.action.time = t;
+                                    layer.action.paused = true;
+                                    mixer.update(0);
+
+                                    const btnPlay = controls.querySelector('button[title="Play/Pause"]');
+                                    if (btnPlay) btnPlay.innerText = '▶';
+                                }
                             }
-                        }
+                            // Update UI playhead visually without full re-render?
+                            // Full re-render is safe but maybe slow? It's fine for now.
+                            // Actually, re-rendering creates new DOM elements, killing drag?
+                            // NO! Re-rendering clears 'container'. 'timeline' is a child of 'row' child of 'container'.
+                            // If we re-render, this 'timeline' div is removed from DOM. Event listeners die.
+                            // BAD IDEA to re-render inside drag.
+
+                            // Just update Playhead CSS
+                            if (isActive) {
+                                // Locate playhead in THIS timeline div?
+                                // We rendered it earlier.
+                                // Let's find it.
+                                // It has red background.
+                                const ph = Array.from(timeline.children).find(c => c.style.background === 'red');
+                                if (ph) {
+                                    ph.style.left = (pct * 100) + '%';
+                                }
+                            }
+                        };
+
+                        updateScrub(e.clientX);
+
+                        const onMove = (em) => updateScrub(em.clientX);
+                        const onUp = () => {
+                            document.removeEventListener('mousemove', onMove);
+                            document.removeEventListener('mouseup', onUp);
+                            renderTimelineTracks(); // Final sync
+                        };
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
                     }
                 };
 
@@ -1811,7 +1876,7 @@
 
                     const items = [{
                         label: "Add Keyframe Here",
-                        action: () => updateOrAddKeyframe(clip, t)
+                        action: () => addKeyframeToClipAtTime(clip, t)
                     }];
 
                     if (selectedKeyframes.size > 0) {
@@ -1862,12 +1927,18 @@
 
                 if (!ev.ctrlKey) selectedKeyframes.clear();
 
+                // Ensure Set exists for this clip
+                if (!selectedKeyframes.has(clip.name)) {
+                    selectedKeyframes.set(clip.name, new Set());
+                }
+                const set = selectedKeyframes.get(clip.name);
+
                 const uniqueTimes = new Set();
                 clip.tracks.forEach(t => t.times.forEach(tv => uniqueTimes.add(tv)));
 
                 uniqueTimes.forEach(t => {
                     if (t >= tStart && t <= tEnd) {
-                        selectedKeyframes.add(t);
+                        set.add(t);
                     }
                 });
 
@@ -1951,74 +2022,7 @@
             }
         };
 
-        // --- KEYFRAME HELPERS ---
-        window.updateOrAddKeyframe = function (clip, time) {
-            if (!selectedBone) { alert("Select a bone to keyframe."); return; }
-            if (!clip) return;
 
-            const name = selectedBone.name;
-            const props = ['.position', '.quaternion', '.scale'];
-            const types = [THREE.VectorKeyframeTrack, THREE.QuaternionKeyframeTrack, THREE.VectorKeyframeTrack];
-
-            props.forEach((prop, i) => {
-                const trackName = name + prop;
-                let track = clip.tracks.find(t => t.name === trackName);
-
-                // Create if missing
-                if (!track) {
-                    const TypedTrack = types[i];
-                    // Initial keyframe at 0 if needed? Or just empty.
-                    track = new TypedTrack(trackName, [], []);
-                    clip.tracks.push(track);
-                }
-
-                // Get Value
-                let value;
-                if (prop === '.position') value = selectedBone.position.toArray();
-                if (prop === '.quaternion') value = selectedBone.quaternion.toArray();
-                if (prop === '.scale') value = selectedBone.scale.toArray();
-
-                // Insert/Update
-                // Find index
-                // Note: THREE.KeyframeTrack.times is a Float32Array usually.
-                // We convert to regular array for editing ease or use splice logic carefully?
-                // Actually THREE.KeyframeTrack utils are limited.
-                // We manually manage arrays.
-
-                // Convert to plain arrays if they are typed
-                let times = Array.from(track.times);
-                let values = Array.from(track.values);
-
-                const existingIdx = times.findIndex(t => Math.abs(t - time) < 0.001);
-                const stride = value.length;
-
-                if (existingIdx !== -1) {
-                    // Update
-                    for (let k = 0; k < stride; k++) values[existingIdx * stride + k] = value[k];
-                } else {
-                    // Insert
-                    // Push and Sort?
-                    times.push(time);
-                    for (let k = 0; k < stride; k++) values.push(value[k]);
-
-                    // Sort by time
-                    // Create pairs
-                    const data = times.map((t, idx) => ({
-                        t,
-                        v: values.slice(idx * stride, (idx + 1) * stride)
-                    }));
-                    data.sort((a, b) => a.t - b.t);
-
-                    times = data.map(d => d.t);
-                    values = data.flatMap(d => d.v);
-                }
-
-                track.times = new Float32Array(times);
-                track.values = new Float32Array(values);
-            });
-
-            renderTimelineTracks();
-        };
 
         window.deleteSelectedKeyframes = function (clip) {
             if (selectedKeyframes.size === 0) return;
@@ -2877,7 +2881,22 @@
 
         // --- KEYFRAME EDITING ---
 
-        window.updateOrAddKeyframe = function (clip, object, time) {
+        window.updateOrAddKeyframe = function (clip, timeOrBone, timeOverride) {
+            // Overload: (clip, object, time) OR (clip, time)
+            let object = selectedBone;
+            let time = timeOrBone;
+
+            if (timeOrBone && timeOrBone.isBone) {
+                object = timeOrBone;
+                time = timeOverride;
+            } else if (typeof timeOrBone === 'number') {
+                time = timeOrBone;
+                object = selectedBone;
+            }
+
+            if (!object) { alert("Select a bone to keyframe."); return; }
+            if (!clip) return;
+
             const trackNameBase = object.name;
 
             // Properties to check
@@ -2983,60 +3002,112 @@
             addKeyframeAtTime();
         };
 
+        window.applyDeltaToKeyframes = function (clip, bone, timesSet, dP, dQ, dS) {
+            if (!timesSet || timesSet.size === 0) return false;
+            let modified = false;
+            const name = bone.name;
+            const props = ['.position', '.quaternion', '.scale'];
+            const strideMap = { '.position': 3, '.quaternion': 4, '.scale': 3 };
+
+            props.forEach((prop, i) => {
+                const trackName = name + prop;
+                const track = clip.tracks.find(t => t.name === trackName);
+                if (!track) return;
+
+                let values = Array.from(track.values);
+                const s = strideMap[prop];
+
+                // Iterate times in track to find matches
+                track.times.forEach((t, idx) => {
+                    // Check fuzzy match
+                    let isSel = false;
+                    for (let selT of timesSet) {
+                        if (Math.abs(selT - t) < 0.001) { isSel = true; break; }
+                    }
+
+                    if (isSel) {
+                        const baseIdx = idx * s;
+                        if (prop === '.position') {
+                            // vNew = vOld + dP
+                            const v = new THREE.Vector3().fromArray(values, baseIdx);
+                            v.add(dP);
+                            v.toArray(values, baseIdx);
+                            modified = true;
+                        } else if (prop === '.quaternion') {
+                            // qNew = qOld * dQ (apply delta rotation locally)
+                            const q = new THREE.Quaternion().fromArray(values, baseIdx);
+                            q.multiply(dQ);
+                            q.toArray(values, baseIdx);
+                            modified = true;
+                        } else if (prop === '.scale') {
+                            // sNew = sOld * dS (component-wise)
+                            const v = new THREE.Vector3().fromArray(values, baseIdx);
+                            v.multiply(dS);
+                            v.toArray(values, baseIdx);
+                            modified = true;
+                        }
+                    }
+                });
+
+                if (modified) {
+                    track.values = new Float32Array(values);
+                }
+            });
+            return modified;
+        };
+
         // --- TIMELINE CONTEXT MENU ---
 
-        window.addKeyframeAtTime = function (timeOverride) {
-            if (!currentAction) {
-                alert("Create an animation first.");
-                return;
+        window.addKeyframeToClipAtTime = function (clip, time) {
+            // 1. Identify Target Bones
+            let bonesToKey = [];
+
+            // If explicit selection exists, prefer it?
+            // User says: "You should not have to select a bone... and you should be able to edit multiple bones"
+            // So if selection exists, maybe key it. 
+            // BUT this is "Add Keyframe Here" on a speciic CLIP row.
+            // It strongly implies "Keyframe relevant bones for THIS clip".
+
+            // Find all bones controlled by this clip
+            if (window.hierarchicalController) {
+                // Brute force check all bones
+                const allBones = [];
+                if (skeletonHelper) allBones.push(...skeletonHelper.bones);
+                else currentModel.traverse(o => { if (o.isBone) allBones.push(o); });
+
+                allBones.forEach(b => {
+                    const layer = window.hierarchicalController.getLayerForBone(b.name);
+                    if (layer && layer.clipName === clip.name) {
+                        bonesToKey.push(b);
+                    }
+                });
             }
 
-            const clip = currentAction.getClip();
+            // Fallback: If no hierarchy logic or unassigned, keyframe selected bone if it matches?
+            // Or just alert if empty.
+            if (bonesToKey.length === 0) {
+                if (selectedBone) bonesToKey.push(selectedBone);
+                else {
+                    // Try to be smart. If clip is "Animation 1" and assigned to Root, chances are it affects everything.
+                    // But getLayerForBone should have caught it.
+                    // If it didn't, maybe the method returned null?
+                    alert("No bones found controlled by this clip.");
+                    return;
+                }
+            }
+
+            // 2. Snapshot
             const jsonBefore = clip.toJSON();
-            const time = (typeof timeOverride === 'number') ? timeOverride : currentAction.time;
 
-            // Interpolation mode
-            const modeVal = document.getElementById('interpolation-select').value;
-            let interp = THREE.InterpolateLinear;
-            if (modeVal === "Smooth") interp = THREE.InterpolateSmooth;
-            if (modeVal === "Step") interp = THREE.InterpolateDiscrete;
-
-            // Iterate ALL bones (or could restrict to selected if we wanted, but previous behavior was Global Snapshot)
-            // User request: "always have an option to add a new keyframe"
-            let bones = [];
-            if (skeletonHelper) {
-                bones = skeletonHelper.bones;
-            } else {
-                scene.traverse(o => { if (o.isBone) bones.push(o); });
-            }
-
-            bones.forEach(bone => {
+            // 3. Apply
+            bonesToKey.forEach(bone => {
+                // Pass explicit bone and time
                 updateOrAddKeyframe(clip, bone, time);
             });
 
-            // Update Duration if needed
-            if (time > clip.duration) {
-                clip.duration = time;
-                duration = time;
-                document.getElementById('duration-input').value = duration;
-            }
-
-            // Re-apply
-            const wasPlaying = isPlaying;
-            currentAction.stop();
+            // 4. Persistence & Refresh
             mixer.uncacheClip(clip);
-            currentAction = mixer.clipAction(clip);
-            currentAction.time = isPlaying ? currentAction.time : time; // Where should playhead be?
-            // If we added at a different time, playhead usually stays where it was?
-            // But verify visual update.
-
-            if (wasPlaying) {
-                currentAction.play();
-            } else {
-                currentAction.play().paused = true;
-                mixer.update(0);
-            }
-
+            if (window.hierarchicalController) window.hierarchicalController.rebuildAndPlay();
             drawKeyframeMarkers(clip);
 
             const jsonAfter = clip.toJSON();
@@ -3044,6 +3115,68 @@
                 execute: () => restoreClipState(clip, jsonAfter),
                 undo: () => restoreClipState(clip, jsonBefore)
             });
+        };
+
+        window.addKeyframeAtTime = function (timeOverride) {
+            // Updated Logic: Targeted Editing.
+            // Find bones to update
+            let bones = [];
+            if (skeletonHelper && document.getElementById('chk-skeleton').checked) {
+                bones = skeletonHelper.bones;
+            } else {
+                scene.traverse(o => { if (o.isBone) bones.push(o); });
+            }
+
+            // For each bone, find controlling clip
+            const affectedClips = new Set();
+            const clipsJsonBefore = new Map();
+
+            bones.forEach(bone => {
+                let layer = null;
+                if (window.hierarchicalController) {
+                    layer = window.hierarchicalController.getLayerForBone(bone.name);
+                }
+
+                if (layer) {
+                    const clip = animations.find(c => c.name === layer.clipName);
+                    if (clip) {
+                        if (!affectedClips.has(clip)) {
+                            clipsJsonBefore.set(clip, clip.toJSON());
+                            affectedClips.add(clip);
+                        }
+
+                        // Use layer time
+                        const t = layer.action ? layer.action.time : (typeof timeOverride === 'number' ? timeOverride : 0);
+                        updateOrAddKeyframe(clip, bone, t);
+                    }
+                }
+            });
+
+            if (affectedClips.size > 0) {
+                // Essential: Uncache modified clips so Three.js re-internals them
+                affectedClips.forEach(c => mixer.uncacheClip(c));
+
+                // Rebuild controller to restart actions with new clip data
+                if (window.hierarchicalController) {
+                    window.hierarchicalController.rebuildAndPlay();
+                }
+
+                // Visuals refresh
+                affectedClips.forEach(c => drawKeyframeMarkers(c));
+
+                // Undo/Redo
+                const clipsJsonAfter = new Map();
+                affectedClips.forEach(c => clipsJsonAfter.set(c, c.toJSON()));
+
+                addCommand({
+                    execute: () => {
+                        clipsJsonAfter.forEach((json, clip) => restoreClipState(clip, json));
+                    },
+                    undo: () => {
+                        clipsJsonBefore.forEach((json, clip) => restoreClipState(clip, json));
+                    }
+                });
+            }
         };
 
         function restoreClipState(clip, json) {
@@ -3267,13 +3400,14 @@
             }
         };
 
-        window.deleteKeyframe = function () {
-            if (selectedKeyframes.size === 0 || !currentAction) return;
-            const clip = currentAction.getClip();
-            const jsonBefore = clip.toJSON();
-            const timesToRemove = Array.from(selectedKeyframes);
+        window.deleteSelectedKeyframes = function (clip) {
+            if (!selectedKeyframes.has(clip.name)) return;
+            const timesToRemove = Array.from(selectedKeyframes.get(clip.name));
+            if (timesToRemove.length === 0) return;
 
+            const jsonBefore = clip.toJSON();
             let changed = false;
+
             clip.tracks.forEach(track => {
                 const times = Array.from(track.times);
                 const values = Array.from(track.values);
@@ -3311,22 +3445,28 @@
             });
 
             if (changed) {
-                const t = currentAction.time;
-                currentAction.stop();
-                mixer.uncacheClip(clip);
-                currentAction = mixer.clipAction(clip);
-                currentAction.time = t;
-                currentAction.play();
-                if (!isPlaying) currentAction.paused = true;
+                // Re-init Logic: handled by rebuildAndPlay usually?
+                // But for specific clip:
+                window.hierarchicalController.rebuildAndPlay(); // Simplest way to refresh all actions
 
-                selectedKeyframes.clear();
-                drawKeyframeMarkers(clip);
+                selectedKeyframes.get(clip.name).clear();
+                renderTimelineTracks();
 
                 const jsonAfter = clip.toJSON();
                 addCommand({
                     execute: () => restoreClipState(clip, jsonAfter),
                     undo: () => restoreClipState(clip, jsonBefore)
                 });
+            }
+        };
+
+        // Legacy/Generic delete (maps to active action?)
+        window.deleteKeyframe = function () {
+            // Try to find ANY selected keyframes?
+            if (selectedKeyframes.size > 0) {
+                const clipName = selectedKeyframes.keys().next().value;
+                const clip = animations.find(c => c.name === clipName);
+                if (clip) window.deleteSelectedKeyframes(clip);
             }
         };
 
@@ -3373,12 +3513,23 @@
                     const base64data = reader.result;
 
                     const project = {
-                        version: 1,
+                        version: 2,
                         timestamp: Date.now(),
                         modelData: base64data,
                         meta: {
-                            // Any extra settings?
-                            duration: duration // (derived from current clip anyway)
+                            duration: duration
+                        },
+                        animState: {
+                            clips: animations.map(c => ({
+                                name: c.name,
+                                userData: c.userData
+                            })),
+                            activeLayers: window.hierarchicalController.activeLayers.map(l => ({
+                                boneName: l.boneName,
+                                clipName: l.clipName,
+                                time: l.action ? l.action.time : 0,
+                                paused: l.action ? l.action.paused : false
+                            }))
                         }
                     };
 
@@ -3406,6 +3557,9 @@
                         const loader = new GLTFLoader();
                         loader.load(json.modelData, (gltf) => {
                             setupLoadedModel(gltf);
+                            if (json.animState) {
+                                restoreAnimationState(json.animState);
+                            }
                         });
                     }
                 } catch (err) {
@@ -3414,6 +3568,40 @@
                 }
             };
             reader.readAsText(file);
+        };
+
+        window.restoreAnimationState = function (state) {
+            if (!state || !state.clips) return;
+
+            // Restore Clips UserData
+            state.clips.forEach(c => {
+                const clip = animations.find(existing => existing.name === c.name);
+                if (clip) {
+                    clip.userData = c.userData;
+                }
+            });
+
+            // Restore Layers
+            if (window.hierarchicalController) {
+                window.hierarchicalController.clearAll();
+                state.activeLayers.forEach(l => {
+                    // Add layer
+                    window.hierarchicalController.addLayer(l.boneName, l.clipName);
+
+                    // Restore Time/Paused
+                    // Note: addLayer calls rebuildAndPlay, so action might exist now
+                    const layer = window.hierarchicalController.activeLayers.find(al => al.boneName === l.boneName && al.clipName === l.clipName);
+                    if (layer && layer.action) {
+                        layer.action.time = l.time;
+                        layer.action.paused = l.paused;
+                        if (!l.paused) layer.action.play();
+                    }
+                });
+
+                window.hierarchicalController.rebuildAndPlay();
+            }
+
+            if (window.renderTimelineTracks) window.renderTimelineTracks();
         };
 
         function saveString(text, filename) {
@@ -3425,23 +3613,39 @@
         }
 
         window.selectKeyframe = function (time, multiSelect, clip) {
+            if (!multiSelect) {
+                // Clear all if generic click
+                selectedKeyframes.clear();
+            }
+
+            if (!selectedKeyframes.has(clip.name)) {
+                selectedKeyframes.set(clip.name, new Set());
+            }
+            const set = selectedKeyframes.get(clip.name);
+
             if (multiSelect) {
-                if (selectedKeyframes.has(time)) selectedKeyframes.delete(time);
-                else selectedKeyframes.add(time);
+                if (set.has(time)) set.delete(time);
+                else set.add(time);
             } else {
-                if (!selectedKeyframes.has(time)) {
-                    selectedKeyframes.clear();
-                    selectedKeyframes.add(time);
+                set.add(time);
+            }
+
+            // Auto-jump? Maybe only if it's the active track?
+            if (isActiveLayer(clip)) {
+                // Find layer
+                const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                if (layer && layer.action) {
+                    layer.action.time = time;
                 }
             }
 
-            // Auto-jump to time
-            if (currentAction) {
-                currentAction.time = time;
-                mixer.update(0);
-            }
-            drawTimeline();
+            renderTimelineTracks();
         };
+
+        function isActiveLayer(clip) {
+            if (!window.hierarchicalController) return false;
+            return window.hierarchicalController.activeLayers.some(l => l.clipName === clip.name);
+        }
 
         // --- INTERACTION ---
 
