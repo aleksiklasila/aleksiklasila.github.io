@@ -266,6 +266,108 @@
             font-size: 1.2rem;
             text-shadow: 1px 1px 0 #000;
         }
+
+        /* --- BOTTOM SHOP BAR --- */
+        #shop-bar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 500;
+            pointer-events: none;
+        }
+
+        .shop-option {
+            width: 120px;
+            padding: 8px 5px;
+            background: rgba(20, 20, 30, 0.95);
+            border: 2px solid #555;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            transition: all 0.15s ease;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .shop-option .option-key {
+            font-size: 0.65rem;
+            color: #ccc;
+            margin-bottom: 4px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 1px 6px;
+            border-radius: 3px;
+        }
+
+        .shop-option .option-name {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 3px;
+            line-height: 1.1;
+        }
+
+        .shop-option .option-rarity {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Fortnite-style rarity colors */
+        .shop-option.rarity-common {
+            border-color: #8a8a8a;
+            background: linear-gradient(180deg, rgba(50, 50, 55, 0.95) 0%, rgba(30, 30, 35, 0.95) 100%);
+        }
+
+        .shop-option.rarity-common .option-rarity {
+            color: #8a8a8a;
+        }
+
+        .shop-option.rarity-uncommon {
+            border-color: #30bf30;
+            background: linear-gradient(180deg, rgba(30, 80, 30, 0.95) 0%, rgba(20, 50, 20, 0.95) 100%);
+        }
+
+        .shop-option.rarity-uncommon .option-rarity {
+            color: #30bf30;
+        }
+
+        .shop-option.rarity-rare {
+            border-color: #3399ff;
+            background: linear-gradient(180deg, rgba(30, 60, 100, 0.95) 0%, rgba(20, 40, 70, 0.95) 100%);
+        }
+
+        .shop-option.rarity-rare .option-rarity {
+            color: #3399ff;
+        }
+
+        .shop-option.rarity-epic {
+            border-color: #b14aff;
+            background: linear-gradient(180deg, rgba(80, 30, 100, 0.95) 0%, rgba(50, 20, 70, 0.95) 100%);
+        }
+
+        .shop-option.rarity-epic .option-rarity {
+            color: #b14aff;
+        }
+
+        .shop-option.rarity-legendary {
+            border-color: #ff9f00;
+            background: linear-gradient(180deg, rgba(100, 70, 20, 0.95) 0%, rgba(70, 50, 15, 0.95) 100%);
+            box-shadow: 0 0 20px rgba(255, 159, 0, 0.3);
+        }
+
+        .shop-option.rarity-legendary .option-rarity {
+            color: #ff9f00;
+        }
+
+        .shop-option:hover,
+        .shop-option.selected {
+            transform: scale(1.05);
+        }
     </style>
 
     <script type="importmap">
@@ -338,14 +440,17 @@
             style="position: absolute; top: 10px; left: 10px; color: #0f0; font-weight: bold; display: none; font-family: monospace; z-index: 300;">
             FPS: 0</div>
         <div id="hud-top-right">
-            <div>WAVE <span id="wave-disp">1</span></div>
+            <div>LVL <span id="level-disp">1</span></div>
+            <div style="font-size:1rem; color:#0af">XP: <span id="xp-disp">0</span>/<span id="xp-max-disp">100</span>
+            </div>
             <div style="font-size:1rem; color:#aaa">Zombies: <span id="zombie-disp">0</span></div>
+            <div id="shop-points-disp" style="font-size:1rem; color:#ff0; display:none">⭐ <span id="shop-pts">0</span>
+                Shop Points</div>
         </div>
         <div id="hud-bottom-right">
             <div style="color:#f44">HP: <span id="hp-disp">100</span></div>
             <div id="ui-weapon" style="color:#fff; font-size: 0.8em; margin-top:5px;">PISTOL</div>
             <div id="ui-ammo" style="color:#ff0">AMMO: <span id="ammo-disp">30</span></div>
-            <div style="color:#0f0">$<span id="money-disp">0</span></div>
             <div id="ui-slots" class="slot-indicator">
                 <span id="slot-1" class="slot-active">1</span>
                 <span id="slot-2">2</span>
@@ -358,9 +463,27 @@
     <div id="host-hud">
         <div id="host-stats">
             <div>HOST SPECTATOR</div>
-            <div>WAVE: <span id="h-wave">1</span></div>
             <div>ZOMBIES: <span id="h-zombies">0</span></div>
             <div>PLAYERS: <span id="h-players">0</span></div>
+        </div>
+    </div>
+
+    <!-- Bottom Shop Bar -->
+    <div id="shop-bar" class="hidden">
+        <div class="shop-option" data-idx="0">
+            <div class="option-key">PRESS [X]</div>
+            <div class="option-name">Option 1</div>
+            <div class="option-rarity">common</div>
+        </div>
+        <div class="shop-option" data-idx="1">
+            <div class="option-key">PRESS [C]</div>
+            <div class="option-name">Option 2</div>
+            <div class="option-rarity">uncommon</div>
+        </div>
+        <div class="shop-option" data-idx="2">
+            <div class="option-key">PRESS [V]</div>
+            <div class="option-name">Option 3</div>
+            <div class="option-rarity">rare</div>
         </div>
     </div>
 
@@ -390,18 +513,54 @@
 
         const WEAPON_REGISTRY = {
             'pistol': { name: "Pistol", type: 'projectile', damage: 35, range: 100, fireRateMs: 250, speed: 80, maxAmmo: 60 },
-            'knife': { name: "Combat Knife", type: 'melee', damage: 45, range: 2.5, fireRateMs: 500, maxAmmo: -1 }
+            'knife': { name: "Combat Knife", type: 'melee', damage: 45, range: 2.5, fireRateMs: 500, maxAmmo: -1 },
+            'shotgun': { name: "Shotgun", type: 'projectile', damage: 20, range: 50, fireRateMs: 800, speed: 70, maxAmmo: 24, pellets: 6, spread: 0.15 }
         };
 
-        const SHOP_ITEMS = [
+        // New upgrade system for radial shop selection
+        const SHOP_UPGRADES = [
+            { id: 'heal', name: "Heal +50", rarity: 'common', action: p => { p.hp = Math.min(p.hp + 50, p.maxHp); } },
             {
-                name: "Refill Pistol", cost: 50, action: (p) => {
-                    const s = p.weapons.findIndex(w => w && w.id === 'pistol');
-                    if (s !== -1) p.weapons[s].ammo = Math.min(p.weapons[s].ammo + 30, WEAPON_REGISTRY['pistol'].maxAmmo);
+                id: 'ammo', name: "+30 Ammo", rarity: 'common', action: p => {
+                    const w = p.weapons[p.currentSlot];
+                    if (w && WEAPON_REGISTRY[w.id] && WEAPON_REGISTRY[w.id].maxAmmo > 0) {
+                        const max = p.maxAmmo[w.id] || WEAPON_REGISTRY[w.id].maxAmmo;
+                        w.ammo = Math.min(w.ammo + 30, max);
+                    }
                 }
             },
-            { name: "Buy Health (+50)", cost: 100, action: (p) => { p.hp = Math.min(100, p.hp + 50); } },
-            { name: "Buy Max Health (+10)", cost: 200, action: (p) => { p.maxHp = (p.maxHp || 100) + 10; p.hp += 10; } }
+            { id: 'maxhp', name: "+20 Max HP", rarity: 'uncommon', action: p => { p.maxHp += 20; p.hp += 20; } },
+            {
+                id: 'maxammo', name: "+20 Max Ammo", rarity: 'uncommon', action: p => {
+                    for (let k in p.maxAmmo) p.maxAmmo[k] += 20;
+                }
+            },
+            { id: 'firerate', name: "Fire Rate+", rarity: 'rare', action: p => { p.fireRateMultiplier = (p.fireRateMultiplier || 1.0) * 0.85; } },
+            {
+                id: 'shotgun', name: "Shotgun", rarity: 'rare', once: true, action: p => {
+                    // Replace current weapon with shotgun
+                    p.weapons[p.currentSlot] = { id: 'shotgun', ammo: 12 };
+                }
+            },
+            {
+                id: 'respawn', name: "Revive Team", rarity: 'rare', action: p => {
+                    // Respawn all dead players near the buyer
+                    for (let pid in players) {
+                        const other = players[pid];
+                        if (other.dead) {
+                            other.dead = false;
+                            other.hp = Math.floor(other.maxHp / 2); // Revive at 50% HP
+                            // Teleport near the buyer
+                            other.x = p.x + (Math.random() - 0.5) * 3;
+                            other.y = p.y;
+                            other.z = p.z + (Math.random() - 0.5) * 3;
+                            if (physicsBodies[pid]) {
+                                physicsBodies[pid].setTranslation({ x: other.x, y: other.y, z: other.z }, true);
+                            }
+                        }
+                    }
+                }
+            }
         ];
 
         const GRID_SIZE = 10;
@@ -412,6 +571,25 @@
         const JUMP_FORCE = 8.0;
         const COYOTE_TIME_MS = 150; // Grace period after leaving ground where jump still works
         const JUMP_BUFFER_MS = 100; // Grace period where jump input is remembered before landing
+
+        // Zombie Progression System
+        const MAX_ZOMBIES = 10;
+        const ZOMBIE_SPAWN_CHANCE = 0.4; // 40% chance to spawn new zombie on kill
+        const ZOMBIE_BOOST_CHANCE = 0.3; // 30% chance to gain a new boost on spawn
+        const ZOMBIE_BOOSTS = {
+            speed: { name: 'Speed', multiplier: 1.2 },      // 20% faster per stack
+            health: { name: 'Health', bonus: 25 },          // +25 HP per stack
+            upImpulse: { name: 'Climber', bonus: 2 },       // +2 climb impulse per stack
+            damage: { name: 'Damage', bonus: 0.25 }         // +0.25 damage/tick per stack
+        };
+        const ZOMBIE_LEVEL_COLORS = [
+            0x00ff00,  // Level 0: Green (default)
+            0x88ff00,  // Level 1: Yellow-green
+            0xffff00,  // Level 2: Yellow
+            0xffa500,  // Level 3: Orange
+            0xff4400,  // Level 4: Red-orange
+            0xff0000,  // Level 5+: Red
+        ];
 
         // ==========================================
         // 1b. WEB WORKER TIMER (Immune to browser throttling)
@@ -456,9 +634,7 @@
         let mapMesh = null; // Collision mesh for bullets
         let mapGroup = null; // ThreeJS Group for map
         let mapBodies = []; // Physics bodies for map
-        let wave = 1;
-        let zombiesToSpawn = 0;
-        let lastWaveTime = 0;
+        // Wave system removed - using infinite spawn mode
 
         // Assets
         const GameAssets = {
@@ -973,13 +1149,12 @@
 
             // Broadcast Compressed State
             // We only send dynamic data. 
-            // Protocol: [Timestamp, PlayersArray, ZombiesArray, BulletsArray, WaveInfo]
+            // Protocol: [Timestamp, PlayersArray, ZombiesArray, BulletsArray, ZombieCount]
             const state = compressState();
             broadcast({ type: 'WS', d: state });
 
             // Update Host HUD
-            document.getElementById('h-wave').innerText = wave;
-            document.getElementById('h-zombies').innerText = zombiesToSpawn + Object.keys(zombies).length;
+            document.getElementById('h-zombies').innerText = Object.keys(zombies).length;
             document.getElementById('h-players').innerText = Object.keys(players).length;
         }
 
@@ -1079,25 +1254,27 @@
             // Attack Logic
             if (p.input.fire) performAttack(pid);
 
-            // Out of Bounds Logic (Damage 20/sec)
-            if (mapBounds) {
-                // Check if outside X/Z or below Y
-                // Allow some vertical freedom upwards, but kill if below
+            // Out of Bounds Logic (Damage 20/sec) OR instant death if falling below -15
+            const fallDeathY = mapBounds ? mapBounds.min.y - 10 : -15;
+            if (pos.y < fallDeathY) {
+                // Instant death from falling
+                if (!p.dead) {
+                    p.dead = true;
+                    p.hp = 0;
+                    broadcast({ type: 'KILL_FEED', killer: 'The Abyss', victim: p.name });
+                    checkGameOver();
+                }
+            } else if (mapBounds) {
+                // Check if outside X/Z bounds
                 const buffer = 2.0; // Grace distance
                 if (pos.x < mapBounds.min.x - buffer || pos.x > mapBounds.max.x + buffer ||
-                    pos.z < mapBounds.min.z - buffer || pos.z > mapBounds.max.z + buffer ||
-                    pos.y < mapBounds.min.y - 10) { // Die if 10 units below map
+                    pos.z < mapBounds.min.z - buffer || pos.z > mapBounds.max.z + buffer) {
 
                     p.hp -= 20 * (TICK_MS / 1000); // 20 damage per second
 
-                    // Visual feedback or sound could go here (server side, so maybe just state)
                     if (p.hp <= 0 && !p.dead) {
                         p.dead = true;
                         p.hp = 0;
-                        if (physicsBodies[pid]) {
-                            // Teleport body away or disable? 
-                            // Usually we keep it for death cam, but maybe disable physics
-                        }
                         broadcast({ type: 'KILL_FEED', killer: 'The Abyss', victim: p.name });
                         checkGameOver();
                     }
@@ -1107,26 +1284,26 @@
 
         function compressState() {
             // Minify data for network transport
-            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent]
+            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent, xp, level, xpToNextLevel, shopPoints]
             const pData = [];
             for (let pid in players) {
                 const p = players[pid];
                 const w = p.weapons[p.currentSlot];
                 const ammo = w ? w.ammo : 0;
-                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.money]);
+                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints]);
             }
 
-            // Z: [id, x, y, z, yaw] (now includes Y for vertical navigation)
+            // Z: [id, x, y, z, yaw, level] (now includes Y for vertical navigation and level for visual indicators)
             const zData = [];
             for (let zid in zombies) {
                 const z = zombies[zid];
-                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.y.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2))]);
+                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.y.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2)), z.level || 0]);
             }
 
             // B: [x, y, z] (Bullets are simple visual particles mostly)
             const bData = bullets.map(b => [parseFloat(b.x.toFixed(1)), parseFloat(b.y.toFixed(1)), parseFloat(b.z.toFixed(1))]);
 
-            return [Date.now(), pData, zData, bData, wave, zombiesToSpawn + Object.keys(zombies).length];
+            return [Date.now(), pData, zData, bData, Object.keys(zombies).length];
         }
 
         function handleHostData(data, sender) {
@@ -1143,12 +1320,26 @@
                     players[sender].pitch = i[6];
                 }
             }
-            else if (data.type === 'BUY') {
-                if (players[sender]) {
-                    const item = SHOP_ITEMS[data.idx];
-                    if (item && players[sender].money >= item.cost) {
-                        players[sender].money -= item.cost;
-                        item.action(players[sender]);
+            else if (data.type === 'SHOP_SELECT') {
+                // Client selected an upgrade from their radial shop
+                if (players[sender] && players[sender].shopPoints > 0) {
+                    const p = players[sender];
+                    let upgrade = null;
+
+                    // Try to find upgrade by ID first (more reliable)
+                    if (data.upgradeId) {
+                        upgrade = SHOP_UPGRADES.find(u => u.id === data.upgradeId);
+                    }
+                    // Fallback to index in currentShopOptions
+                    if (!upgrade && p.currentShopOptions && p.currentShopOptions[data.idx]) {
+                        upgrade = p.currentShopOptions[data.idx];
+                    }
+
+                    if (upgrade) {
+                        console.log("Host applying upgrade for", p.name, ":", upgrade.name);
+                        upgrade.action(p);
+                        p.shopPoints--;
+                        p.currentShopOptions = null;
                     }
                 }
             }
@@ -1170,13 +1361,11 @@
                 if (snapshots.length > 5) snapshots.shift(); // Keep buffer small
 
                 // Update non-positional data immediately
-                // Sync wave info
-                wave = data.d[4];
-                const zCount = data.d[5];
-                document.getElementById('wave-disp').innerText = wave;
+                // State format: [timestamp, players, zombies, bullets, zombieCount]
+                const zCount = data.d[4];
                 document.getElementById('zombie-disp').innerText = zCount;
 
-                // Sync self ammo/hp immediately (don't interpolate HUD)
+                // Sync self ammo/hp/xp immediately (don't interpolate HUD)
                 const pList = data.d[1];
                 const myData = pList.find(p => p[0] === myId);
                 if (myData) {
@@ -1311,6 +1500,17 @@
                 document.getElementById('game-over-screen').classList.add('hidden');
                 gameState = 'PLAYING';
 
+                // Initialize local player state for client
+                if (!players[myId]) players[myId] = {};
+                players[myId].weapons = [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null];
+                players[myId].maxAmmo = { pistol: 60, shotgun: 24 };
+                players[myId].shopPoints = 1; // Start with 1 shop point
+                players[myId].xp = 0;
+                players[myId].level = 1;
+                players[myId].xpToNextLevel = 100;
+                players[myId].currentShopOptions = null;
+                players[myId].selectedShopOption = -1;
+
                 document.getElementById('hud-layer').style.display = 'block'; // Client HUD
                 // Show HUD elements
                 document.getElementById('ui-weapon').style.display = 'block';
@@ -1411,24 +1611,26 @@
                     }
                 });
 
-                // Interpolate Zombies (now with Y coordinate)
+                // Interpolate Zombies (now with Y coordinate and level)
                 const currentZombieIds = [];
                 next[2].forEach(nz => {
                     currentZombieIds.push(nz[0]);
                     const pz = prev[2].find(z => z[0] === nz[0]);
                     if (!zombies[nz[0]]) zombies[nz[0]] = { id: nz[0] };
                     if (pz) {
-                        // nz format: [id, x, y, z, yaw]
+                        // nz format: [id, x, y, z, yaw, level]
                         zombies[nz[0]].x = lerp(pz[1], nz[1], clampedRatio);
                         zombies[nz[0]].y = lerp(pz[2], nz[2], clampedRatio);
                         zombies[nz[0]].z = lerp(pz[3], nz[3], clampedRatio);
                         zombies[nz[0]].yaw = nz[4];
+                        zombies[nz[0]].level = nz[5] || 0;
                     } else {
                         // New zombie, snap
                         zombies[nz[0]].x = nz[1];
                         zombies[nz[0]].y = nz[2];
                         zombies[nz[0]].z = nz[3];
                         zombies[nz[0]].yaw = nz[4];
+                        zombies[nz[0]].level = nz[5] || 0;
                     }
                 });
 
@@ -1463,8 +1665,43 @@
 
             if (!isHost) clientInterpolate();
 
+            if (!isHost) clientInterpolate();
+
             updateEntityAnimations(dt);
+            // Update Shop UI (check for points and auto-show)
+            updateShopUI();
+
+            // Periodic cleanup of ghost entities (approx every 1s)
+            // Use random chance to avoid missing time window at low FPS
+            if (Math.random() < 0.02) {
+                cleanupOrphanedEntities();
+            }
+
             renderScene();
+        }
+
+        function cleanupOrphanedEntities() {
+            // Scan scene for entities that are no longer in game state
+            // This fixes "ghost" zombies that might have been processed during a race condition
+            scene.children.forEach(child => {
+                if (child.userData && child.userData.isEntity) {
+                    const id = child.name;
+                    // Check if it's a zombie
+                    if (id.startsWith('z_')) {
+                        if (!zombies[id]) {
+                            console.log("Removing ghost zombie:", id);
+                            scene.remove(child);
+                            // Also ensure it's gone from meshes map
+                            if (meshes[id]) delete meshes[id];
+                            if (mixermap[id]) delete mixermap[id];
+                        }
+                    }
+                    // Check if it's a player (remote)
+                    else if (players[id] === undefined && id !== 'local') { // 'local' might be special? No, usually IDs are UUIDs or p_
+                        // Remote players removal logic if needed, but focus on zombies for now
+                    }
+                }
+            });
         }
 
         function renderScene() {
@@ -1529,7 +1766,7 @@
             }
 
             // Render Zombies
-            // Clean old meshes
+            // Clean old meshes (including stuck "parsing" placeholders for deleted zombies)
             for (let mid in meshes) {
                 if (mid.startsWith('z_') && !zombies[mid]) {
                     if (meshes[mid].isObject3D) scene.remove(meshes[mid]);
@@ -1541,24 +1778,66 @@
                 const z = zombies[zid];
                 if (!meshes[zid]) {
                     meshes[zid] = { parsing: true };
-                    createEntityVisual(zid, 'zombie').then(m => {
+                    // Capture current values to avoid closure issues
+                    createZombieVisual(zid).then(m => {
+                        // Tag for cleanup
+                        m.name = zid;
+                        m.userData.isEntity = true;
+
+                        // Check if zombie still exists
+                        if (!zombies[zid]) {
+                            scene.remove(m);
+                            delete meshes[zid];
+                            delete mixermap[zid];
+                            return;
+                        }
                         meshes[zid] = m;
-                        playAnimation(zid, 'idle');
+                        scene.add(m); // Ensure it's added to scene
+
+                        // Apply level visual
+                        applyZombieLevelColor(zid, zombies[zid].level || 0);
+
+                        // Setup animation
+                        const mixer = new THREE.AnimationMixer(m);
+                        mixermap[zid] = mixer;
+                        // Use animations attached to the mesh from our loader
+                        const clips = m.animations || [];
+                        const idle = clips.find(c => c.name.toLowerCase() === 'idle') || clips[0];
+                        if (idle) {
+                            mixer.clipAction(idle).play();
+                            // console.log("Playing animation for", zid, idle.name);
+                        } else {
+                            console.warn("No idle animation found for zombie", zid);
+                        }
+                    }).catch(e => {
+                        console.error("Failed to create zombie visual", e);
+                        delete meshes[zid];
                     });
                 }
-                if (meshes[zid].isObject3D) {
-                    meshes[zid].position.set(z.x, z.y, z.z);
-                    meshes[zid].rotation.y = z.yaw + Math.PI;
+                // Skip rendering if mesh is still loading
+                if (!meshes[zid] || !meshes[zid].isObject3D) continue;
 
-                    // Calc velocity for anim
-                    if (!z.lastPosRender) z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
-                    const dist = Math.sqrt((z.x - z.lastPosRender.x) ** 2 + (z.z - z.lastPosRender.z) ** 2);
-                    if (Date.now() - z.lastPosRender.time > 100) {
-                        const speed = dist / ((Date.now() - z.lastPosRender.time) / 1000);
-                        if (speed > 0.5) playAnimation(zid, 'walk', true);
-                        else playAnimation(zid, 'idle', true);
-                        z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
-                    }
+                meshes[zid].position.set(z.x, z.y, z.z);
+                meshes[zid].rotation.y = z.yaw + Math.PI;
+
+                // Update level color if level changed
+                if (meshes[zid].userData.currentLevel !== z.level) {
+                    applyZombieLevelColor(zid, z.level || 0);
+                }
+
+                // Update level label position if exists
+                if (meshes[zid].userData.levelLabel) {
+                    meshes[zid].userData.levelLabel.lookAt(camera.position);
+                }
+
+                // Calc velocity for anim
+                if (!z.lastPosRender) z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
+                const dist = Math.sqrt((z.x - z.lastPosRender.x) ** 2 + (z.z - z.lastPosRender.z) ** 2);
+                if (Date.now() - z.lastPosRender.time > 100) {
+                    const speed = dist / ((Date.now() - z.lastPosRender.time) / 1000);
+                    if (speed > 0.5) playAnimation(zid, 'walk', true);
+                    else playAnimation(zid, 'idle', true);
+                    z.lastPosRender = { x: z.x, z: z.z, time: Date.now() };
                 }
             }
 
@@ -1594,6 +1873,65 @@
             // RAPIER.renderDebugToGraphics(world); // (if using PIXI/etc, but for Three we need manual buffer copy)
         }
 
+        // Apply level-based visual indicator to zombie mesh (label only, no tinting)
+        function applyZombieLevelColor(zid, level) {
+            const mesh = meshes[zid];
+            if (!mesh || !mesh.isObject3D) return;
+
+            // Store current level
+            mesh.userData.currentLevel = level;
+
+            // Get color for label based on level (clamp to max index)
+            const colorIndex = Math.min(level, ZOMBIE_LEVEL_COLORS.length - 1);
+            const color = new THREE.Color(ZOMBIE_LEVEL_COLORS[colorIndex]);
+
+            // Add floating level indicator sprite (only for level > 0)
+            if (level > 0) {
+                // Remove old label if exists
+                if (mesh.userData.levelLabel) {
+                    mesh.remove(mesh.userData.levelLabel);
+                }
+
+                // Create canvas texture for level label
+                const canvas = document.createElement('canvas');
+                canvas.width = 128;
+                canvas.height = 64;
+                const ctx = canvas.getContext('2d');
+
+                // Draw background
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                ctx.beginPath();
+                ctx.roundRect(4, 4, 120, 56, 8);
+                ctx.fill();
+
+                // Draw level text
+                ctx.fillStyle = '#' + color.getHexString();
+                ctx.font = 'bold 32px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('LV' + level, 64, 42);
+
+                // Create sprite
+                const texture = new THREE.CanvasTexture(canvas);
+                const spriteMat = new THREE.SpriteMaterial({
+                    map: texture,
+                    transparent: true,
+                    depthTest: false
+                });
+                const sprite = new THREE.Sprite(spriteMat);
+                sprite.scale.set(1.5, 0.75, 1);
+                sprite.position.set(0, 2.5, 0); // Above zombie head
+
+                mesh.add(sprite);
+                mesh.userData.levelLabel = sprite;
+            } else {
+                // Remove label for level 0
+                if (mesh.userData.levelLabel) {
+                    mesh.remove(mesh.userData.levelLabel);
+                    mesh.userData.levelLabel = null;
+                }
+            }
+        }
+
         function lerp(a, b, t) { return a + (b - a) * t; }
 
         function getSafeSpawnY(x, z, distToCenter) {
@@ -1621,11 +1959,18 @@
             const p = {
                 id, name,
                 x: 0, y: 1, z: 0,
-                hp: 100, maxHp: 100, money: 100,
-                weapons: [{ id: 'pistol', ammo: 0 }, { id: 'knife', ammo: -1 }, null, null],
+                hp: 100, maxHp: 100,
+                // XP/Leveling system - start with 1 shop point
+                xp: 0, level: 1, xpToNextLevel: 100, shopPoints: 1,
+                // Shop selection state
+                currentShopOptions: null, selectedShopOption: -1,
+                // Weapons with starting ammo
+                weapons: [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null],
+                maxAmmo: { pistol: 60, shotgun: 24 },
+                fireRateMultiplier: 1.0,
                 currentSlot: 0, lastFire: 0,
                 yaw: 0, pitch: 0, dead: false, ready: false,
-                input: { x: 0, y: 0, fire: false, jump: false, slot: 0 },
+                input: { x: 0, y: 0, fire: false, jump: false, slot: 0, shopOpen: false },
                 // Jump timing state
                 lastGroundedTime: 0, // Last time player was grounded (for coyote time)
                 lastJumpPressTime: 0 // Last time jump was pressed (for jump buffering)
@@ -1678,18 +2023,52 @@
         }
 
         function updateHUD(data) {
-            // Data: [id, x, y, z, yaw, hp, slot, ammo, money]
+            // Data: [id, x, y, z, yaw, hp, slot, ammo, xp, level, xpToNextLevel, shopPoints]
             document.getElementById('hp-disp').innerText = data[5];
-            document.getElementById('money-disp').innerText = data[8];
+
+            // XP/Level display
+            const xp = data[8];
+            const level = data[9];
+            const xpMax = data[10];
+            const shopPts = data[11];
+
+            document.getElementById('level-disp').innerText = level;
+            document.getElementById('xp-disp').innerText = xp;
+            document.getElementById('xp-max-disp').innerText = xpMax;
+
+            // Shop points indicator
+            const shopDisp = document.getElementById('shop-points-disp');
+            if (shopPts > 0) {
+                shopDisp.style.display = 'block';
+                document.getElementById('shop-pts').innerText = shopPts;
+            } else {
+                shopDisp.style.display = 'none';
+            }
+
+            // Sync local player shop points for radial shop
+            if (players[myId]) {
+                players[myId].xp = xp;
+                players[myId].level = level;
+                players[myId].xpToNextLevel = xpMax;
+                players[myId].shopPoints = shopPts;
+            }
+
             const slot = data[6];
             for (let i = 1; i <= 4; i++) {
                 const el = document.getElementById('slot-' + i);
                 if (i === (slot + 1)) el.classList.add('slot-active'); else el.classList.remove('slot-active');
             }
-            // Derive name from slot (We assume client has same registry)
-            // Ideally we should sync loadout, but for now we assume default loadout structure
-            // 0: Pistol, 1: Knife
-            const wName = slot === 0 ? "PISTOL" : (slot === 1 ? "KNIFE" : "EMPTY");
+
+            // Get weapon name from registry (supports shotgun)
+            let wName = "EMPTY";
+            if (players[myId] && players[myId].weapons && players[myId].weapons[slot]) {
+                const wId = players[myId].weapons[slot].id;
+                if (WEAPON_REGISTRY[wId]) wName = WEAPON_REGISTRY[wId].name.toUpperCase();
+            } else {
+                // Fallback for clients: derive from slot number
+                const defaultNames = ['PISTOL', 'KNIFE', 'EMPTY', 'EMPTY'];
+                wName = defaultNames[slot] || 'EMPTY';
+            }
             document.getElementById('ui-weapon').innerText = wName;
             document.getElementById('ammo-disp').innerText = data[7] === -1 ? "INF" : data[7];
         }
@@ -1699,7 +2078,10 @@
             const w = p.weapons[p.currentSlot];
             if (!w) return;
             const stats = WEAPON_REGISTRY[w.id];
-            if (Date.now() - p.lastFire < stats.fireRateMs) return;
+
+            // Apply fire rate multiplier
+            const effectiveFireRate = stats.fireRateMs * (p.fireRateMultiplier || 1.0);
+            if (Date.now() - p.lastFire < effectiveFireRate) return;
             if (w.ammo === 0) return;
 
             p.lastFire = Date.now();
@@ -1707,10 +2089,20 @@
 
             if (stats.type === 'projectile') {
                 const speed = stats.speed;
-                const vx = -Math.sin(p.yaw) * Math.cos(p.pitch) * speed;
-                const vy = Math.sin(p.pitch) * speed;
-                const vz = -Math.cos(p.yaw) * Math.cos(p.pitch) * speed;
-                bullets.push({ x: p.x, y: p.y + 0.5, z: p.z, vx, vy, vz, life: 2.0, dmg: stats.damage, owner: pid });
+                const pelletCount = stats.pellets || 1;
+
+                for (let pellet = 0; pellet < pelletCount; pellet++) {
+                    // Add spread for shotgun pellets
+                    const spreadYaw = (Math.random() - 0.5) * (stats.spread || 0);
+                    const spreadPitch = (Math.random() - 0.5) * (stats.spread || 0);
+                    const effectiveYaw = p.yaw + spreadYaw;
+                    const effectivePitch = p.pitch + spreadPitch;
+
+                    const vx = -Math.sin(effectiveYaw) * Math.cos(effectivePitch) * speed;
+                    const vy = Math.sin(effectivePitch) * speed;
+                    const vz = -Math.cos(effectiveYaw) * Math.cos(effectivePitch) * speed;
+                    bullets.push({ x: p.x, y: p.y + 0.5, z: p.z, vx, vy, vz, life: 2.0, dmg: stats.damage, owner: pid });
+                }
             } else {
                 // Melee
                 const fx = -Math.sin(p.yaw);
@@ -1734,7 +2126,13 @@
             }
         }
 
-        function spawnZombie() {
+        function spawnZombie(inheritedBoosts = []) {
+            // Check max zombie cap
+            if (Object.keys(zombies).length >= MAX_ZOMBIES) {
+                console.log("Max zombies reached, not spawning");
+                return false;
+            }
+
             // Spawn on NavMesh node
             let spawnNode = null;
             let attempts = 0;
@@ -1768,14 +2166,89 @@
                 }
             }
 
+            // Fallback for GLTF maps when navNodes not ready - use raycast to find ground
+            if (!spawnNode && useGltfMap) {
+                // Try to spawn at random position and raycast to find ground
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 8 + Math.random() * 12; // 8-20 units from origin
+                const testX = Math.cos(angle) * dist;
+                const testZ = Math.sin(angle) * dist;
+
+                // Use raycast to find ground
+                if (mapMesh) {
+                    const raycaster = new THREE.Raycaster(
+                        new THREE.Vector3(testX, 50, testZ),
+                        new THREE.Vector3(0, -1, 0)
+                    );
+                    const hits = raycaster.intersectObject(mapMesh, true);
+                    if (hits.length > 0) {
+                        spawnNode = {
+                            x: testX,
+                            y: hits[0].point.y + 1,
+                            z: testZ
+                        };
+                        console.log("Spawned zombie using raycast at", testX.toFixed(1), testZ.toFixed(1));
+                    }
+                }
+
+                // If still no spawn point, retry later
+                if (!spawnNode) {
+                    console.log("No valid spawn found, retrying in 500ms");
+                    setTimeout(() => spawnZombie(inheritedBoosts), 500);
+                    return false;
+                }
+            }
+
             if (spawnNode) {
                 const id = 'z_' + Date.now() + Math.random();
 
                 // Raycast from above to find actual surface height
-                // Use helper
-                let spawnY = getSafeSpawnY(spawnNode.x, spawnNode.z, 0.6); // 0.6 for zombie (radius 0.5 + 0.1)
+                let spawnY = getSafeSpawnY(spawnNode.x, spawnNode.z, 0.6);
 
-                zombies[id] = { id, x: spawnNode.x, y: spawnY, z: spawnNode.z, hp: 50 + (wave * 20), yaw: 0, path: [], pathTimer: 0, lastPos: null, stuckTime: 0 };
+                // Calculate boosts - inherit from parent and maybe gain a new one
+                const boosts = [...inheritedBoosts];
+                if (Math.random() < ZOMBIE_BOOST_CHANCE) {
+                    const boostTypes = Object.keys(ZOMBIE_BOOSTS);
+                    const newBoost = boostTypes[Math.floor(Math.random() * boostTypes.length)];
+                    boosts.push(newBoost);
+                    console.log(`Zombie ${id} gained boost: ${newBoost}`);
+                }
+
+                // Calculate stats based on boosts
+                const level = boosts.length;
+                let speed = ZOMBIE_SPEED;
+                let baseHp = 50 + Math.floor(totalZombiesKilled / 5) * 10;
+                let upImpulse = 8;
+                let damage = 0.5;
+
+                // Apply boost effects
+                boosts.forEach(boost => {
+                    const config = ZOMBIE_BOOSTS[boost];
+                    if (boost === 'speed') speed *= config.multiplier;
+                    if (boost === 'health') baseHp += config.bonus;
+                    if (boost === 'upImpulse') upImpulse += config.bonus;
+                    if (boost === 'damage') damage += config.bonus;
+                });
+
+                zombies[id] = {
+                    id,
+                    x: spawnNode.x,
+                    y: spawnY,
+                    z: spawnNode.z,
+                    hp: baseHp,
+                    maxHp: baseHp,
+                    yaw: 0,
+                    path: [],
+                    pathTimer: 0,
+                    lastPos: null,
+                    stuckTime: 0,
+                    // Boost system
+                    level,
+                    boosts,
+                    speed,
+                    damage,
+                    upImpulse
+                };
 
                 const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
                     .setTranslation(spawnNode.x, spawnY + 0.5, spawnNode.z)
@@ -1791,36 +2264,20 @@
 
                 world.createCollider(colliderDesc, body);
                 zombieBodies[id] = body;
-                return true;
+
+                if (level > 0) {
+                    console.log(`Spawned zombie ${id} at level ${level} with boosts: ${boosts.join(', ')}`);
+                }
+                return id;
             }
             return false;
         }
 
+        // Track total zombies killed for HP scaling
+        let totalZombiesKilled = 0;
+
         function updateZombies() {
-            if (zombiesToSpawn > 0 && Math.random() < 0.05) {
-                if (spawnZombie()) {
-                    zombiesToSpawn--;
-                }
-            }
-            if (zombiesToSpawn === 0 && Object.keys(zombies).length === 0 && gameState === 'PLAYING') {
-                gameState = 'SHOP';
-
-                // HOST: Open shop UI locally
-                if (isHost) {
-                    // Host is spectator, do not show shop menu
-                    // document.getElementById('shop-menu').classList.remove('hidden'); 
-                    document.exitPointerLock();
-                    document.getElementById('mobile-controls').style.display = 'none';
-
-                    // Reset ready states for next wave
-                    for (let id in players) {
-                        players[id].ready = false;
-                    }
-                }
-
-                // Broadcast to all clients
-                broadcast({ type: 'SHOP_OPEN' });
-            }
+            // No wave-based spawning - zombies spawn on kill via killZombie()
 
             // Zombie grounded check helper
             function isZombieGrounded(body) {
@@ -1895,7 +2352,8 @@
 
                     if (dist3D > 0.1) {
                         // Normalize direction using 3D distance for proper speed
-                        const speed = ZOMBIE_SPEED;
+                        // Use zombie's individual speed (boosted if has speed boosts)
+                        const speed = z.speed || ZOMBIE_SPEED;
                         let vx = (dx / dist3D) * speed;
                         let vz = (dz / dist3D) * speed;
                         let vy = body.linvel().y;
@@ -1940,7 +2398,8 @@
                                 if (z.stuckTime > 150 && isZombieGrounded(body)) {
                                     // Apply a small upward impulse continuously while stuck
                                     // This allows climbing walls gradually instead of one big hop
-                                    const climbStrength = 8; // Small continuous impulse
+                                    // Use zombie's individual upImpulse (boosted if has climber boosts)
+                                    const climbStrength = z.upImpulse || 8;
                                     const maxClimbVelocity = 15; // Cap to prevent flying
 
                                     // Add to velocity, but cap it
@@ -1966,7 +2425,8 @@
                     }
 
                     if (min < 1.5 && Math.abs(target.y - z.y) < 2.0) {
-                        target.hp -= 0.5; // Dmg per tick
+                        // Use zombie's individual damage (boosted if has damage boosts)
+                        target.hp -= (z.damage || 0.5);
                         if (target.hp <= 0) target.dead = true;
                     }
                     body.wakeUp();
@@ -2207,12 +2667,200 @@
         }
 
         function killZombie(zid, pid) {
+            // Save zombie data before deletion for inheritance
+            const zombieData = zombies[zid];
+            const inheritedBoosts = zombieData ? zombieData.boosts || [] : [];
+            const zombieLevel = zombieData ? zombieData.level || 0 : 0;
+
             delete zombies[zid];
             if (zombieBodies[zid]) {
                 if (world.getRigidBody(zombieBodies[zid].handle)) world.removeRigidBody(zombieBodies[zid]);
                 delete zombieBodies[zid];
             }
-            if (players[pid]) players[pid].money += 25;
+
+            // Track for difficulty scaling
+            totalZombiesKilled++;
+
+            // Award XP based on zombie level and check level up
+            if (players[pid]) {
+                const p = players[pid];
+                // XP scales with zombie level: 25 base + 15 per level
+                const xpGain = 25 + (zombieLevel * 15);
+                p.xp += xpGain;
+                console.log(`Player ${pid} gained ${xpGain} XP from level ${zombieLevel} zombie`);
+
+                // Level up check (exponential curve: 100 * 1.5^level)
+                while (p.xp >= p.xpToNextLevel) {
+                    p.xp -= p.xpToNextLevel;
+                    p.level++;
+                    p.xpToNextLevel = Math.floor(100 * Math.pow(1.5, p.level - 1));
+                    p.shopPoints++;
+                    // Generate shop options for this level-up
+                    generateShopOptions(pid);
+                }
+            }
+
+            // Spawn logic: Always spawn 1 replacement (guarantees never reaching 0)
+            // Then chance for a second zombie based on current count (fewer zombies = higher chance)
+            spawnZombie(inheritedBoosts);
+
+            // Second zombie chance: inversely proportional to current zombie count
+            // At 0 zombies: 50% chance, at 5 zombies: 25%, at 9 zombies: 5%
+            const currentCount = Object.keys(zombies).length;
+            const secondSpawnChance = Math.max(0.05, 0.5 - (currentCount * 0.05));
+            if (Math.random() < secondSpawnChance) {
+                spawnZombie(inheritedBoosts);
+            }
+        }
+
+        // Generate 3 semi-random shop options for player
+        function generateShopOptions(pid) {
+            if (!players[pid]) return;
+            const p = players[pid];
+
+            // Weight by rarity
+            const weights = { common: 50, uncommon: 30, rare: 20 };
+            const available = SHOP_UPGRADES.filter(u => {
+                // Skip "once" upgrades player already has
+                if (u.once && u.id === 'shotgun') {
+                    return !p.weapons.some(w => w && w.id === 'shotgun');
+                }
+                return true;
+            });
+
+            // Pick 3 weighted random options
+            const options = [];
+            const pool = [...available];
+
+            for (let i = 0; i < 3 && pool.length > 0; i++) {
+                const totalWeight = pool.reduce((sum, u) => sum + weights[u.rarity], 0);
+                let roll = Math.random() * totalWeight;
+
+                for (let j = 0; j < pool.length; j++) {
+                    roll -= weights[pool[j].rarity];
+                    if (roll <= 0) {
+                        options.push(pool[j]);
+                        pool.splice(j, 1);
+                        break;
+                    }
+                }
+            }
+
+            p.currentShopOptions = options;
+            p.selectedShopOption = -1;
+        }
+
+        // --- SHOP UI LOGIC ---
+
+        // Check if shop should be open and update UI
+        function updateShopUI() {
+            const localPlayer = players[myId];
+            if (!localPlayer) return;
+
+            // Auto-open shop if we GAINED points (or have points and just loaded)
+            // We use a property to track the last known points to detect increase
+            if (localPlayer.lastKnownPoints === undefined) localPlayer.lastKnownPoints = 0;
+
+            if (localPlayer.shopPoints > localPlayer.lastKnownPoints) {
+                // Points increased! Open shop
+                if (localPlayer.shopPoints > 0) {
+                    input.shopOpen = true; // Force open on new points
+                    if (!localPlayer.currentShopOptions || localPlayer.currentShopOptions.length === 0) {
+                        generateShopOptions(myId);
+                    }
+                }
+            }
+            localPlayer.lastKnownPoints = localPlayer.shopPoints;
+
+            if (input.shopOpen && localPlayer.shopPoints > 0) {
+                // Show shop UI
+                const shopBar = document.getElementById('shop-bar');
+                shopBar.classList.remove('hidden');
+
+                // Update options display
+                const options = localPlayer.currentShopOptions || [];
+                const optionEls = shopBar.querySelectorAll('.shop-option');
+
+                optionEls.forEach((el, i) => {
+                    if (options[i]) {
+                        el.querySelector('.option-name').innerText = options[i].name;
+                        el.querySelector('.option-rarity').innerText = options[i].rarity;
+
+                        // Set class based on rarity
+                        el.className = 'shop-option rarity-' + options[i].rarity;
+
+                        el.style.display = 'flex';
+                    } else {
+                        el.style.display = 'none';
+                    }
+                });
+            } else {
+                // Hide shop UI
+                document.getElementById('shop-bar').classList.add('hidden');
+                // Ensure state is synced
+                if (localPlayer.shopPoints <= 0) input.shopOpen = false;
+            }
+        }
+
+        // Cancel shop (keep points, just hide for now until re-triggered or point gained)
+        function cancelShop() {
+            if (!input.shopOpen) return;
+            // For now, we cant really "cancel" since it auto-opens on points
+            // But we can perhaps suppress it? For this request, auto-show implies it stays valid.
+            // User can just ignore it or use keys. 
+            // If we want to hide it explicitly:
+            // input.shopOpen = false;
+            // document.getElementById('shop-bar').classList.add('hidden');
+        }
+
+        // Select a specific shop option by index and confirm (called from X/C/V keys)
+        function selectShopOption(index) {
+            if (!input.shopOpen) return;
+
+            const localPlayer = players[myId];
+            if (!localPlayer) return;
+            if (!localPlayer.currentShopOptions || !localPlayer.currentShopOptions[index]) return;
+
+            // Set selection
+            localPlayer.selectedShopOption = index;
+            confirmShopSelection();
+        }
+
+        function confirmShopSelection() {
+            if (!input.shopOpen) return;
+
+            const localPlayer = players[myId];
+            if (!localPlayer) return;
+
+            const selected = localPlayer.selectedShopOption;
+            if (selected >= 0 && localPlayer.currentShopOptions && localPlayer.currentShopOptions[selected]) {
+                // Apply upgrade
+                const upgrade = localPlayer.currentShopOptions[selected];
+                console.log("Applying upgrade:", upgrade.name);
+
+                if (isHost) {
+                    upgrade.action(localPlayer);
+                    localPlayer.shopPoints--;
+                    localPlayer.currentShopOptions = null; // Clear options to force regen
+                } else {
+                    conns[hostId].send({ type: 'SHOP_SELECT', idx: selected, upgradeId: upgrade.id });
+                    // Optimistically update
+                    localPlayer.shopPoints--;
+                    localPlayer.currentShopOptions = null;
+                }
+
+                // If we still have points, generate new options immediately
+                if (localPlayer.shopPoints > 0) {
+                    generateShopOptions(myId);
+                    // UI will update on next frame via updateShopUI()
+                } else {
+                    input.shopOpen = false;
+                    document.getElementById('shop-bar').classList.add('hidden');
+                }
+            }
+
+            // Reset selection
+            localPlayer.selectedShopOption = -1;
         }
 
         function checkGameOver() {
@@ -2240,16 +2888,24 @@
         }
 
         function hostStartGame() {
-            broadcast({ type: 'SHOP_OPEN' });
             document.getElementById('main-menu').classList.add('hidden');
-            gameState = 'SHOP';
-            wave = 0;
-            zombiesToSpawn = 0;
+            document.getElementById('shop-menu').classList.add('hidden');
+
+            // Reset game state
+            totalZombiesKilled = 0;
+            gameState = 'PLAYING';
+
             for (let id in players) {
                 players[id].ready = false;
                 players[id].dead = false;
                 players[id].hp = players[id].maxHp;
+                players[id].xp = 0;
+                players[id].level = 1;
+                players[id].xpToNextLevel = 100;
+                players[id].shopPoints = 0;
+                players[id].currentShopOptions = null;
             }
+
             if (!(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))) document.body.requestPointerLock();
 
             // Host Overlay
@@ -2257,6 +2913,87 @@
             // Start Host Camera High
             camera.position.set(0, 40, 0);
             camPitch = -Math.PI / 2; // Look down initially
+
+            // Spawn initial zombies (start with 3) - delay to ensure navNodes ready
+            setTimeout(() => {
+                for (let i = 0; i < 3; i++) {
+                    if (!spawnZombie()) {
+                        console.warn("Failed to spawn initial zombie", i);
+                    }
+                }
+                console.log("Initial zombies spawned:", Object.keys(zombies).length);
+            }, 500);
+
+            // Tell clients to start
+            broadcast({ type: 'START_GAME' });
+        }
+
+        function hostRestartGame() {
+            // Clear all existing zombies
+            for (let zid in zombies) {
+                if (zombieBodies[zid]) {
+                    if (world.getRigidBody(zombieBodies[zid].handle)) {
+                        world.removeRigidBody(zombieBodies[zid]);
+                    }
+                    delete zombieBodies[zid];
+                }
+                delete zombies[zid];
+            }
+
+            // Reset game state
+            totalZombiesKilled = 0;
+            gameState = 'PLAYING';
+
+            // Reset all players
+            for (let id in players) {
+                const p = players[id];
+                p.ready = false;
+                p.dead = false;
+                p.hp = p.maxHp || 100;
+                p.xp = 0;
+                p.level = 1;
+                p.xpToNextLevel = 100;
+                p.shopPoints = 1; // Give 1 starting shop point
+                p.currentShopOptions = null;
+                p.fireRateMultiplier = 1.0;
+
+                // Reset weapons and ammo
+                p.weapons = [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null];
+                p.maxAmmo = { pistol: 60, shotgun: 24 };
+                p.currentSlot = 0;
+
+                // Reset position to spawn
+                p.x = 0;
+                p.y = 5;
+                p.z = 0;
+
+                // Teleport physics body
+                if (physicsBodies[id]) {
+                    const spawnY = getSafeSpawnY(0, 0, 1.0);
+                    physicsBodies[id].setTranslation({ x: 0, y: spawnY, z: 0 }, true);
+                    physicsBodies[id].setLinvel({ x: 0, y: 0, z: 0 }, true);
+                }
+            }
+
+            // Hide game over, show HUD
+            document.getElementById('game-over-screen').classList.add('hidden');
+            document.getElementById('host-hud').style.display = 'block';
+
+            // Request pointer lock
+            if (!(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))) {
+                document.body.requestPointerLock();
+            }
+
+            // Spawn initial zombies
+            setTimeout(() => {
+                for (let i = 0; i < 3; i++) {
+                    spawnZombie();
+                }
+                console.log("Restart: zombies spawned:", Object.keys(zombies).length);
+            }, 500);
+
+            // Tell clients to restart
+            broadcast({ type: 'START_GAME' });
         }
 
         let clientReady = false; // Track ready state locally for client
@@ -2291,39 +3028,6 @@
 
                 broadcast({ type: 'START_GAME' });
             }
-        }
-
-        function hostRestartGame() {
-            // Cleanup
-
-            // Remove physical bodies of old zombies
-            for (let zid in zombieBodies) {
-                if (world.getRigidBody(zombieBodies[zid].handle)) {
-                    world.removeRigidBody(zombieBodies[zid]);
-                }
-            }
-            zombies = {};
-            zombieBodies = {};
-
-            bullets = [];
-
-            // Reset players
-            for (let id in players) {
-                players[id].hp = players[id].maxHp;
-                players[id].dead = false;
-                players[id].ready = false;
-                players[id].weapons[0].ammo = 0; // Reset ammo
-                players[id].money = 100; // Reset money
-
-                // Reposition players to spawn?
-                if (physicsBodies[id]) {
-                    const rY = getSafeSpawnY(0, 0, 1.0);
-                    physicsBodies[id].setTranslation({ x: 0, y: rY, z: 0 }, true);
-                    physicsBodies[id].setLinvel({ x: 0, y: 0, z: 0 }, true);
-                }
-            }
-            hostStartGame();
-            document.getElementById('game-over-screen').classList.add('hidden');
         }
 
         // --- MAP & THREEJS INIT HELPERS ---
@@ -2467,6 +3171,110 @@
                 }, undefined, reject);
             });
         }
+
+        async function createZombieVisual(id) {
+            return new Promise((resolve, reject) => {
+                function setupClone(originalScene) {
+                    const clone = SkeletonUtils.clone(originalScene);
+                    clone.animations = GameAssets.zombie.animations;
+
+                    // Apply Config (Scale, Rotation, Offset)
+                    const config = GameAssets.zombie.config;
+                    if (config) {
+                        if (config.scale) clone.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                        if (config.rotation) clone.rotation.set(
+                            THREE.MathUtils.degToRad(config.rotation[0]),
+                            THREE.MathUtils.degToRad(config.rotation[1]),
+                            THREE.MathUtils.degToRad(config.rotation[2])
+                        );
+                        if (config.location) {
+                            // This is an offset relative to the entity position
+                            // We handled this by nesting or just offsetting geometry? 
+                            // Usually we just set position, but entity position is controlled by render loop.
+                            // So we should add a wrapper OR offset the child mesh?
+                            // Better: Add the clone to a Group wrapper?
+                            // Actually, if we set position here, renderScene will OVERWRITE it every frame.
+                            // So we need to apply offset to the children or geometry.
+                            // BUT previous logic likely just applied it to the model and render loop set position of the model.
+                            // If render loop does `mesh.position.set(x, y, z)`, it overwrites this.
+                            // FIX: Use a wrapper Group for the visual, and apply config to the inner model.
+                            // OR: Assume render loop handles position, and this 'location' is actually 'pivot offset'?
+                            // If it's pivot offset, we need a wrapper.
+                            // Let's assume wrapper is safer.
+                        }
+                    }
+                    return clone;
+                }
+
+                // Helper to apply config to a wrapper
+                function wrapVisual(visual) {
+                    const config = GameAssets.zombie.config;
+                    if (!config) return visual;
+
+                    // If we have an offset (location), we MUST use a wrapper
+                    // AND if we have rotation/scale, we can apply to visual or wrapper.
+                    // Scale/Rotation is usually for the model itself.
+                    // Position is for offset.
+
+                    if (config.location) {
+                        const wrapper = new THREE.Group();
+                        wrapper.add(visual);
+
+                        // Apply transforms to the INNER visual
+                        if (config.scale) visual.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                        if (config.rotation) visual.rotation.set(
+                            THREE.MathUtils.degToRad(config.rotation[0]),
+                            THREE.MathUtils.degToRad(config.rotation[1]),
+                            THREE.MathUtils.degToRad(config.rotation[2])
+                        );
+                        visual.position.set(config.location[0], config.location[1], config.location[2]);
+
+                        // The wrapper will be moved by renderScene
+                        // We need to ensure animations are attached to the wrapper so renderScene finds them?
+                        wrapper.animations = visual.animations;
+                        return wrapper;
+                    } else {
+                        // No offset, just apply to visual directly
+                        if (config.scale) visual.scale.set(config.scale[0], config.scale[1], config.scale[2]);
+                        if (config.rotation) visual.rotation.set(
+                            THREE.MathUtils.degToRad(config.rotation[0]),
+                            THREE.MathUtils.degToRad(config.rotation[1]),
+                            THREE.MathUtils.degToRad(config.rotation[2])
+                        );
+                        return visual;
+                    }
+                }
+
+                // 1. Check if model is already loaded/cached
+                if (GameAssets.zombie.scene && GameAssets.zombie.animations) {
+                    const clone = SkeletonUtils.clone(GameAssets.zombie.scene);
+                    clone.animations = GameAssets.zombie.animations;
+                    resolve(wrapVisual(clone));
+                    return;
+                }
+
+                // 2. Load it if not
+                const loader = new GLTFLoader();
+                loader.load(GameAssets.zombie.base, (gltf) => {
+                    // Parse and Setup
+                    GameAssets.zombie.scene = gltf.scene;
+                    GameAssets.zombie.animations = gltf.animations;
+
+                    // Enable shadows
+                    gltf.scene.traverse(node => {
+                        if (node.isMesh) {
+                            node.castShadow = true;
+                            node.receiveShadow = true;
+                        }
+                    });
+
+                    const clone = SkeletonUtils.clone(gltf.scene);
+                    clone.animations = gltf.animations;
+                    resolve(wrapVisual(clone));
+                }, undefined, reject);
+            });
+        }
+
         function initThree() {
             scene = new THREE.Scene(); scene.background = new THREE.Color(0x111111); scene.fog = new THREE.Fog(0x111111, 10, 80);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -2478,12 +3286,8 @@
             requestAnimationFrame(animate);
         }
         function initShopUI() {
-            const c = document.getElementById('shop-items-container'); c.innerHTML = '';
-            SHOP_ITEMS.forEach((it, i) => {
-                const b = document.createElement('button'); b.innerText = `${it.name} ($${it.cost})`;
-                b.style.width = "250px"; b.onclick = () => { if (isHost) { if (players[myId].money >= it.cost) { players[myId].money -= it.cost; it.action(players[myId]); } } else { conns[hostId].send({ type: 'BUY', idx: i }); } };
-                c.appendChild(b);
-            });
+            // Legacy shop UI removed - now using radial shop
+            // No initialization needed
         }
         // Collision Groups for filtering - prevents unnecessary collision checks
         const COLLISION_GROUPS = {
@@ -2797,6 +3601,20 @@
                     document.getElementById('fps-counter').style.display = fpsVisible ? 'block' : 'none';
                 }
                 if (e.key === 'o' || e.key === 'O') { debugPhysics = !debugPhysics; console.log("Debug Physics:", debugPhysics); }
+                // Escape cancels shop
+                if (e.key === 'Escape') {
+                    cancelShop();
+                }
+                // X/C/V keys for shop selection: X=left(0), C=middle(1), V=right(2)
+                if (input.shopOpen) {
+                    if (e.key === 'x' || e.key === 'X') {
+                        selectShopOption(0);
+                    } else if (e.key === 'c' || e.key === 'C') {
+                        selectShopOption(1);
+                    } else if (e.key === 'v' || e.key === 'V') {
+                        selectShopOption(2);
+                    }
+                }
             });
             document.addEventListener('keyup', e => {
                 switch (e.key.toLowerCase()) {
@@ -2823,13 +3641,34 @@
 
             document.addEventListener('mousemove', e => {
                 if (document.pointerLockElement === document.body) {
+                    // Camera movement always allowed, even with shop open
                     camYaw -= e.movementX * 0.002; camPitch -= e.movementY * 0.002;
                     camPitch = Math.max(-1.5, Math.min(1.5, camPitch));
                 }
             });
-            document.addEventListener('mousedown', () => { if (gameState === 'PLAYING') { if (document.pointerLockElement !== document.body) document.body.requestPointerLock(); else input.fire = true; } });
-            document.addEventListener('mouseup', () => input.fire = false);
+
+            document.addEventListener('mousedown', (e) => {
+                if (gameState === 'PLAYING') {
+                    if (document.pointerLockElement !== document.body) {
+                        document.body.requestPointerLock();
+                    } else if (e.button === 0) {
+                        // Left click = fire
+                        input.fire = true;
+                    }
+                }
+            });
+
+            document.addEventListener('mouseup', (e) => {
+                if (e.button === 0) {
+                    input.fire = false;
+                }
+            });
+
+            // Prevent context menu on right click
+            document.addEventListener('contextmenu', e => e.preventDefault());
+
             window.addEventListener('wheel', e => {
+                // Scroll wheel always switches weapons
                 if (e.deltaY > 0) input.slot = (input.slot + 1) % 4; else input.slot = (input.slot - 1 + 4) % 4;
             });
         }
