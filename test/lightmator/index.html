@@ -470,9 +470,7 @@
                 <option value="Smooth">Smooth</option>
                 <option value="Step">Step</option>
             </select>
-            <button class="btn btn-secondary" onclick="recordKeyframe()">🔴 Keyframe</button>
-            <button class="btn btn-danger" onclick="deleteKeyframe()"
-                style="margin-left:5px; padding: 8px 12px;">🗑</button>
+            <label style="margin-right:10px;"><input type="checkbox" id="chk-autokey"> Auto-Key</label>
             <div style="flex-grow:1"></div>
             <label style="margin-right:10px;"><input type="checkbox" id="chk-skeleton" checked
                     onchange="toggleSkeleton()"> Show Bones</label>
@@ -670,96 +668,123 @@
                 orbit.enabled = !event.value;
                 if (event.value) {
                     // Start dragging
-                    if (isPlaying) togglePlay(); // Pause
+                    if (isPlaying) togglePlay();
 
                     if (transformControl.object) {
+                        // Snapshot Standard Transform
                         dragStartPos.copy(transformControl.object.position);
                         dragStartRot.copy(transformControl.object.quaternion);
                         dragStartScale.copy(transformControl.object.scale);
 
-                        // SNAPSHOT CLIP BEFORE (if multiple keyframes selected)
-                        if (selectedKeyframes.size > 0 && currentAction) {
+                        // Snapshot IK Chain State if in IK mode
+                        // We need to compare *all* bones in the chain to see if they moved
+                        if (window.ikEnabled && transformControl.object === window.ikTargetHelper && window.ikChain) {
+                            transformControl.userData.ikStart = window.ikChain.map(b => ({
+                                bone: b,
+                                pos: b.position.clone(),
+                                quat: b.quaternion.clone(),
+                                scale: b.scale.clone()
+                            }));
+                        } else {
+                            transformControl.userData.ikStart = null;
+                        }
+
+                        // Always Snapshot Clip for Undo/Redo of the animation change
+                        if (currentAction) {
                             transformControl.userData.jsonBefore = currentAction.getClip().toJSON();
                         }
                     }
                 } else {
                     // Stop dragging
-                    if (transformControl.object) {
+                    if (transformControl.object && currentAction) {
                         const obj = transformControl.object;
+                        const clip = currentAction.getClip();
+                        const mods = []; // { object, dP, dQ, dS }
 
-                        // Capture end state (copies)
-                        const startP = dragStartPos.clone();
-                        const startQ = dragStartRot.clone();
-                        const startS = dragStartScale.clone();
+                        // 1. Calculate Deltas / Changes
+                        if (window.ikEnabled && obj === window.ikTargetHelper && transformControl.userData.ikStart) {
+                            // Check all chain bones
+                            transformControl.userData.ikStart.forEach(data => {
+                                const b = data.bone;
+                                if (!data.pos.equals(b.position) || !data.quat.equals(b.quaternion) || !data.scale.equals(b.scale)) {
+                                    const dP = b.position.clone().sub(data.pos);
+                                    const dQ = data.quat.clone().invert().multiply(b.quaternion);
+                                    const dS = new THREE.Vector3(
+                                        data.scale.x !== 0 ? b.scale.x / data.scale.x : 1,
+                                        data.scale.y !== 0 ? b.scale.y / data.scale.y : 1,
+                                        data.scale.z !== 0 ? b.scale.z / data.scale.z : 1
+                                    );
+                                    mods.push({ object: b, dP, dQ, dS });
+                                }
+                            });
+                        } else {
+                            // Standard Single Object
+                            const endP = obj.position;
+                            const endQ = obj.quaternion;
+                            const endS = obj.scale;
 
-                        const endP = obj.position.clone();
-                        const endQ = obj.quaternion.clone();
-                        const endS = obj.scale.clone();
-
-                        // Only add if changed
-                        if (!startP.equals(endP) || !startQ.equals(endQ) || !startS.equals(endS)) {
-
-                            // Check for Multi-Keyframe Edit
-                            if (selectedKeyframes.size > 0 && currentAction) {
-                                const clip = currentAction.getClip();
-
-                                // Calculate Deltas
-                                const deltaP = endP.clone().sub(startP);
-                                // For rotation: current = start * delta -> delta = inverse(start) * current
-                                const deltaQ = startQ.clone().invert().multiply(endQ);
-                                // For scale: current = start * delta -> delta = current / start
-                                const deltaS = new THREE.Vector3(
-                                    startS.x !== 0 ? endS.x / startS.x : 1,
-                                    startS.y !== 0 ? endS.y / startS.y : 1,
-                                    startS.z !== 0 ? endS.z / startS.z : 1
+                            if (!dragStartPos.equals(endP) || !dragStartRot.equals(endQ) || !dragStartScale.equals(endS)) {
+                                const dP = endP.clone().sub(dragStartPos);
+                                const dQ = dragStartRot.clone().invert().multiply(endQ);
+                                const dS = new THREE.Vector3(
+                                    dragStartScale.x !== 0 ? endS.x / dragStartScale.x : 1,
+                                    dragStartScale.y !== 0 ? endS.y / dragStartScale.y : 1,
+                                    dragStartScale.z !== 0 ? endS.z / dragStartScale.z : 1
                                 );
-
-                                // Apply to ALL selected keyframes
-                                applyDeltaToKeyframes(clip, obj, selectedKeyframes, deltaP, deltaQ, deltaS);
-
-                                // Refresh Visuals / Markers if needed (usually just values changed)
-                                // We might need to ensure the Current Time frame is up to date?
-                                // If we are sitting on one of the keyframes, the object update above handles the visual.
-                                // But if we modified OTHER frames, we are good.
-
-                                const jsonAfter = clip.toJSON();
-                                const jsonBefore = transformControl.userData.jsonBefore;
-
-                                addCommand({
-                                    execute: () => {
-                                        restoreClipState(clip, jsonAfter);
-                                    },
-                                    undo: () => {
-                                        restoreClipState(clip, jsonBefore);
-                                    }
-                                });
-
-                            } else {
-                                // Standard single transformation (Visual Object Update + IK)
-                                // Note: This does NOT save to keyframe automatically unless 'Keyframe' button is pressed,
-                                // UNLESS we want "Auto Key" mode.
-                                // The User Request said: "save the modifications to those keyframes automatically".
-                                // This implies if we are on a keyframe (or selected one), we modify it.
-                                // My implementation of "Multi-Keyframe" handles the selection case.
-                                // If NO keyframes are explicitly selected, we just move the object (standard behavior).
-
-                                addCommand({
-                                    execute: () => {
-                                        obj.position.copy(endP);
-                                        obj.quaternion.copy(endQ);
-                                        obj.scale.copy(endS);
-                                        obj.updateMatrixWorld(true);
-                                        if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
-                                    },
-                                    undo: () => {
-                                        obj.position.copy(startP);
-                                        obj.quaternion.copy(startQ);
-                                        obj.scale.copy(startS);
-                                        obj.updateMatrixWorld(true);
-                                        if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
-                                    }
-                                });
+                                mods.push({ object: obj, dP, dQ, dS });
                             }
+                        }
+
+                        // 2. Apply Changes
+                        if (mods.length > 0) {
+                            const useMulti = selectedKeyframes.size > 0;
+                            let needRefresh = false;
+
+                            if (useMulti) {
+                                // Multi-Keyframe Edit (Delta)
+                                mods.forEach(m => {
+                                    if (applyDeltaToKeyframes(clip, m.object, selectedKeyframes, m.dP, m.dQ, m.dS)) {
+                                        needRefresh = true;
+                                    }
+                                });
+                            } else {
+                                // Single Frame Auto-Key (Set Value)
+                                // Only if Auto-Key Enabled
+                                const autoKey = document.getElementById('chk-autokey').checked;
+                                if (autoKey) {
+                                    const t = currentAction.time;
+                                    mods.forEach(m => {
+                                        updateOrAddKeyframe(clip, m.object, t);
+                                    });
+                                }
+                            }
+
+                            // 3. Finalize
+
+                            if (needRefresh) {
+                                const time = currentAction.time;
+                                const wasPlaying = isPlaying;
+                                currentAction.stop();
+                                mixer.uncacheClip(clip);
+                                currentAction = mixer.clipAction(clip);
+                                currentAction.time = time;
+                                if (wasPlaying) {
+                                    currentAction.play();
+                                } else {
+                                    currentAction.play().paused = true;
+                                    mixer.update(0);
+                                }
+                            }
+
+                            drawKeyframeMarkers(clip); // Update UI markers (if new keys added)
+
+                            const jsonAfter = clip.toJSON();
+                            const jsonBefore = transformControl.userData.jsonBefore;
+
+                            addCommand({
+                                execute: () => restoreClipState(clip, jsonAfter),
+                                undo: () => restoreClipState(clip, jsonBefore)
+                            });
                         }
                     }
                 }
@@ -1858,18 +1883,66 @@
         }
 
         window.applyDeltaToKeyframes = function (clip, object, timesSet, deltaP, deltaQ, deltaS) {
-            const trackNameBase = object.name; // Assumption: Track names are "BoneName.position", etc.
-
-            // Support both exact matches and UUID based if tracks use UUIDs (GLTF Loader usually uses names)
-            // But we created tracks using .name
+            const trackNameBase = object.name;
             const posTrackName = trackNameBase + ".position";
             const rotTrackName = trackNameBase + ".quaternion";
             const sclTrackName = trackNameBase + ".scale";
 
-            // Find Tracks
-            const posTrack = clip.tracks.find(t => t.name === posTrackName);
-            const rotTrack = clip.tracks.find(t => t.name === rotTrackName);
-            const sclTrack = clip.tracks.find(t => t.name === sclTrackName);
+            let tracksCreated = false;
+
+            // Helper to get or create track
+            const getOrCreateTrack = (trackName, type) => {
+                let track = clip.tracks.find(t => t.name === trackName);
+                if (!track) {
+                    tracksCreated = true;
+                    // Create it seeded with default values
+                    const allTimes = new Set();
+                    clip.tracks.forEach(t => t.times.forEach(timeVal => allTimes.add(timeVal)));
+                    const sortedTimes = Array.from(allTimes).sort((a, b) => a - b);
+                    const values = [];
+
+                    // We must seed with the ORIGINAL value (Before Delta)
+                    // The object currently has the NEW value (Post Delta)
+                    // So we subtract delta to get the base "Rest" pose for unselected frames
+                    let defVal;
+                    if (type === 'pos') {
+                        defVal = object.position.clone().sub(deltaP).toArray();
+                    }
+                    if (type === 'scale') {
+                        defVal = new THREE.Vector3(
+                            deltaS.x !== 0 ? object.scale.x / deltaS.x : 1,
+                            deltaS.y !== 0 ? object.scale.y / deltaS.y : 1,
+                            deltaS.z !== 0 ? object.scale.z / deltaS.z : 1
+                        ).toArray();
+                    }
+                    if (type === 'rot') {
+                        defVal = object.quaternion.clone().multiply(deltaQ.clone().invert()).toArray();
+                    }
+
+                    sortedTimes.forEach(t => {
+                        values.push(...defVal);
+                    });
+
+                    if (type === 'rot') {
+                        track = new THREE.QuaternionKeyframeTrack(trackName, sortedTimes, values);
+                    } else {
+                        track = new THREE.VectorKeyframeTrack(trackName, sortedTimes, values);
+                    }
+                    // Interpolation default
+                    const modeVal = document.getElementById('interpolation-select').value;
+                    let interp = THREE.InterpolateLinear;
+                    if (modeVal === "Smooth") interp = THREE.InterpolateSmooth;
+                    if (modeVal === "Step") interp = THREE.InterpolateDiscrete;
+                    track.setInterpolation(interp);
+
+                    clip.tracks.push(track);
+                }
+                return track;
+            };
+
+            const posTrack = (deltaP.lengthSq() > 0) ? getOrCreateTrack(posTrackName, 'pos') : clip.tracks.find(t => t.name === posTrackName);
+            const rotTrack = (deltaQ.angleTo(new THREE.Quaternion()) > 0.0001) ? getOrCreateTrack(rotTrackName, 'rot') : clip.tracks.find(t => t.name === rotTrackName);
+            const sclTrack = (deltaS.distanceTo(new THREE.Vector3(1, 1, 1)) > 0.0001) ? getOrCreateTrack(sclTrackName, 'scale') : clip.tracks.find(t => t.name === sclTrackName);
 
             const timesToMod = Array.from(timesSet);
 
@@ -1878,11 +1951,8 @@
                 if (!track) return;
                 const times = track.times;
                 const values = track.values;
-                const itemSize = track.getValueSize(); // 3 or 4
 
                 for (let i = 0; i < times.length; i++) {
-                    // Check if this keyframe time is in our selection
-                    // Use epsilon
                     const t = times[i];
                     let isSelected = false;
                     for (let selT of timesToMod) {
@@ -1894,23 +1964,18 @@
 
                     if (isSelected) {
                         if (type === 'pos') {
-                            // Additive
                             values[i * 3] += deltaP.x;
                             values[i * 3 + 1] += deltaP.y;
                             values[i * 3 + 2] += deltaP.z;
                         } else if (type === 'scale') {
-                            // Multiplicative
                             values[i * 3] *= deltaS.x;
                             values[i * 3 + 1] *= deltaS.y;
                             values[i * 3 + 2] *= deltaS.z;
                         } else if (type === 'rot') {
-                            // Rotations are tricky. modifying the stored quaternion.
-                            // Stored: q_old. New: q_new = q_old * deltaQ (Applied locally)
                             const currentQ = new THREE.Quaternion(
                                 values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]
                             );
-                            currentQ.multiply(deltaQ); // multiply appends local rotation
-
+                            currentQ.multiply(deltaQ);
                             values[i * 4] = currentQ.x;
                             values[i * 4 + 1] = currentQ.y;
                             values[i * 4 + 2] = currentQ.z;
@@ -1918,35 +1983,207 @@
                         }
                     }
                 }
+                // Verify/Refresh typed arrays if needed (values modified in place usually works for TypedArray unless length changed)
             };
 
-            if (deltaP.lengthSq() > 0) apply(posTrack, 'pos');
-            if (deltaS.distanceTo(new THREE.Vector3(1, 1, 1)) > 0.0001) apply(sclTrack, 'scale');
-            if (deltaQ.angleTo(new THREE.Quaternion()) > 0.0001) apply(rotTrack, 'rot');
+            if (posTrack && deltaP.lengthSq() > 0) apply(posTrack, 'pos');
+            if (sclTrack && deltaS.distanceTo(new THREE.Vector3(1, 1, 1)) > 0.0001) apply(sclTrack, 'scale');
+            if (rotTrack && deltaQ.angleTo(new THREE.Quaternion()) > 0.0001) apply(rotTrack, 'rot');
+
+            return tracksCreated;
         };
 
         // --- KEYFRAME EDITING ---
 
+        window.updateOrAddKeyframe = function (clip, object, time) {
+            const trackNameBase = object.name;
+
+            // Properties to check
+            const props = ['position', 'quaternion', 'scale'];
+            const trackNames = {
+                'position': trackNameBase + '.position',
+                'quaternion': trackNameBase + '.quaternion',
+                'scale': trackNameBase + '.scale'
+            };
+
+            // Interpolation mode
+            const modeVal = document.getElementById('interpolation-select').value;
+            let interp = THREE.InterpolateLinear;
+            if (modeVal === "Smooth") interp = THREE.InterpolateSmooth;
+            if (modeVal === "Step") interp = THREE.InterpolateDiscrete;
+
+            props.forEach(prop => {
+                const trackName = trackNames[prop];
+                let track = clip.tracks.find(t => t.name === trackName);
+
+                // Get current value
+                let value;
+                if (prop === 'position') value = object.position.toArray();
+                if (prop === 'quaternion') value = object.quaternion.toArray();
+                if (prop === 'scale') value = object.scale.toArray();
+
+                // Check if we need to create track
+                // If track missing, we ONLY create it if the value is non-default (or user explicitly wants to key it, implied by this call)
+                // For Position/Scale, if missing, it means "Default". 
+                // To support "Auto-Key", we create it.
+                // NOTE: If we create a new track, we must seed it with default values for exisiting keyframe times 
+                // to prevent the whole animation from snapping to this new value at other times.
+
+                if (!track) {
+                    // Collect all unique times from other tracks to seed default values
+                    const allTimes = new Set();
+                    allTimes.add(time); // Ensure current time is there
+                    clip.tracks.forEach(t => t.times.forEach(timeVal => allTimes.add(timeVal)));
+                    const sortedTimes = Array.from(allTimes).sort((a, b) => a - b);
+
+                    // Create values array
+                    const values = [];
+                    const itemSize = (prop === 'quaternion') ? 4 : 3;
+
+                    sortedTimes.forEach(t => {
+                        if (Math.abs(t - time) < 0.001) {
+                            values.push(...value);
+                        } else {
+                            // Use current object value as "Rest" or "Default" for now
+                            // ideally we'd use the bind pose, but object.position IS the current pose.
+                            // If we are at a specific time, object.position matches that time.
+                            // BUT if the track didn't exist, the object wasn't animating this prop.
+                            // So its current value is likely the static value for the whole clip.
+                            values.push(...value);
+                        }
+                    });
+
+                    // Create Track
+                    if (prop === 'quaternion') {
+                        track = new THREE.QuaternionKeyframeTrack(trackName, sortedTimes, values);
+                    } else {
+                        track = new THREE.VectorKeyframeTrack(trackName, sortedTimes, values);
+                    }
+                    track.setInterpolation(interp);
+                    clip.tracks.push(track);
+                } else {
+                    // Update or Add Key
+                    const times = Array.from(track.times);
+                    const values = Array.from(track.values);
+                    const itemSize = track.getValueSize();
+
+                    const idx = times.findIndex(t => Math.abs(t - time) < 0.001);
+
+                    if (idx !== -1) {
+                        // Update
+                        for (let k = 0; k < itemSize; k++) {
+                            values[idx * itemSize + k] = value[k];
+                        }
+                    } else {
+                        // Add
+                        times.push(time);
+                        values.push(...value);
+
+                        // Sort
+                        const data = times.map((t, i) => ({
+                            time: t,
+                            val: values.slice(i * itemSize, (i + 1) * itemSize)
+                        }));
+                        data.sort((a, b) => a.time - b.time);
+
+                        track.times = new Float32Array(data.map(d => d.time));
+                        track.values = new Float32Array(data.flatMap(d => d.val));
+                    }
+
+                    // Update track data
+                    track.times = new Float32Array(track.times); // ensure typed array if recreated
+                    track.values = new Float32Array(track.values);
+                }
+            });
+        };
+
         window.recordKeyframe = function () {
+            addKeyframeAtTime();
+        };
+
+        // --- TIMELINE CONTEXT MENU ---
+
+        function getTimelineTimeFromEvent(event) {
+            const track = document.getElementById('scrubber-container'); // Or keyframes-track, they align
+            if (!track) return 0;
+            const rect = track.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            let t = (x / rect.width) * duration;
+            return Math.max(0, Math.min(t, duration));
+        }
+
+        document.getElementById('keyframes-track').addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const clickTime = getTimelineTimeFromEvent(e);
+
+            const items = [
+                {
+                    label: "Add Keyframe Here",
+                    action: () => {
+                        // We need to add keyframes for SELECTED objects (bones)
+                        // Using current Pose? Or interpolating pose at that time?
+                        // User said "Add a new keyframe, at the right click location/time".
+                        // Usually implies snapshotting current state to that time 
+                        // OR if the object isn't at that time, we might snap it there first?
+                        // Let's assume snapshotting the OBJECT'S CURRENT VISUAL STATE to that time.
+                        // (Which effectively keys the current pose at that new time).
+
+                        // BUT if the user right clicks at t=2.0, but the playhead is at t=0.0,
+                        // The object is at t=0.0 pose. Creating a key at t=2.0 with t=0.0 pose is "Holding".
+                        // Standard behavior might be: insert keyframe OF EXISTING CURVE at that time?
+                        // Or Key current visual pose?
+                        // Given "Add Keyframe" usually means "Key what I see", implies using current Object Transforms.
+
+                        // However, commonly "Insert Key" on timeline means "Insert key on curves".
+                        // Let's go with: Snap Object to that time (internally) -> Record Key -> Restore?
+                        // OR just Record Current Visual Pose to Click Time.
+                        // Implication: "Hold Pose".
+
+                        // Let's treat it as "Add Current Pose at Click Time".
+
+                        // Iterate selected bones? Or all bones?
+                        // recordKeyframe logic iterates All Bones or Selected?
+                        // Current recordKeyframe iterates ALL bones if helper exists.
+                        // Let's reuse that but pass specific time.
+
+                        addKeyframeAtTime(clickTime);
+                    }
+                }
+            ];
+
+            if (selectedKeyframes.size > 0) {
+                items.push({
+                    label: "Delete Selected Keyframes",
+                    danger: true,
+                    action: () => deleteKeyframe() // Deletes selected ones
+                });
+            }
+
+            // Future: Paste
+
+            showContextMenu(e, items);
+        });
+
+        window.addKeyframeAtTime = function (timeOverride) {
             if (!currentAction) {
                 alert("Create an animation first.");
                 return;
             }
 
             const clip = currentAction.getClip();
-
-            // SHAPSHOT State BEFORE
             const jsonBefore = clip.toJSON();
+            const time = (typeof timeOverride === 'number') ? timeOverride : currentAction.time;
 
-            const time = currentAction.time;
-
-            // Helper to get interpolation mode from UI
-            const mode = document.getElementById('interpolation-select').value;
+            // Interpolation mode
+            const modeVal = document.getElementById('interpolation-select').value;
             let interp = THREE.InterpolateLinear;
-            if (mode === "Smooth") interp = THREE.InterpolateSmooth;
-            if (mode === "Step") interp = THREE.InterpolateDiscrete;
+            if (modeVal === "Smooth") interp = THREE.InterpolateSmooth;
+            if (modeVal === "Step") interp = THREE.InterpolateDiscrete;
 
-            // Iterate ALL bones
+            // Iterate ALL bones (or could restrict to selected if we wanted, but previous behavior was Global Snapshot)
+            // User request: "always have an option to add a new keyframe"
             let bones = [];
             if (skeletonHelper) {
                 bones = skeletonHelper.bones;
@@ -1955,61 +2192,27 @@
             }
 
             bones.forEach(bone => {
-                const trackName = bone.name + '.quaternion';
-                let track = clip.tracks.find(t => t.name === trackName);
-
-                const q = bone.quaternion;
-                const value = [q.x, q.y, q.z, q.w];
-
-                if (!track) {
-                    track = new THREE.QuaternionKeyframeTrack(trackName, [time], value);
-                    track.setInterpolation(interp);
-                    clip.tracks.push(track);
-                } else {
-                    const times = Array.from(track.times);
-                    const values = Array.from(track.values);
-
-                    const existingIndex = times.findIndex(t => Math.abs(t - time) < 0.001);
-
-                    if (existingIndex >= 0) {
-                        values[existingIndex * 4] = q.x;
-                        values[existingIndex * 4 + 1] = q.y;
-                        values[existingIndex * 4 + 2] = q.z;
-                        values[existingIndex * 4 + 3] = q.w;
-                    } else {
-                        times.push(time);
-                        values.push(...value);
-
-                        // Sort
-                        let data = times.map((t, i) => ({
-                            time: t,
-                            val: [values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]]
-                        }));
-                        data.sort((a, b) => a.time - b.time);
-
-                        track.times = new Float32Array(data.map(d => d.time));
-                        track.values = new Float32Array(data.flatMap(d => d.val));
-                    }
-                    track.setInterpolation(interp); // Update mode
-                }
+                updateOrAddKeyframe(clip, bone, time);
             });
 
-            // Update duration
-            if (time > clip.duration) clip.duration = time;
-            duration = clip.duration;
-            document.getElementById('duration-input').value = duration;
+            // Update Duration if needed
+            if (time > clip.duration) {
+                clip.duration = time;
+                duration = time;
+                document.getElementById('duration-input').value = duration;
+            }
 
             // Re-apply
             const wasPlaying = isPlaying;
             currentAction.stop();
             mixer.uncacheClip(clip);
             currentAction = mixer.clipAction(clip);
-            currentAction.time = time;
+            currentAction.time = isPlaying ? currentAction.time : time; // Where should playhead be?
+            // If we added at a different time, playhead usually stays where it was?
+            // But verify visual update.
 
-            // FIX: Restore play state correctly
             if (wasPlaying) {
                 currentAction.play();
-                isPlaying = true;
             } else {
                 currentAction.play().paused = true;
                 mixer.update(0);
@@ -2017,16 +2220,10 @@
 
             drawKeyframeMarkers(clip);
 
-            // SNAPSHOT State AFTER
             const jsonAfter = clip.toJSON();
-
             addCommand({
-                execute: () => {
-                    restoreClipState(clip, jsonAfter);
-                },
-                undo: () => {
-                    restoreClipState(clip, jsonBefore);
-                }
+                execute: () => restoreClipState(clip, jsonAfter),
+                undo: () => restoreClipState(clip, jsonBefore)
             });
         };
 
