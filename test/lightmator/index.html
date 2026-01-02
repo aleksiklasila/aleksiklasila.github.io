@@ -811,9 +811,46 @@
             initResizers();
 
             LoadLocalStorage();
+            updateCameraOffset(); // Initial adjustment
 
             animate();
         }
+
+        // --- CAMERA OFFSET LOGIC ---
+        window.updateCameraOffset = function () {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            // Dimensions
+            const sidebar = document.getElementById('sidebar');
+            const timeline = document.getElementById('timeline-panel');
+            const toolbar = document.getElementById('toolbar');
+
+            const sbW = sidebar ? parseFloat(getComputedStyle(sidebar).width) : 0;
+            const tlH = timeline ? parseFloat(getComputedStyle(timeline).height) : 0;
+            const tbH = toolbar ? parseFloat(getComputedStyle(toolbar).height) : 0;
+
+            // Visible Area Center calculation
+            // Visible Width range: [0, w - sbW]
+            // Visible Height range: [tbH, h - tlH]
+
+            const cx = (w - sbW) / 2;
+            const cy = tbH + (h - tbH - tlH) / 2;
+
+            // Standard Center
+            const sx = w / 2;
+            const sy = h / 2;
+
+            // Shift needed
+            // Positive x in setViewOffset shifts the "window" right, moving content left.
+            const x = sx - cx;
+            const y = sy - cy;
+
+            camera.setViewOffset(w, h, x, y, w, h);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        };
 
         // --- FILE HANDLING ---
         function loadFile(e) {
@@ -1385,23 +1422,30 @@
             label.innerText = obj.name || (isBone ? "Bone" : "Object");
             row.appendChild(label);
 
-            if (isBone) {
-                row.oncontextmenu = (e) => {
-                    const items = [
-                        {
-                            label: "Rename",
-                            action: () => {
-                                const currentName = obj.name || "Bone";
-                                enableInlineRename(label, currentName, (newName) => {
-                                    obj.name = newName;
-                                    renderBoneHierarchy();
-                                });
-                            }
-                        }
-                    ];
-                    showContextMenu(e, items);
-                };
-            }
+            // Context Menu for ALL items
+            row.oncontextmenu = (e) => {
+                const items = [{
+                    label: "Rename",
+                    action: () => {
+                        const currentName = obj.name || (isBone ? "Bone" : "Object");
+                        enableInlineRename(label, currentName, (newName) => {
+                            obj.name = newName;
+                            renderBoneHierarchy();
+                        });
+                    }
+                },
+                {
+                    label: "Copy",
+                    action: () => copyHierarchyItem(obj)
+                },
+                {
+                    label: "Delete",
+                    danger: true,
+                    action: () => deleteHierarchyItem(obj)
+                }
+                ];
+                showContextMenu(e, items);
+            };
 
             // Click -> Select or Rename (Manual Double Click)
             // Click -> Select
@@ -1472,6 +1516,114 @@
             if (row) {
                 row.classList.add('selected');
             }
+        };
+
+        // --- HIERARCHY ACTIONS ---
+
+        window.copyHierarchyItem = function (obj) {
+            if (!obj || !obj.parent) return;
+
+            // Deep clone
+            const clone = obj.clone(true);
+
+            // Function to recursively rename and handle props
+            function processClone(node, originalName) {
+                // Generate unique name
+                let baseName = originalName || "Object";
+                // Strip existing suffixes if any logic needed, but simple append is safer
+                let newName = baseName + "_copy";
+                let counter = 1;
+                while (scene.getObjectByName(newName)) {
+                    newName = baseName + "_copy_" + counter++;
+                }
+                node.name = newName;
+                node.uuid = THREE.MathUtils.generateUUID(); // Three.js clone does this, but ensure
+
+                // If original was a registered prop, register this one too
+                // Note: 'props' array tracks top-level props usually.
+                // If we copy a hierarchy, we should check if we need to add to 'props'
+                // But logic is: if user explicitly imported it, it's in props.
+                // If it's just a child, it might not be.
+                // Let's being conservative: if it has 'isLocator' or we tracked it, add it.
+                // However, tracking "was in props" is hard on the clone without reference to original.
+                // But we can check if the original 'obj' was in 'props'.
+                // If we are processing the root clone:
+                if (node === clone) {
+                    const originalInProps = props.includes(obj);
+                    if (originalInProps || obj.userData.isLocator) { // Check if we should track it
+                        props.push(node);
+                        // If it's a locator, we might need to recreate the visual sprite if clone didn't handle it perfectly
+                        // (Clone copies children, so sprite is there, but unique name needs update on sprite?)
+                        if (node.userData.isLocator) {
+                            // Find old sprite and replace/update
+                            const oldSprite = node.children.find(c => c.isSprite && c.userData.isEditorVisual);
+                            if (oldSprite) {
+                                // It was cloned. Just update text?
+                                // Actually easier to remove and re-add to ensure text matches name
+                                node.remove(oldSprite);
+                                try {
+                                    const sprite = createTextSprite(node.name);
+                                    sprite.position.set(0, 0.6, 0);
+                                    sprite.userData.isEditorVisual = true;
+                                    node.add(sprite);
+                                } catch (e) { }
+                            }
+                        }
+                    }
+                }
+
+                // Recursion for children is automatic in 'clone', but we need to fix names/IDs if needed?
+                // clone(true) handles UUIDs. Names are copied.
+                // We should probably rename children too to avoid duplicates?
+                // Not strictly required by Three.js (names can be dupes), but good for user.
+                // Logic: Only rename the root of the copy to "Copy". Leave children names as is? 
+                // Or rename all? Standard behavior is usually just root rename.
+                // User said: "Just have new names or something."
+                // I'll stick to renaming the ROOT of the copy.
+            }
+
+            processClone(clone, obj.name);
+
+            obj.parent.add(clone);
+
+            // Refresh
+            renderBoneHierarchy();
+            updatePropsList();
+
+            // Select new
+            if (obj.isBone) selectBone(clone);
+            else {
+                selectBone(null);
+                transformControl.attach(clone);
+            }
+        };
+
+        window.deleteHierarchyItem = function (obj) {
+            if (!confirm("Delete " + (obj.name || "item") + " and all children?")) return;
+
+            if (transformControl.object === obj) transformControl.detach();
+
+            // Recursively clean up from 'props'
+            obj.traverse(child => {
+                const idx = props.indexOf(child);
+                if (idx !== -1) {
+                    props.splice(idx, 1);
+                }
+                if (transformControl.object === child) transformControl.detach();
+            });
+
+            if (obj.parent) {
+                obj.parent.remove(obj);
+            }
+
+            // Cleanup if it was selected bone
+            if (selectedBone === obj) {
+                selectedBone = null;
+                document.getElementById('selection-info').innerText = "No bone selected";
+            }
+
+            renderBoneHierarchy();
+            updatePropsList();
         };
 
         function createTextSprite(message) {
@@ -2709,6 +2861,7 @@
                     const newWidth = window.innerWidth - em.clientX;
                     if (newWidth > 150 && newWidth < 800) {
                         sidebar.style.width = newWidth + 'px';
+                        updateCameraOffset();
                     }
                 };
 
@@ -2717,6 +2870,7 @@
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
                     SaveLocalStorage();
+                    updateCameraOffset();
                 };
 
                 document.addEventListener('mousemove', onMove);
@@ -2733,6 +2887,7 @@
                     if (newHeight > 50 && newHeight < 600) {
                         timeline.style.height = newHeight + 'px';
                         sidebar.style.bottom = newHeight + 'px'; // Update sidebar bottom to match
+                        updateCameraOffset();
                     }
                 };
 
@@ -2741,6 +2896,7 @@
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
                     SaveLocalStorage();
+                    updateCameraOffset();
                 };
 
                 document.addEventListener('mousemove', onMove);
@@ -2751,9 +2907,7 @@
         // --- MAIN LOOP ---
 
         function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            updateCameraOffset();
         }
 
 
