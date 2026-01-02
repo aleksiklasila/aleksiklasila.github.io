@@ -141,21 +141,7 @@
             border-left: 3px solid var(--accent);
         }
 
-        #add-anim-btn {
-            width: 100%;
-            padding: 10px;
-            font-size: 20px;
-            background: #333;
-            border: none;
-            color: #888;
-            cursor: pointer;
-            border-top: 1px solid var(--border);
-        }
 
-        #add-anim-btn:hover {
-            background: #444;
-            color: white;
-        }
 
         /* Timeline (Bottom Panel) */
         #timeline-panel {
@@ -369,6 +355,71 @@
         .context-menu-item.danger:hover {
             background: #800000;
         }
+
+        /* New Timeline Styles */
+        .anim-track-row {
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid #333;
+            background: #252526;
+            margin-bottom: 2px;
+        }
+
+        .track-controls {
+            display: flex;
+            align-items: center;
+            padding: 4px;
+            background: #2d2d30;
+            border-bottom: 1px solid #1e1e1e;
+            font-size: 12px;
+        }
+
+        .track-timeline {
+            position: relative;
+            height: 24px;
+            background: #1e1e1e;
+            cursor: pointer;
+            overflow: hidden;
+        }
+
+        .track-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: #ccc;
+            cursor: pointer;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+
+        .track-btn:hover {
+            background: #444;
+        }
+
+        .track-btn.active {
+            color: #4CAF50;
+        }
+
+        .track-input {
+            background: transparent;
+            border: 1px solid transparent;
+            color: #ddd;
+            font-family: inherit;
+            font-size: 12px;
+            width: 100px;
+        }
+
+        .track-input:focus {
+            background: #333;
+            border-color: #555;
+        }
+
+        .selection-box {
+            position: absolute;
+            background: rgba(0, 122, 204, 0.3);
+            border: 1px solid #007acc;
+            pointer-events: none;
+            z-index: 100;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
@@ -416,21 +467,10 @@
     </div>
 
     <div id="sidebar">
-        <div class="tab-header">
-            <button class="tab-btn active" onclick="switchTab('anim')">Animation</button>
-            <button class="tab-btn" onclick="switchTab('setup')">Model Setup</button>
-        </div>
-
-        <!-- Animation Panel -->
-        <div id="anim-panel-content" style="display:flex; flex-direction:column; height:100%;">
-            <div id="anim-list"></div>
-            <button id="add-anim-btn" onclick="createNewAnimation()">+</button>
-        </div>
-
         <!-- Setup Panel -->
-        <div id="model-setup-panel">
-            <p style="font-size:12px; color:#aaa; margin-bottom:10px;">Import props or add helper nodes.</p>
-            <div style="display:flex; gap:10px; margin-bottom:10px;">
+        <div id="model-setup-panel" style="display:flex; flex-direction:column; height:100%;">
+
+            <div style="display:flex; gap:10px; margin-bottom:0px; padding: 10px; border-bottom: 1px solid #444;">
                 <button class="btn btn-secondary" style="flex:1;"
                     onclick="document.getElementById('prop-input').click()">Import Prop</button>
 
@@ -454,51 +494,41 @@
 
     <div id="timeline-panel">
         <div id="resizer-timeline" class="resizer-h"></div>
-        <div id="timeline-controls">
+
+        <!-- Top Toolbar for Timeline -->
+        <div id="timeline-general-controls"
+            style="display:flex; align-items:center; padding-bottom:5px; border-bottom:1px solid #444; margin-bottom:5px;">
             <button class="btn" id="play-pause-btn" onclick="togglePlay()">Pause</button>
-            <input type="text" id="time-display" value="0.00 / 0.00"
-                style="margin: 0 15px; font-family: monospace; width: 120px; background: transparent; border: 1px solid transparent; color: inherit; text-align: center;"
-                ondblclick="this.readOnly=false; this.style.background='#333'; this.style.borderColor='#555';"
-                onblur="updateTimeFromInput(this)" onkeydown="if(event.key=='Enter') updateTimeFromInput(this)"
-                readonly>
-            <input type="number" id="duration-input" step="0.1" min="0.1"
-                style="width:60px; margin-right:10px; padding:4px; background:#333; color:white; border:1px solid #555; border-radius:4px;"
-                onchange="updateDuration(this.value)">
-            <select id="interpolation-select" onchange="updateInterpolation()"
-                style="margin-right:10px; padding:4px; background:#333; color:white; border:1px solid #555; border-radius:4px;">
-                <option value="Linear">Linear</option>
-                <option value="Smooth">Smooth</option>
-                <option value="Step">Step</option>
-            </select>
-            <label style="margin-right:10px;"><input type="checkbox" id="chk-autokey"> Auto-Key</label>
-            <div style="flex-grow:1"></div>
-            <label style="margin-right:10px;"><input type="checkbox" id="chk-skeleton" checked
+            <button class="btn btn-secondary" style="font-size:12px; padding:4px 8px; margin-right:15px;"
+                onclick="createNewAnimation()">+ New Animation</button>
+
+            <!-- Restored Global Inputs for Logic Compatibility -->
+            <label style="margin-right:10px; font-size:12px;">Duration: <input type="number" id="duration-input"
+                    value="10" step="0.1" style="width:50px; background:#333; border:1px solid #555; color:#fff;"
+                    onchange="renderTimelineTracks()"></label>
+            <label style="margin-right:10px; font-size:12px; display:none;">Interp:
+                <select id="interpolation-select" style="background:#333; color:#fff; border:1px solid #555;">
+                    <option value="Linear">Linear</option>
+                    <option value="Smooth">Smooth</option>
+                    <option value="Step">Step</option>
+                </select>
+            </label>
+
+            <label style="margin-right:10px; font-size:12px;"><input type="checkbox" id="chk-autokey"> Auto-Key</label>
+            <label style="margin-right:10px; font-size:12px;"><input type="checkbox" id="chk-skeleton" checked
                     onchange="toggleSkeleton()"> Show Bones</label>
-            <label style="margin-right:10px;"><input type="checkbox" id="chk-focus-selected" checked
-                    onchange="toggleFocusSelected()"> Focus
-                Selected</label>
-            <label style="margin-right:10px;"><input type="checkbox" id="chk-ik" onchange="toggleIK()"> IK Mode
-                <span id="ik-status" style="font-size:10px; color:#aaa;">OFF</span></label>
+            <label style="margin-right:10px; font-size:12px;"><input type="checkbox" id="chk-focus-selected" checked
+                    onchange="toggleFocusSelected()"> Focus Selected</label>
+            <label style="margin-right:10px; font-size:12px;"><input type="checkbox" id="chk-ik" onchange="toggleIK()">
+                IK Mode <span id="ik-status" style="font-size:10px; color:#aaa;">OFF</span></label>
         </div>
-        <div id="timeline-tracks-container"
-            style="position:relative; flex-grow:1; display:flex; flex-direction:column; background:#1e1e1e; border-radius:4px; overflow:hidden;">
-            <!-- Row 1: Time Scrubber -->
-            <div id="scrubber-row"
-                style="position:relative; height:15px; background:rgba(255,255,255,0.05); cursor:ew-resize; border-bottom:1px solid #333;"
-                onmousedown="startScrub(event)">
-                <div id="scrubber-bar"></div>
-                <!-- Playhead spans both, so we might need it outside or overlay? 
-                     Actually, having two separate playheads visual or one tall one overlaying both is better.
-                     Let's use a container-wide playhead. -->
-            </div>
 
-            <!-- Row 2: Keyframes -->
-            <div id="keyframes-track" style="position:relative; height:20px; background:transparent; cursor:default;">
-                <!-- Markers go here -->
+        <!-- Scrollable Tracks Area -->
+        <div id="timeline-tracks-scroll-area"
+            style="flex-grow:1; overflow-y:auto; overflow-x:hidden; position:relative;">
+            <div id="timeline-tracks-container" style="position:relative; width:100%; min-height:100%;">
+                <!-- Tracks injected here -->
             </div>
-
-            <!-- Global Playhead -->
-            <div id="playhead"></div>
         </div>
     </div>
 
@@ -566,6 +596,295 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
+        // --- HIERARCHICAL ANIMATION SYSTEM ---
+
+        class HierarchicalAnimationController {
+            constructor(model, mixer) {
+                this.model = model;
+                this.mixer = mixer;
+
+                // Stack of layers. Higher index = Higher priority (overrides lower).
+                // Each layer: { boneName, clipName, action, ... }
+                // Implementation detail: 
+                // We use a Map or Array? 
+                // User wants "Assign to Bone". So Map<BoneName, LayerData> is intuitive?
+                // But priority matters. "Spine" overrides "Root". "Head" overrides "Spine".
+                // Priority is determined by Hierarchy Depth? 
+                // Yes: Deeper bones override shallower bones.
+                // So "Head" > "Spine" > "Root".
+                // If two distinct branches (LeftArm vs RightArm), they don't conflict.
+                this.activeLayers = []; // List of active assignments
+
+                this.clipCache = new Map();
+            }
+
+            // Assign an animation to a bone
+            addLayer(boneName, clipName) {
+                // Allow multiple layers on same bone? Yes, for independent tracks.
+                const existingIdx = this.activeLayers.findIndex(l => l.clipName === clipName);
+                if (existingIdx !== -1) {
+                    // Update existing assignment
+                    this.activeLayers[existingIdx].boneName = boneName;
+                } else {
+                    this.activeLayers.push({ boneName: boneName, clipName: clipName, action: null });
+                }
+                this.rebuildAndPlay();
+            }
+
+            removeLayer(boneName, clipName) {
+                // Fix: Match BOTH boneName and clipName (if provided) to ensure correct removal
+                const idx = this.activeLayers.findIndex(l => l.boneName === boneName && (!clipName || l.clipName === clipName));
+                if (idx !== -1) {
+                    const l = this.activeLayers[idx];
+                    if (l.action) {
+                        l.action.stop();
+                        this.mixer.uncacheAction(l.action.getClip());
+                    }
+                    this.activeLayers.splice(idx, 1);
+                    this.rebuildAndPlay();
+                }
+            }
+
+            clearAll() {
+                this.activeLayers.forEach(l => {
+                    if (l.action) l.action.stop();
+                });
+                this.activeLayers = [];
+            }
+
+            rebuildAndPlay() {
+                this.stopGlobalActions();
+
+                // 1. Calculate Masks
+                const boneDescendants = new Map(); // BoneName -> Set<BoneName>
+
+                this.activeLayers.forEach(layer => {
+                    const set = new Set();
+                    // Fix: Handle "Root" or Unassigned properly
+                    if (layer.boneName === 'Root' || !layer.boneName) {
+                        this.model.traverse(o => {
+                            if (o.isBone) set.add(o.name);
+                        });
+                    } else {
+                        const bone = this._findBone(layer.boneName);
+                        if (bone) {
+                            this._collectDescendants(bone, set);
+                            set.add(bone.name);
+                        }
+                    }
+                    boneDescendants.set(layer.boneName, set);
+                });
+
+                // 2. Compute final masks
+                const layerMasks = new Map();
+
+                this.activeLayers.forEach(layer => {
+                    const myScope = new Set(boneDescendants.get(layer.boneName));
+
+                    // Subtract any layer that is 'deeper'
+                    this.activeLayers.forEach(other => {
+                        if (layer === other) return;
+
+                        // Prevent self-clobbering if independent tracks on same bone are allowed
+                        // Only subtract if 'other' is strictly a child (subset)? 
+                        // Simplified: Only subtract if other.boneName is in myScope AND other.boneName != layer.boneName
+                        if (myScope.has(other.boneName) && other.boneName !== layer.boneName) {
+                            const otherScope = boneDescendants.get(other.boneName);
+                            if (otherScope) otherScope.forEach(b => myScope.delete(b));
+                        }
+                    });
+
+                    layerMasks.set(layer.boneName, myScope);
+                });
+
+                // Color Visuals
+                if (this.updateBoneColors) this.updateBoneColors(layerMasks);
+
+                // 3. Play
+                this.activeLayers.forEach(layer => {
+                    const clip = animations.find(c => c.name === layer.clipName);
+                    if (!clip) return;
+
+                    const mask = layerMasks.get(layer.boneName);
+                    // Special case: If mask is empty but we want independent playback? 
+                    // Usually empty mask means fully overridden.
+                    if (!mask || mask.size === 0) {
+                        if (layer.action) {
+                            layer.action.stop();
+                        }
+                        return;
+                    }
+
+                    // Generate SubClip
+                    const subClip = this.getOrCreateSubClip(clip, mask, layer.boneName);
+
+                    // Play
+                    let action = layer.action;
+                    const newAction = this.mixer.clipAction(subClip);
+
+                    if (action !== newAction) {
+                        if (action && action.isRunning()) action.stop();
+                        newAction.play();
+                        layer.action = newAction;
+                    } else {
+                        if (!newAction.isRunning()) newAction.play();
+                    }
+                });
+
+                // Update Multi-Track UI
+                if (window.updateTimelineTracks) window.updateTimelineTracks();
+            }
+
+            updateBoneColors(layerMasks) {
+                // Reset colors?
+                // We need a way to visualize. 'SkeletonHelper' lines?
+                // SkeletonHelper is a single line mesh. We can't color segments easily WITHOUT custom shader or geometry.
+                // Alternative: Attach small sphere to each bone?
+                if (!window.boneVisuals) window.boneVisuals = new Map(); // BoneName -> Mesh
+
+                // Reset logic
+                window.boneVisuals.forEach(mesh => mesh.visible = false);
+
+                this.activeLayers.forEach(layer => {
+                    const mask = layerMasks.get(layer.boneName);
+                    if (!mask) return;
+
+                    // Get Color
+                    const clip = animations.find(c => c.name === layer.clipName);
+                    const color = (clip && clip.userData.color) ? clip.userData.color : '#ffffff';
+
+                    mask.forEach(bName => {
+                        let mesh = window.boneVisuals.get(bName);
+                        if (!mesh) {
+                            const geo = new THREE.SphereGeometry(2, 4, 2); // Small sphere
+                            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, depthTest: false });
+                            mesh = new THREE.Mesh(geo, mat);
+                            const bone = this._findBone(bName);
+                            if (bone) {
+                                bone.add(mesh);
+                                window.boneVisuals.set(bName, mesh);
+                            }
+                        }
+                        if (mesh) {
+                            mesh.visible = true;
+                            mesh.material.color.set(color);
+                        }
+                    });
+                });
+            }
+
+            getOrCreateSubClip(originalClip, mask, suffixID) {
+                // Suffix needs to be unique hash of mask? 
+                // Or just random? 
+                // Or "BoneName_MaskHash"?
+                // Let's use simplified cache key: ClipName + "_" + LayerBoneName + "_Gen"
+                // WARNING: If mask changes dynamically (e.g. adding 3rd layer), we need new clip.
+                // So cache key must depend on active layers configuration?
+                // For now, let's just generate fresh or simple cache.
+                // Optimally: ClipName + "_" + LayerBoneName + "_" + Array.from(mask).join('_') hash
+
+                const maskKey = Array.from(mask).sort().join('_'); // Semi-expensive
+                // Simple hash
+                let hash = 0;
+                for (let i = 0; i < maskKey.length; i++) {
+                    hash = ((hash << 5) - hash) + maskKey.charCodeAt(i);
+                    hash |= 0;
+                }
+
+                const newName = originalClip.name + "_" + suffixID + "_" + hash;
+
+                if (this.clipCache.has(newName)) return this.clipCache.get(newName);
+
+                const newTracks = [];
+                originalClip.tracks.forEach(track => {
+                    const boneName = track.name.split('.')[0];
+                    if (mask.has(boneName)) {
+                        newTracks.push(track.clone());
+                    }
+                });
+
+                const newClip = new THREE.AnimationClip(newName, originalClip.duration, newTracks);
+                this.clipCache.set(newName, newClip);
+                return newClip;
+            }
+
+            stopGlobalActions() {
+                if (currentAction) {
+                    currentAction.stop();
+                }
+            }
+
+            // Fix: Explicitly stop all layer actions when rebuilding or removing
+            stopLayerActions() {
+                this.activeLayers.forEach(l => {
+                    if (l.action) l.action.stop();
+                });
+            }
+
+            playOneShot(clipName) {
+                const clip = animations.find(c => c.name === clipName);
+                if (!clip) return;
+
+                // Play on a temporary mixer action? 
+                // Or just add a temporary layer?
+                // Temp layer is safer for hierarchy.
+                // Add layer "OneShot", play, then remove on finish.
+
+                // For simplified "preview", just play it on mixer directly?
+                // But it might conflict with layers.
+                // Let's us a Mixer Action directly, but we must ensure it overrides?
+                // Or just separate mixer? No.
+
+                // Let's try adding a high-priority "Preview" layer.
+                const layerName = "Preview_OneShot";
+                this.addLayer("Root", clipName);
+
+                // Find the new action and set loop to once
+                const layer = this.activeLayers.find(l => l.clipName === clipName && l.boneName === "Root");
+                if (layer && layer.action) {
+                    const action = layer.action;
+                    action.reset();
+                    action.setLoop(THREE.LoopOnce);
+                    action.clampWhenFinished = true;
+                    action.play();
+
+                    // Cleanup listener
+                    const onFinish = (e) => {
+                        if (e.action === action) {
+                            this.mixer.removeEventListener('finished', onFinish);
+                            // Maybe remove layer?
+                            // Or just pause?
+                            // User typically wants to see the end pose.
+                            // If we remove layer, it snaps back.
+                            // So let's keep it but paused at end.
+                            // We can offer a "Stop" button in UI.
+                        }
+                    };
+                    this.mixer.addEventListener('finished', onFinish);
+                }
+            }
+
+            _findBone(name) {
+                let found = null;
+                this.model.traverse(o => {
+                    if (o.name === name) found = o;
+                });
+                return found;
+            }
+
+            _collectDescendants(bone, set) {
+                bone.children.forEach(c => {
+                    if (c.isBone) {
+                        set.add(c.name);
+                        this._collectDescendants(c, set);
+                    }
+                });
+            }
+        }
+
+        window.HierarchicalController = HierarchicalAnimationController;
+
+
         // --- GLOBAL STATE ---
         let scene, camera, renderer, orbit, transformControl;
         let mixer, currentAction, currentModel, skeletonHelper;
@@ -575,6 +894,7 @@
         let isScrubbing = false;
         let selectedBone = null;
         let duration = 0;
+        let renderedTracks = [];
 
         // Multi-select for keyframes
         let selectedKeyframes = new Set();
@@ -942,6 +1262,7 @@
 
             // Animations
             mixer = new THREE.AnimationMixer(currentModel);
+            window.hierarchicalController = new HierarchicalAnimationController(currentModel, mixer);
             animations = gltf.animations;
 
             updateAnimList();
@@ -1169,55 +1490,430 @@
             input.select();
         }
 
-        function updateAnimList() {
-            const list = document.getElementById('anim-list');
-            list.innerHTML = '';
+        // --- NEW TIMELINE RENDERING ---
 
-            // Safety check
-            if (!animations) animations = [];
+        window.renderTimelineTracks = function () {
+            const container = document.getElementById('timeline-tracks-container');
+            if (!container) return;
+            container.innerHTML = '';
+
+            // Ensure animations initialized
+            if (!window.animations) window.animations = [];
+
+            renderedTracks = [];
 
             animations.forEach((clip, index) => {
-                const div = document.createElement('div');
-                div.className = 'anim-item';
-                div.onclick = () => playAnimation(index);
+                // Fix: Ensure userData
+                if (!clip.userData) clip.userData = {};
 
-                const span = document.createElement('span');
-                span.innerText = clip.name;
-                div.appendChild(span);
+                const row = document.createElement('div');
+                row.className = 'anim-track-row';
+
+                // --- Line 1: Controls ---
+                const controls = document.createElement('div');
+                controls.className = 'track-controls';
+
+                // Active Toggle (Layer / Bone Assignment)
+                const chkActive = document.createElement('input');
+                chkActive.type = 'checkbox';
+                chkActive.style.marginRight = '5px';
+
+                const isActive = window.hierarchicalController && window.hierarchicalController.activeLayers.some(l => l.clipName === clip.name);
+                chkActive.checked = isActive;
+                chkActive.onchange = (e) => {
+                    const boneName = clip.userData.assignedBone || 'Root';
+                    if (e.target.checked) {
+                        window.hierarchicalController.addLayer(boneName, clip.name);
+                    } else {
+                        // Fix: use clip.name to identify layer to remove
+                        window.hierarchicalController.removeLayer(boneName, clip.name);
+                    }
+                    renderTimelineTracks();
+                };
+                controls.appendChild(chkActive);
+
+                // Name Input
+                const inpName = document.createElement('input');
+                inpName.className = 'track-input';
+                inpName.value = clip.name;
+                inpName.onchange = (e) => {
+                    clip.name = e.target.value;
+                };
+                controls.appendChild(inpName);
+
+                // Play/Pause
+                const btnPlay = document.createElement('button');
+                btnPlay.className = 'track-btn';
+                btnPlay.innerHTML = '▶';
+                btnPlay.title = "Play/Pause";
+                btnPlay.style.fontSize = '10px';
+                btnPlay.style.margin = '0 5px';
+
+                btnPlay.onclick = () => {
+                    if (!isActive) {
+                        chkActive.checked = true;
+                        chkActive.dispatchEvent(new Event('change'));
+                    } else {
+                        const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                        if (layer && layer.action) {
+                            layer.action.paused = !layer.action.paused;
+                            btnPlay.innerText = layer.action.paused ? '▶' : '⏸';
+                        }
+                    }
+                };
+                if (isActive) {
+                    const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                    if (layer && layer.action && !layer.action.paused) btnPlay.innerText = '⏸';
+                }
+                controls.appendChild(btnPlay);
+
+                // Play Once
+                const btnOnce = document.createElement('button');
+                btnOnce.className = 'track-btn';
+                btnOnce.innerText = '1x';
+                btnOnce.title = "Play Once";
+                btnOnce.style.marginRight = '10px';
+                btnOnce.onclick = () => {
+                    window.hierarchicalController.playOneShot(clip.name);
+                };
+                controls.appendChild(btnOnce);
+
+                // Time / Duration
+                const lblTime = document.createElement('span');
+                lblTime.style.marginRight = '10px';
+                lblTime.innerText = `${clip.tracks.length > 0 ? clip.duration.toFixed(2) : "0.00"}s`;
+                controls.appendChild(lblTime);
+
+                // Interpolation
+                const selInterp = document.createElement('select');
+                selInterp.style.background = '#333';
+                selInterp.style.color = '#ccc';
+                selInterp.style.border = 'none';
+                selInterp.style.fontSize = '10px';
+                selInterp.style.marginRight = '10px';
+                selInterp.innerHTML = '<option value="Linear">Linear</option><option value="Smooth">Smooth</option><option value="Step">Step</option>';
+                if (clip.tracks.length > 0) {
+                    const mode = clip.tracks[0].getInterpolation();
+                    if (mode === THREE.InterpolateSmooth) selInterp.value = "Smooth";
+                    else if (mode === THREE.InterpolateDiscrete) selInterp.value = "Step";
+                }
+                selInterp.onchange = (e) => {
+                    let mode = THREE.InterpolateLinear;
+                    if (e.target.value === "Smooth") mode = THREE.InterpolateSmooth;
+                    if (e.target.value === "Step") mode = THREE.InterpolateDiscrete;
+                    clip.tracks.forEach(t => t.setInterpolation(mode));
+                };
+                controls.appendChild(selInterp);
+
+                // Bone Color Picker
+                const inpColor = document.createElement('input');
+                inpColor.type = 'color';
+                inpColor.value = clip.userData.color || '#ffffff';
+                inpColor.title = "Bone Color Visualizer";
+                inpColor.style.width = '20px';
+                inpColor.style.height = '20px';
+                inpColor.style.border = 'none';
+                inpColor.style.marginRight = '10px';
+                inpColor.style.padding = '0';
+                inpColor.onchange = (e) => {
+                    clip.userData.color = e.target.value;
+                    if (window.hierarchicalController) window.hierarchicalController.rebuildAndPlay();
+                };
+                controls.appendChild(inpColor);
+
+                // Assigned Bone
+                const btnBone = document.createElement('button');
+                btnBone.className = 'track-btn';
+                btnBone.innerText = clip.userData.assignedBone || "Assign Bone";
+                btnBone.onclick = () => {
+                    if (selectedBone) {
+                        clip.userData.assignedBone = selectedBone.name;
+                        btnBone.innerText = selectedBone.name;
+                        if (isActive) {
+                            window.hierarchicalController.addLayer(selectedBone.name, clip.name);
+                        }
+                    } else {
+                        // De-assignment logic
+                        if (clip.userData.assignedBone) {
+                            if (confirm("Unassign bone '" + clip.userData.assignedBone + "'?")) {
+                                // If active, remove old layer
+                                if (isActive) {
+                                    window.hierarchicalController.removeLayer(clip.userData.assignedBone, clip.name);
+                                }
+                                clip.userData.assignedBone = null;
+                                btnBone.innerText = "Assign Bone";
+
+                                // If active, re-add as Root? Or just stop?
+                                // Usually defaults to Root.
+                                if (isActive) {
+                                    window.hierarchicalController.addLayer("Root", clip.name);
+                                }
+                            }
+                        } else {
+                            alert("Select a bone to assign, or click an assigned button to unassign.");
+                        }
+                    }
+                };
+                controls.appendChild(btnBone);
+
+                // Trimming Inputs
+                const divTrim = document.createElement('div');
+                divTrim.style.display = 'inline-flex';
+                divTrim.style.marginLeft = '10px';
+
+                const inpTrimStart = document.createElement('input');
+                inpTrimStart.className = 'track-input';
+                inpTrimStart.style.width = '40px';
+                inpTrimStart.value = clip.userData.trimStart || 0;
+                inpTrimStart.title = "Trim Start (s)";
+                inpTrimStart.onchange = (e) => {
+                    clip.userData.trimStart = parseFloat(e.target.value) || 0;
+                    renderTimelineTracks();
+                };
+
+                const inpTrimEnd = document.createElement('input');
+                inpTrimEnd.className = 'track-input';
+                inpTrimEnd.style.width = '40px';
+                inpTrimEnd.value = clip.userData.trimEnd || 0;
+                inpTrimEnd.title = "Trim End (s from end)";
+                inpTrimEnd.onchange = (e) => {
+                    clip.userData.trimEnd = parseFloat(e.target.value) || 0;
+                    renderTimelineTracks();
+                };
+
+                divTrim.appendChild(document.createTextNode(' Trim: '));
+                divTrim.appendChild(inpTrimStart);
+                divTrim.appendChild(document.createTextNode(' - '));
+                divTrim.appendChild(inpTrimEnd);
+                controls.appendChild(divTrim);
+
+                // Delete
+                const btnDel = document.createElement('button');
+                btnDel.className = 'track-btn';
+                btnDel.innerText = '🗑';
+                btnDel.style.marginLeft = 'auto';
+                btnDel.onclick = () => deleteAnimation(index);
+                controls.appendChild(btnDel);
+
+                row.appendChild(controls);
+
+                // --- Line 2: Timeline ---
+                const timeline = document.createElement('div');
+                timeline.className = 'track-timeline';
+                timeline.style.position = 'relative';
+                timeline.style.height = '20px';
+                timeline.style.background = '#444';
+                timeline.style.marginTop = '2px';
+                timeline.style.cursor = 'pointer';
+
+                // Trimming Visuals (Gray out trimmed areas)
+                if (clip.userData.trimStart > 0) {
+                    const trimLeft = document.createElement('div');
+                    trimLeft.style.position = 'absolute';
+                    trimLeft.style.left = '0';
+                    trimLeft.style.top = '0';
+                    trimLeft.style.height = '100%';
+                    trimLeft.style.width = (clip.userData.trimStart / clip.duration * 100) + '%';
+                    trimLeft.style.background = 'rgba(0,0,0,0.5)';
+                    trimLeft.style.pointerEvents = 'none';
+                    timeline.appendChild(trimLeft);
+                }
+                const trimEndVal = clip.userData.trimEnd || 0;
+                if (trimEndVal > 0) {
+                    const trimRight = document.createElement('div');
+                    trimRight.style.position = 'absolute';
+                    trimRight.style.right = '0';
+                    trimRight.style.top = '0';
+                    trimRight.style.height = '100%';
+                    trimRight.style.width = (trimEndVal / clip.duration * 100) + '%';
+                    trimRight.style.background = 'rgba(0,0,0,0.5)';
+                    trimRight.style.pointerEvents = 'none';
+                    timeline.appendChild(trimRight);
+                }
+
+                // Render Keyframes
+                // Flatten tracks
+                const times = new Set();
+                clip.tracks.forEach(t => {
+                    for (let i = 0; i < t.times.length; i++) times.add(t.times[i]);
+                });
+                times.forEach(t => {
+                    const pct = (t / clip.duration) * 100;
+                    const mk = document.createElement('div');
+                    mk.style.position = 'absolute';
+                    mk.style.left = pct + '%';
+                    mk.style.height = '100%';
+                    mk.style.width = '2px';
+                    mk.style.background = selectedKeyframes.has(t) ? 'orange' : '#ccc';
+                    mk.onmousedown = (e) => {
+                        e.stopPropagation();
+                        selectKeyframe(t, e.ctrlKey || e.shiftKey, clip);
+                    };
+                    timeline.appendChild(mk);
+                });
+
+                row.appendChild(controls);
+
+                // Playhead
+                if (isActive) {
+                    const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                    if (layer && layer.action) {
+                        const ph = document.createElement('div');
+                        ph.style.position = 'absolute';
+                        ph.style.left = (layer.action.time / clip.duration * 100) + '%';
+                        ph.style.height = '100%';
+                        ph.style.width = '2px';
+                        ph.style.background = 'red';
+                        ph.style.pointerEvents = 'none';
+                        timeline.appendChild(ph);
+
+                        // Track for main loop update
+                        renderedTracks.push({
+                            action: layer.action,
+                            playhead: ph,
+                            duration: clip.duration,
+                            userData: clip.userData
+                        });
+                    }
+                }
+
+                // Drag Selection / Scrub
+                timeline.onmousedown = (e) => {
+                    if (e.shiftKey) {
+                        startBoxSelect(e, timeline, clip, clip.duration);
+                    } else {
+                        // Click to seek independent track
+                        const rect = timeline.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const pct = Math.max(0, Math.min(1, x / rect.width));
+                        let t = pct * clip.duration;
+
+                        // If active, update time
+                        if (isActive) {
+                            const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                            if (layer && layer.action) {
+                                layer.action.time = t;
+                                layer.action.paused = true; // Pause on seek?
+                                // Update button state
+                                const btnPlay = controls.querySelector('button[title="Play/Pause"]');
+                                if (btnPlay) btnPlay.innerText = '▶';
+                            }
+                        }
+                    }
+                };
 
                 // Context Menu
-                div.oncontextmenu = (e) => {
-                    const items = [
-                        {
-                            label: "Rename",
-                            action: () => {
-                                enableInlineRename(span, clip.name, (newName) => {
-                                    clip.name = newName;
-                                    updateAnimList();
-                                });
-                            }
-                        },
-                        {
-                            label: "Copy",
-                            action: () => copyAnimation(index)
-                        },
-                        {
-                            label: "Delete",
+                timeline.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const rect = timeline.getBoundingClientRect();
+                    const t = ((e.clientX - rect.left) / rect.width) * clip.duration;
+
+                    const items = [{
+                        label: "Add Keyframe Here",
+                        action: () => updateOrAddKeyframe(clip, t)
+                    }];
+
+                    if (selectedKeyframes.size > 0) {
+                        items.push({
+                            label: "Delete Selected Keyframes",
                             danger: true,
-                            action: () => deleteAnimation(index)
-                        }
-                    ];
+                            action: () => deleteSelectedKeyframes(clip)
+                        });
+                    }
                     showContextMenu(e, items);
                 };
 
-                // Visual active state
-                if (currentAction && currentAction.getClip() === clip) {
-                    div.classList.add('active');
-                }
-
-                list.appendChild(div);
+                row.appendChild(timeline);
+                container.appendChild(row);
             });
-        }
+        };
+
+        // Box Select Implementation
+        window.startBoxSelect = function (e, container, clip, viewDuration) {
+            const rect = container.getBoundingClientRect();
+            const startX = e.clientX - rect.left;
+
+            const box = document.createElement('div');
+            box.className = 'selection-box';
+            box.style.left = startX + 'px';
+            box.style.top = '0';
+            box.style.height = '100%';
+            box.style.width = '0px';
+            container.appendChild(box);
+
+            const onMove = (ev) => {
+                const currX = ev.clientX - rect.left;
+                const min = Math.min(startX, currX);
+                const max = Math.max(startX, currX);
+                box.style.left = min + 'px';
+                box.style.width = (max - min) + 'px';
+            };
+
+            const onUp = (ev) => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+
+                const boxLeft = parseFloat(box.style.left);
+                const boxWidth = parseFloat(box.style.width);
+
+                const tStart = (boxLeft / rect.width) * viewDuration;
+                const tEnd = ((boxLeft + boxWidth) / rect.width) * viewDuration;
+
+                if (!ev.ctrlKey) selectedKeyframes.clear();
+
+                const uniqueTimes = new Set();
+                clip.tracks.forEach(t => t.times.forEach(tv => uniqueTimes.add(tv)));
+
+                uniqueTimes.forEach(t => {
+                    if (t >= tStart && t <= tEnd) {
+                        selectedKeyframes.add(t);
+                    }
+                });
+
+                box.remove();
+                renderTimelineTracks();
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        };
+
+        window.startScrubSpecific = function (e, container, clip, viewDuration) {
+            const rect = container.getBoundingClientRect();
+
+            const updateTime = (clientX) => {
+                const x = clientX - rect.left;
+                const pct = Math.max(0, Math.min(1, x / rect.width));
+                const t = pct * viewDuration;
+
+                const isActive = window.hierarchicalController.activeLayers.some(l => l.clipName === clip.name);
+                if (isActive) {
+                    const layer = window.hierarchicalController.activeLayers.find(l => l.clipName === clip.name);
+                    if (layer && layer.action) {
+                        layer.action.time = t;
+                        mixer.update(0);
+                    }
+                }
+                renderTimelineTracks();
+            };
+
+            updateTime(e.clientX);
+
+            const onMove = (ev) => updateTime(ev.clientX);
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        };
+
+        // Aliases for compatibility
+        window.updateAnimList = window.renderTimelineTracks;
+        window.drawTimeline = window.renderTimelineTracks;
+        window.drawKeyframeMarkers = function () { window.renderTimelineTracks(); };
+
 
         window.deleteAnimation = function (index) {
             if (!confirm("Delete animation '" + animations[index].name + "'?")) return;
@@ -1227,48 +1923,234 @@
                 mixer.uncacheClip(clip);
                 currentAction = null;
                 selectedKeyframes.clear();
-                const track = document.getElementById('keyframes-track');
-                if (track) track.innerHTML = '';
             }
             animations.splice(index, 1);
-            updateAnimList();
+            renderTimelineTracks();
             if (animations.length > 0) {
-                playAnimation(Math.max(0, index - 1));
-            } else {
-                playAnimation(-1); // Or clear
-            }
-        };
-
-        window.switchTab = function (tabName) {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            if (tabName === 'anim') {
-                document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
-                document.getElementById('anim-panel-content').style.display = 'flex';
-                document.getElementById('model-setup-panel').style.display = 'none';
-            } else {
-                document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
-                document.getElementById('anim-panel-content').style.display = 'none';
-                document.getElementById('model-setup-panel').style.display = 'block';
-                // Timeline remains unlocked
+                // If we are using hierarchical mode, this logic is kinda legacy?
+                // But let's keep it safe.
             }
         };
 
         window.createNewAnimation = function () {
-            // FIX: Ensure initialization
-            if (!animations) animations = [];
+            if (!window.animations) window.animations = [];
             const name = "Animation " + (animations.length + 1);
 
-            // Create an empty clip
             const clip = new THREE.AnimationClip(name, 1, []);
             animations.push(clip);
 
-            // Should ensure mixer exists if model exists
             if (currentModel && !mixer) {
                 mixer = new THREE.AnimationMixer(currentModel);
             }
 
-            updateAnimList();
-            playAnimation(animations.length - 1);
+            renderTimelineTracks();
+            // playAnimation is legacy? Maybe we auto-activate it.
+            // Let's effectively auto-activate it on Root.
+            if (window.hierarchicalController) {
+                window.hierarchicalController.addLayer("Root", name);
+            }
+        };
+
+        // --- KEYFRAME HELPERS ---
+        window.updateOrAddKeyframe = function (clip, time) {
+            if (!selectedBone) { alert("Select a bone to keyframe."); return; }
+            if (!clip) return;
+
+            const name = selectedBone.name;
+            const props = ['.position', '.quaternion', '.scale'];
+            const types = [THREE.VectorKeyframeTrack, THREE.QuaternionKeyframeTrack, THREE.VectorKeyframeTrack];
+
+            props.forEach((prop, i) => {
+                const trackName = name + prop;
+                let track = clip.tracks.find(t => t.name === trackName);
+
+                // Create if missing
+                if (!track) {
+                    const TypedTrack = types[i];
+                    // Initial keyframe at 0 if needed? Or just empty.
+                    track = new TypedTrack(trackName, [], []);
+                    clip.tracks.push(track);
+                }
+
+                // Get Value
+                let value;
+                if (prop === '.position') value = selectedBone.position.toArray();
+                if (prop === '.quaternion') value = selectedBone.quaternion.toArray();
+                if (prop === '.scale') value = selectedBone.scale.toArray();
+
+                // Insert/Update
+                // Find index
+                // Note: THREE.KeyframeTrack.times is a Float32Array usually.
+                // We convert to regular array for editing ease or use splice logic carefully?
+                // Actually THREE.KeyframeTrack utils are limited.
+                // We manually manage arrays.
+
+                // Convert to plain arrays if they are typed
+                let times = Array.from(track.times);
+                let values = Array.from(track.values);
+
+                const existingIdx = times.findIndex(t => Math.abs(t - time) < 0.001);
+                const stride = value.length;
+
+                if (existingIdx !== -1) {
+                    // Update
+                    for (let k = 0; k < stride; k++) values[existingIdx * stride + k] = value[k];
+                } else {
+                    // Insert
+                    // Push and Sort?
+                    times.push(time);
+                    for (let k = 0; k < stride; k++) values.push(value[k]);
+
+                    // Sort by time
+                    // Create pairs
+                    const data = times.map((t, idx) => ({
+                        t,
+                        v: values.slice(idx * stride, (idx + 1) * stride)
+                    }));
+                    data.sort((a, b) => a.t - b.t);
+
+                    times = data.map(d => d.t);
+                    values = data.flatMap(d => d.v);
+                }
+
+                track.times = new Float32Array(times);
+                track.values = new Float32Array(values);
+            });
+
+            renderTimelineTracks();
+        };
+
+        window.deleteSelectedKeyframes = function (clip) {
+            if (selectedKeyframes.size === 0) return;
+
+            clip.tracks.forEach(track => {
+                let times = Array.from(track.times);
+                let values = Array.from(track.values);
+                const stride = track.getValueSize();
+
+                // Filter
+                const kept = [];
+                times.forEach((t, idx) => {
+                    // Check if this time is selected (fuzzy match)
+                    let isSel = false;
+                    for (let selT of selectedKeyframes) {
+                        if (Math.abs(selT - t) < 0.001) { isSel = true; break; }
+                    }
+
+                    if (!isSel) {
+                        kept.push({
+                            t: t,
+                            v: values.slice(idx * stride, (idx + 1) * stride)
+                        });
+                    }
+                });
+
+                track.times = new Float32Array(kept.map(d => d.t));
+                track.values = new Float32Array(kept.flatMap(d => d.v));
+            });
+
+            selectedKeyframes.clear();
+            renderTimelineTracks();
+        };
+
+        // --- HIERARCHICAL UI LOGIC ---
+
+        window.setUpperBodyRoot = function () {
+            if (!selectedBone) { alert("Select a bone first."); return; }
+            if (!window.hierarchicalController) return;
+
+            // Collect all descendants
+            const mask = [];
+
+            // Helper recursive
+            const collect = (obj) => {
+                if (obj.isBone) mask.push(obj.name);
+                obj.children.forEach(collect);
+            };
+            collect(selectedBone);
+
+            window.hierarchicalController.setMask("Upper", mask);
+            document.getElementById('mask-info').innerText = "Upper Body Root: " + selectedBone.name + " (" + mask.length + " bones)";
+            document.getElementById('mask-info').title = mask.join(", ");
+        };
+
+        let testBaseClip = null;
+        let testActionClip = null;
+
+        window.setLayerClip = function (layer) {
+            if (!currentAction) { alert("Select an animation in the list first."); return; }
+            const clipName = currentAction.getClip().name;
+            if (layer === 'Base') {
+                testBaseClip = clipName;
+                document.getElementById('lbl-base').innerText = clipName;
+            } else {
+                testActionClip = clipName;
+                document.getElementById('lbl-upper').innerText = clipName;
+            }
+        };
+
+        let triggerIntervalId = null;
+
+        window.testHierarchicalPlay = function () {
+            if (triggerIntervalId) clearInterval(triggerIntervalId);
+            if (!window.hierarchicalController) return;
+            if (!testBaseClip) { alert("Set Base Clip first."); return; }
+            window.hierarchicalController.playHierarchical(testBaseClip, testActionClip);
+        };
+
+        window.startTriggerTest = function () {
+            if (triggerIntervalId) clearInterval(triggerIntervalId);
+            if (!window.hierarchicalController) return;
+            if (!testBaseClip) { alert("Set Base Clip first."); return; }
+            if (!testActionClip) { alert("Set Upper/Action Clip first."); return; }
+
+            // 1. Play Base ONLY (Action is null)
+            // This sets up Base Lower + Base Upper (defaulting to inverse of upper mask)
+            window.hierarchicalController.playHierarchical(testBaseClip, null);
+
+            const intervalSec = parseFloat(document.getElementById('trigger-interval').value) || 2.0;
+            const ms = intervalSec * 1000;
+
+            triggerIntervalId = setInterval(() => {
+                // Play One Shot
+                // Logic: 
+                // 1. Controller plays Action on Upper Layer.
+                // 2. We need it to return to Base Upper when done.
+                // Since we rely on mixer listeners, ensure Controller handles it.
+                // Current Controller.playOneShot fades out existing, plays new.
+                // It does NOT auto-return to "Base Upper".
+                // Workaround: In setInterval, we play OneShot. 
+                // We need to restore Base Upper after duration? 
+
+                // Let's IMPROVE Controller.playOneShot to handle "Return to Base".
+                // But for now, let's manually handle it if needed.
+                // Actually, if we just playOneShot, it stops at end. The upper body freezes.
+                // We need to resume Base Upper.
+
+                // Let's modify playOneShot in Controller to accept a "restoreClip" or "restoreCallback".
+                // Or just HACK it here:
+
+                window.hierarchicalController.playOneShot(testActionClip);
+
+                // To restore:
+                // We need to know when it finishes.
+                // The Controller adds a 'finished' listener but does nothing currently.
+                // Let's update Controller logic to actually restore.
+
+            }, ms);
+        };
+
+        window.stopHierarchicalTest = function () {
+            if (triggerIntervalId) {
+                clearInterval(triggerIntervalId);
+                triggerIntervalId = null;
+            }
+            if (window.hierarchicalController) window.hierarchicalController.stopHierarchical();
+
+            if (currentAction) {
+                currentAction.stop();
+                currentAction.play();
+            }
         };
 
         // --- MODEL SETUP ---
@@ -2103,69 +2985,6 @@
 
         // --- TIMELINE CONTEXT MENU ---
 
-        function getTimelineTimeFromEvent(event) {
-            const track = document.getElementById('scrubber-container'); // Or keyframes-track, they align
-            if (!track) return 0;
-            const rect = track.getBoundingClientRect();
-            const x = event.clientX - rect.left;
-            let t = (x / rect.width) * duration;
-            return Math.max(0, Math.min(t, duration));
-        }
-
-        document.getElementById('keyframes-track').addEventListener('contextmenu', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            const clickTime = getTimelineTimeFromEvent(e);
-
-            const items = [
-                {
-                    label: "Add Keyframe Here",
-                    action: () => {
-                        // We need to add keyframes for SELECTED objects (bones)
-                        // Using current Pose? Or interpolating pose at that time?
-                        // User said "Add a new keyframe, at the right click location/time".
-                        // Usually implies snapshotting current state to that time 
-                        // OR if the object isn't at that time, we might snap it there first?
-                        // Let's assume snapshotting the OBJECT'S CURRENT VISUAL STATE to that time.
-                        // (Which effectively keys the current pose at that new time).
-
-                        // BUT if the user right clicks at t=2.0, but the playhead is at t=0.0,
-                        // The object is at t=0.0 pose. Creating a key at t=2.0 with t=0.0 pose is "Holding".
-                        // Standard behavior might be: insert keyframe OF EXISTING CURVE at that time?
-                        // Or Key current visual pose?
-                        // Given "Add Keyframe" usually means "Key what I see", implies using current Object Transforms.
-
-                        // However, commonly "Insert Key" on timeline means "Insert key on curves".
-                        // Let's go with: Snap Object to that time (internally) -> Record Key -> Restore?
-                        // OR just Record Current Visual Pose to Click Time.
-                        // Implication: "Hold Pose".
-
-                        // Let's treat it as "Add Current Pose at Click Time".
-
-                        // Iterate selected bones? Or all bones?
-                        // recordKeyframe logic iterates All Bones or Selected?
-                        // Current recordKeyframe iterates ALL bones if helper exists.
-                        // Let's reuse that but pass specific time.
-
-                        addKeyframeAtTime(clickTime);
-                    }
-                }
-            ];
-
-            if (selectedKeyframes.size > 0) {
-                items.push({
-                    label: "Delete Selected Keyframes",
-                    danger: true,
-                    action: () => deleteKeyframe() // Deletes selected ones
-                });
-            }
-
-            // Future: Paste
-
-            showContextMenu(e, items);
-        });
-
         window.addKeyframeAtTime = function (timeOverride) {
             if (!currentAction) {
                 alert("Create an animation first.");
@@ -2358,7 +3177,6 @@
                 t.setInterpolation(interp);
             });
 
-            // Re-apply to see effects
             const t = currentAction.time;
             currentAction.stop();
             mixer.uncacheClip(clip);
@@ -2367,6 +3185,8 @@
             currentAction.play();
             if (!isPlaying) currentAction.paused = true;
         };
+
+
 
         // --- TIMELINE ---
 
@@ -2386,20 +3206,49 @@
             if (parts.length > 1) {
                 const newDur = parseFloat(parts[1]);
                 if (!isNaN(newDur) && newDur > 0) {
-                    updateDuration(newDur);
+                    updateDuration();
                 }
             }
         };
 
-        window.updateDuration = function (val) {
+        window.updateDuration = function () {
             if (!currentAction) return;
+            const scroll = document.getElementById('duration-input');
+            const newDur = parseFloat(scroll.value);
             const clip = currentAction.getClip();
-            const newDur = parseFloat(val);
-            if (newDur > 0) {
+
+            if (newDur > 0 && newDur !== clip.duration) {
+                // Snapshot
+                const jsonBefore = clip.toJSON();
+
                 clip.duration = newDur;
                 duration = newDur;
+
+                // Truncate keys if new duration is shorter
+                let changed = false;
+                clip.tracks.forEach(track => {
+                    const times = track.times;
+                    if (times.length > 0 && times[times.length - 1] > newDur) {
+                        const newTimes = [];
+                        const newValues = [];
+                        const itemSize = track.getValueSize();
+
+                        for (let i = 0; i < times.length; i++) {
+                            if (times[i] <= newDur) {
+                                newTimes.push(times[i]);
+                                for (let k = 0; k < itemSize; k++) {
+                                    newValues.push(track.values[i * itemSize + k]);
+                                }
+                            }
+                        }
+                        track.times = new Float32Array(newTimes);
+                        track.values = new Float32Array(newValues);
+                        changed = true;
+                    }
+                });
+
                 // Re-init
-                const t = currentAction.time;
+                const t = Math.min(currentAction.time, newDur);
                 currentAction.stop();
                 mixer.uncacheClip(clip);
                 currentAction = mixer.clipAction(clip);
@@ -2407,33 +3256,56 @@
                 currentAction.play();
                 if (!isPlaying) currentAction.paused = true;
                 drawKeyframeMarkers(clip);
+
+                const jsonAfter = clip.toJSON();
+                if (changed) {
+                    addCommand({
+                        execute: () => restoreClipState(clip, jsonAfter),
+                        undo: () => restoreClipState(clip, jsonBefore)
+                    });
+                }
             }
-        }
+        };
 
         window.deleteKeyframe = function () {
-            if (!selectedKeyframe || !currentAction) return;
+            if (selectedKeyframes.size === 0 || !currentAction) return;
             const clip = currentAction.getClip();
-            const timeToDelete = selectedKeyframe.time;
+            const jsonBefore = clip.toJSON();
+            const timesToRemove = Array.from(selectedKeyframes);
 
             let changed = false;
             clip.tracks.forEach(track => {
                 const times = Array.from(track.times);
                 const values = Array.from(track.values);
+                const itemSize = track.getValueSize();
 
-                // Find index
-                // Since floats are tricky, look for epsilon match
-                const idx = times.findIndex(t => Math.abs(t - timeToDelete) < 0.001);
+                const newTimes = [];
+                const newValues = [];
+                let trackChanged = false;
 
-                if (idx !== -1) {
-                    // Remove
-                    times.splice(idx, 1);
-                    // Values depend on track type, usually quaternion (4) or vector (3)
-                    // But we generated mostly quaternion tracks.
-                    const itemSize = track.getValueSize();
-                    values.splice(idx * itemSize, itemSize);
+                for (let i = 0; i < times.length; i++) {
+                    const t = times[i];
+                    let shouldDelete = false;
+                    for (let tr of timesToRemove) {
+                        if (Math.abs(t - tr) < 0.001) {
+                            shouldDelete = true;
+                            break;
+                        }
+                    }
 
-                    track.times = new Float32Array(times);
-                    track.values = new Float32Array(values);
+                    if (!shouldDelete) {
+                        newTimes.push(t);
+                        for (let k = 0; k < itemSize; k++) {
+                            newValues.push(values[i * itemSize + k]);
+                        }
+                    } else {
+                        trackChanged = true;
+                    }
+                }
+
+                if (trackChanged) {
+                    track.times = new Float32Array(newTimes);
+                    track.values = new Float32Array(newValues);
                     changed = true;
                 }
             });
@@ -2446,8 +3318,15 @@
                 currentAction.time = t;
                 currentAction.play();
                 if (!isPlaying) currentAction.paused = true;
-                selectedKeyframe = null;
+
+                selectedKeyframes.clear();
                 drawKeyframeMarkers(clip);
+
+                const jsonAfter = clip.toJSON();
+                addCommand({
+                    execute: () => restoreClipState(clip, jsonAfter),
+                    undo: () => restoreClipState(clip, jsonBefore)
+                });
             }
         };
 
@@ -2545,141 +3424,24 @@
             link.click();
         }
 
-
-
-        function drawKeyframeMarkers(clip) {
-            const container = document.getElementById('keyframes-track');
-            container.innerHTML = '';
-
-            if (!clip) return;
-
-            const uniqueTimes = new Set();
-            clip.tracks.forEach(t => {
-                t.times.forEach(time => uniqueTimes.add(time));
-            });
-
-            // Convert to array and sort
-            const timesArr = Array.from(uniqueTimes).sort((a, b) => a - b);
-
-            timesArr.forEach(time => {
-                const mk = document.createElement('div');
-                mk.className = 'keyframe-marker';
-                mk.style.left = (time / duration * 100) + '%';
-
-                let isSelected = false;
-                for (let t of selectedKeyframes) {
-                    if (Math.abs(t - time) < 0.001) isSelected = true;
+        window.selectKeyframe = function (time, multiSelect, clip) {
+            if (multiSelect) {
+                if (selectedKeyframes.has(time)) selectedKeyframes.delete(time);
+                else selectedKeyframes.add(time);
+            } else {
+                if (!selectedKeyframes.has(time)) {
+                    selectedKeyframes.clear();
+                    selectedKeyframes.add(time);
                 }
-
-                if (isSelected) {
-                    mk.style.background = 'red';
-                    mk.style.zIndex = '20';
-                } else {
-                    mk.style.background = 'yellow';
-                }
-
-                mk.onmousedown = (e) => {
-                    e.stopPropagation();
-                    if (e.ctrlKey) {
-                        if (selectedKeyframes.has(time)) selectedKeyframes.delete(time);
-                        else selectedKeyframes.add(time);
-                    } else {
-                        if (!selectedKeyframes.has(time)) {
-                            selectedKeyframes.clear();
-                            selectedKeyframes.add(time);
-                        }
-                    }
-
-                    // Auto-jump to time
-                    if (currentAction) {
-                        currentAction.time = time;
-                        mixer.update(0);
-                    }
-                    drawKeyframeMarkers(clip);
-                };
-
-                container.appendChild(mk);
-            });
-
-            // Box Select Listener
-            if (!selectionBoxDiv) {
-                selectionBoxDiv = document.createElement('div');
-                selectionBoxDiv.style.position = 'absolute';
-                selectionBoxDiv.style.border = '1px dashed white';
-                selectionBoxDiv.style.background = 'rgba(255, 255, 255, 0.2)';
-                selectionBoxDiv.style.pointerEvents = 'none';
-                selectionBoxDiv.style.display = 'none';
-                container.appendChild(selectionBoxDiv);
-
-                container.onmousedown = (e) => {
-                    // Start Box Select on the Keyframe Row
-                    if (e.target !== container && e.target.className !== 'keyframe-marker') return;
-
-                    isBoxSelecting = true;
-                    // Reset selected keyframes if not Ctrl
-                    if (!e.ctrlKey) selectedKeyframes.clear();
-
-                    const rect = container.getBoundingClientRect();
-                    selectionBoxStart = { x: e.clientX - rect.left };
-                    selectionBoxDiv.style.left = selectionBoxStart.x + 'px';
-                    selectionBoxDiv.style.top = '0px';
-                    selectionBoxDiv.style.width = '0px';
-                    selectionBoxDiv.style.height = '100%';
-                    selectionBoxDiv.style.display = 'block';
-
-                    // Draw markers immediately to reflect deselection
-                    drawKeyframeMarkers(clip);
-                    // Re-append box
-                    container.appendChild(selectionBoxDiv);
-
-                    e.stopPropagation(); // Don't trigger scrubber if they are somehow overlapping or propagation issues
-                };
-
-                // Move listeners to document to capture dragging outside slightly
-                const onMove = (e) => {
-                    if (!isBoxSelecting) return;
-                    const container = document.getElementById('keyframes-track');
-                    if (!container) return;
-                    const rect = container.getBoundingClientRect();
-                    // Rel to container
-                    const currentX = e.clientX - rect.left;
-
-                    const left = Math.min(selectionBoxStart.x, currentX);
-                    const width = Math.abs(currentX - selectionBoxStart.x);
-
-                    selectionBoxDiv.style.left = left + 'px';
-                    selectionBoxDiv.style.width = width + 'px';
-                };
-
-                const onUp = (e) => {
-                    if (!isBoxSelecting) return;
-                    isBoxSelecting = false;
-                    selectionBoxDiv.style.display = 'none';
-
-                    const container = document.getElementById('keyframes-track');
-                    const rect = container.getBoundingClientRect();
-
-                    const boxLeft = parseFloat(selectionBoxDiv.style.left);
-                    const boxWidth = parseFloat(selectionBoxDiv.style.width);
-
-                    // Calc Start/End Time coverage
-                    const tStart = (boxLeft / rect.width) * duration;
-                    const tEnd = ((boxLeft + boxWidth) / rect.width) * duration;
-
-                    // Select intersected
-                    timesArr.forEach(time => {
-                        if (time >= tStart && time <= tEnd) {
-                            selectedKeyframes.add(time);
-                        }
-                    });
-
-                    drawKeyframeMarkers(clip);
-                };
-
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onUp);
             }
-        }
+
+            // Auto-jump to time
+            if (currentAction) {
+                currentAction.time = time;
+                mixer.update(0);
+            }
+            drawTimeline();
+        };
 
         // --- INTERACTION ---
 
@@ -2819,37 +3581,6 @@
 
 
         // --- TIMELINE UI LOGIC ---
-
-        window.startScrub = function (e) {
-            isScrubbing = true;
-            isPlaying = false; // Pause while scrubbing
-            scrub(e);
-
-            document.addEventListener('mousemove', scrub);
-            document.addEventListener('mouseup', stopScrub);
-        }
-
-        function scrub(e) {
-            if (!currentAction) return;
-            // Target the Scrubber Row now
-            const container = document.getElementById('scrubber-row');
-            if (!container) return;
-            const rect = container.getBoundingClientRect();
-            let x = e.clientX - rect.left;
-            x = Math.max(0, Math.min(x, rect.width));
-
-            const pct = x / rect.width;
-            const time = pct * duration;
-
-            currentAction.time = time;
-            mixer.update(0); // Update model pose manually
-        }
-
-        function stopScrub() {
-            isScrubbing = false;
-            document.removeEventListener('mousemove', scrub);
-            document.removeEventListener('mouseup', stopScrub);
-        }
 
 
 
@@ -3147,18 +3878,32 @@
                 // Constant is better for visibility.
             }
 
-            // Sync UI
-            if (currentAction && duration > 0) {
-                const time = currentAction.time;
-                const pct = (time / duration) * 100;
-                document.getElementById('playhead').style.left = pct + '%';
-                document.getElementById('scrubber-bar').style.width = pct + '%';
+            // Sync UI (Playheads & Trimming)
+            if (renderedTracks.length > 0) {
+                renderedTracks.forEach(track => {
+                    if (track.action && track.playhead) {
+                        // Handle Trimming Loop
+                        if (track.userData && track.action.isRunning()) {
+                            const trimStart = track.userData.trimStart || 0;
+                            const trimEnd = track.userData.trimEnd || 0;
+                            const duration = track.duration; // Use cached duration
+                            const endTime = Math.max(trimStart, duration - trimEnd);
 
-                // Only update input if not focused
-                const disp = document.getElementById('time-display');
-                if (document.activeElement !== disp) {
-                    disp.value = time.toFixed(2) + " / " + duration.toFixed(2);
-                }
+                            // Custom Loop Logic needed because THREE.Action loop is global/clip based
+                            if (track.action.time > endTime) {
+                                // Wrap around
+                                track.action.time = trimStart;
+                            }
+                            if (track.action.time < trimStart) {
+                                track.action.time = trimStart;
+                            }
+                        }
+
+                        const t = track.action.time;
+                        const pct = (t / track.duration) * 100;
+                        track.playhead.style.left = pct + '%';
+                    }
+                });
             }
 
             renderer.render(scene, camera);
