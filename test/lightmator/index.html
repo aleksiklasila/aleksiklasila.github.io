@@ -476,6 +476,9 @@
             <div style="flex-grow:1"></div>
             <label style="margin-right:10px;"><input type="checkbox" id="chk-skeleton" checked
                     onchange="toggleSkeleton()"> Show Bones</label>
+            <label style="margin-right:10px;"><input type="checkbox" id="chk-focus-selected" checked
+                    onchange="toggleFocusSelected()"> Focus
+                Selected</label>
             <label style="margin-right:10px;"><input type="checkbox" id="chk-ik" onchange="toggleIK()"> IK Mode
                 <span id="ik-status" style="font-size:10px; color:#aaa;">OFF</span></label>
         </div>
@@ -2750,6 +2753,22 @@
 
         let selectionHighlighter = null;
 
+        window.toggleFocusSelected = function () {
+            const chk = document.getElementById('chk-focus-selected');
+            if (chk && chk.checked && selectedBone) {
+                focusOnObject(selectedBone);
+            }
+        };
+
+        function focusOnObject(obj) {
+            if (!obj) return;
+            // Animate or snap? Existing logic was snap.
+            const pos = new THREE.Vector3();
+            obj.getWorldPosition(pos);
+            orbit.target.copy(pos);
+            orbit.update();
+        }
+
         // Define global selectBone
         window.selectBone = function (bone, fromTree) {
             selectedBone = bone;
@@ -2757,13 +2776,13 @@
 
             // Auto Focus Logic
             if (bone) {
-                if (fromTree) {
-                    // Clicked in Tree -> Focus Camera on Bone
-                    const pos = new THREE.Vector3();
-                    bone.getWorldPosition(pos);
-                    orbit.target.copy(pos);
-                    orbit.update();
-                } else {
+                // Focus Camera if toggle enabled
+                const chkFocus = document.getElementById('chk-focus-selected');
+                if (chkFocus && chkFocus.checked) {
+                    focusOnObject(bone);
+                }
+
+                if (!fromTree) {
                     // Clicked in Viewer -> Focus in Tree
                     if (window.focusInTree) focusInTree(bone);
                 }
