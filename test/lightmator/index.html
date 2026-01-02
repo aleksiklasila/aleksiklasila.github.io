@@ -673,6 +673,11 @@
                         dragStartPos.copy(transformControl.object.position);
                         dragStartRot.copy(transformControl.object.quaternion);
                         dragStartScale.copy(transformControl.object.scale);
+
+                        // SNAPSHOT CLIP BEFORE (if multiple keyframes selected)
+                        if (selectedKeyframes.size > 0 && currentAction) {
+                            transformControl.userData.jsonBefore = currentAction.getClip().toJSON();
+                        }
                     }
                 } else {
                     // Stop dragging
@@ -690,22 +695,68 @@
 
                         // Only add if changed
                         if (!startP.equals(endP) || !startQ.equals(endQ) || !startS.equals(endS)) {
-                            addCommand({
-                                execute: () => {
-                                    obj.position.copy(endP);
-                                    obj.quaternion.copy(endQ);
-                                    obj.scale.copy(endS);
-                                    obj.updateMatrixWorld(true);
-                                    if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
-                                },
-                                undo: () => {
-                                    obj.position.copy(startP);
-                                    obj.quaternion.copy(startQ);
-                                    obj.scale.copy(startS);
-                                    obj.updateMatrixWorld(true);
-                                    if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
-                                }
-                            });
+
+                            // Check for Multi-Keyframe Edit
+                            if (selectedKeyframes.size > 0 && currentAction) {
+                                const clip = currentAction.getClip();
+
+                                // Calculate Deltas
+                                const deltaP = endP.clone().sub(startP);
+                                // For rotation: current = start * delta -> delta = inverse(start) * current
+                                const deltaQ = startQ.clone().invert().multiply(endQ);
+                                // For scale: current = start * delta -> delta = current / start
+                                const deltaS = new THREE.Vector3(
+                                    startS.x !== 0 ? endS.x / startS.x : 1,
+                                    startS.y !== 0 ? endS.y / startS.y : 1,
+                                    startS.z !== 0 ? endS.z / startS.z : 1
+                                );
+
+                                // Apply to ALL selected keyframes
+                                applyDeltaToKeyframes(clip, obj, selectedKeyframes, deltaP, deltaQ, deltaS);
+
+                                // Refresh Visuals / Markers if needed (usually just values changed)
+                                // We might need to ensure the Current Time frame is up to date?
+                                // If we are sitting on one of the keyframes, the object update above handles the visual.
+                                // But if we modified OTHER frames, we are good.
+
+                                const jsonAfter = clip.toJSON();
+                                const jsonBefore = transformControl.userData.jsonBefore;
+
+                                addCommand({
+                                    execute: () => {
+                                        restoreClipState(clip, jsonAfter);
+                                    },
+                                    undo: () => {
+                                        restoreClipState(clip, jsonBefore);
+                                    }
+                                });
+
+                            } else {
+                                // Standard single transformation (Visual Object Update + IK)
+                                // Note: This does NOT save to keyframe automatically unless 'Keyframe' button is pressed,
+                                // UNLESS we want "Auto Key" mode.
+                                // The User Request said: "save the modifications to those keyframes automatically".
+                                // This implies if we are on a keyframe (or selected one), we modify it.
+                                // My implementation of "Multi-Keyframe" handles the selection case.
+                                // If NO keyframes are explicitly selected, we just move the object (standard behavior).
+
+                                addCommand({
+                                    execute: () => {
+                                        obj.position.copy(endP);
+                                        obj.quaternion.copy(endQ);
+                                        obj.scale.copy(endS);
+                                        obj.updateMatrixWorld(true);
+                                        if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
+                                    },
+                                    undo: () => {
+                                        obj.position.copy(startP);
+                                        obj.quaternion.copy(startQ);
+                                        obj.scale.copy(startS);
+                                        obj.updateMatrixWorld(true);
+                                        if (ikEnabled && obj === ikTargetHelper) solveIK(ikChain, obj.position);
+                                    }
+                                });
+                            }
                         }
                     }
                 }
@@ -1353,29 +1404,19 @@
             }
 
             // Click -> Select or Rename (Manual Double Click)
+            // Click -> Select
             row.onclick = (e) => {
-                const now = Date.now();
-                if (isBone && (now - lastClick < 300)) {
-                    // Double Click Logic
-                    console.log('Manual double click detected on', obj.name);
-                    e.stopPropagation(); // Stop select from bubbling if needed
-
-                    const currentName = obj.name || "Bone";
-                    enableInlineRename(label, currentName, (newName) => {
-                        obj.name = newName;
-                        renderBoneHierarchy();
-                    });
-                } else {
-                    // Single Click Logic
-                    if (isBone) selectBone(obj, true);
-                    else {
-                        selectBone(null, true);
-                        transformControl.attach(obj);
-                        document.getElementById('selection-info').innerText = "Selected: " + (obj.name || "Object");
-                        updateHierarchySelection(obj);
-                    }
+                if (isBone) selectBone(obj, true);
+                else {
+                    selectBone(null, true);
+                    transformControl.attach(obj);
+                    document.getElementById('selection-info').innerText = "Selected: " + (obj.name || "Object");
+                    // If we have a helper for props, use it? For now, re-render or custom update?
+                    // Usually we don't have a specific update for props selection in tree except rebuild
+                    // But if selectBone rebuilds, maybe we just rebuild for consistency or add simple highlight
+                    if (window.updateHierarchySelection) window.updateHierarchySelection(obj);
+                    else renderBoneHierarchy();
                 }
-                lastClick = now;
             };
 
             div.appendChild(row);
@@ -1422,6 +1463,15 @@
                     setTimeout(() => row.style.background = '', 500);
                 }
             }, 50);
+        };
+
+        window.updateHierarchySelection = function (obj) {
+            document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('selected'));
+            if (!obj) return;
+            const row = document.getElementById('tree-row-' + obj.uuid);
+            if (row) {
+                row.classList.add('selected');
+            }
         };
 
         function createTextSprite(message) {
@@ -1651,6 +1701,74 @@
         window.toggleSkeleton = function () {
             if (skeletonHelper) skeletonHelper.visible = document.getElementById('chk-skeleton').checked;
         }
+
+        window.applyDeltaToKeyframes = function (clip, object, timesSet, deltaP, deltaQ, deltaS) {
+            const trackNameBase = object.name; // Assumption: Track names are "BoneName.position", etc.
+
+            // Support both exact matches and UUID based if tracks use UUIDs (GLTF Loader usually uses names)
+            // But we created tracks using .name
+            const posTrackName = trackNameBase + ".position";
+            const rotTrackName = trackNameBase + ".quaternion";
+            const sclTrackName = trackNameBase + ".scale";
+
+            // Find Tracks
+            const posTrack = clip.tracks.find(t => t.name === posTrackName);
+            const rotTrack = clip.tracks.find(t => t.name === rotTrackName);
+            const sclTrack = clip.tracks.find(t => t.name === sclTrackName);
+
+            const timesToMod = Array.from(timesSet);
+
+            // Helper to apply
+            const apply = (track, type) => {
+                if (!track) return;
+                const times = track.times;
+                const values = track.values;
+                const itemSize = track.getValueSize(); // 3 or 4
+
+                for (let i = 0; i < times.length; i++) {
+                    // Check if this keyframe time is in our selection
+                    // Use epsilon
+                    const t = times[i];
+                    let isSelected = false;
+                    for (let selT of timesToMod) {
+                        if (Math.abs(selT - t) < 0.001) {
+                            isSelected = true;
+                            break;
+                        }
+                    }
+
+                    if (isSelected) {
+                        if (type === 'pos') {
+                            // Additive
+                            values[i * 3] += deltaP.x;
+                            values[i * 3 + 1] += deltaP.y;
+                            values[i * 3 + 2] += deltaP.z;
+                        } else if (type === 'scale') {
+                            // Multiplicative
+                            values[i * 3] *= deltaS.x;
+                            values[i * 3 + 1] *= deltaS.y;
+                            values[i * 3 + 2] *= deltaS.z;
+                        } else if (type === 'rot') {
+                            // Rotations are tricky. modifying the stored quaternion.
+                            // Stored: q_old. New: q_new = q_old * deltaQ (Applied locally)
+                            const currentQ = new THREE.Quaternion(
+                                values[i * 4], values[i * 4 + 1], values[i * 4 + 2], values[i * 4 + 3]
+                            );
+                            currentQ.multiply(deltaQ); // multiply appends local rotation
+
+                            values[i * 4] = currentQ.x;
+                            values[i * 4 + 1] = currentQ.y;
+                            values[i * 4 + 2] = currentQ.z;
+                            values[i * 4 + 3] = currentQ.w;
+                        }
+                    }
+                }
+            };
+
+            if (deltaP.lengthSq() > 0) apply(posTrack, 'pos');
+            if (deltaS.distanceTo(new THREE.Vector3(1, 1, 1)) > 0.0001) apply(sclTrack, 'scale');
+            if (deltaQ.angleTo(new THREE.Quaternion()) > 0.0001) apply(rotTrack, 'rot');
+        };
 
         // --- KEYFRAME EDITING ---
 
@@ -2481,13 +2599,22 @@
         let selectionHighlighter = null;
 
         // Define global selectBone
-        window.selectBone = function (bone) {
+        window.selectBone = function (bone, fromTree) {
             selectedBone = bone;
             document.getElementById('selection-info').innerText = "Selected: " + (bone ? bone.name : "None");
 
-            // Auto Focus in Tree
-            if (bone && window.focusInTree) {
-                focusInTree(bone);
+            // Auto Focus Logic
+            if (bone) {
+                if (fromTree) {
+                    // Clicked in Tree -> Focus Camera on Bone
+                    const pos = new THREE.Vector3();
+                    bone.getWorldPosition(pos);
+                    orbit.target.copy(pos);
+                    orbit.update();
+                } else {
+                    // Clicked in Viewer -> Focus in Tree
+                    if (window.focusInTree) focusInTree(bone);
+                }
             }
 
             // Update Highlight Visual
@@ -2501,7 +2628,11 @@
             }
 
             // Update Tree UI Selection
-            renderBoneHierarchy(); // Simple re-render to update highlights classes
+            if (window.updateHierarchySelection) {
+                updateHierarchySelection(bone);
+            } else {
+                renderBoneHierarchy();
+            }
 
             if (bone) {
                 selectionHighlighter.visible = true;
