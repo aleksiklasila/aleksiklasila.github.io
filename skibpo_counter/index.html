@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Skip-Bo Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@v3.0.3/dist/tesseract.min.js"></script>
+    <script async src="https://docs.opencv.org/4.5.0/opencv.js" onload="onOpenCvReady();"></script>
+    <style>
+        body { background: #121212; color: #fff; font-family: sans-serif; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
+        h1 { color: #f44336; margin: 0 0 10px 0; font-size: 1.2rem; text-align: center; }
+        
+        .top-bar { display: flex; justify-content: space-between; align-items: center; background: #333; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+        .score-box { text-align: right; }
+        .score-val { font-size: 2rem; font-weight: bold; color: #4caf50; }
+        .score-lbl { font-size: 0.7rem; color: #aaa; text-transform: uppercase; }
+
+        .controls { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .btn { border: none; padding: 15px; border-radius: 8px; font-weight: bold; color: white; font-size: 1rem; }
+        .btn-cam { background: #2196F3; }
+        .btn-reset { background: #555; }
+
+        /* Canvas Container */
+        #viewport { position: relative; flex-grow: 1; border: 1px solid #333; overflow: hidden; background: #000; }
+        #displayCanvas { width: 100%; display: block; }
+        #overlayLayer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+        /* The clickable result bubbles */
+        .res-bubble {
+            position: absolute; width: 40px; height: 40px;
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-weight: bold; color: white; border: 2px solid white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5); font-size: 18px;
+            pointer-events: auto; transform: translate(-50%, -50%); /* Center on coordinate */
+            z-index: 10;
+        }
+
+        #log { font-family: monospace; font-size: 10px; color: #aaa; height: 60px; overflow-y: auto; background: #222; padding: 5px; border-top: 1px solid #444; }
+    </style>
+</head>
+<body>
+
+    <h1>Skip-Bo Counter Pro</h1>
+
+    <div class="top-bar">
+        <div id="status">Loading System...</div>
+        <div class="score-box">
+            <div class="score-lbl">Total Points</div>
+            <div class="score-val" id="totalScore">0</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <label class="btn btn-cam" id="camBtn" style="opacity: 0.5; text-align:center;">
+            📷 SCAN
+            <input type="file" id="cameraInput" accept="image/*" hidden capture="environment">
+        </label>
+        <button class="btn btn-reset" onclick="resetAll()">RESET</button>
+    </div>
+
+    <div id="viewport">
+        <canvas id="displayCanvas"></canvas>
+        <div id="overlayLayer"></div>
+    </div>
+
+    <div id="log">Logs will appear here...</div>
+
+<script>
+    let cvReady = false;
+    let worker = null;
+    let grandTotal = 0;
+    
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const totalEl = document.getElementById('totalScore');
+    const overlayLayer = document.getElementById('overlayLayer');
+    const canvas = document.getElementById('displayCanvas');
+    const ctx = canvas.getContext('2d');
+    const camBtn = document.getElementById('camBtn');
+
+    function log(msg) {
+        logEl.innerText = `> ${msg}\n` + logEl.innerText;
+        console.log(msg);
+    }
+
+    // 1. Initialize OpenCV
+    function onOpenCvReady() {
+        cvReady = true;
+        log("OpenCV Core Loaded.");
+        initTesseract();
+    }
+
+    // 2. Initialize Tesseract
+    async function initTesseract() {
+        try {
+            log("Loading OCR Engine...");
+            worker = Tesseract.createWorker();
+            await worker.load();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+            // Strict number mode
+            await worker.setParameters({
+                tessedit_char_whitelist: '0123456789',
+                tessedit_pageseg_mode: '10' // Single char mode
+            });
+            log("System Ready.");
+            statusEl.innerText = "Ready";
+            camBtn.style.opacity = "1";
+        } catch (e) {
+            log("OCR Init Failed: " + e);
+        }
+    }
+
+    function resetAll() {
+        grandTotal = 0;
+        totalEl.innerText = "0";
+        overlayLayer.innerHTML = '';
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        log("Reset.");
+    }
+
+    // 3. Handle Image Input
+    document.getElementById('cameraInput').addEventListener('change', (e) => {
+        if (!e.target.files[0]) return;
+        
+        statusEl.innerText = "Processing...";
+        camBtn.style.opacity = "0.5";
+        
+        const img = new Image();
+        img.onload = () => {
+            // Slight delay to render UI before freezing
+            setTimeout(() => safeProcess(img), 100);
+        };
+        img.src = URL.createObjectURL(e.target.files[0]);
+    });
+
+    // 4. Safe Processing Wrapper
+    async function safeProcess(img) {
+        try {
+            overlayLayer.innerHTML = ''; // Clear old bubbles
+            
+            // Resize to 500px width (Safe for mobile memory)
+            const scale = 500 / img.width;
+            canvas.width = 500;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            log(`Image size: ${canvas.width}x${canvas.height}`);
+
+            // Start OpenCV Pipeline
+            processColors();
+
+        } catch (e) {
+            log("FATAL ERROR: " + e.message);
+            statusEl.innerText = "Error";
+        } finally {
+            camBtn.style.opacity = "1";
+            statusEl.innerText = "Done";
+        }
+    }
+
+    async function processColors() {
+        let src = null, hsv = null;
+        
+        try {
+            src = cv.imread(canvas);
+            hsv = new cv.Mat();
+            cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
+            cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+
+            // Define Color Ranges (H: 0-179, S: 0-255, V: 0-255)
+            const colors = [
+                { name: "Blue",   h: [90, 130], s: [80, 255],  v: [50, 255], bg: "#2196F3", valid:[1,2,3,4] },
+                { name: "Green",  h: [35, 85],  s: [60, 255],  v: [50, 255], bg: "#4CAF50", valid:[5,6,7,8] },
+                { name: "Red",    h: [0, 10],   s: [100, 255], v: [50, 255], bg: "#f44336", valid:[9,10,11,12], wrap:[160,180] },
+                { name: "Orange", h: [11, 25],  s: [100, 255], v: [100, 255],bg: "#ff9800", valid:[0] }
+            ];
+
+            let foundTotal = 0;
+
+            for (let c of colors) {
+                // Perform color isolation in a separate Try/Catch to prevent one color crashing loop
+                try {
+                    let mask = new cv.Mat();
+                    let low = new cv.Mat(src.rows, src.cols, src.type(), [c.h[0], c.s[0], c.v[0], 0]);
+                    let high = new cv.Mat(src.rows, src.cols, src.type(), [c.h[1], c.s[1], c.v[1], 0]);
+                    
+                    cv.inRange(hsv, low, high, mask);
+                    low.delete(); high.delete(); // Immediate cleanup
+
+                    if (c.wrap) {
+                        let m2 = new cv.Mat();
+                        let l2 = new cv.Mat(src.rows, src.cols, src.type(), [c.wrap[0], c.s[0], c.v[0], 0]);
+                        let h2 = new cv.Mat(src.rows, src.cols, src.type(), [c.wrap[1], c.s[1], c.v[1], 0]);
+                        cv.inRange(hsv, l2, h2, m2);
+                        cv.add(mask, m2, mask);
+                        m2.delete(); l2.delete(); h2.delete();
+                    }
+
+                    // Morph open to remove noise
+                    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k);
+                    k.delete();
+
+                    // Find Contours
+                    let contours = new cv.MatVector();
+                    let hier = new cv.Mat();
+                    cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                    // Iterate contours
+                    for (let i = 0; i < contours.size(); ++i) {
+                        let cnt = contours.get(i);
+                        let area = cv.contourArea(cnt);
+
+                        // Card Size Filter (Adjusted for 500px width)
+                        // A card is roughly 1/20th to 1/5th of screen? 
+                        // Let's say min area 1000px.
+                        if (area > 800) {
+                            let rect = cv.boundingRect(cnt);
+                            let ratio = rect.width / rect.height;
+
+                            // Shape Filter (Rectangle-ish)
+                            if (ratio > 0.4 && ratio < 2.5) {
+                                // Valid Candidate
+                                let val = 0;
+                                if (c.name === "Orange") {
+                                    val = 0; // SkipBo
+                                } else {
+                                    // Try OCR
+                                    val = await smartRead(src, rect, c.valid);
+                                }
+                                
+                                addBubble(rect, val, c.bg);
+                                foundTotal += val;
+                            }
+                        }
+                    }
+
+                    // Loop Cleanup
+                    mask.delete(); contours.delete(); hier.delete();
+
+                } catch (err) {
+                    log(`Error in ${c.name}: ${err}`);
+                }
+            }
+
+            grandTotal += foundTotal;
+            totalEl.innerText = grandTotal;
+
+        } catch (e) {
+            log("CV Error: " + e);
+        } finally {
+            if (src) src.delete();
+            if (hsv) hsv.delete();
+        }
+    }
+
+    async function smartRead(fullImg, rect, validList) {
+        // 1. Clamp Rect (Prevent Out-Of-Bounds Crash)
+        let x = Math.max(0, rect.x);
+        let y = Math.max(0, rect.y);
+        let w = Math.min(fullImg.cols - x, rect.width);
+        let h = Math.min(fullImg.rows - y, rect.height);
+        
+        let roiRect = new cv.Rect(x, y, w, h);
+        let roi = fullImg.roi(roiRect);
+        let result = 0;
+
+        try {
+            // 2. Pre-process
+            let gray = new cv.Mat();
+            cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+            cv.threshold(gray, gray, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+            // 3. Inner Crop (Avoid borders)
+            let innerX = Math.floor(w * 0.2);
+            let innerY = Math.floor(h * 0.2);
+            let innerW = Math.floor(w * 0.6);
+            let innerH = Math.floor(h * 0.6);
+            
+            // Safety Check on Inner Crop
+            if (innerW > 1 && innerH > 1) {
+                let innerRect = new cv.Rect(innerX, innerY, innerW, innerH);
+                let innerRoi = gray.roi(innerRect);
+
+                // 4. Convert to Canvas for Tesseract
+                let tCan = document.createElement('canvas');
+                tCan.width = innerW;
+                tCan.height = innerH;
+                cv.imshow(tCan, innerRoi);
+
+                // 5. OCR
+                const { data: { text } } = await worker.recognize(tCan);
+                let num = parseInt(text.replace(/[^0-9]/g, ''));
+                
+                if (validList.includes(num)) {
+                    result = num;
+                } else {
+                    // Simple heuristic fallbacks
+                    if (num === 0 && validList.includes(10)) result = 10;
+                    if (num === 1 && validList.includes(11)) result = 11;
+                }
+                innerRoi.delete();
+            }
+            gray.delete();
+
+        } catch (e) {
+            // Ignore OCR failure, return 0
+        } finally {
+            roi.delete();
+        }
+        return result;
+    }
+
+    function addBubble(rect, val, color) {
+        let b = document.createElement('div');
+        b.className = 'res-bubble';
+        b.style.backgroundColor = color;
+        // Calculate center
+        let cx = rect.x + (rect.width / 2);
+        let cy = rect.y + (rect.height / 2);
+        
+        // CSS expects absolute positioning
+        // We need to scale these coordinates to the display CSS size if canvas scales?
+        // But here canvas is 100% width, so it matches the visual.
+        // Wait, if CSS width != internal width (500), we need to scale.
+        // The canvas is style="width:100%". 
+        // We must rely on percentage positioning to be responsive.
+        
+        let pctLeft = (cx / canvas.width) * 100;
+        let pctTop = (cy / canvas.height) * 100;
+        
+        b.style.left = pctLeft + "%";
+        b.style.top = pctTop + "%";
+        
+        b.innerText = (val === 0 && color === "#ff9800") ? "SB" : val;
+        
+        // Edit Feature
+        b.onclick = () => {
+            let newVal = prompt("Enter Value:", val);
+            if (newVal && !isNaN(parseInt(newVal))) {
+                let n = parseInt(newVal);
+                let oldVal = (b.innerText === "SB") ? 0 : parseInt(b.innerText);
+                grandTotal = grandTotal - oldVal + n;
+                totalEl.innerText = grandTotal;
+                b.innerText = n;
+            }
+        };
+
+        overlayLayer.appendChild(b);
+    }
+</script>
+</body>
+</html>
