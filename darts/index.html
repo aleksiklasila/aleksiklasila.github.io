@@ -1,0 +1,1719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Darts Scorer Pro</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-color: #e0e0e0;
+            --accent: #00e676;
+            --accent-dim: #00a856;
+            --danger: #cf6679;
+            --gold: #ffd700;
+            --dart-flight: #ff4081;
+            --dart-shaft: #eee;
+            --dart-barrel: #333;
+            --dart-tip: #aaa;
+        }
+
+        html, body {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; position: fixed;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex; flex-direction: column;
+            touch-action: none; user-select: none;
+        }
+
+        /* --- Header --- */
+        header {
+            flex: 0 0 auto; padding: 5px 15px; background: var(--card-bg);
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #333; height: 44px;
+            padding-top: max(5px, env(safe-area-inset-top)); z-index: 100;
+        }
+        h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.5px; }
+        
+        .header-controls { display: flex; gap: 10px; }
+        
+        button {
+            background: var(--accent); color: #000; border: none; padding: 6px 14px;
+            border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.85rem;
+        }
+        button.icon-btn { 
+            padding: 6px 10px; 
+            display: flex; align-items: center; justify-content: center; 
+            background: #333; color: #ccc; border: 1px solid #444;
+        }
+        button.icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+        button.danger { background: var(--danger); color: white; }
+
+        /* --- Scoreboard --- */
+        #scoreboard {
+            flex: 0 0 90px; display: flex; overflow-x: auto; background: #000;
+            padding: 8px; gap: 8px; border-bottom: 1px solid #333; 
+            -webkit-overflow-scrolling: touch;
+        }
+        .player-column {
+            min-width: 100px; flex: 1; background: var(--card-bg); border-radius: 8px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            border: 2px solid transparent; padding: 5px; position: relative; flex-shrink: 0;
+        }
+        .player-column.active { border-color: var(--accent); background: #252525; box-shadow: 0 0 15px rgba(0, 230, 118, 0.1); }
+        .player-column.finished { opacity: 0.6; border-color: gold; }
+        .player-name { font-size: 0.85rem; font-weight: 600; color: #aaa; margin-bottom: 2px; }
+        
+        .current-score { 
+            font-size: 2.2rem; font-weight: 800; color: white; line-height: 1; letter-spacing: -1px; 
+            cursor: pointer;
+        }
+        .current-score:active { transform: scale(0.95); color: #ccc; }
+
+        .projected-row { margin-top: 4px; font-size: 0.75rem; color: #777; display: flex; justify-content: center; gap: 4px; }
+        .next-score { color: var(--accent); font-weight: bold; }
+        .next-score.bust { color: var(--danger); text-decoration: line-through; }
+
+        /* --- View Slider --- */
+        #view-slider {
+            flex: 1; display: flex; overflow-x: auto; overflow-y: hidden;
+            scroll-snap-type: x mandatory; scroll-behavior: smooth;
+            width: 100%; background: #121212; position: relative;
+            -webkit-overflow-scrolling: touch; 
+        }
+        .view-section {
+            flex: 0 0 100%; width: 100%; height: 100%;
+            scroll-snap-align: start; position: relative; overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+
+        /* --- View 1: Board --- */
+        #section-visual { position: relative; }
+        
+        #board-content-wrapper {
+            flex: 1; 
+            position: relative; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: flex-end; 
+            align-items: center;
+            padding-bottom: 140px; 
+            background: radial-gradient(circle at center, #222 0%, #121212 70%);
+        }
+        
+        #dartboard-container {
+            width: 90%; max-width: 420px; aspect-ratio: 1/1; position: relative;
+            filter: drop-shadow(0px 10px 20px rgba(0,0,0,0.6));
+        }
+        svg { width: 100%; height: 100%; }
+        
+        /* Footer Spacer */
+        .view-footer {
+            flex: 0 0 auto; width: 100%; height: 60px; pointer-events: none;
+        }
+
+        /* --- View 2: Grid --- */
+        #grid-content-wrapper { 
+            flex: 1; display: flex; flex-direction: column; 
+            background: #121212; padding: 10px 10px 0 10px; 
+            overflow: hidden; 
+        }
+        #grid-tabs { display: flex; gap: 5px; margin-bottom: 10px; flex: 0 0 auto; }
+        .grid-tab {
+            flex: 1; background: #252525; padding: 10px; border-radius: 8px;
+            text-align: center; border: 1px solid #333; cursor: pointer; transition: 0.2s;
+        }
+        .grid-tab.active { background: var(--accent-dim); border-color: var(--accent); color: white; }
+        .grid-tab-label { font-size: 0.75rem; font-weight: bold; color: #aaa; display: block; margin-bottom: 2px;}
+        .grid-tab.active .grid-tab-label { color: rgba(255,255,255,0.8); }
+        .grid-tab-val { font-size: 1.1rem; font-weight: 800; color: white; }
+
+        #grid-body-container { 
+            flex: 1; overflow-y: auto; background: #181818; border-radius: 8px; padding: 5px; position: relative;
+        }
+        .grid-page { display: none; padding-bottom: 10px; }
+        .grid-page.active { display: block; }
+        .grid-matrix { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+        .g-btn {
+            padding: 12px 2px; text-align: center; background: #333; border-radius: 4px;
+            font-size: 0.8rem; font-weight: bold; color: #ddd; cursor: pointer;
+            border: 1px solid #444; user-select: none;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .g-btn:active { background: #555; transform: scale(0.98); }
+        .g-single { background: #222; }
+        .g-double { background: #388e3c; color: white; border-color: #388e3c; }
+        .g-triple { background: #d32f2f; color: white; border-color: #d32f2f; }
+        .g-bull { grid-column: span 3; background: #d32f2f; color: white; margin-top: 5px; font-size: 0.9rem; }
+        .g-miss { grid-column: span 3; background: #333; color: #888; margin-top: 5px; font-size: 0.9rem; }
+
+        .grid-dim-text {
+            color: #777; font-size: 0.75em; font-weight: 500; margin-left: 4px;
+        }
+        .g-double .grid-dim-text, .g-triple .grid-dim-text { color: rgba(255,255,255,0.6); }
+
+        /* --- Graph/History Modal Content --- */
+        #graph-wrapper, #player-graph-wrapper {
+            flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #111; padding: 10px; width: 100%; height: 100%; box-sizing: border-box;
+            border-radius: 8px;
+        }
+        #graph-container, #player-graph-container {
+            width: 100%; flex: 1; position: relative;
+            border-bottom: 1px solid #444;
+            border-left: 1px solid #444;
+            margin-bottom: 10px; min-height: 200px;
+        }
+        .graph-legend {
+            display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; width: 100%; flex: 0 0 auto;
+        }
+        .legend-item { display: flex; align-items: center; font-size: 0.9rem; color: #ccc; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        
+        /* History Styles */
+        .hist-nav { display: flex; border-bottom: 1px solid #444; margin-bottom: 15px; }
+        .hist-tab { flex: 1; padding: 10px; text-align: center; color: #888; cursor: pointer; font-weight: bold; }
+        .hist-tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+        .hist-content { flex: 1; overflow-y: auto; display: none; }
+        .hist-content.active { display: block; }
+        
+        .hist-section-header, .player-accordion-header {
+            background: #252525; color: #e0e0e0; padding: 12px; margin-top: 10px; border-radius: 6px;
+            font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+            border: 1px solid #333;
+        }
+        .hist-section-body, .player-accordion-body { display: none; padding-top: 5px; }
+        .hist-section-body.expanded, .player-accordion-body.expanded { display: block; }
+        
+        .hist-card { 
+            background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 8px; 
+            border: 1px solid #333; cursor: pointer; position: relative; overflow: hidden;
+        }
+        .hist-card:active { background: #333; }
+        
+        .hist-card-row { display: flex; justify-content: space-between; align-items: center; }
+        .hist-date { font-size: 0.75rem; color: #888; }
+        .hist-mode { font-size: 0.75rem; background: #333; padding: 2px 6px; border-radius: 4px; color: #ccc; margin-right: 35px; }
+        .hist-winner { color: var(--accent); font-weight: bold; font-size: 1rem; margin: 5px 0; }
+        .hist-darts { font-size: 0.85rem; color: #ccc; margin-left: 5px;}
+        .hist-players { font-size: 0.85rem; color: #aaa; margin-top: 5px; line-height: 1.4; }
+        .finish-badge { color: gold; font-weight: bold; margin-right: 4px; }
+        .finish-stat { color: #888; font-size: 0.8em; margin-left: 5px; }
+        
+        .hist-delete-btn {
+            position: absolute; right: 10px; top: 10px;
+            background: rgba(207, 102, 121, 0.1); color: var(--danger);
+            border: 1px solid var(--danger); border-radius: 4px;
+            padding: 4px 8px; font-size: 0.8rem; z-index: 10;
+        }
+        .hist-delete-btn:active { background: var(--danger); color: white; }
+
+        .player-delete-icon {
+            padding: 5px 10px; color: #666; font-size: 1.1rem;
+        }
+        .player-delete-icon:active { color: var(--danger); }
+
+        /* Player Accordion Body Content */
+        .player-accordion-body { background: #1a1a1a; padding: 10px; border-radius: 0 0 8px 8px; margin-top: -5px; border: 1px solid #333; border-top: none; }
+        .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
+        .stat-box { background: #252525; padding: 10px; border-radius: 6px; text-align: center; }
+        .stat-val { display: block; font-size: 1.2rem; font-weight: bold; color: white; }
+        .stat-lbl { font-size: 0.75rem; color: #888; }
+
+        /* --- Darts --- */
+        .dart-obj {
+            width: 40px; height: 120px; 
+            position: absolute; z-index: 1000;
+            cursor: grab; filter: drop-shadow(0px 5px 5px rgba(0,0,0,0.5));
+            touch-action: none; transform-origin: 50% 95%;
+            transition: transform 0.2s; 
+        }
+        .dart-obj.hidden-in-grid { display: none !important; }
+        
+        /* Hides darts when modal is open to prevent overlapping */
+        body.modal-open .dart-obj { display: none !important; }
+
+        .dart-badge {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            font-size: 9px; font-weight: 900; color: white; 
+            text-shadow: 0 1px 3px black;
+            pointer-events: none; white-space: nowrap;
+            background: rgba(0,0,0,0.3); padding: 1px 3px; border-radius: 4px;
+        }
+
+        /* --- Magnifier --- */
+        #magnifier {
+            position: absolute; 
+            bottom: 20px; left: 20px;
+            width: 120px; height: 120px;
+            border: 3px solid var(--accent); border-radius: 50%; background: #000;
+            overflow: hidden; display: none; z-index: 500; pointer-events: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.9);
+        }
+        .magnifier-crosshair {
+            position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+            background: transparent; border: 2px solid rgba(255, 255, 0, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); z-index: 502;
+        }
+        #magnifier-score {
+            position: absolute; bottom: 10px; width: 100%; text-align: center;
+            font-weight: 900; color: yellow; text-shadow: 0px 2px 4px rgba(0,0,0,1);
+            z-index: 502; font-size: 1.1rem;
+        }
+
+        /* --- Fixed Footer --- */
+        #footer-fixed {
+            flex: 0 0 auto; background: var(--card-bg); width: 100%;
+            border-top: 1px solid #333; padding: 10px 15px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            z-index: 200;
+            display: flex; gap: 10px;
+        }
+        
+        .action-btn {
+            padding: 14px; font-size: 1.1rem; border-radius: 8px; border: none; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: transform 0.1s;
+        }
+        .action-btn:active { transform: scale(0.98); }
+
+        .btn-prev {
+            width: 30%; background: #333; color: #ccc; border: 1px solid #444;
+        }
+
+        .btn-next {
+            flex: 1; background: var(--accent); color: #000;
+            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+        }
+        
+        .action-btn.game-over {
+            background: #444; color: #ccc; pointer-events: none; border: 1px solid #666; width: 100%;
+        }
+
+        /* --- Tutorials --- */
+        .tutorial-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1500; display: none; 
+            justify-content: center; align-items: center; 
+        }
+        .tut-text {
+            position: absolute; text-align: center; color: white; 
+            font-weight: bold; font-size: 1.2rem; text-shadow: 0 3px 6px black;
+            white-space: nowrap; transform: translateY(-50px); 
+        }
+        .hand-emoji { font-size: 3rem; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.8)); }
+        
+        #tut-drag .tut-wrapper { position: absolute; bottom: 120px; right: 60px; animation: dragToBoard 2s infinite ease-in-out; opacity: 0; }
+        @keyframes dragToBoard { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 60% { transform: translate(-150px, -250px); opacity: 1; } 80% { opacity: 0; } 100% { opacity: 0; } }
+        
+        #tut-swipe .tut-wrapper { position: absolute; top: 50%; right: 20%; animation: swipeLeft 2s infinite ease-in-out; opacity: 0; }
+        @keyframes swipeLeft { 0% { right: 10%; opacity: 0; transform: rotate(10deg); } 20% { opacity: 1; } 60% { right: 80%; opacity: 1; transform: rotate(-10deg); } 80% { opacity: 0; } 100% { opacity: 0; } }
+
+        /* Modal */
+        #setup-modal, #graph-modal, #history-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px); }
+        .modal-content { background: #222; padding: 25px; border-radius: 16px; width: 85%; max-width: 380px; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        .modal-wide { max-width: 600px; height: 80%; }
+        
+        input { width: 100%; padding: 12px; background: #111; border: 1px solid #444; color: white; border-radius: 8px; margin-bottom: 12px; font-size: 1rem; box-sizing: border-box; }
+        .tag-container { display: flex; flex-wrap: wrap; margin-bottom: 15px; gap: 8px; min-height: 30px;}
+        
+        /* Added Players - Green Theme */
+        .player-tag { 
+            background: rgba(0, 230, 118, 0.15); 
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 6px 12px; border-radius: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; font-weight: bold;
+        }
+        .player-tag span { cursor: pointer; opacity: 0.7; }
+        .player-tag span:hover { opacity: 1; }
+
+        /* Quick Add Chips - Yellow/Gold Theme */
+        .quick-add-container {
+            display: flex; gap: 8px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 5px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .quick-add-chip {
+            background: rgba(255, 215, 0, 0.1); border: 1px solid var(--gold); color: var(--gold);
+            padding: 5px 10px; border-radius: 16px; font-size: 0.85rem; white-space: nowrap;
+            cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 500;
+            transition: all 0.2s;
+        }
+        .quick-add-chip:active { background: rgba(255, 215, 0, 0.3); transform: scale(0.95); }
+        .chip-del { font-weight: bold; color: var(--gold); padding: 0 4px; opacity: 0.6; }
+        .chip-del:hover { color: var(--danger); opacity: 1; }
+
+    </style>
+</head>
+<body class="modal-open">
+
+<div id="setup-modal" style="display:flex;">
+    <div class="modal-content">
+        <h2 id="modal-title" style="margin-top:0">New Game</h2>
+        
+        <div style="font-size:0.8rem; color:#888; margin-bottom:5px;">Quick Add (Shortcuts)</div>
+        <div class="quick-add-container" id="quick-add-area"></div>
+        
+        <input type="text" id="new-player-input" placeholder="Type Player Name..." maxlength="10">
+        <button onclick="addPlayer()" style="width:100%; margin-bottom:15px; background: #444; color:white; border:none; padding:10px; border-radius:6px;">Add Player</button>
+        
+        <div class="tag-container" id="player-list-display"></div>
+        
+        <div style="border-top: 1px solid #333; padding-top: 15px;">
+             <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size: 0.9rem; color:#ccc;">
+                Starting Score
+                <select id="start-score-select" style="background:#111; color:white; border:1px solid #444; padding:5px; border-radius:4px;">
+                    <option value="101">101</option>
+                    <option value="201">201</option>
+                    <option value="301">301</option>
+                    <option value="401">401</option>
+                    <option value="501" selected>501</option>
+                    <option value="601">601</option>
+                    <option value="701">701</option>
+                    <option value="801">801</option>
+                    <option value="901">901</option>
+                    <option value="1001">1001</option>
+                </select>
+            </label>
+            <button onclick="startGame()" style="width:100%; padding: 12px; font-size:1rem;">Start Game</button>
+        </div>
+    </div>
+</div>
+
+<div id="graph-modal">
+    <div class="modal-content modal-wide">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 style="margin:0;">Timeline</h3>
+            <button onclick="toggleGraph()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
+        </div>
+        <div id="graph-wrapper">
+            <div id="graph-container"></div>
+            <div class="graph-legend" id="graph-legend"></div>
+        </div>
+    </div>
+</div>
+
+<div id="history-modal">
+    <div class="modal-content modal-wide">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <h3 style="margin:0;">History</h3>
+            <button onclick="toggleHistory()" style="background:#333; color:#ccc; padding:5px 10px;">&times;</button>
+        </div>
+        
+        <div class="hist-nav">
+            <div class="hist-tab active" onclick="switchHistTab('games')" id="ht-games">Games</div>
+            <div class="hist-tab" onclick="switchHistTab('players')" id="ht-players">Players</div>
+        </div>
+
+        <div class="hist-content active" id="hc-games">
+            <div class="hist-section-header" onclick="toggleHistSection('unfinished')">
+                <span>In Progress / Aborted</span> <span id="arrow-unfinished">▶</span>
+            </div>
+            <div id="list-unfinished" class="hist-section-body"></div>
+
+            <div class="hist-section-header" onclick="toggleHistSection('finished')">
+                <span>Finished Games (At least 1 winner)</span> <span id="arrow-finished">▶</span>
+            </div>
+            <div id="list-finished" class="hist-section-body"></div>
+        </div>
+        
+        <div class="hist-content" id="hc-players">
+            <div id="player-list-view"></div>
+        </div>
+    </div>
+</div>
+
+<header>
+    <h1 id="app-title">Darts Scorer Pro</h1>
+    <div class="header-controls">
+        <button onclick="toggleHistory()" class="icon-btn" title="History">
+            <svg viewBox="0 0 24 24"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+        </button>
+        <button onclick="toggleGraph()" class="icon-btn" title="Graph">
+            <svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>
+        </button>
+        <button onclick="retryGame()" class="danger" id="btn-retry">Retry</button>
+    </div>
+</header>
+
+<div id="scoreboard"></div>
+
+<div id="view-slider">
+    
+    <div class="view-section" id="section-visual">
+        <div id="board-content-wrapper">
+            <div id="magnifier">
+                <div class="magnifier-crosshair"></div>
+                <div id="magnifier-score"></div>
+            </div>
+            <div id="dartboard-container"></div>
+         
+            <div id="tut-drag" class="tutorial-overlay">
+                <div class="tut-wrapper">
+                    <div class="tut-text">Drag to Throw</div>
+                    <div class="hand-emoji">👆</div>
+                </div>
+            </div>
+            <div id="tut-swipe" class="tutorial-overlay">
+                <div class="tut-wrapper">
+                    <div class="tut-text">Swipe for Grid</div>
+                    <div class="hand-emoji">👆</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="view-footer">
+        </div>
+    </div>
+
+    <div class="view-section" id="section-grid">
+        <div id="grid-content-wrapper">
+            <div id="grid-tabs">
+                <div class="grid-tab active" onclick="switchGridTab(0)" id="tab-0"><span class="grid-tab-label">1st</span><span class="grid-tab-val" id="grid-val-0">0</span></div>
+                <div class="grid-tab" onclick="switchGridTab(1)" id="tab-1"><span class="grid-tab-label">2nd</span><span class="grid-tab-val" id="grid-val-1">0</span></div>
+                <div class="grid-tab" onclick="switchGridTab(2)" id="tab-2"><span class="grid-tab-label">3rd</span><span class="grid-tab-val" id="grid-val-2">0</span></div>
+            </div>
+            <div id="grid-body-container"></div>
+        </div>
+    </div>
+
+</div>
+
+<div id="footer-fixed">
+    <button onclick="manualPrev()" class="action-btn btn-prev" id="btn-prev">Prev</button>
+    <button onclick="manualNext()" class="action-btn btn-next" id="btn-next">Next</button>
+</div>
+
+<script>
+    const i18n = {
+        en: { next: "Rem: ", bust: "BUST", win: "Wins!", confirm: "End current game?", miss: "Miss", retry: "Retry", gameOver: "GAME OVER" },
+        fi: { next: "Jäljellä: ", bust: "YLILYÖNTI", win: "Voitti!", confirm: "Lopeta peli?", miss: "Ohi", retry: "Uusi Peli", gameOver: "PELI OHI" }
+    };
+    const userLang = navigator.language.startsWith('fi') ? 'fi' : 'en';
+    const txt = i18n[userLang];
+
+    // -- State --
+    let players = [];
+    let currentPlayerIndex = 0;
+    let gameActive = false;
+    let startScoreVal = 501;
+    // Updated initial state to include missed:false
+    let dartState = [ {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false}, {val:0, mult:1, missed:false} ];
+    let currentGameId = Date.now();
+    let knownPlayers = [];
+    
+    // -- History Data --
+    let gameHistory = []; // Array of game objects
+
+    // Tutorial Logic
+    let tutorialInterval = null;
+    let tutorialsActive = false;
+    let currentGridTab = 0;
+
+    const boardNumbers = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+    const playerColors = ["#00e676", "#2979ff", "#ff4081", "#ff9100", "#e040fb", "#00bcd4", "#ffeb3b", "#ff1744"];
+    
+    // --- PERSISTENCE ---
+    function saveGame() {
+        // Save Active Game
+        const state = {
+            players, currentPlayerIndex, gameActive, startScoreVal, dartState, currentGameId
+        };
+        localStorage.setItem('darts_pro_save', JSON.stringify(state));
+
+        // Update History Entry for this game to ensure it has latest stats if resumed later
+        if(gameHistory.length > 0) {
+            const idx = gameHistory.findIndex(g => g.id === currentGameId);
+            if(idx !== -1) {
+                // Determine if "finished" (at least one player won)
+                const anyWon = players.some(p => p.finished);
+              
+                gameHistory[idx].players = JSON.parse(JSON.stringify(players)); // deep copy
+                gameHistory[idx].currentPlayerIndex = currentPlayerIndex;
+                gameHistory[idx].dartState = dartState; 
+                gameHistory[idx].finished = anyWon; // Marked as finished in list if at least 1 person won
+                localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+            }
+        }
+    }
+
+    function loadGame() {
+        // Load Global History
+        try {
+            const h = localStorage.getItem('darts_pro_history_games');
+            if(h) gameHistory = JSON.parse(h);
+        } catch(e) {}
+      
+        // Load Known Players
+        try {
+            const kp = localStorage.getItem('darts_pro_known_players');
+            if(kp) knownPlayers = JSON.parse(kp);
+        } catch(e) {}
+
+        // Load Active Game
+        const saved = localStorage.getItem('darts_pro_save');
+        if(saved) {
+            try {
+                const s = JSON.parse(saved);
+                if(!s.players || s.players.length === 0) {
+                     renderQuickAdd();
+                     return;
+                }
+             
+                restoreGameState(s);
+
+            } catch(e) { console.error("Save load error", e); }
+        } else {
+             renderQuickAdd();
+        }
+    }
+
+    function restoreGameState(s) {
+        players = s.players;
+        currentPlayerIndex = s.currentPlayerIndex;
+        startScoreVal = s.startScoreVal;
+        
+        // Ensure missed:false is default if loading legacy state or new game
+        dartState = s.dartState || [
+            {val:0, mult:1, missed:false},
+            {val:0, mult:1, missed:false},
+            {val:0, mult:1, missed:false}
+        ];
+        
+        currentGameId = s.currentGameId;
+
+        // CRITICAL: Determine gameActive based on whether ALL players are done
+        if(players.every(p => p.finished)) gameActive = false;
+        else gameActive = true;
+
+        document.getElementById('setup-modal').style.display = 'none';
+        document.body.classList.remove('modal-open');
+        
+        // Reset UI Buttons
+        const btn = document.getElementById('btn-next');
+        if(!gameActive) {
+            btn.innerText = txt.gameOver;
+            btn.classList.add('game-over');
+        } else {
+            btn.innerText = "Next"; 
+            btn.classList.remove('game-over');
+        }
+
+        renderScoreboard();
+        
+        setTimeout(() => {
+            resetDartsPosition(); 
+            // Then move ONLY thrown darts to board
+            let thrownCount = 0;
+            dartState.forEach((d, i) => {
+               if(d.val !== 0 || d.missed) {
+                   thrownCount++;
+                   updateDartVisuals(i, d.val, d.mult);
+                   if(!d.missed) moveDartToBoardLocation(i, d.val, d.mult);
+               } 
+            });
+            // Restore proper tab
+            if(thrownCount < 3) switchGridTab(thrownCount);
+            else switchGridTab(2);
+        }, 50);
+
+        updateGameState();
+    }
+
+    function recordGameStart() {
+        // Create full object for history
+        const newGame = {
+            id: currentGameId,
+            date: new Date().toISOString(),
+            startScore: startScoreVal,
+            players: JSON.parse(JSON.stringify(players)), 
+            currentPlayerIndex: 0,
+            dartState: [{val:0, mult:1, missed:false},{val:0, mult:1, missed:false},{val:0, mult:1, missed:false}],
+            finished: false // Initially false
+        };
+        gameHistory.unshift(newGame);
+        localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+    }
+    
+    // --- QUICK ADD ---
+    function renderQuickAdd() {
+        const area = document.getElementById('quick-add-area');
+        if(knownPlayers.length === 0) {
+            area.innerHTML = '<span style="color:#555; font-size:0.8rem; padding:4px;">No saved players</span>';
+            return;
+        }
+        area.innerHTML = knownPlayers.map(name => `
+            <div class="quick-add-chip" onclick="addPlayerByName('${name}')">
+                ${name}
+                <span class="chip-del" onclick="deleteQuickAdd('${name}', event)">&times;</span>
+            </div>
+        `).join('');
+    }
+    
+    function addPlayerByName(name) {
+        players.push({name:name, score:501, finished:false, history:[]}); 
+        renderList(); 
+        saveGame();
+    }
+    
+    function deleteQuickAdd(name, e) {
+        e.stopPropagation();
+        if(confirm(`Remove "${name}" from shortcuts?`)) {
+            knownPlayers = knownPlayers.filter(p => p !== name);
+            localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+            renderQuickAdd();
+        }
+    }
+
+    // --- VISUAL & GAME LOGIC ---
+
+    function getBoardCoordinates(score, mult) {
+        if(score === 0) return null; 
+        if(score === 25) return {x:0, y:0};
+        if(score === 50) return {x:0, y:0};
+     
+        const numberIndex = boardNumbers.indexOf(score);
+        const angleDeg = (numberIndex * 18) - 90;
+        const angleRad = angleDeg * (Math.PI / 180);
+     
+        let r = 0;
+        if(mult === 3) r = 104;
+        else if(mult === 2) r = 167;
+        else r = 135; 
+     
+        return {x: (r * Math.cos(angleRad)), y: (r * Math.sin(angleRad))};
+    }
+
+    function formatScore(val, mult, style) {
+        const total = val * mult;
+     
+        if(style === 'button') {
+            if (val === 0) return `0`;
+            if (val === 25) return `1x25 <span class="grid-dim-text">(${total})</span>`;
+            if (val === 50) return `1x50 <span class="grid-dim-text">(${total})</span>`;
+            return `${mult}x${val} <span class="grid-dim-text">(${total})</span>`; 
+        }
+
+        if (val === 0) return "0";
+        if (val === 25) return "1x25 (25)";
+        if (val === 50) return "1x50 (50)";
+     
+        return `${mult}x${val} (${total})`;
+    }
+
+    const NS = "http://www.w3.org/2000/svg";
+
+    function createDartSVG(id, number) {
+        const div = document.createElement('div');
+        div.className = 'dart-obj'; div.id = id;
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 40 120");
+        svg.style.pointerEvents = "none";
+        const flight = document.createElementNS(NS, "path");
+        flight.setAttribute("d", "M10,0 L30,0 L25,30 L15,30 Z"); flight.setAttribute("fill", "var(--dart-flight)"); svg.appendChild(flight);
+        const shaft = document.createElementNS(NS, "rect");
+        shaft.setAttribute("x", "18"); shaft.setAttribute("y", "30"); shaft.setAttribute("width", "4"); shaft.setAttribute("height", "40"); shaft.setAttribute("fill", "var(--dart-shaft)"); svg.appendChild(shaft);
+        const barrel = document.createElementNS(NS, "path");
+        barrel.setAttribute("d", "M16,70 L24,70 L23,100 L17,100 Z"); barrel.setAttribute("fill", "var(--dart-barrel)"); svg.appendChild(barrel);
+        const tip = document.createElementNS(NS, "path");
+        tip.setAttribute("d", "M19,100 L21,100 L20,120 Z"); tip.setAttribute("fill", "var(--dart-tip)"); svg.appendChild(tip);
+        div.appendChild(svg);
+        const badge = document.createElement('div'); 
+        badge.className = 'dart-badge'; badge.id = `badge-${id}`; badge.innerText = "0"; 
+        div.appendChild(badge);
+        return div;
+    }
+
+    function createBoardSVG() {
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "-205 -205 410 410");
+        const numbers = boardNumbers;
+        for (let i=0; i<20; i++) {
+            const rot = (i*18)-9;
+            const g = document.createElementNS(NS, "g");
+            g.setAttribute("transform", `rotate(${rot})`);
+            const c1 = i%2===0?"#121212":"#e0e0e0"; const c2 = i%2===0?"#d32f2f":"#388e3c";
+            const seg = (r1,r2,m,c) => {
+                const p = document.createElementNS(NS,"path");
+                const rad = Math.PI/180, a=9*rad;
+                const x1=r1*Math.sin(-a), y1=-r1*Math.cos(-a); const x2=r1*Math.sin(a), y2=-r1*Math.cos(a);
+                const x3=r2*Math.sin(a), y3=-r2*Math.cos(a); const x4=r2*Math.sin(-a), y4=-r2*Math.cos(-a);
+                p.setAttribute("d", `M${x1},${y1} L${x4},${y4} A${r2},${r2} 0 0 1 ${x3},${y3} L${x2},${y2} A${r1},${r1} 0 0 0 ${x1},${y1} Z`);
+                p.setAttribute("fill", c); p.setAttribute("stroke", "#666"); p.setAttribute("stroke-width", "1");
+                p.setAttribute("class", "board-segment"); p.setAttribute("data-s", numbers[i]); p.setAttribute("data-m", m);
+                return p;
+            };
+            g.appendChild(seg(109,162,1,c1)); g.appendChild(seg(162,172,2,c2));
+            g.appendChild(seg(32,99,1,c1)); g.appendChild(seg(99,109,3,c2));
+            const txt = document.createElementNS(NS,"text");
+            txt.setAttribute("x",0); txt.setAttribute("y",-182); txt.setAttribute("text-anchor","middle");
+            txt.setAttribute("fill","white"); txt.setAttribute("font-size", "22"); txt.setAttribute("font-weight","bold");
+            txt.setAttribute("transform", `rotate(${-rot} 0 -182)`); txt.textContent = numbers[i];
+            txt.style.pointerEvents="none"; g.appendChild(txt);
+            svg.appendChild(g);
+        }
+        const bull = (r,s,c) => {
+            const crc = document.createElementNS(NS,"circle");
+            crc.setAttribute("r",r); crc.setAttribute("fill",c); crc.setAttribute("stroke","#666");
+            crc.setAttribute("class", "board-segment"); crc.setAttribute("data-s", s); crc.setAttribute("data-m", 1);
+            return crc;
+        };
+        svg.appendChild(bull(31.8, 25, "#388e3c")); svg.appendChild(bull(12.7, 50, "#d32f2f"));
+        return svg;
+    }
+
+    function init() {
+        document.getElementById('dartboard-container').appendChild(createBoardSVG().cloneNode(true)).id = "main-svg";
+        const magWrap = document.getElementById('magnifier');
+        magWrap.insertBefore(createBoardSVG().cloneNode(true), magWrap.firstChild).id = "mag-svg";
+
+        const visSection = document.getElementById('section-visual');
+        [1,2,3].forEach(i => visSection.appendChild(createDartSVG(`dart-${i}`, i)));
+
+        document.getElementById('btn-next').innerText = "Next";
+        document.getElementById('btn-retry').innerText = txt.retry;
+        document.getElementById('new-player-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') addPlayer(); });
+
+        setupDragAndDrop();
+        setupSwipeObserver();
+        buildGridInterface();
+      
+        loadGame(); 
+    }
+
+    function buildGridInterface() {
+        const container = document.getElementById('grid-body-container');
+        container.innerHTML = '';
+      
+        [0, 1, 2].forEach(dartIdx => {
+            const page = document.createElement('div');
+            page.className = 'grid-page';
+            page.id = `grid-page-${dartIdx}`;
+          
+            const grid = document.createElement('div');
+            grid.className = 'grid-matrix';
+          
+            for(let i=20; i>=1; i--) {
+                grid.innerHTML += `
+                    <div class="g-btn g-single" onclick="gridInput(${dartIdx}, ${i}, 1)">${formatScore(i,1,'button')}</div>
+                    <div class="g-btn g-double" onclick="gridInput(${dartIdx}, ${i}, 2)">${formatScore(i,2,'button')}</div>
+                    <div class="g-btn g-triple" onclick="gridInput(${dartIdx}, ${i}, 3)">${formatScore(i,3,'button')}</div>
+                `;
+            }
+            grid.innerHTML += `
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 50, 1)">1x50 <span class="grid-dim-text">(50)</span></div>
+                <div class="g-btn g-bull" onclick="gridInput(${dartIdx}, 25, 1)">1x25 <span class="grid-dim-text">(25)</span></div>
+                <div class="g-btn g-miss" onclick="gridInput(${dartIdx}, 0, 1)">0</div>
+            `;
+            page.appendChild(grid);
+            container.appendChild(page);
+        });
+        switchGridTab(0);
+    }
+
+    function switchGridTab(idx) {
+        currentGridTab = idx;
+        [0,1,2].forEach(i => {
+            document.getElementById(`tab-${i}`).classList.toggle('active', i===idx);
+            document.getElementById(`grid-page-${i}`).classList.toggle('active', i===idx);
+        });
+    }
+
+    function gridInput(dartIdx, score, mult) {
+        if(!gameActive) return;
+        endTutorials();
+
+        dartState[dartIdx] = { val: score, mult: mult, missed: (score===0) };
+      
+        if(score === 0) {
+            resetSingleDart(dartIdx);
+        } else {
+            moveDartToBoardLocation(dartIdx, score, mult);
+        }
+      
+        updateDartVisuals(dartIdx, score, mult);
+        updateGameState();
+        saveGame();
+      
+        if(dartIdx < 2) switchGridTab(dartIdx + 1);
+    }
+
+    function moveDartToBoardLocation(dartIdx, score, mult) {
+        const d = document.getElementById(`dart-${dartIdx+1}`);
+        const container = document.getElementById('dartboard-container');
+        const boardRect = container.getBoundingClientRect();
+        const sectionRect = document.getElementById('section-visual').getBoundingClientRect();
+      
+        const relativeLeft = boardRect.left - sectionRect.left;
+        const relativeTop = boardRect.top - sectionRect.top;
+        const boardW = boardRect.width;
+
+        const coords = getBoardCoordinates(score, mult);
+        const scale = boardW / 410; 
+      
+        const pixelX = (coords.x * scale) + (relativeLeft + boardW/2);
+        const pixelY = (coords.y * scale) + (relativeTop + boardW/2);
+
+        d.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+        d.style.left = (pixelX - 20) + 'px'; 
+        d.style.top = (pixelY - 120) + 'px';
+        d.style.transform = 'scale(0.8) rotate(0deg)';
+        d.style.zIndex = 1000 + dartIdx;
+    }
+
+    function updateDartVisuals(idx, score, mult) {
+        document.getElementById(`grid-val-${idx}`).innerText = formatScore(score, mult, 'display');
+        const badge = document.getElementById(`badge-dart-${idx+1}`);
+        if(badge) badge.innerText = formatScore(score, mult, 'display');
+    }
+
+    function startTutorialLoop() {
+        tutorialsActive = true;
+        let phase = 0; 
+        const drag = document.getElementById('tut-drag');
+        const swipe = document.getElementById('tut-swipe');
+      
+        drag.style.display = 'flex';
+        swipe.style.display = 'none';
+
+        if(tutorialInterval) clearInterval(tutorialInterval);
+      
+        tutorialInterval = setInterval(() => {
+            if(!tutorialsActive) return;
+            if(phase === 0) {
+                drag.style.display = 'none';
+                swipe.style.display = 'flex';
+                phase = 1;
+            } else {
+                swipe.style.display = 'none';
+                drag.style.display = 'flex';
+                phase = 0;
+            }
+        }, 3000);
+    }
+
+    function endTutorials() {
+        if(!tutorialsActive) return;
+        tutorialsActive = false;
+        if(tutorialInterval) clearInterval(tutorialInterval);
+        document.getElementById('tut-drag').style.display = 'none';
+        document.getElementById('tut-swipe').style.display = 'none';
+    }
+
+    function setupSwipeObserver() {
+        const slider = document.getElementById('view-slider');
+        slider.addEventListener('scroll', () => {
+            const index = Math.round(slider.scrollLeft / slider.offsetWidth);
+          
+            const darts = document.querySelectorAll('.dart-obj');
+            darts.forEach(d => {
+                if(index > 0) d.classList.add('hidden-in-grid');
+                else d.classList.remove('hidden-in-grid');
+            });
+
+            if(slider.scrollLeft > 10) endTutorials();
+        });
+    }
+
+    function setupDragAndDrop() {
+        const darts = [1,2,3].map(i => document.getElementById(`dart-${i}`));
+        const magnifier = document.getElementById('magnifier');
+        const magSVG = document.getElementById('mag-svg');
+        const magScore = document.getElementById('magnifier-score');
+        const mainSVG = document.getElementById('main-svg');
+        const visualSection = document.getElementById('section-visual');
+        const slider = document.getElementById('view-slider');
+
+        darts.forEach((dart, idx) => {
+            const onStart = (e) => {
+                if(!gameActive) return;
+                // If we are already scrolled to grid, don't grab dart
+                if(slider.scrollLeft > 100) return;
+
+                endTutorials();
+                
+                // --- DISABLE SWIPE ---
+                // Reset scroll to 0 (revert swipe if slightly started)
+                slider.scrollLeft = 0;
+                // Lock horizontal scroll
+                slider.style.overflow = 'hidden';
+
+                e.preventDefault();
+                const cx = e.touches ? e.touches[0].clientX : e.clientX;
+                const cy = e.touches ? e.touches[0].clientY : e.clientY;
+
+                dart.style.position = 'fixed'; 
+                dart.style.zIndex = 9999; 
+                dart.style.transition = 'none';
+                dart.style.transform = 'scale(1.2) rotate(-10deg)'; 
+                darts.forEach(d => d.style.pointerEvents = 'none');
+                magnifier.style.display = 'block';
+
+                const updatePos = (mx, my) => {
+                    dart.style.left = (mx - 20) + 'px'; 
+                    dart.style.top = (my - 120) + 'px';
+                  
+                    const hit = document.elementFromPoint(mx, my);
+                  
+                    const container = document.getElementById('dartboard-container');
+                    const rect = container.getBoundingClientRect();
+                    const scale = 410 / rect.width;
+                    const svgX = (mx - (rect.left + rect.width/2)) * scale;
+                    const svgY = (my - (rect.top + rect.height/2)) * scale;
+                    magSVG.setAttribute("viewBox", `${svgX - 20} ${svgY - 20} 40 40`);
+
+                    if(hit && hit.classList.contains('board-segment')) {
+                        const s = parseInt(hit.getAttribute('data-s')), m = parseInt(hit.getAttribute('data-m'));
+                        magScore.innerText = formatScore(s, m, 'display');
+                        magScore.style.color = (m===3?'#00e676':(m===2?'#ff4081':'white'));
+                    } else {
+                        magScore.innerText = "0"; 
+                        magScore.style.color = '#aaa';
+                    }
+                };
+                updatePos(cx, cy);
+
+                const onMove = (em) => { 
+                    em.preventDefault(); 
+                    updatePos(em.touches?em.touches[0].clientX:em.clientX, em.touches?em.touches[0].clientY:em.clientY); 
+                };
+                
+                const onEnd = (ee) => {
+                    document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd);
+                    document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd);
+                    magnifier.style.display = 'none';
+                    
+                    // --- RE-ENABLE SWIPE ---
+                    slider.style.overflowX = 'auto';
+                    slider.style.overflowY = 'hidden';
+                  
+                    const mx = ee.changedTouches?ee.changedTouches[0].clientX:ee.clientX;
+                    const my = ee.changedTouches?ee.changedTouches[0].clientY:ee.clientY;
+                  
+                    dart.hidden = true; let el = document.elementFromPoint(mx, my); dart.hidden = false;
+                    darts.forEach(d => d.style.pointerEvents = 'auto');
+
+                    const sectionRect = visualSection.getBoundingClientRect();
+                    const finalRelLeft = (mx - 20) - sectionRect.left;
+                    const finalRelTop = (my - 120) - sectionRect.top;
+
+                    dart.style.position = 'absolute';
+                    dart.style.left = finalRelLeft + 'px';
+                    dart.style.top = finalRelTop + 'px';
+
+                    if(el && el.classList.contains('board-segment')) {
+                        const s = parseInt(el.getAttribute('data-s')), m = parseInt(el.getAttribute('data-m'));
+                      
+                        requestAnimationFrame(() => {
+                            dart.style.transition = 'transform 0.1s ease-out';
+                            dart.style.transform = 'scale(0.8) rotate(0deg)';
+                        });
+
+                        dartState[idx] = { val: s, mult: m, missed: false };
+                        updateDartVisuals(idx, s, m);
+                        updateGameState();
+                        saveGame();
+                    } else {
+                        resetSingleDart(idx); 
+                        dartState[idx] = { val: 0, mult: 1, missed: true };
+                        updateDartVisuals(idx, 0, 1);
+                        updateGameState();
+                        saveGame();
+                    }
+                };
+                document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
+                document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onEnd);
+            };
+            dart.addEventListener('touchstart', onStart, {passive:false}); dart.addEventListener('mousedown', onStart);
+        });
+    }
+
+    function updateGameState() {
+        const p = players[currentPlayerIndex];
+        const res = calculateScore(p.score);
+        const projEl = document.getElementById(`proj-score-${currentPlayerIndex}`);
+        if(projEl) {
+            if(res.isBust) projEl.innerHTML = `<span class="next-score bust">${txt.bust}</span>`;
+            else if(res.isWin) projEl.innerHTML = `<span class="next-score" style="color:gold">${txt.win}</span>`;
+            else {
+                let w = (res.rem <= 1 && res.rem !== 0) ? `(${txt.bust})` : '';
+                projEl.innerHTML = `<span>${txt.next}</span> <span class="next-score">${res.rem} ${w}</span>`;
+            }
+        }
+    }
+
+    function calculateScore(currentScore) {
+        let temp = currentScore;
+        let isBust = false, isWin = false;
+        let winningDartIndex = -1;
+
+        for(let i=0; i<3; i++) {
+            const d = dartState[i];
+           
+            // NOTE: We no longer skip 0s here. Every dart index counts as a throw attempt.
+            // if(d.val === 0 && !d.missed) continue; 
+
+            const pts = d.val * d.mult;
+            const rem = temp - pts;
+
+            if(rem < 0 || rem === 1) { 
+                isBust = true; 
+                break; 
+            }
+            else if (rem === 0) {
+                if(d.mult === 2 || d.val === 50) { 
+                    isWin = true; 
+                    temp = 0; 
+                    winningDartIndex = i;
+                    break; 
+                }
+                else { 
+                    isBust = true; 
+                    break; 
+                }
+            } else { 
+                temp = rem; 
+            }
+        }
+        return { rem: isBust ? currentScore : temp, isBust, isWin, winningDartIndex };
+    }
+
+    // --- MANUAL EDIT ---
+    function editPlayerScore(idx) {
+        if(!gameActive) return;
+        const p = players[idx];
+        const newScore = prompt(`Edit score for ${p.name}:`, p.score);
+        if(newScore !== null && !isNaN(newScore)) {
+            p.score = parseInt(newScore);
+            // Update history to maintain graph continuity for this turn
+            if(p.history.length > 0) p.history[p.history.length-1] = p.score;
+            else p.history = [p.score];
+          
+            renderScoreboard();
+            updateGameState();
+            saveGame();
+        }
+    }
+
+    function manualPrev() {
+        if(!gameActive) return;
+
+        let prevIndex = currentPlayerIndex - 1;
+        if(prevIndex < 0) prevIndex = players.length - 1;
+
+        const prevPlayer = players[prevIndex];
+
+        if(prevPlayer.history.length <= 1) return;
+
+        currentPlayerIndex = prevIndex;
+      
+        const p = players[currentPlayerIndex];
+        p.finished = false; 
+        p.history.pop(); 
+        p.score = p.history[p.history.length - 1]; 
+
+        dartState = [{val:0, mult:1, missed:false},{val:0, mult:1, missed:false},{val:0, mult:1, missed:false}];
+      
+        document.getElementById('btn-next').classList.remove('game-over');
+        document.getElementById('btn-next').innerText = "Next"; 
+      
+        [0,1,2].forEach(i => {
+            document.getElementById(`grid-val-${i}`).innerText = '-';
+            const badge = document.getElementById(`badge-dart-${i+1}`);
+            if(badge) badge.innerText = "0"; 
+        });
+        switchGridTab(0);
+        endTutorials();
+      
+        renderScoreboard();
+        resetDartsPosition();
+        saveGame();
+    }
+
+    function manualNext() {
+        if(!gameActive) return;
+        const p = players[currentPlayerIndex];
+        const res = calculateScore(p.score);
+      
+        if(res.isWin) { 
+            // Calculate Darts Thrown to store in history
+            const turns = p.history.length - 1; 
+            p.dartsThrown = (turns * 3) + (res.winningDartIndex + 1);
+            p.finishTime = Date.now(); 
+          
+            p.score = 0; 
+            p.finished = true;
+            p.history.push(0);
+        } else if(!res.isBust) { 
+            p.score = res.rem;
+            p.history.push(res.rem);
+        } else {
+            p.history.push(p.score);
+        }
+
+        dartState = [
+            {val:0, mult:1, missed:false}, 
+            {val:0, mult:1, missed:false}, 
+            {val:0, mult:1, missed:false}
+        ];
+      
+        [0,1,2].forEach(i => {
+            document.getElementById(`grid-val-${i}`).innerText = '-';
+            const badge = document.getElementById(`badge-dart-${i+1}`);
+            if(badge) badge.innerText = "0"; 
+        });
+        switchGridTab(0);
+      
+        endTutorials();
+
+        if(players.every(pl => pl.finished)) { 
+            renderScoreboard(); 
+            gameActive = false; 
+            const btn = document.getElementById('btn-next');
+            btn.innerText = txt.gameOver;
+            btn.classList.add('game-over');
+            saveGame();
+            return; 
+        }
+
+        let loop=0;
+        do { currentPlayerIndex = (currentPlayerIndex + 1) % players.length; loop++; } while(players[currentPlayerIndex].finished && loop < players.length);
+
+        const activeEl = document.querySelector(`.player-column#p-col-${currentPlayerIndex}`);
+        const sb = document.getElementById('scoreboard');
+        if(activeEl && sb) {
+            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
+            sb.scrollTo({ left: center, behavior: 'smooth' });
+        }
+
+        renderScoreboard();
+        resetDartsPosition();
+        saveGame();
+    }
+
+    function toggleGraph() {
+        const modal = document.getElementById('graph-modal');
+        if(modal.style.display === 'flex') {
+            modal.style.display = 'none';
+            document.body.classList.remove('modal-open');
+        } else {
+            modal.style.display = 'flex';
+            document.body.classList.add('modal-open');
+            requestAnimationFrame(drawGraph); // Draw after layout
+        }
+    }
+
+    function drawGraph() {
+        const container = document.getElementById('graph-container');
+        const legend = document.getElementById('graph-legend');
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if(w === 0 || h === 0) return; 
+
+        // Calculate max turns
+        let maxTurns = 0;
+        players.forEach(p => { if(p.history.length > maxTurns) maxTurns = p.history.length; });
+        if(maxTurns < 5) maxTurns = 5; 
+      
+        const xMax = maxTurns + 1; // Extend axis slightly
+
+        const svgNS = "http://www.w3.org/2000/svg";
+        let svg = document.getElementById('graph-svg');
+        if(!svg) {
+            svg = document.createElementNS(svgNS, "svg");
+            svg.id = 'graph-svg';
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            container.appendChild(svg);
+        }
+        svg.innerHTML = ''; 
+
+        // Padding for Axis Labels
+        const padL = 25; const padB = 20;
+        const graphW = w - padL;
+        const graphH = h - padB;
+
+        // Y-Axis Lines & Labels (Score)
+        const startVal = startScoreVal;
+        for(let i=0; i<=4; i++) {
+            const val = Math.round(startVal * (i/4));
+            const y = graphH - (graphH * (i/4));
+            const line = document.createElementNS(svgNS, "line");
+            line.setAttribute("x1", padL); line.setAttribute("y1", y);
+            line.setAttribute("x2", w); line.setAttribute("y2", y);
+            line.setAttribute("stroke", "#333"); line.setAttribute("stroke-width", "1");
+            svg.appendChild(line);
+
+            // Label
+            const txt = document.createElementNS(svgNS, "text");
+            txt.setAttribute("x", 0); txt.setAttribute("y", y + 4);
+            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
+            txt.textContent = val;
+            svg.appendChild(txt);
+        }
+
+        // X-Axis Labels (Turns)
+        for(let i=0; i<xMax; i++) {
+            const x = padL + (i / (xMax - 1)) * graphW;
+            // Only draw some labels if too many
+            if(xMax > 10 && i % 2 !== 0) continue;
+          
+            const txt = document.createElementNS(svgNS, "text");
+            txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
+            txt.setAttribute("text-anchor", "middle");
+            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
+            txt.textContent = (i + 1);
+            svg.appendChild(txt);
+        }
+
+        // Draw Lines
+        legend.innerHTML = '';
+        players.forEach((p, idx) => {
+            const color = playerColors[idx % playerColors.length];
+            legend.innerHTML += `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div>${p.name}</div>`;
+
+            if(p.history.length < 1) return;
+
+            let points = "";
+            p.history.forEach((score, turnIdx) => {
+                const x = padL + (turnIdx / (xMax - 1)) * graphW;
+                const y = graphH - ((score / startVal) * graphH);
+                points += `${x},${y} `;
+              
+                const dot = document.createElementNS(svgNS, "circle");
+                dot.setAttribute("cx", x); dot.setAttribute("cy", y);
+                dot.setAttribute("r", 3); dot.setAttribute("fill", color);
+                svg.appendChild(dot);
+            });
+
+            const poly = document.createElementNS(svgNS, "polyline");
+            poly.setAttribute("points", points);
+            poly.setAttribute("fill", "none");
+            poly.setAttribute("stroke", color);
+            poly.setAttribute("stroke-width", "2");
+            svg.appendChild(poly);
+        });
+    }
+
+    // --- HISTORY MODAL ---
+    function toggleHistory() {
+        const modal = document.getElementById('history-modal');
+        if(modal.style.display === 'flex') {
+            modal.style.display = 'none';
+            document.body.classList.remove('modal-open');
+        } else {
+            modal.style.display = 'flex';
+            document.body.classList.add('modal-open');
+            renderHistoryModal();
+        }
+    }
+
+    function switchHistTab(tab) {
+        document.querySelectorAll('.hist-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.hist-content').forEach(c => c.classList.remove('active'));
+        document.getElementById('ht-' + tab).classList.add('active');
+        document.getElementById('hc-' + tab).classList.add('active');
+    }
+
+    function toggleHistSection(sec) {
+        const el = document.getElementById('list-' + sec);
+        const arrow = document.getElementById('arrow-' + sec);
+        if(el.classList.contains('expanded')) {
+            el.classList.remove('expanded');
+            arrow.innerText = "▶";
+        } else {
+            el.classList.add('expanded');
+            arrow.innerText = "▼";
+        }
+    }
+
+    function togglePlayerAccordion(name) {
+        const el = document.getElementById('p-acc-body-' + name);
+        const arrow = document.getElementById('p-arrow-' + name);
+        // Collapse all others
+        document.querySelectorAll('.player-accordion-body').forEach(b => {
+            if(b.id !== 'p-acc-body-' + name) b.classList.remove('expanded');
+        });
+        document.querySelectorAll('.player-accordion-header span:last-child').forEach(a => {
+             if(a.id !== 'p-arrow-' + name && a.innerText !== '🗑️') a.innerText = "▶";
+        });
+
+        if(el.classList.contains('expanded')) {
+            el.classList.remove('expanded');
+            arrow.innerText = "▶";
+        } else {
+            el.classList.add('expanded');
+            arrow.innerText = "▼";
+            // Render details immediately
+            renderPlayerDetailsInAccordion(name);
+        }
+    }
+
+    function loadHistoryGame(id) {
+        const game = gameHistory.find(g => g.id === id);
+        if(game) {
+            // Restore state
+            const state = {
+                players: JSON.parse(JSON.stringify(game.players)),
+                currentPlayerIndex: game.currentPlayerIndex || 0,
+                startScoreVal: game.startScore,
+                dartState: [{val:0, mult:1, missed:false},{val:0, mult:1, missed:false},{val:0, mult:1, missed:false}], // Reset darts hand
+                currentGameId: game.id
+            };
+            restoreGameState(state);
+            toggleHistory(); // Close modal
+            saveGame(); // Set as active
+        }
+    }
+    
+    function deleteGame(id, event) {
+        event.stopPropagation();
+        if(confirm("Are you sure you want to permanently delete this game?")) {
+            gameHistory = gameHistory.filter(g => g.id !== id);
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+            renderHistoryModal(); // Re-render
+          
+            // If the deleted game was the active one, reset
+            if(id === currentGameId) {
+                retryGame();
+                toggleHistory();
+            }
+        }
+    }
+    
+    function deletePlayerFromHistory(name, event) {
+        event.stopPropagation();
+        if(confirm(`PERMANENTLY DELETE "${name}"?\n\nThis will remove them from shortcuts AND delete their presence from all past game records. This cannot be undone.`)) {
+            // 1. Remove from shortcuts
+            knownPlayers = knownPlayers.filter(p => p !== name);
+            localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+
+            // 2. Remove from Game History
+            gameHistory.forEach(g => {
+                g.players = g.players.filter(p => p.name !== name);
+            });
+            // Remove games that are now empty
+            gameHistory = gameHistory.filter(g => g.players.length > 0);
+          
+            localStorage.setItem('darts_pro_history_games', JSON.stringify(gameHistory));
+
+            renderHistoryModal();
+            renderQuickAdd();
+        }
+    }
+
+    function renderHistoryModal() {
+        // Render Games
+        const finishedEl = document.getElementById('list-finished');
+        const unfinishedEl = document.getElementById('list-unfinished');
+      
+        // Definition: Finished if AT LEAST ONE player has finished
+        const finished = gameHistory.filter(g => g.players.some(p => p.finished));
+        const unfinished = gameHistory.filter(g => !g.players.some(p => p.finished));
+      
+        unfinishedEl.innerHTML = unfinished.length ? unfinished.map(g => `
+            <div class="hist-card" onclick="loadHistoryGame(${g.id})">
+                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">&times;</button>
+                <div class="hist-card-row">
+                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    <span class="hist-mode">${g.startScore}</span>
+                </div>
+                <div class="hist-players">${g.players.map(p=>p.name).join(', ')}</div>
+            </div>
+        `).join('') : '<div style="padding:10px; color:#666; text-align:center">No active games.</div>';
+
+        finishedEl.innerHTML = finished.length ? finished.map(g => {
+            // Sort players by finish time (winners first)
+            const winners = g.players.filter(p => p.finished).sort((a,b) => (a.finishTime || 0) - (b.finishTime || 0));
+            const winnerHtml = winners.map((w, idx) => {
+                const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : '🥉');
+                return `<div><span class="finish-badge">${medal}</span> ${w.name} <span class="finish-stat">${w.dartsThrown} darts</span></div>`;
+            }).join('');
+
+            return `
+            <div class="hist-card" onclick="loadHistoryGame(${g.id})">
+                <button class="hist-delete-btn" onclick="deleteGame(${g.id}, event)">🗑️</button>
+                <div class="hist-card-row">
+                    <span class="hist-date">${new Date(g.date).toLocaleDateString()} ${new Date(g.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                    <span class="hist-mode">${g.startScore}</span>
+                </div>
+                <div class="hist-players" style="margin-top:8px;">${winnerHtml}</div>
+                ${!g.players.every(p=>p.finished) ? '<div style="color:#00e676; font-size:0.75rem; margin-top:5px;">• Resume for other players</div>' : ''}
+            </div>
+        `}).join('') : '<div style="padding:10px; color:#666; text-align:center">No finished games.</div>';
+
+        // Render Players (Accordion Style)
+        const playersEl = document.getElementById('player-list-view');
+        const allPlayers = new Set();
+        gameHistory.forEach(g => g.players.forEach(p => allPlayers.add(p.name)));
+      
+        // Also include known players even if they haven't played a game yet (from shortcuts)
+        knownPlayers.forEach(p => allPlayers.add(p));
+      
+        playersEl.innerHTML = Array.from(allPlayers).map(name => `
+            <div class="player-accordion-header" onclick="togglePlayerAccordion('${name}')">
+                <span>${name}</span> 
+                <div style="display:flex; align-items:center;">
+                    <span class="player-delete-icon" onclick="deletePlayerFromHistory('${name}', event)">🗑️</span>
+                    <span id="p-arrow-${name}">▶</span>
+                </div>
+            </div>
+            <div class="player-accordion-body" id="p-acc-body-${name}">
+                </div>
+        `).join('');
+    }
+
+    function renderPlayerDetailsInAccordion(name) {
+        const container = document.getElementById('p-acc-body-' + name);
+      
+        // Get all game instances for this player where they finished
+        let finishedGames = [];
+        let wins = 0;
+        let totalGames = 0;
+
+        gameHistory.forEach(g => {
+            const p = g.players.find(pl => pl.name === name);
+            if(p) {
+                totalGames++;
+                if(p.finished) {
+                    const othersFinished = g.players.filter(op => op.finished && op.name !== name);
+                    if(othersFinished.length === 0) wins++;
+                    else {
+                        const myTime = p.finishTime || 0;
+                        if(othersFinished.every(op => (op.finishTime || 0) > myTime)) wins++;
+                    }
+
+                    finishedGames.push({
+                        date: g.date,
+                        darts: p.dartsThrown
+                    });
+                }
+            }
+        });
+      
+        let best = '-';
+        let avg = '-';
+        if(finishedGames.length > 0) {
+            const darts = finishedGames.map(g => g.darts);
+            best = Math.min(...darts);
+            avg = Math.round(darts.reduce((a,b)=>a+b,0) / finishedGames.length);
+        }
+
+        container.innerHTML = `
+            <div class="stat-grid">
+                <div class="stat-box"><span class="stat-val">${wins}</span><span class="stat-lbl">1st Place Wins</span></div>
+                <div class="stat-box"><span class="stat-val">${best}</span><span class="stat-lbl">Best Darts</span></div>
+                <div class="stat-box"><span class="stat-val">${avg}</span><span class="stat-lbl">Avg Darts</span></div>
+                <div class="stat-box"><span class="stat-val">${totalGames ? Math.round((wins/totalGames)*100) + '%' : '0%'}</span><span class="stat-lbl">Win Rate</span></div>
+            </div>
+            <div style="margin-bottom:5px; color:#aaa; font-size:0.8rem;">Darts to Finish (Over Time)</div>
+            <div id="graph-container-${name}" style="height:200px; width:100%; position:relative; border-left:1px solid #444; border-bottom:1px solid #444;"></div>
+        `;
+      
+        requestAnimationFrame(() => drawPlayerGraphInAccordion(name, finishedGames));
+    }
+
+    function drawPlayerGraphInAccordion(name, finishedGames) {
+        const container = document.getElementById(`graph-container-${name}`);
+        container.innerHTML = '';
+        if(finishedGames.length < 2) {
+             container.innerHTML = '<div style="color:#666;text-align:center;padding-top:80px;">Not enough data for graph</div>';
+             return;
+        }
+
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute('width', '100%');
+        svg.setAttribute('height', '100%');
+        container.appendChild(svg);
+      
+        // Sort by date
+        finishedGames.sort((a,b) => new Date(a.date) - new Date(b.date));
+      
+        const darts = finishedGames.map(g => g.darts);
+        const maxDarts = Math.max(...darts);
+        const minDarts = Math.max(0, Math.min(...darts) - 5);
+      
+        // Define Scale range with padding
+        const yMax = maxDarts + 5; 
+        const yRange = yMax - minDarts;
+      
+        const xMax = darts.length + 1; // Pad X axis
+      
+        // Padding for labels
+        const padL = 25; const padB = 20;
+        const graphW = w - padL;
+        const graphH = h - padB;
+
+        // Y-Axis (Dart Count)
+        for(let i=0; i<=4; i++) {
+             const val = Math.round(minDarts + (yRange * (i/4)));
+             const y = graphH - (graphH * (i/4));
+           
+             // Label
+            const txt = document.createElementNS(svgNS, "text");
+            txt.setAttribute("x", 0); txt.setAttribute("y", y + 4);
+            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
+            txt.textContent = val;
+            svg.appendChild(txt);
+        }
+
+        // X-Axis (Game Number)
+         for(let i=0; i<xMax; i++) {
+            const x = padL + (i / (xMax - 1)) * graphW;
+            if(xMax > 10 && i % 2 !== 0) continue;
+            const txt = document.createElementNS(svgNS, "text");
+            txt.setAttribute("x", x); txt.setAttribute("y", h - 2);
+            txt.setAttribute("text-anchor", "middle");
+            txt.setAttribute("fill", "#666"); txt.setAttribute("font-size", "10");
+            txt.textContent = (i + 1);
+            svg.appendChild(txt);
+         }
+
+        let points = "";
+        darts.forEach((d, i) => {
+            const x = padL + (i / (xMax - 1)) * graphW;
+            const y = graphH - ((d - minDarts) / yRange) * graphH;
+            points += `${x},${y} `;
+          
+            const dot = document.createElementNS(svgNS, "circle");
+            dot.setAttribute("cx", x); dot.setAttribute("cy", y);
+            dot.setAttribute("r", 4); dot.setAttribute("fill", "#00e676");
+            svg.appendChild(dot);
+          
+            // Draw Value above point
+            const valTxt = document.createElementNS(svgNS, "text");
+            valTxt.setAttribute("x", x); valTxt.setAttribute("y", y - 8);
+            valTxt.setAttribute("text-anchor", "middle");
+            valTxt.setAttribute("fill", "#fff"); valTxt.setAttribute("font-size", "9");
+            valTxt.textContent = d;
+            svg.appendChild(valTxt);
+        });
+
+        const poly = document.createElementNS(svgNS, "polyline");
+        poly.setAttribute("points", points);
+        poly.setAttribute("fill", "none");
+        poly.setAttribute("stroke", "#00e676");
+        poly.setAttribute("stroke-width", "2");
+        svg.appendChild(poly);
+    }
+
+    function retryGame() {
+        if(confirm("End current game and setup new one?")) {
+            gameActive = false;
+            // Mark current game as abandoned if not finished
+            localStorage.removeItem('darts_pro_save'); 
+            document.getElementById('setup-modal').style.display = 'flex';
+            document.body.classList.add('modal-open');
+            renderList(); 
+            renderQuickAdd();
+        }
+    }
+
+    function resetDartsPosition() {
+        const section = document.getElementById('section-visual');
+        const rect = section.getBoundingClientRect();
+      
+        const startX = rect.width - 60; 
+        const startY = rect.height - 100;
+
+        [0,1,2].forEach(i => {
+            const d = document.getElementById(`dart-${i+1}`);
+            d.style.position = 'absolute'; 
+            d.style.transition = 'all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            d.style.left = (startX - (i*15)) + 'px'; 
+            d.style.top = (startY + (i*5)) + 'px';
+            d.style.transform = 'rotate(10deg)'; 
+            d.style.zIndex = 1000 + i;
+        });
+    }
+
+    function resetSingleDart(i) {
+        const section = document.getElementById('section-visual');
+        const rect = section.getBoundingClientRect();
+        const startX = rect.width - 60; 
+        const startY = rect.height - 100;
+
+        const d = document.getElementById(`dart-${i+1}`);
+        d.style.transition = 'all 0.4s ease-out';
+        d.style.left = (startX - (i*15)) + 'px'; 
+        d.style.top = (startY + (i*5)) + 'px';
+        d.style.transform = 'rotate(10deg)';
+    }
+
+    function addPlayer() { 
+        const inp = document.getElementById('new-player-input'); 
+        if(inp.value.trim()){ 
+            const name = inp.value.trim();
+            players.push({name:name, score:501, finished:false, history:[]}); 
+          
+            // Add to known players if not exists
+            if(!knownPlayers.includes(name)) {
+                knownPlayers.push(name);
+                localStorage.setItem('darts_pro_known_players', JSON.stringify(knownPlayers));
+                renderQuickAdd();
+            }
+
+            inp.value=""; 
+            renderList(); 
+            inp.focus(); 
+            saveGame();
+        } 
+    }
+    
+    function renderList() { document.getElementById('player-list-display').innerHTML = players.map((p,i)=>`<div class="player-tag">${p.name} <span onclick="players.splice(${i},1);renderList();saveGame()" style="cursor:pointer">&times;</span></div>`).join(''); }
+    
+    function startGame() { 
+        if(players.length===0) return; 
+        const s = parseInt(document.getElementById('start-score-select').value); 
+        startScoreVal = s;
+        currentGameId = Date.now();
+        players.forEach(p => { 
+            p.score = s; 
+            p.finished = false; 
+            p.history = [s]; 
+        }); 
+        gameActive = true; currentPlayerIndex = 0; 
+        document.getElementById('setup-modal').style.display='none'; 
+        document.body.classList.remove('modal-open');
+      
+        const btn = document.getElementById('btn-next');
+        btn.innerText = "Next"; 
+        btn.classList.remove('game-over');
+
+        recordGameStart(); // Log to history
+        renderScoreboard(); 
+      
+        setTimeout(() => { 
+            resetDartsPosition(); 
+            startTutorialLoop();
+        }, 100); 
+        saveGame();
+    }
+    
+    function renderScoreboard() {
+        document.getElementById('scoreboard').innerHTML = players.map((p,i) => {
+            const active = (i===currentPlayerIndex && !p.finished);
+            // Added on dblclick to allow editing
+            return `<div class="player-column ${active?'active':''} ${p.finished?'finished':''}" id="p-col-${i}"><div class="player-name">${p.name}</div><div class="current-score" ondblclick="editPlayerScore(${i})">${p.finished ? txt.win : p.score}</div>${active ? `<div class="projected-row" id="proj-score-${i}"><span>${txt.next}</span> <span class="next-score">${p.score}</span></div>` : ''}</div>`;
+        }).join('');
+      
+        const activeEl = document.querySelector(`.player-column.active`);
+        const sb = document.getElementById('scoreboard');
+        if(activeEl && sb) {
+            const center = activeEl.offsetLeft - (sb.clientWidth / 2) + (activeEl.clientWidth / 2);
+            sb.scrollTo({ left: center, behavior: 'smooth' });
+        }
+    }
+
+    init();
+</script>
+</body>
+</html>
