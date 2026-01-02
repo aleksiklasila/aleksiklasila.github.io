@@ -336,12 +336,45 @@
             cursor: ns-resize;
             z-index: 10;
         }
+
+        /* Context Menu */
+        #context-menu {
+            display: none;
+            position: absolute;
+            z-index: 10000;
+            background: #252526;
+            border: 1px solid #454545;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+            min-width: 150px;
+            padding: 5px 0;
+            border-radius: 4px;
+        }
+
+        .context-menu-item {
+            padding: 5px 15px;
+            cursor: pointer;
+            color: #ccc;
+            font-size: 13px;
+        }
+
+        .context-menu-item:hover {
+            background: #094771;
+            color: white;
+        }
+
+        .context-menu-item.danger {
+            color: #ce9178;
+        }
+
+        .context-menu-item.danger:hover {
+            background: #800000;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
 <body>
-
+    <div id="context-menu"></div>
     <div id="toolbar">
         <div style="display:flex; align-items:center;">
             <h3 style="margin:0 20px 0 0;">GLB Animator</h3>
@@ -917,6 +950,12 @@
             transformControl.detach();
 
             try {
+                // Get Project Name
+                const nameInput = document.getElementById('project-name');
+                if (nameInput && nameInput.value.trim()) {
+                    projectName = nameInput.value.trim();
+                }
+
                 // Export Main
                 const mainBlob = await exportToBlob(currentModel);
                 folder.file(projectName + ".glb", mainBlob);
@@ -1028,47 +1067,37 @@
 
                 const span = document.createElement('span');
                 span.innerText = clip.name;
-                span.title = "Double-click to rename";
-                span.ondblclick = (e) => {
-                    e.stopPropagation();
-                    enableInlineRename(span, clip.name, (newName) => {
-                        clip.name = newName;
-                        updateAnimList();
-                    });
-                };
                 div.appendChild(span);
 
-                const actions = document.createElement('div');
-                actions.style.display = 'flex';
-                actions.style.gap = '5px';
-
-                // Removed Rename Button
-
-                const btnCopy = document.createElement('button');
-                btnCopy.innerText = '📋';
-                btnCopy.title = "Copy";
-                btnCopy.className = "btn btn-secondary";
-                btnCopy.style.padding = "2px 5px";
-                btnCopy.style.fontSize = "10px";
-                btnCopy.onclick = (e) => {
-                    e.stopPropagation();
-                    copyAnimation(index);
+                // Context Menu
+                div.oncontextmenu = (e) => {
+                    const items = [
+                        {
+                            label: "Rename",
+                            action: () => {
+                                enableInlineRename(span, clip.name, (newName) => {
+                                    clip.name = newName;
+                                    updateAnimList();
+                                });
+                            }
+                        },
+                        {
+                            label: "Copy",
+                            action: () => copyAnimation(index)
+                        },
+                        {
+                            label: "Delete",
+                            danger: true,
+                            action: () => deleteAnimation(index)
+                        }
+                    ];
+                    showContextMenu(e, items);
                 };
 
-                const btnDelete = document.createElement('button');
-                btnDelete.innerText = '🗑';
-                btnDelete.title = "Delete";
-                btnDelete.className = "btn btn-danger";
-                btnDelete.style.padding = "2px 5px";
-                btnDelete.style.fontSize = "10px";
-                btnDelete.onclick = (e) => {
-                    e.stopPropagation();
-                    deleteAnimation(index);
-                };
-
-                actions.appendChild(btnCopy);
-                actions.appendChild(btnDelete);
-                div.appendChild(actions);
+                // Visual active state
+                if (currentAction && currentAction.getClip() === clip) {
+                    div.classList.add('active');
+                }
 
                 list.appendChild(div);
             });
@@ -1306,16 +1335,20 @@
             row.appendChild(label);
 
             if (isBone) {
-                row.title = "Right-click to rename";
                 row.oncontextmenu = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('Right-click rename', obj.name);
-                    const currentName = obj.name || "Bone";
-                    enableInlineRename(label, currentName, (newName) => {
-                        obj.name = newName;
-                        renderBoneHierarchy();
-                    });
+                    const items = [
+                        {
+                            label: "Rename",
+                            action: () => {
+                                const currentName = obj.name || "Bone";
+                                enableInlineRename(label, currentName, (newName) => {
+                                    obj.name = newName;
+                                    renderBoneHierarchy();
+                                });
+                            }
+                        }
+                    ];
+                    showContextMenu(e, items);
                 };
             }
 
@@ -1430,6 +1463,54 @@
                 div.style.display = 'flex';
                 div.style.flexDirection = 'column'; // Vertical layout for item
 
+                // Context Menu
+                div.oncontextmenu = (e) => {
+                    const items = [
+                        {
+                            label: "Rename",
+                            action: () => {
+                                enableInlineRename(span, p.name || ("Prop " + (i + 1)), (newName) => {
+                                    p.name = newName;
+                                    // Update Label if Locator
+                                    if (p.userData.isLocator) {
+                                        const oldSprite = p.children.find(c => c.isSprite && c.userData.isEditorVisual);
+                                        if (oldSprite) p.remove(oldSprite);
+                                        try {
+                                            const sprite = createTextSprite(newName);
+                                            sprite.position.set(0, 0.6, 0);
+                                            sprite.userData.isEditorVisual = true;
+                                            p.add(sprite);
+                                        } catch (err) { console.error(err); }
+                                    }
+                                    updatePropsList();
+                                });
+                            }
+                        },
+                        {
+                            label: "Attach to Bone",
+                            action: () => startBonePickMode(p)
+                        },
+                        {
+                            label: "Snap to Parent",
+                            action: () => {
+                                p.position.set(0, 0, 0);
+                                p.quaternion.set(0, 0, 0, 1);
+                            }
+                        },
+                        {
+                            label: "Delete",
+                            danger: true,
+                            action: () => {
+                                if (p.parent) p.parent.remove(p);
+                                props.splice(i, 1);
+                                if (transformControl.object === p) transformControl.detach();
+                                updatePropsList();
+                            }
+                        }
+                    ];
+                    showContextMenu(e, items);
+                };
+
                 // Header Row
                 const header = document.createElement('div');
                 header.style.display = 'flex';
@@ -1440,34 +1521,11 @@
                 const span = document.createElement('span');
                 span.innerText = (p.userData.isLocator ? "📍 " : "📦 ") + (p.name || ("Prop " + (i + 1)));
                 span.style.cursor = "pointer";
-                span.title = "Click to Select, Double-click to Rename";
+                span.title = "Click to Select, Right-click for Menu";
 
                 // Select on click
                 span.onclick = () => {
                     transformControl.attach(p);
-                };
-
-                // Rename on Double Click
-                span.ondblclick = (e) => {
-                    e.stopPropagation();
-                    const currentName = p.name || ("Prop " + (i + 1));
-                    enableInlineRename(span, currentName, (newName) => {
-                        p.name = newName;
-                        // Update Label if Locator
-                        if (p.userData.isLocator) {
-                            // Find old sprite and remove
-                            const oldSprite = p.children.find(c => c.isSprite && c.userData.isEditorVisual);
-                            if (oldSprite) p.remove(oldSprite);
-                            // Add new
-                            try {
-                                const sprite = createTextSprite(newName);
-                                sprite.position.set(0, 0.6, 0);
-                                sprite.userData.isEditorVisual = true;
-                                p.add(sprite);
-                            } catch (err) { console.error(err); }
-                        }
-                        updatePropsList();
-                    });
                 };
                 header.appendChild(span);
 
@@ -2604,6 +2662,57 @@
 
             renderer.render(scene, camera);
         }
+
+        // --- CONTEXT MENU SYSTEM ---
+        window.showContextMenu = function (e, items) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const menu = document.getElementById('context-menu');
+            menu.innerHTML = '';
+
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'context-menu-item';
+                if (item.danger) div.classList.add('danger');
+                div.innerText = item.label;
+                div.onclick = (evt) => {
+                    evt.stopPropagation();
+                    menu.style.display = 'none';
+                    item.action();
+                };
+                menu.appendChild(div);
+            });
+
+            menu.style.display = 'block';
+
+            // Positioning (Basic)
+            let x = e.pageX;
+            let y = e.pageY;
+
+            // Simple boundary check
+            if (x + 150 > window.innerWidth) x -= 150;
+            if (y + menu.offsetHeight > window.innerHeight) y -= menu.offsetHeight;
+
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+        };
+
+        // Close context menu on global click
+        window.addEventListener('click', () => {
+            const menu = document.getElementById('context-menu');
+            if (menu) menu.style.display = 'none';
+        });
+
+        // Close when right-clicking elsewhere
+        window.addEventListener('contextmenu', (e) => {
+            const menu = document.getElementById('context-menu');
+            if (menu && menu.style.display === 'block') {
+                if (!e.target.closest('.tree-item') && !e.target.closest('.anim-item') && !e.target.closest('.prop-item')) {
+                    menu.style.display = 'none';
+                }
+            }
+        });
 
         // Start
         init();
