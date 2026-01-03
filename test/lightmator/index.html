@@ -788,7 +788,8 @@
                     mask.forEach(bName => {
                         let mesh = window.boneVisuals.get(bName);
                         if (!mesh) {
-                            const geo = new THREE.SphereGeometry(2, 4, 2); // Small sphere
+                            const radius = (window.modelSize || 10) * 0.004; // Smaller sizing
+                            const geo = new THREE.SphereGeometry(radius, 8, 8);
                             const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, depthTest: false });
                             mesh = new THREE.Mesh(geo, mat);
                             const bone = this._findBone(bName);
@@ -799,6 +800,12 @@
                         }
                         if (mesh) {
                             mesh.visible = true;
+                            // Ensure size update if model reloaded
+                            const targetR = (window.modelSize || 10) * 0.004;
+                            if (Math.abs(mesh.geometry.parameters.radius - targetR) > 0.001) {
+                                mesh.geometry.dispose();
+                                mesh.geometry = new THREE.SphereGeometry(targetR, 8, 8);
+                            }
                             mesh.material.color.set(color);
                         }
                     });
@@ -1169,27 +1176,27 @@
                                     window.hierarchicalController.rebuildAndPlay();
 
                                     // Restore state
-                                    layerStates.forEach(s => {
-                                        const layer = window.hierarchicalController.activeLayers.find(l => l.boneName === s.boneName && l.clipName === s.clipName);
-                                        if (layer && layer.action) {
-                                            layer.action.time = s.time;
-                                            layer.action.paused = s.paused;
-                                            if (!s.paused) {
-                                                layer.action.play();
-                                            } else {
-                                                layer.action.play().paused = true;
-                                            }
-                                        }
-                                    });
+                                    // Logic moved to stateRestorer helper for reuse
+                                    // See stateRestorer definition below
                                     mixer.update(0);
+                                    // Robust Restore logic
+                                    stateRestorer(layerStates);
+
+                                    // FORCE update to apply restored times
+                                    mixer.update(0);
+
+                                    // Ensure global play state if needed
+                                    if (dragWasPlaying) isPlaying = true;
                                 } else {
                                     if (currentAction && currentAction.getClip() === clip) {
                                         const time = currentAction.time;
                                         currentAction.stop();
                                         currentAction = mixer.clipAction(clip);
                                         currentAction.time = time;
+                                        // Ensure we match the previous running state more carefully
                                         if (dragWasPlaying) {
                                             currentAction.play();
+                                            currentAction.paused = false;
                                         } else {
                                             currentAction.play().paused = true;
                                             mixer.update(0);
@@ -1356,6 +1363,8 @@
             const box = new THREE.Box3().setFromObject(currentModel);
             const size = box.getSize(new THREE.Vector3()).length();
             const center = box.getCenter(new THREE.Vector3());
+
+            window.modelSize = size; // Store globally for visuals
 
             // Reset camera based on size
             orbit.target.copy(center);
@@ -1962,6 +1971,12 @@
                             action: () => deleteSelectedKeyframes(clip)
                         });
                     }
+
+                    items.push({
+                        label: "Fix Loop (Match End to Start)",
+                        action: () => fixAnimationLoop(clip)
+                    });
+
                     showContextMenu(e, items);
                 };
 
@@ -3528,6 +3543,7 @@
             if (changed) {
                 // Re-init Logic: handled by rebuildAndPlay usually?
                 // But for specific clip:
+                if (window.hierarchicalController) window.hierarchicalController.invalidateClip(clip.name);
                 window.hierarchicalController.rebuildAndPlay(); // Simplest way to refresh all actions
 
                 selectedKeyframes.get(clip.name).clear();
@@ -3549,6 +3565,108 @@
                 const clip = animations.find(c => c.name === clipName);
                 if (clip) window.deleteSelectedKeyframes(clip);
             }
+        };
+
+        window.fixAnimationLoop = function (clip) {
+            if (!clip) return;
+            // Strategy: For every track, read value at t=0, set keyframe at t=duration
+            // Effectively making it cyclic.
+
+            const jsonBefore = clip.toJSON();
+            let changed = false;
+
+            clip.tracks.forEach(track => {
+                // Find or interpolate value at 0
+                // Since this is a raw keyframe track, we can just grab value at t=0 if exists,
+                // or assume first keyframe is start? 
+                // Let's assume t=0. If keyframes start at 0.5, we interpolate? 
+                // For simplicity: Grab value of the very first keyframe (time-wise)
+                // NO, we want value at EXACTLY 0? Or just "First Frame".
+                // Usually "First Frame" means the earliest keyframe.
+
+                if (track.times.length === 0) return;
+
+                const firstTime = track.times[0];
+                const itemSize = track.getValueSize();
+                const firstValue = [];
+                for (let k = 0; k < itemSize; k++) firstValue.push(track.values[k]);
+
+                // We want to set this value at 'clip.duration'
+                const endTime = clip.duration;
+
+                // Check if keyframe exists at exactly duration
+                let existIdx = -1;
+                for (let i = 0; i < track.times.length; i++) {
+                    if (Math.abs(track.times[i] - endTime) < 0.0001) {
+                        existIdx = i;
+                        break;
+                    }
+                }
+
+                if (existIdx !== -1) {
+                    // Update exisiting
+                    for (let k = 0; k < itemSize; k++) track.values[existIdx * itemSize + k] = firstValue[k];
+                    changed = true;
+                } else {
+                    // Add new
+                    const newTimes = Array.from(track.times);
+                    const newValues = Array.from(track.values);
+                    newTimes.push(endTime);
+                    newValues.push(...firstValue);
+
+                    // Re-sort required? Yes.
+                    // Map to objects
+                    const data = newTimes.map((t, i) => ({
+                        t: t,
+                        v: newValues.slice(i * itemSize, (i + 1) * itemSize)
+                    }));
+                    data.sort((a, b) => a.t - b.t);
+
+                    track.times = new Float32Array(data.map(d => d.t));
+                    track.values = new Float32Array(data.flatMap(d => d.v));
+                    changed = true;
+                }
+            });
+
+            if (changed) {
+                // Refresh
+                if (window.hierarchicalController) {
+                    window.hierarchicalController.invalidateClip(clip.name);
+                    window.hierarchicalController.rebuildAndPlay();
+                } else {
+                    mixer.uncacheClip(clip);
+                    // Simple reload
+                    if (currentAction && currentAction.getClip().name === clip.name) {
+                        const t = currentAction.time;
+                        currentAction.stop();
+                        currentAction = mixer.clipAction(clip);
+                        currentAction.time = t;
+                        currentAction.play();
+                    }
+                }
+                drawKeyframeMarkers(clip);
+
+                const jsonAfter = clip.toJSON();
+                addCommand({
+                    execute: () => restoreClipState(clip, jsonAfter),
+                    undo: () => restoreClipState(clip, jsonBefore)
+                });
+            }
+        };
+
+        const stateRestorer = function (layerStates) {
+            layerStates.forEach(s => {
+                const layer = window.hierarchicalController.activeLayers.find(l => l.boneName === s.boneName && l.clipName === s.clipName);
+                if (layer && layer.action) {
+                    layer.action.time = s.time;
+                    layer.action.paused = s.paused;
+                    if (!s.paused) {
+                        layer.action.play();
+                    } else {
+                        layer.action.play().paused = true;
+                    }
+                }
+            });
         };
 
 

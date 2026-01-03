@@ -1,0 +1,2168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bonemator - Automatic Bone Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: rgba(20, 20, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            z-index: 100;
+            gap: 20px;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #00d4ff, #7b2fff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4ff, #7b2fff);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 60px);
+            margin-top: 60px;
+        }
+
+        /* 3D Viewport */
+        #viewport {
+            flex: 1;
+            position: relative;
+            background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a0f 100%);
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* Drop Zone Overlay */
+        .drop-zone {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            padding: 60px;
+            border: 3px dashed rgba(0, 212, 255, 0.5);
+            border-radius: 20px;
+            background: rgba(0, 212, 255, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .drop-zone.hidden {
+            display: none;
+        }
+
+        .drop-zone.dragover {
+            border-color: #00d4ff;
+            background: rgba(0, 212, 255, 0.15);
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+
+        .drop-zone-icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            opacity: 0.7;
+        }
+
+        .drop-zone-text {
+            font-size: 1.2rem;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .drop-zone-hint {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.4);
+            margin-top: 10px;
+        }
+
+        /* Side Panel */
+        .side-panel {
+            width: 320px;
+            background: rgba(20, 20, 35, 0.95);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .panel-section {
+            margin-bottom: 25px;
+        }
+
+        .panel-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Status Card */
+        .status-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-label {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .status-value {
+            color: #00d4ff;
+            font-weight: 600;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-top: 15px;
+        }
+
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #7b2fff);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        /* Settings */
+        .setting-group {
+            margin-bottom: 15px;
+        }
+
+        .setting-label {
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        select,
+        input[type="range"] {
+            width: 100%;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            font-size: 0.9rem;
+        }
+
+        select option {
+            background: #1a1a2e;
+        }
+
+        input[type="range"] {
+            padding: 0;
+            height: 6px;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #00d4ff;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .range-value {
+            text-align: right;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 5px;
+        }
+
+        /* Checkbox */
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #00d4ff;
+        }
+
+        .checkbox-group label {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.8);
+            cursor: pointer;
+        }
+
+        /* Bone List */
+        .bone-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .bone-item {
+            padding: 8px;
+            margin-bottom: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .bone-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .bone-icon {
+            width: 8px;
+            height: 8px;
+            background: #00d4ff;
+            border-radius: 50%;
+        }
+
+        /* Log Console */
+        .log-console {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 0.8rem;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .log-info {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .log-success {
+            color: #00ff88;
+        }
+
+        .log-warning {
+            color: #ffaa00;
+        }
+
+        .log-error {
+            color: #ff4466;
+        }
+
+        /* Hidden file input */
+        #file-input {
+            display: none;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #00d4ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .loading-text {
+            margin-top: 20px;
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        /* Tooltips */
+        [data-tooltip] {
+            position: relative;
+        }
+
+        [data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            font-size: 0.8rem;
+            border-radius: 6px;
+            white-space: nowrap;
+            margin-bottom: 5px;
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">🦴 Bonemator</div>
+        <input type="file" id="file-input" accept=".glb,.gltf">
+        <button class="header-btn btn-primary" id="btn-import">
+            📁 Import GLB
+        </button>
+        <button class="header-btn btn-secondary" id="btn-generate" disabled>
+            ⚡ Generate Bones
+        </button>
+        <button class="header-btn btn-secondary" id="btn-reset" disabled>
+            🔄 Reset Bones
+        </button>
+        <button class="header-btn btn-secondary" id="btn-export" disabled>
+            💾 Export GLB
+        </button>
+    </header>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- 3D Viewport -->
+        <div id="viewport">
+            <div id="canvas-container"></div>
+
+            <!-- Drop Zone -->
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-icon">📦</div>
+                <div class="drop-zone-text">Drag & Drop GLB file here</div>
+                <div class="drop-zone-hint">or click "Import GLB" button</div>
+            </div>
+        </div>
+
+        <!-- Side Panel -->
+        <div class="side-panel">
+            <!-- Model Info -->
+            <div class="panel-section">
+                <div class="panel-title">Model Info</div>
+                <div class="status-card">
+                    <div class="status-row">
+                        <span class="status-label">Vertices</span>
+                        <span class="status-value" id="stat-vertices">—</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Triangles</span>
+                        <span class="status-value" id="stat-triangles">—</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Dimensions</span>
+                        <span class="status-value" id="stat-dimensions">—</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Detected Type</span>
+                        <span class="status-value" id="stat-type">—</span>
+                    </div>
+                </div>
+
+                <!-- Progress -->
+                <div class="progress-container" id="progress-section" style="display: none;">
+                    <div class="progress-label">
+                        <span id="progress-text">Analyzing...</span>
+                        <span id="progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings -->
+            <div class="panel-section">
+                <div class="panel-title">Settings</div>
+
+                <div class="setting-group">
+                    <label class="setting-label">Body Type Override</label>
+                    <select id="body-type">
+                        <option value="auto">Auto-detect</option>
+                        <option value="humanoid">Humanoid (Biped)</option>
+                        <option value="quadruped">Quadruped (4 legs)</option>
+                        <option value="snake">Snake/Worm</option>
+                        <option value="custom">Simple Spine</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-label">Bone Density</label>
+                    <input type="range" id="bone-density" min="1" max="3" value="2" step="1">
+                    <div class="range-value" id="density-label">Medium</div>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show-bones" checked>
+                    <label for="show-bones">Show Bone Helpers</label>
+                </div>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="show-wireframe">
+                    <label for="show-wireframe">Show Wireframe</label>
+                </div>
+            </div>
+
+            <!-- Generated Bones -->
+            <div class="panel-section" id="bones-section" style="display: none;">
+                <div class="panel-title">Generated Bones (<span id="bone-count">0</span>)</div>
+                <div class="bone-list" id="bone-list"></div>
+            </div>
+
+            <!-- Log -->
+            <div class="panel-section">
+                <div class="panel-title">Log</div>
+                <div class="log-console" id="log-console"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay hidden" id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text" id="loading-text">Processing...</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { TransformControls } from 'three/addons/controls/TransformControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+        // ==========================================
+        // GLOBALS
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let importedModel = null;
+        let originalMeshes = [];
+        let generatedSkeleton = null;
+        let skinnedMeshes = [];
+        let boneHelpers = [];
+        let boneSpheres = []; // Clickable bone spheres for selection
+        let analysisData = null;
+
+        // Interactive bone testing
+        let selectedBone = null;
+        let selectedBoneSphere = null;
+        let isRotating = false;
+        let rotationStartMouse = new THREE.Vector2();
+        let rotationStartQuat = new THREE.Quaternion();
+        const raycaster = new THREE.Raycaster();
+
+        // Transform gizmo
+        let transformControls = null;
+
+        // Store original bone rotations for reset
+        let originalBoneRotations = new Map();
+
+        // ==========================================
+        // LOGGING
+        // ==========================================
+        function log(message, type = 'info') {
+            const console = document.getElementById('log-console');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const time = new Date().toLocaleTimeString();
+            entry.textContent = `[${time}] ${message}`;
+            console.appendChild(entry);
+            console.scrollTop = console.scrollHeight;
+        }
+
+        // ==========================================
+        // PROGRESS
+        // ==========================================
+        function showProgress(text, percent) {
+            const section = document.getElementById('progress-section');
+            section.style.display = 'block';
+            document.getElementById('progress-text').textContent = text;
+            document.getElementById('progress-percent').textContent = `${Math.round(percent)}%`;
+            document.getElementById('progress-fill').style.width = `${percent}%`;
+        }
+
+        function hideProgress() {
+            document.getElementById('progress-section').style.display = 'none';
+        }
+
+        function showLoading(text) {
+            document.getElementById('loading-text').textContent = text;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').classList.add('hidden');
+        }
+
+        // ==========================================
+        // THREE.JS SETUP
+        // ==========================================
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0f);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(
+                60,
+                container.clientWidth / container.clientHeight,
+                0.1,
+                1000
+            );
+            camera.position.set(3, 2, 5);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Transform controls (rotation gizmo for bones)
+            transformControls = new TransformControls(camera, renderer.domElement);
+            transformControls.setMode('rotate');
+            transformControls.setSize(0.8);
+            transformControls.visible = false;
+            scene.add(transformControls);
+
+            // Disable orbit controls while using transform controls
+            transformControls.addEventListener('dragging-changed', (event) => {
+                controls.enabled = !event.value;
+                if (!event.value && generatedSkeleton) {
+                    // Update skeleton after rotation
+                    generatedSkeleton.update();
+                }
+            });
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(5, 10, 5);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            const fillLight = new THREE.DirectionalLight(0x88aaff, 0.3);
+            fillLight.position.set(-5, 3, -5);
+            scene.add(fillLight);
+
+            // Grid
+            const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
+            scene.add(gridHelper);
+
+            // Resize handler
+            window.addEventListener('resize', onWindowResize);
+
+            // Start animation loop
+            animate();
+
+            log('Renderer initialized', 'success');
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // FILE HANDLING
+        // ==========================================
+        function setupFileHandling() {
+            const fileInput = document.getElementById('file-input');
+            const importBtn = document.getElementById('btn-import');
+            const dropZone = document.getElementById('drop-zone');
+            const viewport = document.getElementById('viewport');
+
+            // Import button
+            importBtn.addEventListener('click', () => fileInput.click());
+
+            // File input change
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    loadFile(e.target.files[0]);
+                }
+            });
+
+            // Drag and drop
+            viewport.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+
+            viewport.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+            });
+
+            viewport.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) {
+                    loadFile(e.dataTransfer.files[0]);
+                }
+            });
+        }
+
+        async function loadFile(file) {
+            log(`Loading file: ${file.name}`);
+            showLoading('Loading model...');
+
+            const url = URL.createObjectURL(file);
+            const loader = new GLTFLoader();
+
+            try {
+                const gltf = await new Promise((resolve, reject) => {
+                    loader.load(url, resolve, undefined, reject);
+                });
+
+                // Clear previous model
+                clearModel();
+
+                // Store the imported model
+                importedModel = gltf.scene;
+
+                // Center and scale the model
+                const box = new THREE.Box3().setFromObject(importedModel);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const scale = 2 / maxDim;
+
+                importedModel.scale.setScalar(scale);
+                importedModel.position.sub(center.multiplyScalar(scale));
+                importedModel.position.y += size.y * scale / 2;
+
+                scene.add(importedModel);
+
+                // Collect all meshes
+                originalMeshes = [];
+                importedModel.traverse((child) => {
+                    if (child.isMesh) {
+                        originalMeshes.push(child);
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+
+                // Hide drop zone
+                document.getElementById('drop-zone').classList.add('hidden');
+
+                // Analyze the model
+                await analyzeModel();
+
+                // Enable generate button
+                document.getElementById('btn-generate').disabled = false;
+
+                log(`Model loaded: ${originalMeshes.length} meshes`, 'success');
+                hideLoading();
+
+                URL.revokeObjectURL(url);
+
+            } catch (error) {
+                log(`Error loading model: ${error.message}`, 'error');
+                hideLoading();
+                console.error(error);
+            }
+        }
+
+        function clearModel() {
+            if (importedModel) {
+                scene.remove(importedModel);
+                importedModel = null;
+            }
+
+            // Clear bone helpers
+            boneHelpers.forEach(helper => {
+                if (helper.parent) helper.parent.remove(helper);
+                scene.remove(helper);
+            });
+            boneHelpers = [];
+            boneSpheres = [];
+
+            // Clear skinned meshes from scene
+            skinnedMeshes.forEach(mesh => scene.remove(mesh));
+            skinnedMeshes = [];
+
+            // Clear skeleton root from scene
+            if (generatedSkeleton && generatedSkeleton.bones[0]) {
+                scene.remove(generatedSkeleton.bones[0]);
+            }
+
+            originalMeshes = [];
+            generatedSkeleton = null;
+            analysisData = null;
+            originalBoneRotations.clear();
+
+            // Detach transform controls
+            if (transformControls) {
+                transformControls.detach();
+                transformControls.visible = false;
+            }
+            selectedBone = null;
+            selectedBoneSphere = null;
+
+            // Reset UI
+            document.getElementById('btn-generate').disabled = true;
+            document.getElementById('btn-export').disabled = true;
+            document.getElementById('btn-reset').disabled = true;
+            document.getElementById('bones-section').style.display = 'none';
+            document.getElementById('stat-vertices').textContent = '—';
+            document.getElementById('stat-triangles').textContent = '—';
+            document.getElementById('stat-dimensions').textContent = '—';
+            document.getElementById('stat-type').textContent = '—';
+        }
+
+        /**
+         * Clear only skeleton-related objects (for regenerating bones)
+         */
+        function clearSkeleton() {
+            // Clear bone helpers
+            boneHelpers.forEach(helper => {
+                if (helper.parent) helper.parent.remove(helper);
+                scene.remove(helper);
+            });
+            boneHelpers = [];
+            boneSpheres = [];
+
+            // Clear skinned meshes from scene
+            skinnedMeshes.forEach(mesh => scene.remove(mesh));
+            skinnedMeshes = [];
+
+            // Clear skeleton root from scene
+            if (generatedSkeleton && generatedSkeleton.bones[0]) {
+                scene.remove(generatedSkeleton.bones[0]);
+            }
+            generatedSkeleton = null;
+            originalBoneRotations.clear();
+
+            // Detach transform controls
+            if (transformControls) {
+                transformControls.detach();
+                transformControls.visible = false;
+            }
+            selectedBone = null;
+            selectedBoneSphere = null;
+
+            // Show original meshes again
+            originalMeshes.forEach(mesh => mesh.visible = true);
+        }
+
+        // ==========================================
+        // MODEL ANALYSIS
+        // ==========================================
+        async function analyzeModel() {
+            log('Analyzing model geometry...');
+            showProgress('Analyzing geometry...', 10);
+
+            await sleep(100); // Allow UI to update
+
+            // Gather all geometry data
+            let totalVertices = 0;
+            let totalTriangles = 0;
+            const allPositions = [];
+
+            originalMeshes.forEach(mesh => {
+                const geometry = mesh.geometry;
+                const positions = geometry.attributes.position;
+
+                totalVertices += positions.count;
+                totalTriangles += geometry.index ? geometry.index.count / 3 : positions.count / 3;
+
+                // Get world positions
+                mesh.updateMatrixWorld(true);
+                for (let i = 0; i < positions.count; i++) {
+                    const vertex = new THREE.Vector3();
+                    vertex.fromBufferAttribute(positions, i);
+                    vertex.applyMatrix4(mesh.matrixWorld);
+                    allPositions.push(vertex);
+                }
+            });
+
+            showProgress('Computing bounding box...', 30);
+            await sleep(50);
+
+            // Compute bounding box
+            const bbox = new THREE.Box3().setFromObject(importedModel);
+            const size = bbox.getSize(new THREE.Vector3());
+            const center = bbox.getCenter(new THREE.Vector3());
+
+            // Compute center of mass
+            const com = new THREE.Vector3();
+            allPositions.forEach(p => com.add(p));
+            com.divideScalar(allPositions.length);
+
+            showProgress('Detecting body type...', 50);
+            await sleep(50);
+
+            // Detect body type
+            const bodyType = detectBodyType(allPositions, size, com, bbox);
+
+            showProgress('Computing vertex distribution...', 70);
+            await sleep(50);
+
+            // Compute vertex density along axes
+            const vertexDistribution = computeVertexDistribution(allPositions, bbox);
+
+            showProgress('Finding limb regions...', 90);
+            await sleep(50);
+
+            // Find potential limb regions
+            const limbs = findLimbRegions(allPositions, size, com, bodyType);
+
+            // Store analysis data
+            analysisData = {
+                totalVertices,
+                totalTriangles,
+                bbox,
+                size,
+                center,
+                centerOfMass: com,
+                bodyType,
+                vertexDistribution,
+                limbs,
+                allPositions
+            };
+
+            // Update UI
+            document.getElementById('stat-vertices').textContent = totalVertices.toLocaleString();
+            document.getElementById('stat-triangles').textContent = Math.round(totalTriangles).toLocaleString();
+            document.getElementById('stat-dimensions').textContent =
+                `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
+            document.getElementById('stat-type').textContent = bodyType.charAt(0).toUpperCase() + bodyType.slice(1);
+
+            hideProgress();
+            log(`Analysis complete: ${bodyType} body type detected`, 'success');
+        }
+
+        function detectBodyType(positions, size, com, bbox) {
+            const userOverride = document.getElementById('body-type').value;
+            if (userOverride !== 'auto') return userOverride;
+
+            // Aspect ratio analysis
+            const heightToWidth = size.y / size.x;
+            const heightToDepth = size.y / size.z;
+            const widthToDepth = size.x / size.z;
+
+            // Check symmetry along X axis
+            let leftCount = 0, rightCount = 0;
+            positions.forEach(p => {
+                if (p.x < com.x) leftCount++;
+                else rightCount++;
+            });
+            const symmetryScore = 1 - Math.abs(leftCount - rightCount) / positions.length;
+
+            // Vertical distribution - count vertices in upper/lower halves
+            const midY = (bbox.min.y + bbox.max.y) / 2;
+            let upperCount = 0, lowerCount = 0;
+            positions.forEach(p => {
+                if (p.y > midY) upperCount++;
+                else lowerCount++;
+            });
+
+            // Heuristic classification
+            if (heightToWidth > 1.5 && heightToDepth > 1.5 && symmetryScore > 0.8) {
+                // Tall and symmetric - likely humanoid
+                return 'humanoid';
+            } else if (heightToWidth < 0.8 && widthToDepth < 1.5) {
+                // Wide and flat - likely quadruped
+                return 'quadruped';
+            } else if (heightToWidth < 0.5 && widthToDepth > 2) {
+                // Very elongated - snake
+                return 'snake';
+            }
+
+            // Default to humanoid if uncertain
+            return 'humanoid';
+        }
+
+        function computeVertexDistribution(positions, bbox) {
+            const resolution = 20;
+            const distribution = {
+                x: new Array(resolution).fill(0),
+                y: new Array(resolution).fill(0),
+                z: new Array(resolution).fill(0)
+            };
+
+            const size = bbox.getSize(new THREE.Vector3());
+
+            positions.forEach(p => {
+                const nx = Math.floor((p.x - bbox.min.x) / size.x * (resolution - 1));
+                const ny = Math.floor((p.y - bbox.min.y) / size.y * (resolution - 1));
+                const nz = Math.floor((p.z - bbox.min.z) / size.z * (resolution - 1));
+
+                distribution.x[Math.max(0, Math.min(resolution - 1, nx))]++;
+                distribution.y[Math.max(0, Math.min(resolution - 1, ny))]++;
+                distribution.z[Math.max(0, Math.min(resolution - 1, nz))]++;
+            });
+
+            return distribution;
+        }
+
+        function findLimbRegions(positions, size, com, bodyType) {
+            const limbs = [];
+
+            // For humanoid, look for 4 extremities (2 arms, 2 legs)
+            if (bodyType === 'humanoid') {
+                // Find extremities by clustering distant vertices
+                const extremities = findExtremities(positions, com, 4);
+
+                // Classify extremities as arms or legs based on height
+                extremities.forEach((ext, i) => {
+                    const isArm = ext.position.y > com.y;
+                    limbs.push({
+                        type: isArm ? 'arm' : 'leg',
+                        side: ext.position.x < com.x ? 'left' : 'right',
+                        endpoint: ext.position,
+                        vertices: ext.vertices
+                    });
+                });
+            } else if (bodyType === 'quadruped') {
+                // Find 4 legs and potentially a head/tail
+                const extremities = findExtremities(positions, com, 6);
+                extremities.forEach(ext => {
+                    const isLeg = ext.position.y < com.y * 0.5;
+                    const isHead = ext.position.z > com.z + size.z * 0.3;
+                    const isTail = ext.position.z < com.z - size.z * 0.3;
+
+                    if (isHead) {
+                        limbs.push({ type: 'head', endpoint: ext.position, vertices: ext.vertices });
+                    } else if (isTail) {
+                        limbs.push({ type: 'tail', endpoint: ext.position, vertices: ext.vertices });
+                    } else if (isLeg) {
+                        const isFront = ext.position.z > com.z;
+                        const isLeft = ext.position.x < com.x;
+                        limbs.push({
+                            type: 'leg',
+                            position: isFront ? 'front' : 'back',
+                            side: isLeft ? 'left' : 'right',
+                            endpoint: ext.position,
+                            vertices: ext.vertices
+                        });
+                    }
+                });
+            }
+
+            return limbs;
+        }
+
+        function findExtremities(positions, center, count) {
+            // Sort vertices by distance from center
+            const sorted = positions.map((p, i) => ({
+                position: p,
+                distance: p.distanceTo(center),
+                index: i
+            })).sort((a, b) => b.distance - a.distance);
+
+            // Use k-means-ish clustering to find distinct extremity regions
+            const extremities = [];
+            const minDistance = positions.length > 0 ?
+                new THREE.Vector3().subVectors(
+                    new THREE.Box3().setFromPoints(positions).getSize(new THREE.Vector3()),
+                    new THREE.Vector3()
+                ).length() * 0.15 : 0.5;
+
+            for (const vertex of sorted) {
+                // Check if this vertex is far enough from existing extremities
+                let isNew = true;
+                for (const ext of extremities) {
+                    if (vertex.position.distanceTo(ext.position) < minDistance) {
+                        ext.vertices.push(vertex.index);
+                        isNew = false;
+                        break;
+                    }
+                }
+
+                if (isNew && extremities.length < count) {
+                    extremities.push({
+                        position: vertex.position.clone(),
+                        vertices: [vertex.index]
+                    });
+                }
+
+                if (extremities.length >= count && extremities.every(e => e.vertices.length > 10)) {
+                    break;
+                }
+            }
+
+            return extremities;
+        }
+
+        // ==========================================
+        // GEOMETRY-BASED BONE POSITIONING
+        // ==========================================
+
+        /**
+         * Find the center point of mesh at a specific height (Y value)
+         * This helps position bones along the actual mesh centerline
+         */
+        function findMeshCenterAtHeight(positions, targetY, tolerance) {
+            const nearbyVertices = positions.filter(p =>
+                Math.abs(p.y - targetY) < tolerance
+            );
+
+            if (nearbyVertices.length === 0) {
+                return null;
+            }
+
+            const center = new THREE.Vector3();
+            nearbyVertices.forEach(v => center.add(v));
+            center.divideScalar(nearbyVertices.length);
+            return center;
+        }
+
+        /**
+         * Compute the spine/centerline path through the mesh
+         * Returns array of points from bottom to top
+         */
+        function computeSpinePath(positions, bbox, numPoints) {
+            const path = [];
+            const height = bbox.max.y - bbox.min.y;
+            const tolerance = height / (numPoints * 2);
+
+            for (let i = 0; i < numPoints; i++) {
+                const y = bbox.min.y + (height * (i + 0.5) / numPoints);
+                const center = findMeshCenterAtHeight(positions, y, tolerance);
+                if (center) {
+                    path.push(center);
+                }
+            }
+
+            return path;
+        }
+
+        /**
+         * Find limb endpoints by analyzing geometry in specific regions
+         */
+        function findLimbEndpoints(positions, com, bbox, bodyType) {
+            const endpoints = {
+                leftArm: null, rightArm: null,
+                leftLeg: null, rightLeg: null,
+                frontLeftLeg: null, frontRightLeg: null,
+                backLeftLeg: null, backRightLeg: null,
+                head: null, tail: null
+            };
+
+            if (bodyType === 'humanoid') {
+                // Find lowest points on left/right sides for legs
+                const leftVertices = positions.filter(p => p.x < com.x - 0.1);
+                const rightVertices = positions.filter(p => p.x > com.x + 0.1);
+
+                if (leftVertices.length > 0) {
+                    const lowestLeft = leftVertices.reduce((min, v) => v.y < min.y ? v : min);
+                    endpoints.leftLeg = lowestLeft.clone();
+                }
+                if (rightVertices.length > 0) {
+                    const lowestRight = rightVertices.reduce((min, v) => v.y < min.y ? v : min);
+                    endpoints.rightLeg = lowestRight.clone();
+                }
+
+                // Find outermost high points for arms
+                const upperVertices = positions.filter(p => p.y > com.y);
+                if (upperVertices.length > 0) {
+                    const leftmostUpper = upperVertices.reduce((min, v) => v.x < min.x ? v : min);
+                    const rightmostUpper = upperVertices.reduce((max, v) => v.x > max.x ? v : max);
+                    endpoints.leftArm = leftmostUpper.clone();
+                    endpoints.rightArm = rightmostUpper.clone();
+                }
+
+                // Head - highest point
+                const highest = positions.reduce((max, v) => v.y > max.y ? v : max);
+                endpoints.head = highest.clone();
+
+            } else if (bodyType === 'quadruped') {
+                // For quadrupeds, find 4 lowest points in each quadrant
+                const frontLeft = positions.filter(p => p.x < com.x && p.z > com.z);
+                const frontRight = positions.filter(p => p.x > com.x && p.z > com.z);
+                const backLeft = positions.filter(p => p.x < com.x && p.z < com.z);
+                const backRight = positions.filter(p => p.x > com.x && p.z < com.z);
+
+                if (frontLeft.length > 0) {
+                    endpoints.frontLeftLeg = frontLeft.reduce((min, v) => v.y < min.y ? v : min).clone();
+                }
+                if (frontRight.length > 0) {
+                    endpoints.frontRightLeg = frontRight.reduce((min, v) => v.y < min.y ? v : min).clone();
+                }
+                if (backLeft.length > 0) {
+                    endpoints.backLeftLeg = backLeft.reduce((min, v) => v.y < min.y ? v : min).clone();
+                }
+                if (backRight.length > 0) {
+                    endpoints.backRightLeg = backRight.reduce((min, v) => v.y < min.y ? v : min).clone();
+                }
+
+                // Head - frontmost point
+                const frontmost = positions.reduce((max, v) => v.z > max.z ? v : max);
+                endpoints.head = frontmost.clone();
+
+                // Tail - backmost point  
+                const backmost = positions.reduce((min, v) => v.z < min.z ? v : min);
+                endpoints.tail = backmost.clone();
+            }
+
+            return endpoints;
+        }
+
+        /**
+         * Trace a path from shoulder/hip to limb endpoint through the mesh
+         */
+        function traceLimbPath(positions, startPoint, endPoint, numBones) {
+            const path = [];
+
+            for (let i = 0; i <= numBones; i++) {
+                const t = i / numBones;
+                const targetPoint = new THREE.Vector3().lerpVectors(startPoint, endPoint, t);
+
+                // Find nearby vertices and compute their center to stay inside mesh
+                const tolerance = startPoint.distanceTo(endPoint) * 0.15;
+                const nearbyVertices = positions.filter(p => p.distanceTo(targetPoint) < tolerance);
+
+                if (nearbyVertices.length > 0) {
+                    const center = new THREE.Vector3();
+                    nearbyVertices.forEach(v => center.add(v));
+                    center.divideScalar(nearbyVertices.length);
+                    path.push(center);
+                } else {
+                    path.push(targetPoint);
+                }
+            }
+
+            return path;
+        }
+
+        // ==========================================
+        // SKELETON GENERATION
+        // ==========================================
+        async function generateBones() {
+            if (!analysisData) {
+                log('No model analyzed yet', 'error');
+                return;
+            }
+
+            log('Generating skeleton...');
+            showLoading('Generating bones...');
+            showProgress('Creating bone hierarchy...', 10);
+
+            // Clean up previous skeleton if regenerating
+            clearSkeleton();
+
+            await sleep(100);
+
+            const { size, centerOfMass, bbox, limbs } = analysisData;
+            const density = parseInt(document.getElementById('bone-density').value);
+
+            // Get body type from UI override (check at generation time, not analysis time)
+            const userOverride = document.getElementById('body-type').value;
+            const bodyType = userOverride !== 'auto' ? userOverride : analysisData.bodyType;
+
+            let skeleton;
+            let rootBone;
+
+            switch (bodyType) {
+                case 'humanoid':
+                    [rootBone, skeleton] = createHumanoidSkeleton(size, centerOfMass, bbox, density);
+                    break;
+                case 'quadruped':
+                    [rootBone, skeleton] = createQuadrupedSkeleton(size, centerOfMass, bbox, density);
+                    break;
+                case 'snake':
+                    [rootBone, skeleton] = createSnakeSkeleton(size, centerOfMass, bbox, density);
+                    break;
+                default:
+                    [rootBone, skeleton] = createSimpleSkeleton(size, centerOfMass, bbox, density);
+            }
+
+            showProgress('Positioning bones...', 40);
+            await sleep(100);
+
+            // Position skeleton at model center
+            rootBone.position.copy(centerOfMass);
+            rootBone.updateMatrixWorld(true);
+
+            generatedSkeleton = skeleton;
+
+            // Add skeleton to scene for visualization
+            scene.add(rootBone);
+
+            showProgress('Computing skin weights...', 50);
+            await sleep(100);
+
+            // Create skinned meshes with weights FIRST (before bone helpers to avoid cyclic refs during clone)
+            await createSkinnedMeshes(skeleton, rootBone);
+
+            showProgress('Creating bone helpers...', 90);
+            await sleep(50);
+
+            // Create bone helpers AFTER skinned meshes (bone helpers add userData refs that cause clone issues)
+            createBoneHelpers(skeleton);
+
+            // Store original bone rotations for reset functionality
+            storeOriginalBoneRotations(skeleton);
+
+            showProgress('Finalizing...', 95);
+            await sleep(50);
+
+            // Update UI
+            updateBoneList(skeleton);
+            document.getElementById('btn-export').disabled = false;
+            document.getElementById('btn-reset').disabled = false;
+
+            hideProgress();
+            hideLoading();
+            log(`Generated ${skeleton.bones.length} bones for ${bodyType} body type`, 'success');
+            log('Ctrl+Click a bone to select, use gizmo to rotate.', 'info');
+        }
+
+        function createHumanoidSkeleton(size, com, bbox, density) {
+            const bones = [];
+            const boneMap = {};
+
+            // Calculate proportions
+            const height = size.y;
+            const hipHeight = height * 0.45;
+            const spineHeight = height * 0.30;
+            const headHeight = height * 0.15;
+            const legLength = hipHeight;
+            const armLength = height * 0.35;
+
+            // Root/Hips
+            const root = new THREE.Bone();
+            root.name = 'Root';
+            bones.push(root);
+            boneMap.root = root;
+
+            const hips = new THREE.Bone();
+            hips.name = 'Hips';
+            hips.position.set(0, -height / 2 + hipHeight, 0);
+            root.add(hips);
+            bones.push(hips);
+            boneMap.hips = hips;
+
+            // Spine
+            const spineCount = density === 1 ? 1 : density === 2 ? 2 : 3;
+            let prevSpine = hips;
+            const spineStep = spineHeight / spineCount;
+
+            for (let i = 0; i < spineCount; i++) {
+                const spine = new THREE.Bone();
+                spine.name = `Spine${i + 1}`;
+                spine.position.set(0, spineStep, 0);
+                prevSpine.add(spine);
+                bones.push(spine);
+                prevSpine = spine;
+            }
+            boneMap.chest = prevSpine;
+
+            // Neck and Head
+            const neck = new THREE.Bone();
+            neck.name = 'Neck';
+            neck.position.set(0, spineStep * 0.5, 0);
+            prevSpine.add(neck);
+            bones.push(neck);
+
+            const head = new THREE.Bone();
+            head.name = 'Head';
+            head.position.set(0, headHeight * 0.4, 0);
+            neck.add(head);
+            bones.push(head);
+
+            // Arms
+            const shoulderWidth = size.x * 0.4;
+            ['Left', 'Right'].forEach((side, idx) => {
+                const sign = idx === 0 ? -1 : 1;
+
+                const shoulder = new THREE.Bone();
+                shoulder.name = `Shoulder_${side}`;
+                shoulder.position.set(sign * shoulderWidth / 2, 0, 0);
+                prevSpine.add(shoulder);
+                bones.push(shoulder);
+
+                const upperArm = new THREE.Bone();
+                upperArm.name = `UpperArm_${side}`;
+                upperArm.position.set(sign * shoulderWidth * 0.2, -armLength * 0.1, 0);
+                shoulder.add(upperArm);
+                bones.push(upperArm);
+
+                const lowerArm = new THREE.Bone();
+                lowerArm.name = `LowerArm_${side}`;
+                lowerArm.position.set(0, -armLength * 0.4, 0);
+                upperArm.add(lowerArm);
+                bones.push(lowerArm);
+
+                const hand = new THREE.Bone();
+                hand.name = `Hand_${side}`;
+                hand.position.set(0, -armLength * 0.4, 0);
+                lowerArm.add(hand);
+                bones.push(hand);
+
+                // Add fingers if high density
+                if (density >= 3) {
+                    for (let f = 0; f < 5; f++) {
+                        const finger = new THREE.Bone();
+                        finger.name = `Finger${f + 1}_${side}`;
+                        finger.position.set(sign * (f - 2) * 0.02, -0.05, 0);
+                        hand.add(finger);
+                        bones.push(finger);
+                    }
+                }
+            });
+
+            // Legs
+            ['Left', 'Right'].forEach((side, idx) => {
+                const sign = idx === 0 ? -1 : 1;
+                const hipWidth = size.x * 0.15;
+
+                const upperLeg = new THREE.Bone();
+                upperLeg.name = `UpperLeg_${side}`;
+                upperLeg.position.set(sign * hipWidth, 0, 0);
+                hips.add(upperLeg);
+                bones.push(upperLeg);
+
+                const lowerLeg = new THREE.Bone();
+                lowerLeg.name = `LowerLeg_${side}`;
+                lowerLeg.position.set(0, -legLength * 0.5, 0);
+                upperLeg.add(lowerLeg);
+                bones.push(lowerLeg);
+
+                const foot = new THREE.Bone();
+                foot.name = `Foot_${side}`;
+                foot.position.set(0, -legLength * 0.5, 0);
+                lowerLeg.add(foot);
+                bones.push(foot);
+
+                const toe = new THREE.Bone();
+                toe.name = `Toe_${side}`;
+                toe.position.set(0, 0, size.z * 0.1);
+                foot.add(toe);
+                bones.push(toe);
+            });
+
+            const skeleton = new THREE.Skeleton(bones);
+            return [root, skeleton];
+        }
+
+        function createQuadrupedSkeleton(size, com, bbox, density) {
+            const bones = [];
+
+            // All positions relative to root which will be placed at center of mass
+            // Body dimensions for positioning
+            const bodyLength = size.z;
+            const bodyHeight = size.y;
+            const bodyWidth = size.x;
+
+            // Estimate where the "body" part is (not legs)
+            // For a quadruped, the main body is in the upper 60% of height
+            const bodyBottom = bodyHeight * 0.35; // legs take bottom 35%
+            const bodyCenter = bodyHeight * 0.55; // center of body mass
+
+            // Root bone at origin (will be positioned at center of mass by caller)
+            const root = new THREE.Bone();
+            root.name = 'Root';
+            bones.push(root);
+
+            // Hips - at back of body, inside the mesh
+            const hips = new THREE.Bone();
+            hips.name = 'Hips';
+            // Position relative to center of mass: back 30% of body length, at body center height
+            hips.position.set(0, bodyCenter - com.y + bbox.min.y, -bodyLength * 0.35);
+            root.add(hips);
+            bones.push(hips);
+
+            // Spine chain from hips to chest
+            const spineCount = density === 1 ? 2 : density === 2 ? 3 : 5;
+            const spineLength = bodyLength * 0.5; // spine covers middle 50% of body
+            const spineStep = spineLength / spineCount;
+
+            let prevSpine = hips;
+            for (let i = 0; i < spineCount; i++) {
+                const spine = new THREE.Bone();
+                spine.name = `Spine${i + 1}`;
+                spine.position.set(0, 0, spineStep);
+                prevSpine.add(spine);
+                bones.push(spine);
+                prevSpine = spine;
+            }
+            const chest = prevSpine;
+
+            // Neck - goes up and forward from chest
+            const neck = new THREE.Bone();
+            neck.name = 'Neck';
+            neck.position.set(0, bodyHeight * 0.15, bodyLength * 0.1);
+            chest.add(neck);
+            bones.push(neck);
+
+            // Head - continues forward
+            const head = new THREE.Bone();
+            head.name = 'Head';
+            head.position.set(0, bodyHeight * 0.08, bodyLength * 0.12);
+            neck.add(head);
+            bones.push(head);
+
+            // Tail - goes back and slightly up from hips
+            const tail1 = new THREE.Bone();
+            tail1.name = 'Tail1';
+            tail1.position.set(0, bodyHeight * 0.05, -bodyLength * 0.12);
+            hips.add(tail1);
+            bones.push(tail1);
+
+            if (density >= 2) {
+                const tail2 = new THREE.Bone();
+                tail2.name = 'Tail2';
+                tail2.position.set(0, bodyHeight * 0.02, -bodyLength * 0.1);
+                tail1.add(tail2);
+                bones.push(tail2);
+            }
+
+            // Leg length: from body center down to ground
+            // bodyHeight * 0.55 is where body center is, legs go from there to bottom
+            const legLength = bodyHeight * 0.55; // legs take roughly 55% of total height
+            const upperLegLength = legLength * 0.5;
+            const lowerLegLength = legLength * 0.5;
+
+            // Four legs
+            const legConfigs = [
+                { name: 'FrontLeft', x: -bodyWidth * 0.25, z: spineLength * 0.9, parent: chest },
+                { name: 'FrontRight', x: bodyWidth * 0.25, z: spineLength * 0.9, parent: chest },
+                { name: 'BackLeft', x: -bodyWidth * 0.25, z: 0, parent: hips },
+                { name: 'BackRight', x: bodyWidth * 0.25, z: 0, parent: hips }
+            ];
+
+            legConfigs.forEach(config => {
+                // Upper leg - starts at body, goes down
+                const upperLeg = new THREE.Bone();
+                upperLeg.name = `UpperLeg_${config.name}`;
+                // Position relative to parent (chest or hips)
+                upperLeg.position.set(config.x, 0, config.name.includes('Front') ? 0 : 0);
+                config.parent.add(upperLeg);
+                bones.push(upperLeg);
+
+                // Lower leg
+                const lowerLeg = new THREE.Bone();
+                lowerLeg.name = `LowerLeg_${config.name}`;
+                lowerLeg.position.set(0, -upperLegLength, 0);
+                upperLeg.add(lowerLeg);
+                bones.push(lowerLeg);
+
+                // Foot
+                const foot = new THREE.Bone();
+                foot.name = `Foot_${config.name}`;
+                foot.position.set(0, -lowerLegLength, 0);
+                lowerLeg.add(foot);
+                bones.push(foot);
+            });
+
+            const skeleton = new THREE.Skeleton(bones);
+            return [root, skeleton];
+        }
+
+        function createSnakeSkeleton(size, com, bbox, density) {
+            const bones = [];
+
+            const root = new THREE.Bone();
+            root.name = 'Root';
+            bones.push(root);
+
+            // Create a long chain of bones along the Z axis
+            const boneCount = density === 1 ? 10 : density === 2 ? 20 : 30;
+            let prevBone = root;
+            const step = size.z / boneCount;
+
+            for (let i = 0; i < boneCount; i++) {
+                const bone = new THREE.Bone();
+                bone.name = `Segment${i + 1}`;
+                bone.position.set(0, 0, step);
+                prevBone.add(bone);
+                bones.push(bone);
+                prevBone = bone;
+            }
+
+            // Head at the end
+            const head = new THREE.Bone();
+            head.name = 'Head';
+            head.position.set(0, size.y * 0.1, step * 0.5);
+            prevBone.add(head);
+            bones.push(head);
+
+            const skeleton = new THREE.Skeleton(bones);
+            return [root, skeleton];
+        }
+
+        function createSimpleSkeleton(size, com, bbox, density) {
+            const bones = [];
+
+            const root = new THREE.Bone();
+            root.name = 'Root';
+            bones.push(root);
+
+            // Simple vertical spine
+            const boneCount = density === 1 ? 3 : density === 2 ? 5 : 8;
+            let prevBone = root;
+            const step = size.y / boneCount;
+
+            for (let i = 0; i < boneCount; i++) {
+                const bone = new THREE.Bone();
+                bone.name = `Spine${i + 1}`;
+                bone.position.set(0, step, 0);
+                prevBone.add(bone);
+                bones.push(bone);
+                prevBone = bone;
+            }
+
+            const skeleton = new THREE.Skeleton(bones);
+            return [root, skeleton];
+        }
+
+        function createBoneHelpers(skeleton) {
+            // Clear existing helpers
+            boneHelpers.forEach(h => {
+                if (h.parent) h.parent.remove(h);
+                scene.remove(h);
+            });
+            boneHelpers = [];
+            boneSpheres = [];
+
+            if (!document.getElementById('show-bones').checked) return;
+
+            skeleton.bones.forEach(bone => {
+                // Create a visual for each bone
+                const helper = new THREE.AxesHelper(0.08);
+                bone.add(helper);
+                boneHelpers.push(helper);
+
+                // Create line to parent
+                if (bone.parent && bone.parent.isBone) {
+                    const material = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+                    const points = [new THREE.Vector3(0, 0, 0), bone.position.clone().negate()];
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const line = new THREE.Line(geometry, material);
+                    bone.add(line);
+                    boneHelpers.push(line);
+                }
+
+                // Create clickable bone sphere - larger for easier selection
+                const sphereGeo = new THREE.SphereGeometry(0.04, 12, 12);
+                const sphereMat = new THREE.MeshBasicMaterial({
+                    color: 0x00d4ff,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+                sphere.userData.bone = bone; // Store reference to bone for selection
+                sphere.userData.originalColor = 0x00d4ff;
+                bone.add(sphere);
+                boneHelpers.push(sphere);
+                boneSpheres.push(sphere);
+            });
+        }
+
+        /**
+         * Select a bone for interactive manipulation
+         */
+        function selectBone(bone, sphere) {
+            // Deselect previous bone
+            if (selectedBoneSphere) {
+                selectedBoneSphere.material.color.setHex(selectedBoneSphere.userData.originalColor);
+            }
+
+            selectedBone = bone;
+            selectedBoneSphere = sphere;
+
+            if (bone && sphere) {
+                // Highlight selected bone
+                sphere.material.color.setHex(0xff6600);
+
+                // Attach transform controls (gizmo) to the bone
+                transformControls.attach(bone);
+                transformControls.visible = true;
+
+                log(`Selected bone: ${bone.name} - Use gizmo to rotate`, 'success');
+            } else {
+                // Deselect - hide gizmo
+                transformControls.detach();
+                transformControls.visible = false;
+            }
+        }
+
+        /**
+         * Reset all bones to their original rotations
+         */
+        function resetBones() {
+            if (!generatedSkeleton || originalBoneRotations.size === 0) {
+                log('No bones to reset', 'warning');
+                return;
+            }
+
+            generatedSkeleton.bones.forEach(bone => {
+                const originalQuat = originalBoneRotations.get(bone.name);
+                if (originalQuat) {
+                    bone.quaternion.copy(originalQuat);
+                }
+            });
+
+            // Update skeleton
+            generatedSkeleton.update();
+
+            // Deselect current bone
+            if (selectedBone) {
+                selectBone(null, null);
+            }
+
+            log('All bones reset to original rotation', 'success');
+        }
+
+        /**
+         * Store original bone rotations for reset functionality
+         */
+        function storeOriginalBoneRotations(skeleton) {
+            originalBoneRotations.clear();
+            skeleton.bones.forEach(bone => {
+                originalBoneRotations.set(bone.name, bone.quaternion.clone());
+            });
+        }
+
+        /**
+         * Handle pointer down for bone selection
+         */
+        function onPointerDown(event) {
+            // Only handle Ctrl+Click for bone selection
+            if (!event.ctrlKey || !generatedSkeleton) return;
+
+            const container = document.getElementById('canvas-container');
+            const rect = container.getBoundingClientRect();
+
+            const mouse = new THREE.Vector2(
+                ((event.clientX - rect.left) / rect.width) * 2 - 1,
+                -((event.clientY - rect.top) / rect.height) * 2 + 1
+            );
+
+            raycaster.setFromCamera(mouse, camera);
+
+            // Raycast against bone spheres
+            const intersects = raycaster.intersectObjects(boneSpheres, false);
+
+            if (intersects.length > 0) {
+                const sphere = intersects[0].object;
+                const bone = sphere.userData.bone;
+
+                if (bone) {
+                    selectBone(bone, sphere);
+
+                    // Start rotation mode
+                    isRotating = true;
+                    rotationStartMouse.set(event.clientX, event.clientY);
+                    rotationStartQuat.copy(bone.quaternion);
+
+                    // Disable orbit controls while rotating bone
+                    controls.enabled = false;
+
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+            }
+        }
+
+        /**
+         * Handle pointer move for bone rotation
+         */
+        function onPointerMove(event) {
+            if (!isRotating || !selectedBone) return;
+
+            const deltaX = (event.clientX - rotationStartMouse.x) * 0.01;
+            const deltaY = (event.clientY - rotationStartMouse.y) * 0.01;
+
+            // Create rotation from mouse movement
+            const rotX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), deltaY);
+            const rotZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), deltaX);
+
+            // Apply rotation
+            selectedBone.quaternion.copy(rotationStartQuat);
+            selectedBone.quaternion.multiply(rotX);
+            selectedBone.quaternion.multiply(rotZ);
+
+            // Update skeleton - this triggers mesh deformation
+            if (generatedSkeleton) {
+                generatedSkeleton.update();
+            }
+        }
+
+        /**
+         * Handle pointer up to stop bone rotation
+         */
+        function onPointerUp(event) {
+            if (isRotating) {
+                isRotating = false;
+                controls.enabled = true;
+
+                if (selectedBone) {
+                    log(`Rotated bone: ${selectedBone.name}`, 'info');
+                }
+            }
+        }
+
+        // ==========================================
+        // SKINNING
+        // ==========================================
+        async function createSkinnedMeshes(skeleton, rootBone) {
+            skinnedMeshes = [];
+
+            const totalMeshes = originalMeshes.length;
+
+            for (let i = 0; i < originalMeshes.length; i++) {
+                const mesh = originalMeshes[i];
+
+                showProgress(`Skinning mesh ${i + 1}/${totalMeshes}...`, 60 + (i / totalMeshes) * 35);
+                await sleep(10);
+
+                // Clone geometry for skinned mesh
+                const geometry = mesh.geometry.clone();
+
+                // Compute skin weights
+                const { skinIndices, skinWeights } = computeSkinWeights(
+                    geometry,
+                    mesh.matrixWorld,
+                    skeleton
+                );
+
+                // Add skinning attributes
+                geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+                geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+
+                // Create material clone with transparency to show bones through mesh
+                const material = mesh.material.clone();
+                material.transparent = true;
+                material.opacity = 0.6;
+                material.side = THREE.DoubleSide;
+                material.depthWrite = false; // Helps with transparency rendering
+
+                // Create skinned mesh
+                const skinnedMesh = new THREE.SkinnedMesh(geometry, material);
+                skinnedMesh.name = mesh.name + '_skinned';
+
+                // Bind skeleton
+                skinnedMesh.add(rootBone.clone());
+                skinnedMesh.bind(skeleton);
+
+                // Copy transforms
+                skinnedMesh.position.copy(mesh.position);
+                skinnedMesh.rotation.copy(mesh.rotation);
+                skinnedMesh.scale.copy(mesh.scale);
+
+                skinnedMeshes.push(skinnedMesh);
+
+                // Add skinned mesh to scene so it's visible
+                scene.add(skinnedMesh);
+
+                // Hide original mesh
+                mesh.visible = false;
+            }
+        }
+
+        function computeSkinWeights(geometry, worldMatrix, skeleton) {
+            const positions = geometry.attributes.position;
+            const vertexCount = positions.count;
+
+            const skinIndices = new Uint16Array(vertexCount * 4);
+            const skinWeights = new Float32Array(vertexCount * 4);
+
+            // Get bone world positions
+            const bonePositions = skeleton.bones.map(bone => {
+                const pos = new THREE.Vector3();
+                bone.getWorldPosition(pos);
+                return pos;
+            });
+
+            // For each vertex, find the 4 nearest bones and compute weights
+            for (let i = 0; i < vertexCount; i++) {
+                const vertex = new THREE.Vector3();
+                vertex.fromBufferAttribute(positions, i);
+                vertex.applyMatrix4(worldMatrix);
+
+                // Calculate distances to all bones
+                const distances = bonePositions.map((bonePos, idx) => ({
+                    index: idx,
+                    distance: vertex.distanceTo(bonePos)
+                }));
+
+                // Sort by distance
+                distances.sort((a, b) => a.distance - b.distance);
+
+                // Take closest 4 bones
+                const closest = distances.slice(0, 4);
+
+                // Compute weights using inverse distance
+                const weights = closest.map(d => {
+                    const dist = Math.max(d.distance, 0.0001);
+                    return 1 / (dist * dist);
+                });
+
+                // Normalize weights
+                const sum = weights.reduce((a, b) => a + b, 0);
+
+                for (let j = 0; j < 4; j++) {
+                    const idx = i * 4 + j;
+                    if (j < closest.length) {
+                        skinIndices[idx] = closest[j].index;
+                        skinWeights[idx] = weights[j] / sum;
+                    } else {
+                        skinIndices[idx] = 0;
+                        skinWeights[idx] = 0;
+                    }
+                }
+            }
+
+            return { skinIndices, skinWeights };
+        }
+
+        function updateBoneList(skeleton) {
+            const container = document.getElementById('bone-list');
+            const countEl = document.getElementById('bone-count');
+            const section = document.getElementById('bones-section');
+
+            container.innerHTML = '';
+            countEl.textContent = skeleton.bones.length;
+            section.style.display = 'block';
+
+            skeleton.bones.forEach(bone => {
+                const item = document.createElement('div');
+                item.className = 'bone-item';
+                item.innerHTML = `<span class="bone-icon"></span>${bone.name}`;
+                container.appendChild(item);
+            });
+        }
+
+        // ==========================================
+        // EXPORT
+        // ==========================================
+        async function exportGLB() {
+            if (!generatedSkeleton || skinnedMeshes.length === 0) {
+                log('No rigged model to export', 'error');
+                return;
+            }
+
+            log('Exporting GLB...');
+            showLoading('Exporting...');
+
+            try {
+                // Temporarily remove bone helpers to avoid issues
+                const helperParents = [];
+                boneHelpers.forEach(helper => {
+                    if (helper.parent) {
+                        helperParents.push({ helper, parent: helper.parent });
+                        helper.parent.remove(helper);
+                    }
+                });
+
+                // Create export group
+                const exportGroup = new THREE.Group();
+                exportGroup.name = 'RiggedModel';
+
+                // Clone the root bone hierarchy (without helpers now)
+                const clonedRootBone = generatedSkeleton.bones[0].clone();
+
+                // IMPORTANT: Remove all non-bone children (helpers, spheres, lines) from the cloned hierarchy
+                // The clone() method copies ALL children, including the visual helpers we added
+                const removeNonBoneChildren = (bone) => {
+                    const childrenToRemove = [];
+                    bone.children.forEach(child => {
+                        if (child.isBone) {
+                            // Recursively clean bone children
+                            removeNonBoneChildren(child);
+                        } else {
+                            // Mark non-bone children for removal (meshes, lines, helpers)
+                            childrenToRemove.push(child);
+                        }
+                    });
+                    childrenToRemove.forEach(child => bone.remove(child));
+                };
+                removeNonBoneChildren(clonedRootBone);
+
+                // Collect all bones from the cloned hierarchy
+                const clonedBones = [];
+                clonedRootBone.traverse(obj => {
+                    if (obj.isBone) {
+                        clonedBones.push(obj);
+                    }
+                });
+
+                // Create a new skeleton with the cloned bones
+                const exportSkeleton = new THREE.Skeleton(clonedBones);
+
+                // For each skinned mesh, create a proper export version
+                skinnedMeshes.forEach((mesh, index) => {
+                    // Clone geometry
+                    const exportGeometry = mesh.geometry.clone();
+
+                    // Clone material (make it opaque for export)
+                    let exportMaterial;
+                    if (mesh.material) {
+                        exportMaterial = mesh.material.clone();
+                        exportMaterial.transparent = false;
+                        exportMaterial.opacity = 1;
+                        exportMaterial.depthWrite = true;
+                    } else {
+                        exportMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+                    }
+
+                    // Create new skinned mesh
+                    const exportMesh = new THREE.SkinnedMesh(exportGeometry, exportMaterial);
+                    exportMesh.name = mesh.name || `SkinnedMesh_${index}`;
+
+                    // Add root bone as child and bind skeleton
+                    if (index === 0) {
+                        // Only add bones once
+                        exportMesh.add(clonedRootBone);
+                    }
+                    exportMesh.bind(exportSkeleton);
+
+                    // Match original transforms
+                    exportMesh.position.copy(mesh.position);
+                    exportMesh.rotation.copy(mesh.rotation);
+                    exportMesh.scale.copy(mesh.scale);
+
+                    exportGroup.add(exportMesh);
+                });
+
+                // Restore bone helpers
+                helperParents.forEach(({ helper, parent }) => {
+                    parent.add(helper);
+                });
+
+                const exporter = new GLTFExporter();
+
+                const glb = await new Promise((resolve, reject) => {
+                    exporter.parse(
+                        exportGroup,
+                        (result) => resolve(result),
+                        (error) => reject(error),
+                        { binary: true }
+                    );
+                });
+
+                // Download
+                const blob = new Blob([glb], { type: 'model/gltf-binary' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'rigged_model.glb';
+                link.click();
+                URL.revokeObjectURL(url);
+
+                log('Export complete!', 'success');
+                hideLoading();
+
+            } catch (error) {
+                log(`Export error: ${error.message}`, 'error');
+                hideLoading();
+                console.error(error);
+            }
+        }
+
+        // ==========================================
+        // UTILITIES
+        // ==========================================
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // ==========================================
+        // EVENT LISTENERS
+        // ==========================================
+        function setupEventListeners() {
+            // Generate button
+            document.getElementById('btn-generate').addEventListener('click', generateBones);
+
+            // Reset bones button
+            document.getElementById('btn-reset').addEventListener('click', resetBones);
+
+            // Export button
+            document.getElementById('btn-export').addEventListener('click', exportGLB);
+
+            // Show bones toggle
+            document.getElementById('show-bones').addEventListener('change', (e) => {
+                if (generatedSkeleton) {
+                    createBoneHelpers(generatedSkeleton);
+                }
+            });
+
+            // Wireframe toggle
+            document.getElementById('show-wireframe').addEventListener('change', (e) => {
+                originalMeshes.forEach(mesh => {
+                    if (mesh.material) {
+                        mesh.material.wireframe = e.target.checked;
+                    }
+                });
+            });
+
+            // Bone density slider
+            document.getElementById('bone-density').addEventListener('input', (e) => {
+                const labels = ['Low', 'Medium', 'High'];
+                document.getElementById('density-label').textContent = labels[e.target.value - 1];
+            });
+
+            // Pointer events for bone selection and rotation
+            const container = document.getElementById('canvas-container');
+            container.addEventListener('pointerdown', onPointerDown);
+            container.addEventListener('pointermove', onPointerMove);
+            container.addEventListener('pointerup', onPointerUp);
+            container.addEventListener('pointerleave', onPointerUp);
+        }
+
+        // ==========================================
+        // INITIALIZATION
+        // ==========================================
+        function init() {
+            initThree();
+            setupFileHandling();
+            setupEventListeners();
+            log('Bonemator ready. Import a GLB file to begin.');
+            log('Tip: Ctrl+Click on a bone to select, then drag to rotate.', 'info');
+        }
+
+        init();
+    </script>
+</body>
+
+</html>
