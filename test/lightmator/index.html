@@ -498,7 +498,8 @@
         <!-- Top Toolbar for Timeline -->
         <div id="timeline-general-controls"
             style="display:flex; align-items:center; padding-bottom:5px; border-bottom:1px solid #444; margin-bottom:5px;">
-            <button class="btn" id="play-pause-btn" onclick="togglePlay()">Pause</button>
+            <!-- Play/Pause Button Removed -->
+            <!-- <button class="btn" id="play-pause-btn" onclick="togglePlay()">Pause</button> -->
             <button class="btn btn-secondary" style="font-size:12px; padding:4px 8px; margin-right:15px;"
                 onclick="createNewAnimation()">+ New Animation</button>
 
@@ -763,7 +764,7 @@
                 });
 
                 // Update Multi-Track UI
-                if (window.updateTimelineTracks) window.updateTimelineTracks();
+                if (window.renderTimelineTracks) window.renderTimelineTracks();
             }
 
             updateBoneColors(layerMasks) {
@@ -851,6 +852,10 @@
             }
 
             stopGlobalActions() {
+                // Nuclear option: Stop EVERYTHING to ensure no ghosting.
+                if (this.mixer) this.mixer.stopAllAction();
+
+                // Also explicitly stop currentAction if it exists (redundant but safe)
                 if (currentAction) {
                     currentAction.stop();
                 }
@@ -937,20 +942,21 @@
         // Define togglePlay globally
         window.togglePlay = function () {
             isPlaying = !isPlaying;
-            document.getElementById('play-pause-btn').innerText = isPlaying ? "Pause" : "Play";
+            const btn = document.getElementById('play-pause-btn');
+            if (btn) btn.innerText = isPlaying ? "Pause" : "Play";
 
-            // Update individual track buttons only if they are syncing or we paused globally?
-            /* 
-               Actually, THREE.Action can be paused independently. 
-               If Global Pause: we skip mixer.update(). The actions remain as they are.
-               So 'isPlaying' controls GLOBAL time flow.
-               We DO NOT need to reset action times.
-               User issue: "it takes current animation times to the beginning".
-               Usually that happens if we stop() and play().
-               Here we just toggle isPlaying flag.
-            */
-            // Ensure no reset happens.
+            // STRICT MODE: Do not blindly restart currentAction. 
+            // Only active layers should play.
+            if (!isPlaying) {
+                // Global Pause
+            } else {
+                // Global Resume - Mixer update loop resumes.
+                // We don't need to do anything here if actions are already 'running' (but filtered by mixer update).
+                // However, THREE.Action 'paused' state is separate.
+                // If we rely on mixer loop, we leave actions 'running'.
+            }
         };
+
         let isScrubbing = false;
         let selectedBone = null;
         let duration = 0;
@@ -1043,12 +1049,14 @@
             let dragStartPos = new THREE.Vector3();
             let dragStartRot = new THREE.Quaternion();
             let dragStartScale = new THREE.Vector3();
+            let dragWasPlaying = false;
 
             transformControl.addEventListener('dragging-changed', function (event) {
                 orbit.enabled = !event.value;
                 if (event.value) {
                     // Start dragging
-                    if (isPlaying) togglePlay();
+                    dragWasPlaying = isPlaying;
+                    isPlaying = false;
 
                     if (transformControl.object) {
                         // Snapshot Standard Transform
@@ -1076,7 +1084,7 @@
                     if (transformControl.object) {
                         const obj = transformControl.object;
 
-                        // Identify Correct Clip (Same logic as Start)
+                        // Identify Correct Clip
                         let clip = null;
                         if (window.hierarchicalController) {
                             const layer = window.hierarchicalController.getLayerForBone(obj.name);
@@ -1086,7 +1094,10 @@
                         }
                         if (!clip && currentAction) clip = currentAction.getClip();
 
-                        if (!clip) return;
+                        if (!clip) {
+                            if (dragWasPlaying) isPlaying = true;
+                            return;
+                        }
 
                         const mods = []; // { object, dP, dQ, dS }
 
@@ -1121,7 +1132,7 @@
                                     }
                                 });
                             } else {
-                                // Fallback (Auto-Key if no selection, though Gizmo should be hidden per strict rules)
+                                // Fallback (Auto-Key)
                                 const autoKey = document.getElementById('chk-autokey') ? document.getElementById('chk-autokey').checked : false;
                                 if (autoKey) {
                                     const t = (window.hierarchicalController && window.hierarchicalController.getLayerForBone(obj.name)) ?
@@ -1150,6 +1161,11 @@
                                     }));
 
                                     window.hierarchicalController.invalidateClip(clip.name);
+
+                                    // Hard Reset: Force fresh actions
+                                    window.hierarchicalController.stopLayerActions();
+                                    window.hierarchicalController.activeLayers.forEach(l => l.action = null);
+
                                     window.hierarchicalController.rebuildAndPlay();
 
                                     // Restore state
@@ -1169,11 +1185,10 @@
                                 } else {
                                     if (currentAction && currentAction.getClip() === clip) {
                                         const time = currentAction.time;
-                                        const wasPlaying = isPlaying;
                                         currentAction.stop();
                                         currentAction = mixer.clipAction(clip);
                                         currentAction.time = time;
-                                        if (wasPlaying) {
+                                        if (dragWasPlaying) {
                                             currentAction.play();
                                         } else {
                                             currentAction.play().paused = true;
@@ -1199,10 +1214,11 @@
                                 console.log("No keyframes modified/found.");
                             }
                         }
+
+                        if (dragWasPlaying) isPlaying = true;
                     }
                 }
             });
-
             // We only want rotation for standard skeletal animation usually
             transformControl.setMode('rotate');
             transformControl.space = 'local';
@@ -2815,15 +2831,7 @@
             }
         }
 
-        window.togglePlay = function () {
-            isPlaying = !isPlaying;
-            document.getElementById('play-pause-btn').innerText = isPlaying ? "Pause" : "Play";
 
-            if (isPlaying && currentAction) {
-                currentAction.paused = false;
-                currentAction.play();
-            }
-        };
 
         window.toggleSkeleton = function () {
             if (skeletonHelper) skeletonHelper.visible = document.getElementById('chk-skeleton').checked;
