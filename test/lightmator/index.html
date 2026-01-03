@@ -504,9 +504,6 @@
                 onclick="createNewAnimation()">+ New Animation</button>
 
             <!-- Restored Global Inputs for Logic Compatibility -->
-            <label style="margin-right:10px; font-size:12px;">Duration: <input type="number" id="duration-input"
-                    value="10" step="0.1" style="width:50px; background:#333; border:1px solid #555; color:#fff;"
-                    onchange="renderTimelineTracks()"></label>
             <label style="margin-right:10px; font-size:12px; display:none;">Interp:
                 <select id="interpolation-select" style="background:#333; color:#fff; border:1px solid #555;">
                     <option value="Linear">Linear</option>
@@ -1025,6 +1022,62 @@
         };
 
 
+        // --- DURATION UI HELPERS ---
+        window.updateClipDuration = function (clip, newDur) {
+            if (!clip || newDur <= 0 || newDur === clip.duration) return;
+
+            const jsonBefore = clip.toJSON();
+
+            clip.duration = newDur;
+
+            // Truncate keys if new duration is shorter (Logic adapted from previous updateDuration)
+            let changed = false;
+            clip.tracks.forEach(track => {
+                const times = track.times;
+                if (times.length > 0 && times[times.length - 1] > newDur) {
+                    const newTimes = [];
+                    const newValues = [];
+                    const itemSize = track.getValueSize();
+
+                    for (let i = 0; i < times.length; i++) {
+                        if (times[i] <= newDur) {
+                            newTimes.push(times[i]);
+                            for (let k = 0; k < itemSize; k++) {
+                                newValues.push(track.values[i * itemSize + k]);
+                            }
+                        }
+                    }
+                    track.times = new Float32Array(newTimes);
+                    track.values = new Float32Array(newValues);
+                    changed = true;
+                }
+            });
+
+            // Persistence & Refresh
+            const jsonAfter = clip.toJSON();
+
+            // Refresh Logic
+            if (window.hierarchicalController) {
+                window.hierarchicalController.invalidateClip(clip.name);
+                window.hierarchicalController.rebuildAndPlay();
+            } else {
+                if (window.restoreClipState) window.restoreClipState(clip, jsonAfter);
+            }
+
+            if (window.renderTimelineTracks) window.renderTimelineTracks();
+
+            addCommand({
+                execute: () => {
+                    if (window.restoreClipState) window.restoreClipState(clip, jsonAfter);
+                    if (window.renderTimelineTracks) window.renderTimelineTracks();
+                },
+                undo: () => {
+                    if (window.restoreClipState) window.restoreClipState(clip, jsonBefore);
+                    if (window.renderTimelineTracks) window.renderTimelineTracks();
+                }
+            });
+        };
+
         // --- INITIALIZATION ---
         function init() {
             const canvas = document.getElementById('viewport');
@@ -1354,6 +1407,18 @@
 
                 transformControl.setTranslationSnap(e.shiftKey ? 0.5 : null);
                 transformControl.setRotationSnap(e.shiftKey ? THREE.MathUtils.degToRad(15) : null);
+            });
+
+            // Key listeners for Gizmo Control Restriction
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Control') {
+                    if (transformControl) transformControl.enabled = false;
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                if (e.key === 'Control') {
+                    if (transformControl) transformControl.enabled = true;
+                }
             });
 
             // Initialize UI state
@@ -1783,11 +1848,62 @@
                 };
                 controls.appendChild(btnOnce);
 
-                // Time / Duration
-                const lblTime = document.createElement('span');
-                lblTime.style.marginRight = '10px';
-                lblTime.innerText = `${clip.tracks.length > 0 ? clip.duration.toFixed(2) : "0.00"}s`;
-                controls.appendChild(lblTime);
+                // Time / Duration (Editable)
+                const durContainer = document.createElement('div');
+                durContainer.style.display = 'inline-block';
+                durContainer.style.marginRight = '10px';
+
+                const lblDur = document.createElement('span');
+                lblDur.innerText = `${clip.duration.toFixed(2)}s`;
+                lblDur.title = "Double click to edit duration";
+                lblDur.style.cursor = 'pointer';
+                lblDur.style.padding = '2px 4px';
+                lblDur.style.border = '1px solid transparent';
+                lblDur.style.fontSize = '12px';
+
+                const inpDur = document.createElement('input');
+                inpDur.type = 'number';
+                inpDur.step = '0.1';
+                inpDur.value = clip.duration;
+                inpDur.style.width = '40px';
+                inpDur.style.display = 'none';
+                inpDur.style.background = '#333';
+                inpDur.style.color = '#fff';
+                inpDur.style.border = '1px solid #555';
+                inpDur.style.fontSize = '12px';
+
+                lblDur.ondblclick = () => {
+                    lblDur.style.display = 'none';
+                    inpDur.style.display = 'inline-block';
+                    inpDur.focus();
+                    inpDur.select();
+                };
+
+                const commitDuration = () => {
+                    const val = parseFloat(inpDur.value);
+                    if (!isNaN(val) && val > 0 && val !== clip.duration) {
+                        window.updateClipDuration(clip, val);
+                    } else {
+                        // Revert UI if invalid or unchanged
+                        inpDur.value = clip.duration;
+                        lblDur.style.display = 'inline-block';
+                        inpDur.style.display = 'none';
+                    }
+                };
+
+                inpDur.onblur = commitDuration;
+                inpDur.onkeydown = (e) => {
+                    if (e.key === 'Enter') inpDur.blur();
+                    if (e.key === 'Escape') {
+                        inpDur.value = clip.duration;
+                        lblDur.style.display = 'inline-block';
+                        inpDur.style.display = 'none';
+                    }
+                };
+
+                durContainer.appendChild(lblDur);
+                durContainer.appendChild(inpDur);
+                controls.appendChild(durContainer);
 
                 // Interpolation
                 const selInterp = document.createElement('select');
@@ -2945,8 +3061,6 @@
             duration = clip.duration || 1; // Default to 1 if empty
             currentAction.setEffectiveTimeScale(1);
 
-            document.getElementById('duration-input').value = duration;
-
             // Force redraw of keyframe markers
             selectedKeyframes.clear();
             drawKeyframeMarkers(clip);
@@ -3334,7 +3448,7 @@
             }
 
             drawKeyframeMarkers(clip);
-            document.getElementById('duration-input').value = clip.duration;
+            // No longer update global duration display here, renderTimelineTracks will handle it.
         }
 
         window.deleteKeyframe = function () {
@@ -3444,67 +3558,13 @@
             }
             if (parts.length > 1) {
                 const newDur = parseFloat(parts[1]);
-                if (!isNaN(newDur) && newDur > 0) {
-                    updateDuration();
+                if (!isNaN(newDur) && newDur > 0 && currentAction) {
+                    window.updateClipDuration(currentAction.getClip(), newDur);
                 }
             }
         };
 
-        window.updateDuration = function () {
-            if (!currentAction) return;
-            const scroll = document.getElementById('duration-input');
-            const newDur = parseFloat(scroll.value);
-            const clip = currentAction.getClip();
-
-            if (newDur > 0 && newDur !== clip.duration) {
-                // Snapshot
-                const jsonBefore = clip.toJSON();
-
-                clip.duration = newDur;
-                duration = newDur;
-
-                // Truncate keys if new duration is shorter
-                let changed = false;
-                clip.tracks.forEach(track => {
-                    const times = track.times;
-                    if (times.length > 0 && times[times.length - 1] > newDur) {
-                        const newTimes = [];
-                        const newValues = [];
-                        const itemSize = track.getValueSize();
-
-                        for (let i = 0; i < times.length; i++) {
-                            if (times[i] <= newDur) {
-                                newTimes.push(times[i]);
-                                for (let k = 0; k < itemSize; k++) {
-                                    newValues.push(track.values[i * itemSize + k]);
-                                }
-                            }
-                        }
-                        track.times = new Float32Array(newTimes);
-                        track.values = new Float32Array(newValues);
-                        changed = true;
-                    }
-                });
-
-                // Re-init
-                const t = Math.min(currentAction.time, newDur);
-                currentAction.stop();
-                mixer.uncacheClip(clip);
-                currentAction = mixer.clipAction(clip);
-                currentAction.time = t;
-                currentAction.play();
-                if (!isPlaying) currentAction.paused = true;
-                drawKeyframeMarkers(clip);
-
-                const jsonAfter = clip.toJSON();
-                if (changed) {
-                    addCommand({
-                        execute: () => restoreClipState(clip, jsonAfter),
-                        undo: () => restoreClipState(clip, jsonBefore)
-                    });
-                }
-            }
-        };
+        // window.updateDuration removed.
 
         window.deleteSelectedKeyframes = function (clip) {
             if (!selectedKeyframes.has(clip.name)) return;
