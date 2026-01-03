@@ -419,6 +419,56 @@
             white-space: nowrap;
             margin-bottom: 5px;
         }
+
+        /* Left Toolbar */
+        .left-toolbar {
+            position: fixed;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .left-toolbar.visible {
+            display: flex;
+        }
+
+        .tool-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            border-radius: 12px;
+            background: rgba(20, 20, 35, 0.95);
+            color: white;
+            font-size: 1.4rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .tool-btn:hover {
+            background: rgba(40, 40, 60, 0.95);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
+        }
+
+        .tool-btn.active {
+            background: linear-gradient(135deg, #00d4ff, #7b2fff);
+            border-color: transparent;
+            box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+        }
+
+        .tool-separator {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 4px 0;
+        }
     </style>
 
     <script type="importmap">
@@ -461,6 +511,15 @@
                 <div class="drop-zone-icon">📦</div>
                 <div class="drop-zone-text">Drag & Drop GLB file here</div>
                 <div class="drop-zone-hint">or click "Import GLB" button</div>
+            </div>
+
+            <!-- Left Toolbar -->
+            <div class="left-toolbar" id="left-toolbar">
+                <button class="tool-btn" id="tool-move" title="Move (W)">↔</button>
+                <button class="tool-btn active" id="tool-rotate" title="Rotate (E)">⟳</button>
+                <div class="tool-separator"></div>
+                <button class="tool-btn" id="tool-add-bone" title="Add Child Bone">➕</button>
+                <button class="tool-btn" id="tool-delete-bone" title="Delete Bone (Del)">🗑</button>
             </div>
         </div>
 
@@ -587,9 +646,12 @@
 
         // Transform gizmo
         let transformControls = null;
+        let currentTransformMode = 'rotate'; // 'rotate' or 'translate'
+        let skeletonDirty = false; // Flag for skinning recalculation
 
-        // Store original bone rotations for reset
+        // Store original bone rotations and positions for reset
         let originalBoneRotations = new Map();
+        let originalBonePositions = new Map();
 
         // ==========================================
         // LOGGING
@@ -670,9 +732,19 @@
             // Disable orbit controls while using transform controls
             transformControls.addEventListener('dragging-changed', (event) => {
                 controls.enabled = !event.value;
-                if (!event.value && generatedSkeleton) {
-                    // Update skeleton after rotation
-                    generatedSkeleton.update();
+
+                if (event.value && generatedSkeleton) {
+                    // Dragging started - hide skinned meshes, show original static meshes
+                    // This prevents mesh deformation during bone editing
+                    skinnedMeshes.forEach(mesh => mesh.visible = false);
+                    originalMeshes.forEach(mesh => mesh.visible = true);
+                } else if (!event.value && generatedSkeleton && selectedBone) {
+                    // Transform ended - rebind skeleton with new bone positions as rest pose
+                    rebindSkeletonWithCurrentPose();
+
+                    // Show skinned meshes again, hide original
+                    skinnedMeshes.forEach(mesh => mesh.visible = true);
+                    originalMeshes.forEach(mesh => mesh.visible = false);
                 }
             });
 
@@ -843,6 +915,7 @@
             generatedSkeleton = null;
             analysisData = null;
             originalBoneRotations.clear();
+            originalBonePositions.clear();
 
             // Detach transform controls
             if (transformControls) {
@@ -885,6 +958,7 @@
             }
             generatedSkeleton = null;
             originalBoneRotations.clear();
+            originalBonePositions.clear();
 
             // Detach transform controls
             if (transformControls) {
@@ -1355,6 +1429,7 @@
             updateBoneList(skeleton);
             document.getElementById('btn-export').disabled = false;
             document.getElementById('btn-reset').disabled = false;
+            updateToolbarVisibility();
 
             hideProgress();
             hideLoading();
@@ -1733,7 +1808,7 @@
         }
 
         /**
-         * Reset all bones to their original rotations
+         * Reset all bones to their original rotations and positions
          */
         function resetBones() {
             if (!generatedSkeleton || originalBoneRotations.size === 0) {
@@ -1741,22 +1816,33 @@
                 return;
             }
 
+            let positionsChanged = false;
             generatedSkeleton.bones.forEach(bone => {
                 const originalQuat = originalBoneRotations.get(bone.name);
+                const originalPos = originalBonePositions.get(bone.name);
                 if (originalQuat) {
                     bone.quaternion.copy(originalQuat);
+                }
+                if (originalPos && !bone.position.equals(originalPos)) {
+                    bone.position.copy(originalPos);
+                    positionsChanged = true;
                 }
             });
 
             // Update skeleton
             generatedSkeleton.update();
 
+            // Recalculate skinning if positions changed
+            if (positionsChanged) {
+                recalculateSkinning();
+            }
+
             // Deselect current bone
             if (selectedBone) {
                 selectBone(null, null);
             }
 
-            log('All bones reset to original rotation', 'success');
+            log('All bones reset to original state', 'success');
         }
 
         /**
@@ -1764,9 +1850,252 @@
          */
         function storeOriginalBoneRotations(skeleton) {
             originalBoneRotations.clear();
+            originalBonePositions.clear();
             skeleton.bones.forEach(bone => {
                 originalBoneRotations.set(bone.name, bone.quaternion.clone());
+                originalBonePositions.set(bone.name, bone.position.clone());
             });
+        }
+
+        /**
+         * Rebind skeleton with current bone positions as the new rest pose
+         * This is called after editing bones - the mesh stays in original shape,
+         * and the new bone configuration becomes the bind pose for future animation.
+         */
+        async function rebindSkeletonWithCurrentPose() {
+            if (!generatedSkeleton || skinnedMeshes.length === 0) return;
+
+            log('Updating bind pose...', 'info');
+
+            // Update all bone world matrices with current positions/rotations
+            const rootBone = generatedSkeleton.bones[0];
+            rootBone.updateMatrixWorld(true);
+
+            // Compute new bone inverse matrices (these define the bind pose)
+            // Each boneInverse is the inverse of the bone's world matrix at rest pose
+            const boneInverses = [];
+            for (const bone of generatedSkeleton.bones) {
+                const inverseMatrix = new THREE.Matrix4();
+                inverseMatrix.copy(bone.matrixWorld).invert();
+                boneInverses.push(inverseMatrix);
+            }
+
+            // Create a new skeleton with updated bind matrices
+            const newSkeleton = new THREE.Skeleton(generatedSkeleton.bones, boneInverses);
+
+            // Recalculate skin weights based on new bone positions
+            for (let i = 0; i < skinnedMeshes.length; i++) {
+                const skinnedMesh = skinnedMeshes[i];
+                const originalMesh = originalMeshes[i];
+
+                if (!originalMesh) continue;
+
+                // Recompute skin weights using original mesh world matrix
+                const { skinIndices, skinWeights } = computeSkinWeights(
+                    originalMesh.geometry,
+                    originalMesh.matrixWorld,
+                    newSkeleton
+                );
+
+                // Update the skinned mesh geometry attributes
+                const geometry = skinnedMesh.geometry;
+                geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+                geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+                geometry.attributes.skinIndex.needsUpdate = true;
+                geometry.attributes.skinWeight.needsUpdate = true;
+
+                // Rebind with the new skeleton (new bind matrices)
+                skinnedMesh.bind(newSkeleton);
+            }
+
+            // Update the global skeleton reference
+            generatedSkeleton = newSkeleton;
+
+            // Store new original positions/rotations (this is now the new rest pose)
+            storeOriginalBoneRotations(generatedSkeleton);
+
+            log('Bind pose updated - bones repositioned', 'success');
+        }
+
+        /**
+         * Recalculate skin weights for all skinned meshes
+         * Called when bones are moved to new positions
+         */
+        async function recalculateSkinning() {
+            // Now just calls rebindSkeletonWithCurrentPose
+            await rebindSkeletonWithCurrentPose();
+        }
+
+        /**
+         * Add a child bone to the currently selected bone
+         */
+        function addChildBone() {
+            if (!selectedBone) {
+                log('Select a bone first to add a child', 'warning');
+                return;
+            }
+
+            if (!generatedSkeleton) {
+                log('No skeleton available', 'error');
+                return;
+            }
+
+            // Count existing children to generate unique name
+            let childCount = 0;
+            selectedBone.children.forEach(child => {
+                if (child.isBone) childCount++;
+            });
+
+            // Create new bone
+            const newBone = new THREE.Bone();
+            newBone.name = `${selectedBone.name}_Child${childCount + 1}`;
+
+            // Position at same location as parent (0,0,0 in local space)
+            // User can immediately move it after spawning
+            newBone.position.set(0, 0, 0);
+
+            // Add to parent
+            selectedBone.add(newBone);
+
+            // Update skeleton bones array
+            generatedSkeleton.bones.push(newBone);
+
+            // Store original state for new bone
+            originalBoneRotations.set(newBone.name, newBone.quaternion.clone());
+            originalBonePositions.set(newBone.name, newBone.position.clone());
+
+            // Rebuild bone helpers to include new bone
+            createBoneHelpers(generatedSkeleton);
+
+            // Update bone list UI
+            updateBoneList(generatedSkeleton);
+
+            // Update skeleton
+            generatedSkeleton.update();
+
+            // Recalculate skinning with new bone
+            recalculateSkinning();
+
+            log(`Added child bone: ${newBone.name}`, 'success');
+
+            // Select the new bone and focus on it
+            const newSphere = boneSpheres.find(s => s.userData.bone === newBone);
+            if (newSphere) {
+                selectBone(newBone, newSphere);
+
+                // Focus camera on the new bone
+                const boneWorldPos = new THREE.Vector3();
+                newBone.getWorldPosition(boneWorldPos);
+                controls.target.copy(boneWorldPos);
+                controls.update();
+            }
+
+            // Switch to move mode so user can immediately reposition
+            setTransformMode('translate');
+        }
+
+        /**
+         * Delete the currently selected bone
+         */
+        function deleteBone() {
+            if (!selectedBone) {
+                log('Select a bone first to delete', 'warning');
+                return;
+            }
+
+            if (!generatedSkeleton) {
+                log('No skeleton available', 'error');
+                return;
+            }
+
+            // Don't allow deleting the root bone
+            if (selectedBone === generatedSkeleton.bones[0]) {
+                log('Cannot delete root bone', 'warning');
+                return;
+            }
+
+            const boneName = selectedBone.name;
+            const parentBone = selectedBone.parent;
+
+            // Reparent children to this bone's parent
+            const childrenToReparent = [];
+            selectedBone.children.forEach(child => {
+                if (child.isBone) {
+                    childrenToReparent.push(child);
+                }
+            });
+
+            childrenToReparent.forEach(child => {
+                // Keep child's world position
+                const worldPos = new THREE.Vector3();
+                child.getWorldPosition(worldPos);
+
+                selectedBone.remove(child);
+                if (parentBone && parentBone.isBone) {
+                    parentBone.add(child);
+                    // Convert world position to new parent's local space
+                    parentBone.worldToLocal(worldPos);
+                    child.position.copy(worldPos);
+                }
+            });
+
+            // Remove from parent
+            if (parentBone) {
+                parentBone.remove(selectedBone);
+            }
+
+            // Remove from skeleton bones array
+            const boneIdx = generatedSkeleton.bones.indexOf(selectedBone);
+            if (boneIdx > -1) {
+                generatedSkeleton.bones.splice(boneIdx, 1);
+            }
+
+            // Remove from original state maps
+            originalBoneRotations.delete(boneName);
+            originalBonePositions.delete(boneName);
+
+            // Detach transform controls
+            transformControls.detach();
+            transformControls.visible = false;
+            selectedBone = null;
+            selectedBoneSphere = null;
+
+            // Rebuild bone helpers
+            createBoneHelpers(generatedSkeleton);
+
+            // Update bone list UI
+            updateBoneList(generatedSkeleton);
+
+            // Recalculate skinning
+            recalculateSkinning();
+
+            log(`Deleted bone: ${boneName}`, 'success');
+        }
+
+        /**
+         * Set transform mode (rotate or translate)
+         */
+        function setTransformMode(mode) {
+            currentTransformMode = mode;
+            transformControls.setMode(mode === 'rotate' ? 'rotate' : 'translate');
+
+            // Update toolbar button states
+            document.getElementById('tool-move').classList.toggle('active', mode === 'translate');
+            document.getElementById('tool-rotate').classList.toggle('active', mode === 'rotate');
+
+            log(`Transform mode: ${mode}`, 'info');
+        }
+
+        /**
+         * Show/hide the left toolbar
+         */
+        function updateToolbarVisibility() {
+            const toolbar = document.getElementById('left-toolbar');
+            if (generatedSkeleton) {
+                toolbar.classList.add('visible');
+            } else {
+                toolbar.classList.remove('visible');
+            }
         }
 
         /**
@@ -2257,6 +2586,26 @@
             container.addEventListener('pointermove', onPointerMove);
             container.addEventListener('pointerup', onPointerUp);
             container.addEventListener('pointerleave', onPointerUp);
+
+            // Left toolbar buttons
+            document.getElementById('tool-move').addEventListener('click', () => setTransformMode('translate'));
+            document.getElementById('tool-rotate').addEventListener('click', () => setTransformMode('rotate'));
+            document.getElementById('tool-add-bone').addEventListener('click', addChildBone);
+            document.getElementById('tool-delete-bone').addEventListener('click', deleteBone);
+
+            // Keyboard shortcuts for transform mode
+            document.addEventListener('keydown', (e) => {
+                // Ignore if typing in an input
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+                if (e.key.toLowerCase() === 'w') {
+                    setTransformMode('translate');
+                } else if (e.key.toLowerCase() === 'e') {
+                    setTransformMode('rotate');
+                } else if (e.key === 'Delete') {
+                    deleteBone();
+                }
+            });
         }
 
         // ==========================================
