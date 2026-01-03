@@ -1141,8 +1141,31 @@
 
                                 // Invalidate Hierarchy Cache for this clip
                                 if (window.hierarchicalController) {
+                                    // Snapshot state of all layers
+                                    const layerStates = window.hierarchicalController.activeLayers.map(l => ({
+                                        boneName: l.boneName,
+                                        clipName: l.clipName,
+                                        time: l.action ? l.action.time : 0,
+                                        paused: l.action ? l.action.paused : false
+                                    }));
+
                                     window.hierarchicalController.invalidateClip(clip.name);
                                     window.hierarchicalController.rebuildAndPlay();
+
+                                    // Restore state
+                                    layerStates.forEach(s => {
+                                        const layer = window.hierarchicalController.activeLayers.find(l => l.boneName === s.boneName && l.clipName === s.clipName);
+                                        if (layer && layer.action) {
+                                            layer.action.time = s.time;
+                                            layer.action.paused = s.paused;
+                                            if (!s.paused) {
+                                                layer.action.play();
+                                            } else {
+                                                layer.action.play().paused = true;
+                                            }
+                                        }
+                                    });
+                                    mixer.update(0);
                                 } else {
                                     if (currentAction && currentAction.getClip() === clip) {
                                         const time = currentAction.time;
