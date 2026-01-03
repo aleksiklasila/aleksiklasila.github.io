@@ -765,11 +765,16 @@
             }
 
             updateBoneColors(layerMasks) {
-                // Reset colors?
-                // We need a way to visualize. 'SkeletonHelper' lines?
-                // SkeletonHelper is a single line mesh. We can't color segments easily WITHOUT custom shader or geometry.
-                // Alternative: Attach small sphere to each bone?
                 if (!window.boneVisuals) window.boneVisuals = new Map(); // BoneName -> Mesh
+
+                // Ensure model size is known for scaling
+                if (!window.modelSize && this.model) {
+                    const box = new THREE.Box3().setFromObject(this.model);
+                    const size = new THREE.Vector3();
+                    box.getSize(size);
+                    window.modelSize = Math.max(size.x, size.y, size.z) || 10;
+                }
+                const baseRadius = (window.modelSize || 10) * 0.015; // Increased size
 
                 // Reset logic
                 window.boneVisuals.forEach(mesh => mesh.visible = false);
@@ -780,30 +785,34 @@
 
                     // Get Color
                     const clip = animations.find(c => c.name === layer.clipName);
-                    const color = (clip && clip.userData.color) ? clip.userData.color : '#ffffff';
+                    const colorVal = (clip && clip.userData.color) ? clip.userData.color : '#ffffff';
 
                     mask.forEach(bName => {
                         let mesh = window.boneVisuals.get(bName);
                         if (!mesh) {
-                            const radius = (window.modelSize || 10) * 0.004; // Smaller sizing
-                            const geo = new THREE.SphereGeometry(radius, 8, 8);
-                            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, depthTest: false });
+                            const geo = new THREE.SphereGeometry(1, 8, 8); // Base radius 1, scaled later
+                            const mat = new THREE.MeshBasicMaterial({
+                                color: colorVal,
+                                transparent: true,
+                                opacity: 0.6,
+                                depthTest: false
+                            });
                             mesh = new THREE.Mesh(geo, mat);
+                            mesh.userData.isBoneHelper = true;
+                            mesh.userData.boneName = bName;
+
                             const bone = this._findBone(bName);
                             if (bone) {
                                 bone.add(mesh);
                                 window.boneVisuals.set(bName, mesh);
                             }
                         }
+
                         if (mesh) {
                             mesh.visible = true;
-                            // Ensure size update if model reloaded
-                            const targetR = (window.modelSize || 10) * 0.004;
-                            if (Math.abs(mesh.geometry.parameters.radius - targetR) > 0.001) {
-                                mesh.geometry.dispose();
-                                mesh.geometry = new THREE.SphereGeometry(targetR, 8, 8);
-                            }
-                            mesh.material.color.set(color);
+                            mesh.material.color.set(colorVal);
+                            mesh.material.opacity = 0.6; // Restore visibility
+                            mesh.scale.setScalar(baseRadius); // Apply scale
                         }
                     });
                 });
@@ -1095,6 +1104,10 @@
             // Grid & Lights
             const grid = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
             scene.add(grid);
+
+            // Ensure Bone Visual Helper Exists
+            if (!window.boneVisuals) window.boneVisuals = new Map();
+
 
             const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 2);
             hemiLight.position.set(0, 20, 0);
@@ -1529,6 +1542,9 @@
             skeletonHelper = new THREE.SkeletonHelper(currentModel);
             skeletonHelper.visible = true;
             scene.add(skeletonHelper);
+
+            // Ensure Visuals
+            ensureAllBoneVisuals();
 
             // Animations
             mixer = new THREE.AnimationMixer(currentModel);
@@ -2552,6 +2568,7 @@
                 selectBone(bone);
 
                 renderBoneHierarchy(); // Refresh tree
+                ensureAllBoneVisuals(); // Update visuals for new bone
 
                 // Auto Focus
                 if (window.focusInTree) focusInTree(bone);
@@ -4042,80 +4059,71 @@
                 let closestBone = null;
                 let minDistanceSq = Infinity;
 
-                // 1. Check Bones (Ray distance to Bone Segments)
-                const boneList = skeletonHelper ? skeletonHelper.bones : [];
-                // Fallback if helper missing but model exists
-                if (boneList.length === 0 && currentModel) {
-                    currentModel.traverse(o => { if (o.isBone) boneList.push(o); });
+                // 1. Check Bone Visualizers (Ray intersection)
+                // Use window.boneVisuals
+                if (window.boneVisuals && window.boneVisuals.size > 0) {
+                    const visuals = Array.from(window.boneVisuals.values());
+                    const intersects = raycaster.intersectObjects(visuals, false); // Objects are spheres
+
+                    if (intersects.length > 0) {
+                        // Closest hit
+                        const hit = intersects[0];
+                        if (hit.object.userData && hit.object.userData.isBoneHelper) {
+                            closestBone = hit.object.parent; // The bone is the parent
+                            minDistanceSq = hit.distance; // Use linear distance for consistency logic if mixed? 
+                            // But here we just take the hit.
+                        }
+                    }
                 }
 
-                boneList.forEach(bone => {
-                    // Check Bone Point (Joint)
-                    const bonePos = new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld);
-                    const distSqPoint = ray.distanceSqToPoint(bonePos);
+                // If no visual hit, should we fallback? 
+                // Maybe the visuals are hidden or missing? 
+                // We ensureAllBoneVisuals() on load.
+                // If opacity is 0, raycast still hits them in Three.js IF valid material?
+                // Actually Raycaster hits invisible objects ONLY if raycaster.params.Mesh.threshold is handled or we pass proper flag?
+                // NO, Raycaster intersects invisible objects? 
+                // By default, it does NOT?
+                // We must check. Three.js Raycaster usually ignores visible=false.
+                // But our spheres are visible=true, opacity=0 (or low). So they are "visible".
+                // So it should work.
 
-                    if (distSqPoint < minDistanceSq) {
-                        minDistanceSq = distSqPoint;
-                        closestBone = bone;
-                    }
-
-                    // Check Segments (Bone to Children)
-                    bone.children.forEach(child => {
-                        if (!child.isBone) return;
-                        const childPos = new THREE.Vector3().setFromMatrixPosition(child.matrixWorld);
-                        const distSqSeg = ray.distanceSqToSegment(bonePos, childPos);
-
-                        if (distSqSeg < minDistanceSq) {
-                            minDistanceSq = distSqSeg;
-                            closestBone = bone; // Select parent of segment
-                        }
-                    });
-                });
-
-                // 2. Check Props (Ray intersection)
-                // We keep raycast for props since they are meshes
+                // 2. Check Props
                 let closestProp = null;
-                let minPropDist = Infinity;
-
-                // Filter props for intersection
                 if (props.length > 0) {
                     const propIntersects = raycaster.intersectObjects(props, true);
                     if (propIntersects.length > 0) {
-                        // For props, we DO care about depth usually, but let's follow the "closest to ray" philosophy 
-                        // if we want to be consistent? 
-                        // Actually props are meshes, standard raycast is best.
                         closestProp = propIntersects[0].object;
-                        minPropDist = propIntersects[0].distance;
-                        // Note: propIntersects[0].distance is distance from Camera.
-                        // But minDistanceSq is distance from Ray. These are different metrics.
-                        // We need to decide priority.
-                        // Usually picking a Bone is the priority in Animation Mode.
+                        // Determine if prop is closer than bone
+                        // propIntersects[0].distance is Camera -> Object distance
+                        // minDistanceSq is Ray -> Object perpendicular distance (squared)
+
+                        // We need comparable metrics. 
+                        // Let's check the ray distance for the prop hit point?
+                        // Actually, Raycaster gives accurate hit.
+                        // If we hit a prop, we usually want to select it unless a bone is *visually in front*?
+                        // But Bone "lines" are thin. 
+
+                        // User Preference: "just calculate distance to the clicked raycast from each bone"
+                        // This implies we prioritize bones if we are "close enough" to them.
                     }
                 }
 
-                // Threshold for bone selection (e.g. 0.5 units from ray)
-                const SELECTION_THRESHOLD_SQ = 0.5 * 0.5;
+                // 3. Selection Decision
 
-                // Logic: If we hit a prop "directly" (raycast), select it?
-                // Or if closestBone is very close to ray, select it?
-
-                // Let's bias: If bone is reasonably close, select bone.
-                if (closestBone && minDistanceSq < SELECTION_THRESHOLD_SQ) {
+                // Prioritize Bone Visual Hit
+                if (closestBone) {
                     if (pickingParentFor) {
                         // Execution Attachment
-                        // Use attach() to preserve world transform
                         closestBone.attach(pickingParentFor);
                         document.getElementById('selection-info').innerText = "Attached " + (pickingParentFor.name || "Prop") + " to " + closestBone.name;
                         document.getElementById('selection-info').style.color = "";
                         pickingParentFor = null;
-                        // Select the prop again to keep working on it
                         transformControl.attach(closestBone.children[closestBone.children.length - 1]);
                         return;
                     }
                     selectBone(closestBone);
                 } else if (closestProp) {
                     if (pickingParentFor) {
-                        // Cannot attach to a prop? Or maybe yes? Let's assume only bones for now.
                         alert("Please select a bone.");
                         return;
                     }
@@ -4128,11 +4136,9 @@
                         transformControl.attach(target);
                         selectedBone = null;
                         document.getElementById('selection-info').innerText = "Prop: " + (target.name || "Prop");
-                        // Preserve current mode
                         if (ikTargetHelper) ikTargetHelper.visible = false;
                     }
                 } else {
-                    // Deselect if nothing close
                     selectBone(null);
                 }
 
@@ -4400,15 +4406,49 @@
 
                     const axis = toEnd.clone().cross(toTarget).normalize();
 
-                    // Clamp for stability
-                    angle = Math.min(angle, 0.2);
-
-                    // Apply rotation
                     bone.rotateOnWorldAxis(axis, angle);
                     bone.updateMatrixWorld(true);
                 }
             }
         }
+
+        // --- BONE VISUALS HELPERS ---
+        window.ensureAllBoneVisuals = function () {
+            if (!currentModel) return;
+            if (!window.boneVisuals) window.boneVisuals = new Map();
+
+            // Ensure model size logic
+            if (!window.modelSize) {
+                const box = new THREE.Box3().setFromObject(currentModel);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                window.modelSize = Math.max(size.x, size.y, size.z) || 10;
+            }
+            const baseRadius = (window.modelSize || 10) * 0.015;
+
+            currentModel.traverse(o => {
+                if (o.isBone) {
+                    let mesh = window.boneVisuals.get(o.name);
+                    if (!mesh) {
+                        // Create visual
+                        const geo = new THREE.SphereGeometry(1, 8, 8);
+                        const mat = new THREE.MeshBasicMaterial({
+                            color: 0xffffff,
+                            transparent: true,
+                            opacity: 0.0, // Invisible but selectable (Raycaster hits transparent)
+                            depthTest: false
+                        });
+                        mesh = new THREE.Mesh(geo, mat);
+                        mesh.userData.isBoneHelper = true;
+                        mesh.userData.boneName = o.name;
+                        o.add(mesh);
+                        window.boneVisuals.set(o.name, mesh);
+                    }
+                    // Ensure scale
+                    mesh.scale.setScalar(baseRadius);
+                }
+            });
+        };
 
         // --- RESIZERS ---
         function initResizers() {
