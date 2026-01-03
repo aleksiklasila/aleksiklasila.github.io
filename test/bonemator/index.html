@@ -521,6 +521,12 @@
                     <div class="range-value" id="density-label">Medium</div>
                 </div>
 
+                <div class="setting-group">
+                    <label class="setting-label">Joint Blend Zone</label>
+                    <input type="range" id="joint-blend-zone" min="0.05" max="0.5" value="0.15" step="0.05">
+                    <div class="range-value" id="blend-zone-label">15%</div>
+                </div>
+
                 <div class="checkbox-group">
                     <input type="checkbox" id="show-bones" checked>
                     <label for="show-bones">Show Bone Helpers</label>
@@ -1907,47 +1913,144 @@
             const skinIndices = new Uint16Array(vertexCount * 4);
             const skinWeights = new Float32Array(vertexCount * 4);
 
-            // Get bone world positions
-            const bonePositions = skeleton.bones.map(bone => {
+            // Get joint blend zone from UI (default 0.15 = 15% of bone length)
+            const blendZoneSlider = document.getElementById('joint-blend-zone');
+            const blendZoneFactor = blendZoneSlider ? parseFloat(blendZoneSlider.value) : 0.15;
+
+            // Build bone data: world positions and hierarchy info
+            const boneData = skeleton.bones.map((bone, idx) => {
                 const pos = new THREE.Vector3();
                 bone.getWorldPosition(pos);
-                return pos;
+
+                // Find parent index in skeleton
+                let parentIndex = -1;
+                if (bone.parent && bone.parent.isBone) {
+                    parentIndex = skeleton.bones.indexOf(bone.parent);
+                }
+
+                // Find children indices
+                const childIndices = [];
+                skeleton.bones.forEach((otherBone, otherIdx) => {
+                    if (otherBone.parent === bone) {
+                        childIndices.push(otherIdx);
+                    }
+                });
+
+                // Compute bone length (distance to parent)
+                let boneLength = 0.1; // default
+                if (bone.parent && bone.parent.isBone) {
+                    const parentPos = new THREE.Vector3();
+                    bone.parent.getWorldPosition(parentPos);
+                    boneLength = pos.distanceTo(parentPos);
+                }
+
+                return {
+                    index: idx,
+                    bone: bone,
+                    position: pos,
+                    parentIndex: parentIndex,
+                    childIndices: childIndices,
+                    boneLength: Math.max(boneLength, 0.01)
+                };
             });
 
-            // For each vertex, find the 4 nearest bones and compute weights
+            // For each vertex, assign to primary bone with joint blending
             for (let i = 0; i < vertexCount; i++) {
                 const vertex = new THREE.Vector3();
                 vertex.fromBufferAttribute(positions, i);
                 vertex.applyMatrix4(worldMatrix);
 
-                // Calculate distances to all bones
-                const distances = bonePositions.map((bonePos, idx) => ({
-                    index: idx,
-                    distance: vertex.distanceTo(bonePos)
-                }));
+                // Step 1: Find primary bone (closest bone - Voronoi assignment)
+                let minDist = Infinity;
+                let primaryBoneIdx = 0;
 
-                // Sort by distance
-                distances.sort((a, b) => a.distance - b.distance);
+                for (let b = 0; b < boneData.length; b++) {
+                    const dist = vertex.distanceTo(boneData[b].position);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        primaryBoneIdx = b;
+                    }
+                }
 
-                // Take closest 4 bones
-                const closest = distances.slice(0, 4);
+                const primaryBone = boneData[primaryBoneIdx];
 
-                // Compute weights using inverse distance
-                const weights = closest.map(d => {
-                    const dist = Math.max(d.distance, 0.0001);
-                    return 1 / (dist * dist);
-                });
+                // Step 2: Compute weights for primary bone and connected bones only
+                // Connected = parent + children of primary bone
+                const connectedBones = [primaryBoneIdx];
+                if (primaryBone.parentIndex >= 0) {
+                    connectedBones.push(primaryBone.parentIndex);
+                }
+                connectedBones.push(...primaryBone.childIndices);
+
+                // Calculate blend zone radius based on primary bone length
+                const blendRadius = primaryBone.boneLength * blendZoneFactor;
+
+                // Compute weights for connected bones
+                const boneWeights = [];
+
+                for (const boneIdx of connectedBones) {
+                    const bd = boneData[boneIdx];
+                    const dist = vertex.distanceTo(bd.position);
+
+                    if (boneIdx === primaryBoneIdx) {
+                        // Primary bone always has significant influence
+                        // Weight decreases as we approach joint boundaries
+                        let weight = 1.0;
+
+                        // Check distance to parent joint
+                        if (bd.parentIndex >= 0) {
+                            const parentBone = boneData[bd.parentIndex];
+                            const distToParentJoint = vertex.distanceTo(parentBone.position);
+                            if (distToParentJoint < blendRadius) {
+                                // Near parent joint - reduce weight for blending
+                                const t = distToParentJoint / blendRadius;
+                                weight *= 0.5 + 0.5 * t; // 0.5 to 1.0
+                            }
+                        }
+
+                        // Check distance to child joints
+                        for (const childIdx of bd.childIndices) {
+                            const childBone = boneData[childIdx];
+                            const distToChildJoint = vertex.distanceTo(childBone.position);
+                            if (distToChildJoint < blendRadius) {
+                                const t = distToChildJoint / blendRadius;
+                                weight *= 0.5 + 0.5 * t;
+                            }
+                        }
+
+                        boneWeights.push({ index: boneIdx, weight: weight });
+                    } else {
+                        // Connected bone - only gets weight if vertex is near the joint
+                        const jointPos = bd.position; // The connected bone's position is the joint
+                        const distToJoint = vertex.distanceTo(jointPos);
+
+                        if (distToJoint < blendRadius) {
+                            // Smooth falloff: weight = 1 at joint, 0 at blendRadius
+                            const t = distToJoint / blendRadius;
+                            const weight = Math.max(0, (1 - t) * 0.5); // Max 0.5 weight for connected bones
+                            if (weight > 0.01) {
+                                boneWeights.push({ index: boneIdx, weight: weight });
+                            }
+                        }
+                    }
+                }
+
+                // Sort by weight and take top 4
+                boneWeights.sort((a, b) => b.weight - a.weight);
+                const topBones = boneWeights.slice(0, 4);
 
                 // Normalize weights
-                const sum = weights.reduce((a, b) => a + b, 0);
+                const totalWeight = topBones.reduce((sum, bw) => sum + bw.weight, 0);
 
+                // Assign to skinning attributes
                 for (let j = 0; j < 4; j++) {
                     const idx = i * 4 + j;
-                    if (j < closest.length) {
-                        skinIndices[idx] = closest[j].index;
-                        skinWeights[idx] = weights[j] / sum;
+                    if (j < topBones.length && totalWeight > 0) {
+                        skinIndices[idx] = topBones[j].index;
+                        skinWeights[idx] = topBones[j].weight / totalWeight;
                     } else {
-                        skinIndices[idx] = 0;
+                        // Fill with primary bone for unused slots
+                        skinIndices[idx] = primaryBoneIdx;
                         skinWeights[idx] = 0;
                     }
                 }
@@ -2140,6 +2243,12 @@
             document.getElementById('bone-density').addEventListener('input', (e) => {
                 const labels = ['Low', 'Medium', 'High'];
                 document.getElementById('density-label').textContent = labels[e.target.value - 1];
+            });
+
+            // Joint blend zone slider
+            document.getElementById('joint-blend-zone').addEventListener('input', (e) => {
+                const percent = Math.round(parseFloat(e.target.value) * 100);
+                document.getElementById('blend-zone-label').textContent = percent + '%';
             });
 
             // Pointer events for bone selection and rotation
