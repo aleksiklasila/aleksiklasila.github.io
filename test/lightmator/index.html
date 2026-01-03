@@ -618,6 +618,22 @@
                 this.clipCache = new Map();
             }
 
+            invalidateClip(originalClipName) {
+                // Invalidate any sub-clips derived from this original clip
+                const keysToRemove = [];
+                for (const key of this.clipCache.keys()) {
+                    if (key.startsWith(originalClipName + "_")) {
+                        keysToRemove.push(key);
+                    }
+                }
+                keysToRemove.forEach(k => {
+                    const clip = this.clipCache.get(k);
+                    // Also uncache from mixer to be safe
+                    if (clip) this.mixer.uncacheClip(clip);
+                    this.clipCache.delete(k);
+                });
+            }
+
             // Assign an animation to a bone
             addLayer(boneName, clipName) {
                 // Allow multiple layers on same bone? Yes, for independent tracks.
@@ -724,9 +740,22 @@
                     let action = layer.action;
                     const newAction = this.mixer.clipAction(subClip);
 
+                    let prevTime = 0;
+                    let prevPaused = false;
+                    // If we have an existing action for this layer/clip tuple, preserve state
+                    if (action) {
+                        prevTime = action.time;
+                        prevPaused = action.paused;
+                    }
+
                     if (action !== newAction) {
                         if (action && action.isRunning()) action.stop();
+
+                        // Restore state
+                        newAction.time = prevTime;
                         newAction.play();
+                        newAction.paused = prevPaused;
+
                         layer.action = newAction;
                     } else {
                         if (!newAction.isRunning()) newAction.play();
@@ -1027,117 +1056,125 @@
                         dragStartRot.copy(transformControl.object.quaternion);
                         dragStartScale.copy(transformControl.object.scale);
 
-                        // Snapshot IK Chain State if in IK mode
-                        // We need to compare *all* bones in the chain to see if they moved
-                        if (window.ikEnabled && transformControl.object === window.ikTargetHelper && window.ikChain) {
-                            transformControl.userData.ikStart = window.ikChain.map(b => ({
-                                bone: b,
-                                pos: b.position.clone(),
-                                quat: b.quaternion.clone(),
-                                scale: b.scale.clone()
-                            }));
-                        } else {
-                            transformControl.userData.ikStart = null;
+                        // Identify Clip logic for Undo Snapshot
+                        let targetClip = null;
+                        if (window.hierarchicalController) {
+                            const layer = window.hierarchicalController.getLayerForBone(transformControl.object.name);
+                            if (layer) {
+                                targetClip = animations.find(c => c.name === layer.clipName);
+                            }
                         }
+                        if (!targetClip && currentAction) targetClip = currentAction.getClip();
 
-                        // Always Snapshot Clip for Undo/Redo of the animation change
-                        if (currentAction) {
-                            transformControl.userData.jsonBefore = currentAction.getClip().toJSON();
+                        if (targetClip) {
+                            transformControl.userData.jsonBefore = targetClip.toJSON();
+                            transformControl.userData.targetClipName = targetClip.name;
                         }
                     }
                 } else {
                     // Stop dragging
-                    if (transformControl.object && currentAction) {
+                    if (transformControl.object) {
                         const obj = transformControl.object;
-                        const clip = currentAction.getClip();
-                        const mods = []; // { object, dP, dQ, dS }
 
-                        // 1. Calculate Deltas / Changes
-                        if (window.ikEnabled && obj === window.ikTargetHelper && transformControl.userData.ikStart) {
-                            // Check all chain bones
-                            transformControl.userData.ikStart.forEach(data => {
-                                const b = data.bone;
-                                if (!data.pos.equals(b.position) || !data.quat.equals(b.quaternion) || !data.scale.equals(b.scale)) {
-                                    const dP = b.position.clone().sub(data.pos);
-                                    const dQ = data.quat.clone().invert().multiply(b.quaternion);
-                                    const dS = new THREE.Vector3(
-                                        data.scale.x !== 0 ? b.scale.x / data.scale.x : 1,
-                                        data.scale.y !== 0 ? b.scale.y / data.scale.y : 1,
-                                        data.scale.z !== 0 ? b.scale.z / data.scale.z : 1
-                                    );
-                                    mods.push({ object: b, dP, dQ, dS });
-                                }
-                            });
-                        } else {
-                            // Standard Single Object
-                            const endP = obj.position;
-                            const endQ = obj.quaternion;
-                            const endS = obj.scale;
-
-                            if (!dragStartPos.equals(endP) || !dragStartRot.equals(endQ) || !dragStartScale.equals(endS)) {
-                                const dP = endP.clone().sub(dragStartPos);
-                                const dQ = dragStartRot.clone().invert().multiply(endQ);
-                                const dS = new THREE.Vector3(
-                                    dragStartScale.x !== 0 ? endS.x / dragStartScale.x : 1,
-                                    dragStartScale.y !== 0 ? endS.y / dragStartScale.y : 1,
-                                    dragStartScale.z !== 0 ? endS.z / dragStartScale.z : 1
-                                );
-                                mods.push({ object: obj, dP, dQ, dS });
+                        // Identify Correct Clip (Same logic as Start)
+                        let clip = null;
+                        if (window.hierarchicalController) {
+                            const layer = window.hierarchicalController.getLayerForBone(obj.name);
+                            if (layer) {
+                                clip = animations.find(c => c.name === layer.clipName);
                             }
                         }
+                        if (!clip && currentAction) clip = currentAction.getClip();
 
-                        // 2. Apply Changes
+                        if (!clip) return;
+
+                        const mods = []; // { object, dP, dQ, dS }
+
+                        // Delta Calc
+                        const endP = obj.position;
+                        const endQ = obj.quaternion;
+                        const endS = obj.scale;
+
+                        if (!dragStartPos.equals(endP) || !dragStartRot.equals(endQ) || !dragStartScale.equals(endS)) {
+                            const dP = endP.clone().sub(dragStartPos);
+                            const dQ = dragStartRot.clone().invert().multiply(endQ);
+                            const dS = new THREE.Vector3(
+                                dragStartScale.x !== 0 ? endS.x / dragStartScale.x : 1,
+                                dragStartScale.y !== 0 ? endS.y / dragStartScale.y : 1,
+                                dragStartScale.z !== 0 ? endS.z / dragStartScale.z : 1
+                            );
+                            mods.push({ object: obj, dP, dQ, dS });
+                        }
+
+                        // Apply Changes
                         if (mods.length > 0) {
-                            // Clip-specific selection only
                             const selTimes = selectedKeyframes.get(clip.name);
                             const useMulti = selTimes && selTimes.size > 0;
                             let needRefresh = false;
 
                             if (useMulti) {
                                 // Multi-Keyframe Edit (Delta)
+                                console.log(`Applying delta to clip '${clip.name}' for bone '${obj.name}'`, selTimes);
                                 mods.forEach(m => {
                                     if (applyDeltaToKeyframes(clip, m.object, selTimes, m.dP, m.dQ, m.dS)) {
                                         needRefresh = true;
                                     }
                                 });
                             } else {
-                                // Single Frame Auto-Key (Set Value)
-                                // Only if Auto-Key Enabled
-                                const autoKey = document.getElementById('chk-autokey').checked;
+                                // Fallback (Auto-Key if no selection, though Gizmo should be hidden per strict rules)
+                                const autoKey = document.getElementById('chk-autokey') ? document.getElementById('chk-autokey').checked : false;
                                 if (autoKey) {
-                                    const t = currentAction.time;
+                                    const t = (window.hierarchicalController && window.hierarchicalController.getLayerForBone(obj.name)) ?
+                                        window.hierarchicalController.getLayerForBone(obj.name).action.time :
+                                        (currentAction ? currentAction.time : 0);
+
                                     mods.forEach(m => {
                                         updateOrAddKeyframe(clip, m.object, t);
+                                        needRefresh = true;
                                     });
                                 }
                             }
 
-                            // 3. Finalize
-
                             if (needRefresh) {
-                                const time = currentAction.time;
-                                const wasPlaying = isPlaying;
-                                currentAction.stop();
+                                console.log("Refreshing animation tracks...");
                                 mixer.uncacheClip(clip);
-                                currentAction = mixer.clipAction(clip);
-                                currentAction.time = time;
-                                if (wasPlaying) {
-                                    currentAction.play();
+
+                                // Invalidate Hierarchy Cache for this clip
+                                if (window.hierarchicalController) {
+                                    window.hierarchicalController.invalidateClip(clip.name);
+                                    window.hierarchicalController.rebuildAndPlay();
                                 } else {
-                                    currentAction.play().paused = true;
-                                    mixer.update(0);
+                                    if (currentAction && currentAction.getClip() === clip) {
+                                        const time = currentAction.time;
+                                        const wasPlaying = isPlaying;
+                                        currentAction.stop();
+                                        currentAction = mixer.clipAction(clip);
+                                        currentAction.time = time;
+                                        if (wasPlaying) {
+                                            currentAction.play();
+                                        } else {
+                                            currentAction.play().paused = true;
+                                            mixer.update(0);
+                                        }
+                                    }
                                 }
+
+                                drawKeyframeMarkers(clip);
+
+                                // Undo/Redo
+                                const jsonAfter = clip.toJSON();
+                                const jsonBefore = transformControl.userData.jsonBefore;
+
+                                // Verify strict integrity
+                                if (transformControl.userData.targetClipName === clip.name) {
+                                    addCommand({
+                                        execute: () => restoreClipState(clip, jsonAfter),
+                                        undo: () => restoreClipState(clip, jsonBefore)
+                                    });
+                                }
+                            } else {
+                                console.log("No keyframes modified/found.");
                             }
-
-                            drawKeyframeMarkers(clip); // Update UI markers (if new keys added)
-
-                            const jsonAfter = clip.toJSON();
-                            const jsonBefore = transformControl.userData.jsonBefore;
-
-                            addCommand({
-                                execute: () => restoreClipState(clip, jsonAfter),
-                                undo: () => restoreClipState(clip, jsonBefore)
-                            });
                         }
                     }
                 }
@@ -1944,6 +1981,7 @@
 
                 box.remove();
                 renderTimelineTracks();
+                if (window.updateGizmoVisibility) window.updateGizmoVisibility();
             };
 
             document.addEventListener('mousemove', onMove);
@@ -3009,6 +3047,8 @@
             const props = ['.position', '.quaternion', '.scale'];
             const strideMap = { '.position': 3, '.quaternion': 4, '.scale': 3 };
 
+            console.log(`[ApplyDelta] Bone: ${name}, Times: ${Array.from(timesSet).join(', ')}`);
+
             props.forEach((prop, i) => {
                 const trackName = name + prop;
                 const track = clip.tracks.find(t => t.name === trackName);
@@ -3016,6 +3056,8 @@
 
                 let values = Array.from(track.values);
                 const s = strideMap[prop];
+
+                let trackMod = false;
 
                 // Iterate times in track to find matches
                 track.times.forEach((t, idx) => {
@@ -3032,25 +3074,27 @@
                             const v = new THREE.Vector3().fromArray(values, baseIdx);
                             v.add(dP);
                             v.toArray(values, baseIdx);
-                            modified = true;
+                            trackMod = true;
                         } else if (prop === '.quaternion') {
                             // qNew = qOld * dQ (apply delta rotation locally)
                             const q = new THREE.Quaternion().fromArray(values, baseIdx);
                             q.multiply(dQ);
                             q.toArray(values, baseIdx);
-                            modified = true;
+                            trackMod = true;
                         } else if (prop === '.scale') {
                             // sNew = sOld * dS (component-wise)
                             const v = new THREE.Vector3().fromArray(values, baseIdx);
                             v.multiply(dS);
                             v.toArray(values, baseIdx);
-                            modified = true;
+                            trackMod = true;
                         }
                     }
                 });
 
-                if (modified) {
+                if (trackMod) {
+                    console.log(`[ApplyDelta] Modifying track ${trackName}`);
                     track.values = new Float32Array(values);
+                    modified = true;
                 }
             });
             return modified;
@@ -3107,7 +3151,10 @@
 
             // 4. Persistence & Refresh
             mixer.uncacheClip(clip);
-            if (window.hierarchicalController) window.hierarchicalController.rebuildAndPlay();
+            if (window.hierarchicalController) {
+                window.hierarchicalController.invalidateClip(clip.name);
+                window.hierarchicalController.rebuildAndPlay();
+            }
             drawKeyframeMarkers(clip);
 
             const jsonAfter = clip.toJSON();
@@ -3154,7 +3201,10 @@
 
             if (affectedClips.size > 0) {
                 // Essential: Uncache modified clips so Three.js re-internals them
-                affectedClips.forEach(c => mixer.uncacheClip(c));
+                affectedClips.forEach(c => {
+                    mixer.uncacheClip(c);
+                    if (window.hierarchicalController) window.hierarchicalController.invalidateClip(c.name);
+                });
 
                 // Rebuild controller to restart actions with new clip data
                 if (window.hierarchicalController) {
@@ -3639,7 +3689,9 @@
                 }
             }
 
+            // Re-render and Check visibility
             renderTimelineTracks();
+            if (window.updateGizmoVisibility) window.updateGizmoVisibility();
         };
 
         function isActiveLayer(clip) {
@@ -3904,7 +3956,16 @@
         // Define global selectBone
         window.selectBone = function (bone, fromTree) {
             selectedBone = bone;
-            document.getElementById('selection-info').innerText = "Selected: " + (bone ? bone.name : "None");
+
+            // Update UI
+            if (window.updateGizmoVisibility) {
+                window.updateGizmoVisibility();
+            } else {
+                // Fallback / Initial load before function defined
+                document.getElementById('selection-info').innerText = "Selected: " + (bone ? bone.name : "None");
+                if (bone) transformControl.attach(bone);
+                else transformControl.detach();
+            }
 
             // Auto Focus Logic
             if (bone) {
@@ -3940,20 +4001,61 @@
             if (bone) {
                 selectionHighlighter.visible = true;
 
-                // If IK Enabled
+                // Sync Gizmo Mode with IK
                 if (ikEnabled) {
                     transformControl.setMode('translate');
-                    startIKSession(bone);
+                    startIKSession(bone); // This attaches to helper
                 } else {
-                    transformControl.setMode('rotate');
-                    transformControl.attach(bone);
+                    // Gizmo attachment handled by updateGizmoVisibility
                     if (ikTargetHelper) ikTargetHelper.visible = false;
                 }
             } else {
                 selectionHighlighter.visible = false;
-                transformControl.detach();
                 if (ikTargetHelper) ikTargetHelper.visible = false;
             }
+        };
+
+        window.updateGizmoVisibility = function () {
+            if (!selectedBone) {
+                transformControl.detach();
+                document.getElementById('selection-info').innerText = "No bone selected";
+                return;
+            }
+
+            // Check Control Strictness
+            let isControlled = false;
+            let clipName = null;
+
+            if (window.hierarchicalController) {
+                const layer = window.hierarchicalController.getLayerForBone(selectedBone.name);
+                if (layer) {
+                    isControlled = true;
+                    clipName = layer.clipName;
+                }
+            }
+
+            // If not controlled by any ACTIVE layer, disable editing (unless we want to allow base pose editing? User implies strictness)
+            // "if user selects keyframes for an animation... user must have keyframes selected for an animation that currently controls a specific bone"
+
+            if (!isControlled) {
+                transformControl.detach();
+                document.getElementById('selection-info').innerText = selectedBone.name + " (Not controlled by active animation)";
+                return;
+            }
+
+            // Check Keyframes
+            const hasKeys = selectedKeyframes.has(clipName) && selectedKeyframes.get(clipName).size > 0;
+            if (!hasKeys) {
+                transformControl.detach();
+                document.getElementById('selection-info').innerText = selectedBone.name + " (Select Keyframes to Edit)";
+                return;
+            }
+
+            // Allowed
+            if (transformControl.object !== selectedBone) {
+                transformControl.attach(selectedBone);
+            }
+            document.getElementById('selection-info').innerText = "Selected: " + selectedBone.name;
         };
 
         // CCD Solver
