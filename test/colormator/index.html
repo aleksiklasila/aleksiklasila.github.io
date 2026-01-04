@@ -548,11 +548,13 @@
             scene.add(dir);
             scene.add(new THREE.GridHelper(10, 10, 0x333, 0x222));
 
-            // Brush helper (3D sphere to show where painting)
-            brushHelper = new THREE.Mesh(
-                new THREE.SphereGeometry(0.02, 16, 16),
-                new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.6, depthTest: false })
-            );
+            // Brush helper geometries (sphere for circle, cube for square)
+            const brushHelperMaterial = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.6, depthTest: false });
+            const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16); // Unit diameter
+            const cubeGeometry = new THREE.BoxGeometry(1, 1, 1); // Unit size
+            brushHelper = new THREE.Mesh(sphereGeometry, brushHelperMaterial);
+            brushHelper.userData.sphereGeometry = sphereGeometry;
+            brushHelper.userData.cubeGeometry = cubeGeometry;
             brushHelper.visible = false;
             scene.add(brushHelper);
 
@@ -667,6 +669,30 @@
             if (hits.length > 0) {
                 brushHelper.visible = true;
                 brushHelper.position.copy(hits[0].point);
+
+                // Switch geometry based on brush shape
+                const targetGeometry = brushShape === 'circle'
+                    ? brushHelper.userData.sphereGeometry
+                    : brushHelper.userData.cubeGeometry;
+                if (brushHelper.geometry !== targetGeometry) {
+                    brushHelper.geometry = targetGeometry;
+                }
+
+                // Scale brush helper based on brushSize and model/texture ratio
+                const mesh = hits[0].object;
+                const texData = textureCanvases.get(mesh.uuid);
+                if (texData) {
+                    // Estimate world-to-texture ratio using model bounding box
+                    const box = new THREE.Box3().setFromObject(model);
+                    const modelSize = box.getSize(new THREE.Vector3());
+                    const avgModelSize = (modelSize.x + modelSize.y + modelSize.z) / 3;
+                    const textureSize = texData.canvas.width;
+
+                    // brushSize is in texture pixels (diameter), convert to world units
+                    // Scale by 2 to match actual painted area (UV mapping approximation)
+                    const worldBrushSize = (brushSize / textureSize) * avgModelSize * 2;
+                    brushHelper.scale.setScalar(worldBrushSize);
+                }
             } else {
                 brushHelper.visible = false;
             }
@@ -723,16 +749,221 @@
                     pixels[i + 3] = 255;
                 }
                 ctx.putImageData(imageData, 0, 0);
-            } else if (currentTool === 'eraser') {
-                // Restore original pixels
-                paintOnTexture(ctx, x, y, originalImageData, true);
             } else {
-                // Brush or spray
-                paintOnTexture(ctx, x, y, null, false);
+                // Brush, spray, or eraser - use 3D distance-based painting
+                paint3DOnTexture(hit.point, mesh, texData, currentTool === 'eraser');
             }
 
             texture.needsUpdate = true;
             updateTexturePreview(texData);
+        }
+
+        // Calculate world-space brush radius from texture-space brush size
+        function calculateWorldBrushRadius(mesh, texData) {
+            const box = new THREE.Box3().setFromObject(model);
+            const modelSize = box.getSize(new THREE.Vector3());
+            const avgModelSize = (modelSize.x + modelSize.y + modelSize.z) / 3;
+            const textureSize = texData.canvas.width;
+            // brushSize is in texture pixels (diameter), convert to world units radius
+            // Multiply by 2 to better match the visual brush helper size
+            return (brushSize / textureSize) * avgModelSize * 2;
+        }
+
+        // Paint on texture using 3D world distance
+        // Algorithm: For each triangle, if any corner is within brush radius,
+        // iterate over the 3D triangle surface at small steps, check 3D distance,
+        // then map the 3D point to texture coordinates and paint
+        function paint3DOnTexture(hitPoint, mesh, texData, isEraser) {
+            const { canvas, ctx, texture, originalImageData, flipY } = texData;
+            const geometry = mesh.geometry;
+            const positions = geometry.attributes.position;
+            const uvs = geometry.attributes.uv;
+            const index = geometry.index;
+
+            if (!uvs) return;
+
+            // Calculate world-space brush radius
+            const worldRadius = calculateWorldBrushRadius(mesh, texData);
+            const worldRadiusSq = worldRadius * worldRadius;
+
+            // Get current image data for modification
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const pixels = imageData.data;
+
+            const isSpray = currentTool === 'spray';
+
+            // Helper to convert UV to canvas coordinates
+            const uvToCanvas = (u, v) => {
+                const cx = u * canvas.width;
+                const cy = flipY ? (1 - v) * canvas.height : v * canvas.height;
+                return { x: cx, y: cy };
+            };
+
+            // Helper to paint a single pixel with bounds checking
+            const paintPixel = (px, py, alpha, restoreOriginal = false) => {
+                px = Math.floor(px);
+                py = Math.floor(py);
+                if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) return;
+
+                const idx = (py * canvas.width + px) * 4;
+
+                if (restoreOriginal && originalImageData) {
+                    pixels[idx] = Math.round(pixels[idx] * (1 - alpha) + originalImageData.data[idx] * alpha);
+                    pixels[idx + 1] = Math.round(pixels[idx + 1] * (1 - alpha) + originalImageData.data[idx + 1] * alpha);
+                    pixels[idx + 2] = Math.round(pixels[idx + 2] * (1 - alpha) + originalImageData.data[idx + 2] * alpha);
+                } else {
+                    pixels[idx] = Math.round(pixels[idx] * (1 - alpha) + currentColor.r * alpha);
+                    pixels[idx + 1] = Math.round(pixels[idx + 1] * (1 - alpha) + currentColor.g * alpha);
+                    pixels[idx + 2] = Math.round(pixels[idx + 2] * (1 - alpha) + currentColor.b * alpha);
+                }
+                pixels[idx + 3] = 255;
+            };
+
+            // Determine step size based on texture resolution and model size
+            // Smaller steps = more precision but slower
+            const box = new THREE.Box3().setFromObject(model);
+            const modelSize = box.getSize(new THREE.Vector3());
+            const avgModelSize = (modelSize.x + modelSize.y + modelSize.z) / 3;
+            // Step size in world units - smaller for higher precision
+            // Aim for roughly 1-2 pixels per step on the texture
+            const stepSize = avgModelSize / (canvas.width * 0.5);
+
+            const triangleCount = index ? index.count / 3 : positions.count / 3;
+            const v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3();
+            const tempPoint = new THREE.Vector3();
+
+            for (let t = 0; t < triangleCount; t++) {
+                const i0 = index ? index.getX(t * 3) : t * 3;
+                const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+                const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+
+                // Get world positions of triangle vertices
+                v0.set(positions.getX(i0), positions.getY(i0), positions.getZ(i0));
+                v1.set(positions.getX(i1), positions.getY(i1), positions.getZ(i1));
+                v2.set(positions.getX(i2), positions.getY(i2), positions.getZ(i2));
+                mesh.localToWorld(v0);
+                mesh.localToWorld(v1);
+                mesh.localToWorld(v2);
+
+                // Check if any corner of triangle is within brush radius
+                const d0 = v0.distanceToSquared(hitPoint);
+                const d1 = v1.distanceToSquared(hitPoint);
+                const d2 = v2.distanceToSquared(hitPoint);
+
+                // Use a slightly larger check radius to catch triangles that might have interior within range
+                const checkRadiusSq = (worldRadius * 1.5) * (worldRadius * 1.5);
+                if (d0 > checkRadiusSq && d1 > checkRadiusSq && d2 > checkRadiusSq) continue;
+
+                // Get UV coordinates for this triangle's vertices
+                const uv0x = uvs.getX(i0), uv0y = uvs.getY(i0);
+                const uv1x = uvs.getX(i1), uv1y = uvs.getY(i1);
+                const uv2x = uvs.getX(i2), uv2y = uvs.getY(i2);
+
+                // Calculate edge vectors for the triangle
+                const edge1 = new THREE.Vector3().subVectors(v1, v0);
+                const edge2 = new THREE.Vector3().subVectors(v2, v0);
+
+                // Calculate the length of edges to determine step count
+                const edge1Len = edge1.length();
+                const edge2Len = edge2.length();
+
+                // Number of steps along each edge
+                const steps1 = Math.max(2, Math.ceil(edge1Len / stepSize));
+                const steps2 = Math.max(2, Math.ceil(edge2Len / stepSize));
+
+                // Iterate over the triangle surface using barycentric-style parameterization
+                // u goes from 0 to 1 along edge1, v goes from 0 to 1 along edge2
+                // Points inside triangle satisfy u >= 0, v >= 0, u + v <= 1
+                for (let si = 0; si <= steps1; si++) {
+                    const u = si / steps1;
+                    const maxV = 1 - u; // Limit v so we stay inside triangle
+
+                    for (let sj = 0; sj <= steps2; sj++) {
+                        const v = (sj / steps2) * maxV;
+
+                        // Calculate 3D position on triangle surface
+                        // P = v0 + u * edge1 + v * edge2
+                        tempPoint.copy(v0)
+                            .addScaledVector(edge1, u)
+                            .addScaledVector(edge2, v);
+
+                        // Check 3D distance to click point
+                        const distSq = tempPoint.distanceToSquared(hitPoint);
+                        if (distSq > worldRadiusSq) continue;
+
+                        const dist = Math.sqrt(distSq);
+                        const normalizedDist = dist / worldRadius;
+
+                        // Calculate alpha based on 3D distance and brush settings
+                        let alpha = brushStrength;
+
+                        if (brushHardness < 0.99) {
+                            if (normalizedDist > brushHardness) {
+                                const falloffRange = 1 - brushHardness;
+                                const falloffPos = (normalizedDist - brushHardness) / falloffRange;
+                                alpha = brushStrength * (1 - falloffPos * falloffPos);
+                            }
+                        } else {
+                            if (normalizedDist > 0.9) {
+                                alpha = brushStrength * (1 - (normalizedDist - 0.9) / 0.1);
+                            }
+                        }
+
+                        if (alpha < 0.001) continue;
+
+                        if (isSpray) {
+                            if (Math.random() > 0.3) continue;
+                            alpha *= Math.random();
+                        }
+
+                        // Calculate UV coordinates for this 3D point using same parameterization
+                        // UV = uv0 + u * (uv1 - uv0) + v * (uv2 - uv0)
+                        const texU = uv0x + u * (uv1x - uv0x) + v * (uv2x - uv0x);
+                        const texV = uv0y + u * (uv1y - uv0y) + v * (uv2y - uv0y);
+
+                        // Convert to canvas coordinates
+                        const canvasCoord = uvToCanvas(texU, texV);
+
+                        // Paint the pixel (and a small area around it for better coverage)
+                        paintPixel(canvasCoord.x, canvasCoord.y, alpha, isEraser);
+                        // Paint neighboring pixels for smoother coverage
+                        paintPixel(canvasCoord.x + 1, canvasCoord.y, alpha * 0.5, isEraser);
+                        paintPixel(canvasCoord.x - 1, canvasCoord.y, alpha * 0.5, isEraser);
+                        paintPixel(canvasCoord.x, canvasCoord.y + 1, alpha * 0.5, isEraser);
+                        paintPixel(canvasCoord.x, canvasCoord.y - 1, alpha * 0.5, isEraser);
+                    }
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        // Calculate barycentric coordinates for point (px, py) in triangle (c0, c1, c2)
+        function getBarycentricCoords(px, py, c0, c1, c2) {
+            const v0x = c2.x - c0.x;
+            const v0y = c2.y - c0.y;
+            const v1x = c1.x - c0.x;
+            const v1y = c1.y - c0.y;
+            const v2x = px - c0.x;
+            const v2y = py - c0.y;
+
+            const dot00 = v0x * v0x + v0y * v0y;
+            const dot01 = v0x * v1x + v0y * v1y;
+            const dot02 = v0x * v2x + v0y * v2y;
+            const dot11 = v1x * v1x + v1y * v1y;
+            const dot12 = v1x * v2x + v1y * v2y;
+
+            const denom = dot00 * dot11 - dot01 * dot01;
+            if (Math.abs(denom) < 0.0001) {
+                return { u: -1, v: -1, w: -1 }; // Degenerate triangle
+            }
+
+            const invDenom = 1 / denom;
+            const w = (dot00 * dot12 - dot01 * dot02) * invDenom;
+            const v = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const u = 1 - v - w;
+
+            return { u, v, w };
         }
 
         function paintOnTexture(ctx, x, y, originalData, isEraser) {
