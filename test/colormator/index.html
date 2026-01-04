@@ -1,0 +1,1522 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Colormator - 3D Texture Painter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #0a0a0f;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            background: rgba(20, 20, 35, 0.98);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            z-index: 100;
+            gap: 10px;
+        }
+
+        .logo {
+            font-size: 1.3rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-right: 15px;
+        }
+
+        .header-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 50px);
+            margin-top: 50px;
+        }
+
+        #viewport {
+            flex: 1;
+            position: relative;
+            background: radial-gradient(ellipse at center, #1a1a2e 0%, #0a0a0f 100%);
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        .drop-zone {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            padding: 50px;
+            border: 3px dashed rgba(255, 107, 107, 0.5);
+            border-radius: 20px;
+            background: rgba(255, 107, 107, 0.05);
+        }
+
+        .drop-zone.hidden {
+            display: none;
+        }
+
+        .drop-zone.dragover {
+            border-color: #ff6b6b;
+            background: rgba(255, 107, 107, 0.15);
+        }
+
+        .drop-zone-icon {
+            font-size: 3.5rem;
+            margin-bottom: 15px;
+        }
+
+        .drop-zone-text {
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .left-toolbar {
+            position: fixed;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            background: rgba(20, 20, 35, 0.95);
+            padding: 8px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .left-toolbar.visible {
+            display: flex;
+        }
+
+        .tool-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .tool-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .tool-btn.active {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            box-shadow: 0 3px 12px rgba(255, 107, 107, 0.4);
+        }
+
+        .tool-separator {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 4px 0;
+        }
+
+        .side-panel {
+            width: 280px;
+            background: rgba(20, 20, 35, 0.98);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel-section {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 10px;
+        }
+
+        .panel-title {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 8px;
+        }
+
+        #color-wheel-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1;
+            margin-bottom: 8px;
+        }
+
+        #color-wheel {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            cursor: crosshair;
+        }
+
+        #color-preview {
+            width: 100%;
+            height: 35px;
+            border-radius: 6px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 8px;
+        }
+
+        .color-input-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 6px;
+            align-items: center;
+        }
+
+        .color-input-row label {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            width: 30px;
+        }
+
+        .color-input-row input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            padding: 4px 6px;
+            font-size: 0.8rem;
+        }
+
+        .color-palette {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 3px;
+        }
+
+        .palette-color {
+            aspect-ratio: 1;
+            border-radius: 3px;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+
+        .palette-color:hover {
+            transform: scale(1.1);
+            border-color: white;
+        }
+
+        .slider-group {
+            margin-bottom: 10px;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 3px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 5px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #ff6b6b;
+            border-radius: 50%;
+        }
+
+        .shape-btns {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .shape-btn {
+            padding: 5px 10px;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+        }
+
+        .shape-btn.active {
+            background: #ff6b6b;
+            border-color: #ff6b6b;
+        }
+
+        .texture-preview {
+            width: 100%;
+            aspect-ratio: 1;
+            background: #222;
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .texture-preview canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .texture-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+
+        .texture-tab {
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 4px;
+            color: #aaa;
+            cursor: pointer;
+        }
+
+        .texture-tab.active {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .status-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 280px;
+            height: 28px;
+            background: rgba(20, 20, 35, 0.95);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            gap: 20px;
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #ff6b6b;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .controls-hint {
+            position: fixed;
+            bottom: 35px;
+            left: 15px;
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.4);
+            line-height: 1.6;
+        }
+    </style>
+    <script
+        type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+</head>
+
+<body>
+    <header class="header">
+        <div class="logo">🎨 Colormator</div>
+        <input type="file" id="file-input" accept=".glb,.gltf">
+        <button class="header-btn btn-primary" id="btn-import">📁 Import</button>
+        <button class="header-btn btn-secondary" id="btn-export" disabled>💾 Export</button>
+        <button class="header-btn btn-secondary" id="btn-undo" disabled>↶</button>
+        <button class="header-btn btn-secondary" id="btn-redo" disabled>↷</button>
+    </header>
+    <div class="main-container">
+        <div id="viewport">
+            <div id="canvas-container"></div>
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-icon">🎨</div>
+                <div class="drop-zone-text">Drag & Drop GLB file</div>
+            </div>
+            <div class="left-toolbar" id="left-toolbar">
+                <button class="tool-btn active" id="tool-brush" title="Brush (B)">🖌️</button>
+                <button class="tool-btn" id="tool-bucket" title="Fill (G)">🪣</button>
+                <button class="tool-btn" id="tool-spray" title="Spray (S)">✨</button>
+                <button class="tool-btn" id="tool-eraser" title="Eraser (E)">⌫</button>
+                <div class="tool-separator"></div>
+                <button class="tool-btn" id="tool-eyedropper" title="Eyedropper (I)">💧</button>
+                <button class="tool-btn" id="tool-height" title="Height Range (H)">📏</button>
+            </div>
+            <div class="controls-hint">RMB: Pan | Ctrl+RMB: Rotate | Scroll: Zoom | LMB: Paint</div>
+        </div>
+        <div class="side-panel">
+            <div class="panel-section">
+                <div class="panel-title">Color</div>
+                <div id="color-wheel-container"><canvas id="color-wheel"></canvas></div>
+                <div id="color-preview"></div>
+                <div class="color-input-row">
+                    <label>HEX</label>
+                    <input type="text" id="hex-input" value="#FF6B6B" maxlength="7">
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-title">Palette</div>
+                <div class="color-palette" id="color-palette"></div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-title">Brush</div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Size</span><span id="size-value">30</span></div>
+                    <input type="range" id="brush-size" min="1" max="200" value="30">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Strength</span><span id="strength-value">100%</span></div>
+                    <input type="range" id="brush-strength" min="1" max="100" value="100">
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Hardness</span><span id="hardness-value">80%</span></div>
+                    <input type="range" id="brush-hardness" min="0" max="100" value="80">
+                </div>
+                <div class="panel-title" style="margin-top:8px">Shape</div>
+                <div class="shape-btns">
+                    <button class="shape-btn active" data-shape="circle">⚫ Circle</button>
+                    <button class="shape-btn" data-shape="square">⬛ Square</button>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-title">Texture Map (Live)</div>
+                <div class="texture-tabs" id="texture-tabs"></div>
+                <div class="texture-preview" id="texture-preview"></div>
+            </div>
+        </div>
+    </div>
+    <div class="status-bar">
+        <span id="status-tool">Tool: Brush</span>
+        <span id="status-info">—</span>
+    </div>
+    <div class="loading-overlay hidden" id="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+
+        let scene, camera, renderer, controls;
+        let model = null, meshes = [];
+        let brushHelper = null, heightMarker1 = null, heightMarker2 = null;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Texture painting state
+        let textureCanvases = new Map(); // mesh.uuid -> { canvas, ctx, texture, originalImageData }
+        let sharedTextures = new Map(); // textureKey -> { canvas, ctx, texture, originalImageData, meshes: [] }
+        let currentColor = { r: 255, g: 107, b: 107 };
+        let currentTool = 'brush', brushSize = 30, brushStrength = 1.0, brushHardness = 0.8, brushShape = 'circle';
+        let isPainting = false, heightPoint1 = null;
+
+        // Undo system
+        let undoStack = [], redoStack = [];
+        const MAX_UNDO = 20;
+
+        const palette = ['#FF6B6B', '#EE5A24', '#FFC312', '#A3CB38', '#1289A7', '#5758BB', '#B53471', '#833471', '#FFFFFF', '#CCCCCC', '#999999', '#666666', '#333333', '#000000', '#FF0000', '#00FF00'];
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.01, 1000);
+            camera.position.set(2, 1.5, 3);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            // Middle mouse = rotate, Right mouse = pan, Scroll = zoom
+            controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dir = new THREE.DirectionalLight(0xffffff, 1);
+            dir.position.set(5, 10, 5);
+            scene.add(dir);
+            scene.add(new THREE.GridHelper(10, 10, 0x333, 0x222));
+
+            // Brush helper (3D sphere to show where painting)
+            brushHelper = new THREE.Mesh(
+                new THREE.SphereGeometry(0.02, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.6, depthTest: false })
+            );
+            brushHelper.visible = false;
+            scene.add(brushHelper);
+
+            window.addEventListener('resize', onResize);
+            setupEvents();
+            initColorWheel();
+            initPalette();
+            animate();
+        }
+
+        function onResize() {
+            const c = document.getElementById('canvas-container');
+            camera.aspect = c.clientWidth / c.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(c.clientWidth, c.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function setupEvents() {
+            const canvas = renderer.domElement;
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+            canvas.addEventListener('mousedown', e => {
+                if (e.button === 0 && model) {
+                    isPainting = true;
+                    saveUndo();
+                    doPaint(e);
+                }
+            });
+
+            canvas.addEventListener('mousemove', e => {
+                updateMouse(e);
+                updateBrushHelper();
+                if (isPainting && e.buttons === 1) doPaint(e);
+            });
+
+            canvas.addEventListener('mouseup', e => {
+                if (e.button === 0) isPainting = false;
+            });
+
+            // Tool buttons
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                btn.onclick = () => setTool(btn.id.replace('tool-', ''));
+            });
+
+            // Shape buttons
+            document.querySelectorAll('.shape-btn').forEach(btn => {
+                btn.onclick = () => {
+                    document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    brushShape = btn.dataset.shape;
+                };
+            });
+
+            // Sliders
+            document.getElementById('brush-size').oninput = e => {
+                brushSize = +e.target.value;
+                document.getElementById('size-value').textContent = brushSize;
+            };
+            document.getElementById('brush-strength').oninput = e => {
+                brushStrength = +e.target.value / 100;
+                document.getElementById('strength-value').textContent = e.target.value + '%';
+            };
+            document.getElementById('brush-hardness').oninput = e => {
+                brushHardness = +e.target.value / 100;
+                document.getElementById('hardness-value').textContent = e.target.value + '%';
+            };
+            document.getElementById('hex-input').onchange = e => {
+                try { setColor(e.target.value); } catch { }
+            };
+
+            // File handling
+            document.getElementById('btn-import').onclick = () => document.getElementById('file-input').click();
+            document.getElementById('file-input').onchange = e => { if (e.target.files[0]) loadModel(e.target.files[0]); };
+            document.getElementById('btn-export').onclick = exportModel;
+            document.getElementById('btn-undo').onclick = undo;
+            document.getElementById('btn-redo').onclick = redo;
+
+            const vp = document.getElementById('viewport');
+            vp.ondragover = e => { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragover'); };
+            vp.ondragleave = () => document.getElementById('drop-zone').classList.remove('dragover');
+            vp.ondrop = e => { e.preventDefault(); document.getElementById('drop-zone').classList.remove('dragover'); if (e.dataTransfer.files[0]) loadModel(e.dataTransfer.files[0]); };
+
+            // Keyboard
+            document.addEventListener('keydown', e => {
+                if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+                if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+                if (e.key === 'b') setTool('brush');
+                if (e.key === 'g') setTool('bucket');
+                if (e.key === 's' && !e.ctrlKey) setTool('spray');
+                if (e.key === 'e') setTool('eraser');
+                if (e.key === 'i') setTool('eyedropper');
+                if (e.key === 'h') setTool('height');
+            });
+        }
+
+        function updateMouse(e) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        }
+
+        function updateBrushHelper() {
+            if (!model) { brushHelper.visible = false; return; }
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObjects(meshes, true);
+            if (hits.length > 0) {
+                brushHelper.visible = true;
+                brushHelper.position.copy(hits[0].point);
+            } else {
+                brushHelper.visible = false;
+            }
+        }
+
+        function doPaint(e) {
+            if (!model) return;
+            updateMouse(e);
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObjects(meshes, true);
+            if (hits.length === 0) return;
+
+            const hit = hits[0];
+            const mesh = hit.object;
+            const uv = hit.uv;
+
+            if (!uv) {
+                document.getElementById('status-info').textContent = 'No UV coords on this mesh';
+                return;
+            }
+
+            const texData = textureCanvases.get(mesh.uuid);
+            if (!texData) {
+                document.getElementById('status-info').textContent = 'No paintable texture';
+                return;
+            }
+
+            const { canvas, ctx, texture, originalImageData, flipY } = texData;
+            const x = uv.x * canvas.width;
+            // If flipY is true (WebGL default), UV origin is bottom-left, so we flip with (1 - uv.y)
+            // If flipY is false (GLTF default), UV origin matches canvas (top-left), so we use uv.y directly
+            const y = flipY ? (1 - uv.y) * canvas.height : uv.y * canvas.height;
+
+            if (currentTool === 'eyedropper') {
+                pickColorFromTexture(ctx, x, y);
+                return;
+            }
+
+            if (currentTool === 'height') {
+                handleHeightTool(hit.point, mesh, texData);
+                return;
+            }
+
+            if (currentTool === 'bucket') {
+                // Direct pixel replacement for bucket fill
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const pixels = imageData.data;
+                const alpha = brushStrength;
+
+                for (let i = 0; i < pixels.length; i += 4) {
+                    pixels[i] = Math.round(pixels[i] * (1 - alpha) + currentColor.r * alpha);
+                    pixels[i + 1] = Math.round(pixels[i + 1] * (1 - alpha) + currentColor.g * alpha);
+                    pixels[i + 2] = Math.round(pixels[i + 2] * (1 - alpha) + currentColor.b * alpha);
+                    pixels[i + 3] = 255;
+                }
+                ctx.putImageData(imageData, 0, 0);
+            } else if (currentTool === 'eraser') {
+                // Restore original pixels
+                paintOnTexture(ctx, x, y, originalImageData, true);
+            } else {
+                // Brush or spray
+                paintOnTexture(ctx, x, y, null, false);
+            }
+
+            texture.needsUpdate = true;
+            updateTexturePreview(texData);
+        }
+
+        function paintOnTexture(ctx, x, y, originalData, isEraser) {
+            const size = brushSize;
+            const isSpray = currentTool === 'spray';
+            const canvas = ctx.canvas;
+
+            if (isEraser && originalData) {
+                // Eraser: restore original pixels within brush area
+                const halfSize = size / 2;
+                const minX = Math.max(0, Math.floor(x - halfSize));
+                const minY = Math.max(0, Math.floor(y - halfSize));
+                const maxX = Math.min(canvas.width, Math.ceil(x + halfSize));
+                const maxY = Math.min(canvas.height, Math.ceil(y + halfSize));
+
+                const currentImageData = ctx.getImageData(minX, minY, maxX - minX, maxY - minY);
+                const currentPixels = currentImageData.data;
+
+                for (let py = minY; py < maxY; py++) {
+                    for (let px = minX; px < maxX; px++) {
+                        // Check if pixel is within brush shape
+                        let inBrush = false;
+                        if (brushShape === 'circle') {
+                            const dx = px - x;
+                            const dy = py - y;
+                            inBrush = (dx * dx + dy * dy) <= halfSize * halfSize;
+                        } else {
+                            inBrush = true;
+                        }
+
+                        if (inBrush) {
+                            const localX = px - minX;
+                            const localY = py - minY;
+                            const localIdx = (localY * (maxX - minX) + localX) * 4;
+                            const origIdx = (py * originalData.width + px) * 4;
+
+                            // Blend based on strength
+                            const alpha = brushStrength;
+                            currentPixels[localIdx] = Math.round(currentPixels[localIdx] * (1 - alpha) + originalData.data[origIdx] * alpha);
+                            currentPixels[localIdx + 1] = Math.round(currentPixels[localIdx + 1] * (1 - alpha) + originalData.data[origIdx + 1] * alpha);
+                            currentPixels[localIdx + 2] = Math.round(currentPixels[localIdx + 2] * (1 - alpha) + originalData.data[origIdx + 2] * alpha);
+                            currentPixels[localIdx + 3] = 255;
+                        }
+                    }
+                }
+                ctx.putImageData(currentImageData, minX, minY);
+            } else if (isSpray) {
+                // Spray paint - random dots with direct pixel replacement
+                const halfSize = size / 2;
+                const minX = Math.max(0, Math.floor(x - halfSize));
+                const minY = Math.max(0, Math.floor(y - halfSize));
+                const maxX = Math.min(canvas.width, Math.ceil(x + halfSize));
+                const maxY = Math.min(canvas.height, Math.ceil(y + halfSize));
+
+                const imageData = ctx.getImageData(minX, minY, maxX - minX, maxY - minY);
+                const pixels = imageData.data;
+                const dots = Math.floor(size * 2);
+
+                for (let i = 0; i < dots; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = Math.random() * halfSize;
+                    const px = Math.floor(x + Math.cos(angle) * dist);
+                    const py = Math.floor(y + Math.sin(angle) * dist);
+
+                    if (px >= minX && px < maxX && py >= minY && py < maxY) {
+                        const localX = px - minX;
+                        const localY = py - minY;
+                        const idx = (localY * (maxX - minX) + localX) * 4;
+                        const alpha = Math.random() * brushStrength;
+
+                        // Direct color replacement with random alpha
+                        pixels[idx] = Math.round(pixels[idx] * (1 - alpha) + currentColor.r * alpha);
+                        pixels[idx + 1] = Math.round(pixels[idx + 1] * (1 - alpha) + currentColor.g * alpha);
+                        pixels[idx + 2] = Math.round(pixels[idx + 2] * (1 - alpha) + currentColor.b * alpha);
+                        pixels[idx + 3] = 255;
+                    }
+                }
+                ctx.putImageData(imageData, minX, minY);
+            } else {
+                // Normal brush - direct pixel replacement
+                const halfSize = size / 2;
+                const minX = Math.max(0, Math.floor(x - halfSize));
+                const minY = Math.max(0, Math.floor(y - halfSize));
+                const maxX = Math.min(canvas.width, Math.ceil(x + halfSize));
+                const maxY = Math.min(canvas.height, Math.ceil(y + halfSize));
+
+                const imageData = ctx.getImageData(minX, minY, maxX - minX, maxY - minY);
+                const pixels = imageData.data;
+
+                for (let py = minY; py < maxY; py++) {
+                    for (let px = minX; px < maxX; px++) {
+                        const dx = px - x;
+                        const dy = py - y;
+                        const distSq = dx * dx + dy * dy;
+                        const radiusSq = halfSize * halfSize;
+
+                        // Check if pixel is within brush shape
+                        let inBrush = false;
+                        let alpha = brushStrength;
+
+                        if (brushShape === 'circle') {
+                            if (distSq <= radiusSq) {
+                                inBrush = true;
+                                // Apply hardness falloff for soft brush
+                                if (brushHardness < 0.99) {
+                                    const dist = Math.sqrt(distSq);
+                                    const hardRadius = halfSize * brushHardness;
+                                    if (dist > hardRadius) {
+                                        // Falloff from hard edge to outer edge
+                                        const falloff = 1 - (dist - hardRadius) / (halfSize - hardRadius);
+                                        alpha = brushStrength * falloff;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Square brush
+                            inBrush = true;
+                            alpha = brushStrength;
+                        }
+
+                        if (inBrush && alpha > 0) {
+                            const localX = px - minX;
+                            const localY = py - minY;
+                            const idx = (localY * (maxX - minX) + localX) * 4;
+
+                            // Direct color replacement
+                            pixels[idx] = Math.round(pixels[idx] * (1 - alpha) + currentColor.r * alpha);
+                            pixels[idx + 1] = Math.round(pixels[idx + 1] * (1 - alpha) + currentColor.g * alpha);
+                            pixels[idx + 2] = Math.round(pixels[idx + 2] * (1 - alpha) + currentColor.b * alpha);
+                            pixels[idx + 3] = 255;
+                        }
+                    }
+                }
+                ctx.putImageData(imageData, minX, minY);
+            }
+        }
+
+        function pickColorFromTexture(ctx, x, y) {
+            const pixel = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+            currentColor = { r: pixel[0], g: pixel[1], b: pixel[2] };
+            updateColorPreview();
+            setTool('brush');
+        }
+
+        function handleHeightTool(point, mesh, texData) {
+            if (!heightPoint1) {
+                heightPoint1 = { y: point.y, mesh, texData };
+                addHeightMarker(point, 0x00ff00);
+                document.getElementById('status-info').textContent = 'Click second height...';
+            } else {
+                const y1 = Math.min(heightPoint1.y, point.y);
+                const y2 = Math.max(heightPoint1.y, point.y);
+                addHeightMarker(point, 0xff0000);
+                paintHeightRange(y1, y2);
+                setTimeout(() => { clearHeightMarkers(); heightPoint1 = null; }, 500);
+            }
+        }
+
+        function addHeightMarker(point, color) {
+            const marker = new THREE.Mesh(
+                new THREE.SphereGeometry(0.03, 8, 8),
+                new THREE.MeshBasicMaterial({ color, depthTest: false })
+            );
+            marker.position.copy(point);
+            scene.add(marker);
+            if (!heightMarker1) heightMarker1 = marker;
+            else heightMarker2 = marker;
+        }
+
+        function clearHeightMarkers() {
+            if (heightMarker1) { scene.remove(heightMarker1); heightMarker1 = null; }
+            if (heightMarker2) { scene.remove(heightMarker2); heightMarker2 = null; }
+        }
+
+        function paintHeightRange(y1, y2) {
+            meshes.forEach(mesh => {
+                const texData = textureCanvases.get(mesh.uuid);
+                if (!texData) return;
+
+                const geo = mesh.geometry;
+                const pos = geo.attributes.position;
+                const uv = geo.attributes.uv;
+                if (!uv) return;
+
+                const { canvas, ctx, texture, flipY } = texData;
+
+                ctx.fillStyle = `rgba(${currentColor.r}, ${currentColor.g}, ${currentColor.b}, ${brushStrength})`;
+
+                // Helper to convert UV Y to canvas Y based on flipY
+                const uvYToCanvasY = (uvY) => flipY ? (1 - uvY) * canvas.height : uvY * canvas.height;
+
+                // For each triangle, check if vertices are in range and paint
+                const index = geo.index;
+                const triangleCount = index ? index.count / 3 : pos.count / 3;
+
+                for (let i = 0; i < triangleCount; i++) {
+                    const i0 = index ? index.getX(i * 3) : i * 3;
+                    const i1 = index ? index.getX(i * 3 + 1) : i * 3 + 1;
+                    const i2 = index ? index.getX(i * 3 + 2) : i * 3 + 2;
+
+                    const v0 = new THREE.Vector3(pos.getX(i0), pos.getY(i0), pos.getZ(i0));
+                    const v1 = new THREE.Vector3(pos.getX(i1), pos.getY(i1), pos.getZ(i1));
+                    const v2 = new THREE.Vector3(pos.getX(i2), pos.getY(i2), pos.getZ(i2));
+
+                    mesh.localToWorld(v0);
+                    mesh.localToWorld(v1);
+                    mesh.localToWorld(v2);
+
+                    // If any vertex in height range, paint the triangle
+                    const inRange = [v0, v1, v2].some(v => v.y >= y1 && v.y <= y2);
+                    if (inRange) {
+                        const uv0 = { x: uv.getX(i0) * canvas.width, y: uvYToCanvasY(uv.getY(i0)) };
+                        const uv1 = { x: uv.getX(i1) * canvas.width, y: uvYToCanvasY(uv.getY(i1)) };
+                        const uv2 = { x: uv.getX(i2) * canvas.width, y: uvYToCanvasY(uv.getY(i2)) };
+
+                        ctx.beginPath();
+                        ctx.moveTo(uv0.x, uv0.y);
+                        ctx.lineTo(uv1.x, uv1.y);
+                        ctx.lineTo(uv2.x, uv2.y);
+                        ctx.closePath();
+                        ctx.fill();
+                    }
+                }
+
+                texture.needsUpdate = true;
+                updateTexturePreview(texData);
+            });
+            document.getElementById('status-info').textContent = 'Height range painted';
+        }
+
+        function loadModel(file) {
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            const reader = new FileReader();
+            reader.onload = async e => {
+                new GLTFLoader().parse(e.target.result, '', async gltf => {
+                    console.log('=== GLTF LOADED ===');
+
+                    if (model) scene.remove(model);
+                    meshes = [];
+                    textureCanvases.clear();
+                    sharedTextures.clear();
+
+                    // Collect all meshes and find the first/shared texture
+                    const meshList = [];
+                    let sharedSourceImage = null;
+                    let sharedOriginalTexture = null;
+                    let sharedTextureSlot = 'map';
+                    let sharedMaterial = null;
+
+                    gltf.scene.traverse(child => {
+                        if (child.isMesh) {
+                            meshList.push(child);
+
+                            // Extract texture info from first mesh that has one
+                            if (!sharedSourceImage) {
+                                const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+                                sharedMaterial = mat;
+
+                                if (mat?.map?.image) {
+                                    sharedSourceImage = mat.map.image;
+                                    sharedOriginalTexture = mat.map;
+                                    sharedTextureSlot = 'map';
+                                } else if (mat?.emissiveMap?.image) {
+                                    sharedSourceImage = mat.emissiveMap.image;
+                                    sharedOriginalTexture = mat.emissiveMap;
+                                    sharedTextureSlot = 'emissiveMap';
+                                }
+                            }
+                        }
+                    });
+
+                    console.log(`Found ${meshList.length} meshes, merging into one...`);
+
+                    if (meshList.length === 0) {
+                        document.getElementById('loading-overlay').classList.add('hidden');
+                        alert('No meshes found in model');
+                        return;
+                    }
+
+                    // Merge all geometries into one
+                    const geometries = [];
+                    for (const mesh of meshList) {
+                        // Clone geometry and apply world transform
+                        const geo = mesh.geometry.clone();
+                        mesh.updateWorldMatrix(true, false);
+                        geo.applyMatrix4(mesh.matrixWorld);
+                        geometries.push(geo);
+                    }
+
+                    let mergedGeometry;
+                    if (geometries.length === 1) {
+                        mergedGeometry = geometries[0];
+                    } else {
+                        mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries, false);
+                    }
+
+                    if (!mergedGeometry) {
+                        console.error('Failed to merge geometries');
+                        document.getElementById('loading-overlay').classList.add('hidden');
+                        alert('Failed to merge geometries');
+                        return;
+                    }
+
+                    // Create canvas for the shared texture
+                    const texSize = sharedSourceImage?.width || 1024;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = texSize;
+                    canvas.height = texSize;
+                    const ctx = canvas.getContext('2d');
+
+                    if (sharedSourceImage && sharedSourceImage.width && sharedSourceImage.height) {
+                        ctx.drawImage(sharedSourceImage, 0, 0, canvas.width, canvas.height);
+                        console.log(`Drew shared texture: ${texSize}x${texSize}`);
+                    } else {
+                        ctx.fillStyle = '#cccccc';
+                        ctx.fillRect(0, 0, texSize, texSize);
+                        console.log('No shared texture found, using gray fill');
+                    }
+
+                    const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                    // Create the shared CanvasTexture
+                    const texture = new THREE.CanvasTexture(canvas);
+                    if (sharedOriginalTexture) {
+                        texture.flipY = sharedOriginalTexture.flipY;
+                        texture.wrapS = sharedOriginalTexture.wrapS;
+                        texture.wrapT = sharedOriginalTexture.wrapT;
+                        texture.colorSpace = sharedOriginalTexture.colorSpace || THREE.SRGBColorSpace;
+                    }
+                    texture.needsUpdate = true;
+
+                    // Create new material with the shared texture
+                    // Use MeshBasicMaterial for emissive (unlit) models to preserve full color brightness
+                    let newMaterial;
+                    if (sharedTextureSlot === 'emissiveMap') {
+                        // Unlit material - shows texture at full brightness
+                        newMaterial = new THREE.MeshBasicMaterial({
+                            map: texture,
+                            toneMapped: false
+                        });
+                    } else {
+                        newMaterial = new THREE.MeshStandardMaterial({
+                            map: texture,
+                            color: 0xffffff
+                        });
+                    }
+                    newMaterial.needsUpdate = true;
+
+                    // Create the merged mesh
+                    const mergedMesh = new THREE.Mesh(mergedGeometry, newMaterial);
+                    mergedMesh.name = 'CombinedMesh';
+
+                    // Create a container group
+                    model = new THREE.Group();
+                    model.add(mergedMesh);
+                    scene.add(model);
+
+                    meshes = [mergedMesh];
+
+                    // Store texture data for the merged mesh
+                    // Store flipY to correctly map UV coordinates to canvas coordinates when painting
+                    const textureFlipY = sharedOriginalTexture ? sharedOriginalTexture.flipY : true;
+                    textureCanvases.set(mergedMesh.uuid, {
+                        canvas,
+                        ctx,
+                        texture,
+                        originalImageData,
+                        mesh: mergedMesh,
+                        textureName: 'Combined Texture',
+                        hasVertexColors: false,
+                        textureSlot: sharedTextureSlot,
+                        flipY: textureFlipY
+                    });
+
+                    // Center model
+                    const box = new THREE.Box3().setFromObject(model);
+                    const center = box.getCenter(new THREE.Vector3());
+                    model.position.sub(center);
+
+                    document.getElementById('drop-zone').classList.add('hidden');
+                    document.getElementById('left-toolbar').classList.add('visible');
+                    document.getElementById('btn-export').disabled = false;
+                    document.getElementById('loading-overlay').classList.add('hidden');
+
+                    console.log('=== MERGED: 1 mesh, 1 texture ===');
+                    renderTextureTabs();
+                    saveUndo();
+                }, err => {
+                    console.error(err);
+                    document.getElementById('loading-overlay').classList.add('hidden');
+                    alert('Failed to load');
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function setupMeshTexture(mesh, gltf) {
+            // Handle array of materials
+            let mat = mesh.material;
+            if (Array.isArray(mat)) {
+                console.log('Mesh has', mat.length, 'materials, using first');
+                mat = mat[0];
+            }
+
+            let texSize = 1024;
+            let originalTexture = null;
+            let textureName = mesh.name || 'Mesh';
+            let sourceImage = null;
+            let hasVertexColors = mesh.geometry && mesh.geometry.attributes.color;
+
+            // Debug: Log everything about the material
+            console.log('=== Mesh:', mesh.name, '===');
+            console.log('Material type:', mat?.type);
+            console.log('mat.map:', mat?.map);
+            console.log('Has vertex colors:', hasVertexColors);
+
+            // Check for texture in mat.map OR mat.emissiveMap
+            let textureSlot = 'map'; // Track which slot we're using
+
+            if (mat && mat.map) {
+                originalTexture = mat.map;
+                sourceImage = mat.map.image || (mat.map.source && mat.map.source.data);
+                if (sourceImage && sourceImage.width) {
+                    texSize = sourceImage.width;
+                    textureSlot = 'map';
+                    console.log('Found diffuse texture:', texSize, 'x', texSize);
+                    if (mat.map.name) textureName = mat.map.name;
+                }
+            }
+
+            // Also check emissiveMap (some models use emissive for colors)
+            if (!sourceImage && mat && mat.emissiveMap) {
+                originalTexture = mat.emissiveMap;
+                sourceImage = mat.emissiveMap.image || (mat.emissiveMap.source && mat.emissiveMap.source.data);
+                if (sourceImage && sourceImage.width) {
+                    texSize = sourceImage.width;
+                    textureSlot = 'emissiveMap';
+                    console.log('Found emissive texture:', texSize, 'x', texSize);
+                    if (mat.emissiveMap.name) textureName = mat.emissiveMap.name;
+                }
+            }
+
+            // If no map but GLTF has textures, try to find one
+            if (!sourceImage && gltf && gltf.parser && gltf.parser.json) {
+                const jsonMaterials = gltf.parser.json.materials;
+                const meshMaterialIndex = mesh.userData?.gltfExtensions?.materialIndex ?? 0;
+
+                if (jsonMaterials && jsonMaterials.length > 0) {
+                    // Try to get the texture for this mesh's material
+                    const matDef = jsonMaterials[meshMaterialIndex] || jsonMaterials[0];
+                    console.log('GLTF material definition:', matDef);
+
+                    // Check for emissiveTexture first (common for unlit models)
+                    let texIndex = null;
+                    if (matDef?.emissiveTexture) {
+                        texIndex = matDef.emissiveTexture.index;
+                        textureSlot = 'emissiveMap';
+                        console.log('Found emissiveTexture at index:', texIndex);
+                    } else if (matDef?.pbrMetallicRoughness?.baseColorTexture) {
+                        texIndex = matDef.pbrMetallicRoughness.baseColorTexture.index;
+                        textureSlot = 'map';
+                        console.log('Found baseColorTexture at index:', texIndex);
+                    }
+
+                    if (texIndex !== null) {
+                        // Try to load the texture
+                        try {
+                            const texture = await gltf.parser.loadTexture(texIndex);
+                            if (texture && texture.image) {
+                                sourceImage = texture.image;
+                                originalTexture = texture;
+                                texSize = sourceImage.width || 1024;
+                                console.log('Loaded texture from parser:', texSize, 'x', texSize);
+                            }
+                        } catch (e) {
+                            console.warn('Failed to load texture from parser:', e);
+                        }
+                    }
+                }
+            }
+
+            // Create canvas for painting
+            const canvas = document.createElement('canvas');
+            canvas.width = texSize;
+            canvas.height = texSize;
+            const ctx = canvas.getContext('2d');
+
+            // Copy original texture to canvas
+            if (sourceImage && sourceImage.width && sourceImage.height) {
+                try {
+                    ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+                    const sample = ctx.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data;
+                    console.log('Drew texture. Sample pixel:', sample[0], sample[1], sample[2], sample[3]);
+                } catch (e) {
+                    console.error('Failed to draw texture:', e);
+                    fillWithBaseColor(ctx, mat, texSize);
+                }
+            } else if (hasVertexColors) {
+                // Model uses vertex colors - fill with a base and let vertex colors show through
+                console.log('Using vertex colors - filling with white base');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, texSize, texSize);
+            } else {
+                console.log('No texture or vertex colors, filling with base color');
+                fillWithBaseColor(ctx, mat, texSize);
+            }
+
+            // Store original for eraser
+            const originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+            // Create new texture from canvas
+            const texture = new THREE.CanvasTexture(canvas);
+            if (originalTexture) {
+                texture.flipY = originalTexture.flipY;
+                texture.wrapS = originalTexture.wrapS;
+                texture.wrapT = originalTexture.wrapT;
+                texture.colorSpace = originalTexture.colorSpace || THREE.SRGBColorSpace;
+            }
+            texture.needsUpdate = true;
+
+            // Apply texture to the correct slot on the material
+            const targetMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+            console.log('Setting texture on slot:', textureSlot);
+            targetMat[textureSlot] = texture;
+            targetMat.needsUpdate = true;
+
+            textureCanvases.set(mesh.uuid, { canvas, ctx, texture, originalImageData, mesh, textureName, hasVertexColors, textureSlot });
+            document.getElementById('status-info').textContent = `Loaded: ${texSize}x${texSize} (${textureSlot})`;
+        }
+
+        async function extractTextureViaWebGL(sourceTexture, targetCtx, size) {
+            // Create a render target to render the texture
+            const renderTarget = new THREE.WebGLRenderTarget(size, size, {
+                format: THREE.RGBAFormat,
+                type: THREE.UnsignedByteType
+            });
+
+            // Create a simple scene with a plane showing the texture
+            const extractScene = new THREE.Scene();
+            const extractCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+            const planeMat = new THREE.MeshBasicMaterial({
+                map: sourceTexture,
+                side: THREE.DoubleSide
+            });
+            const planeGeo = new THREE.PlaneGeometry(2, 2);
+            const plane = new THREE.Mesh(planeGeo, planeMat);
+            extractScene.add(plane);
+
+            // Render to the target
+            const prevRenderTarget = renderer.getRenderTarget();
+            renderer.setRenderTarget(renderTarget);
+            renderer.render(extractScene, extractCamera);
+
+            // Read pixels
+            const pixels = new Uint8Array(size * size * 4);
+            renderer.readRenderTargetPixels(renderTarget, 0, 0, size, size, pixels);
+
+            // Restore previous render target
+            renderer.setRenderTarget(prevRenderTarget);
+
+            // Put pixels into canvas (flip Y because WebGL is bottom-up)
+            const imageData = targetCtx.createImageData(size, size);
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const srcIdx = ((size - 1 - y) * size + x) * 4;
+                    const dstIdx = (y * size + x) * 4;
+                    imageData.data[dstIdx] = pixels[srcIdx];
+                    imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+                    imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+                    imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+                }
+            }
+            targetCtx.putImageData(imageData, 0, 0);
+
+            // Cleanup
+            renderTarget.dispose();
+            planeMat.dispose();
+            planeGeo.dispose();
+        }
+
+        function fillWithBaseColor(ctx, mat, texSize) {
+            if (mat && mat.color) {
+                const c = mat.color;
+                ctx.fillStyle = `rgb(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)})`;
+            } else {
+                ctx.fillStyle = '#cccccc';
+            }
+            ctx.fillRect(0, 0, texSize, texSize);
+            console.log('Filled with base color:', ctx.fillStyle);
+        }
+
+        function renderTextureTabs() {
+            const tabs = document.getElementById('texture-tabs');
+            const preview = document.getElementById('texture-preview');
+            tabs.innerHTML = '';
+
+            if (textureCanvases.size === 0) {
+                preview.innerHTML = '<div style="color:#666;padding:20px;text-align:center">No textures</div>';
+                return;
+            }
+
+            let first = true;
+            textureCanvases.forEach((data, uuid) => {
+                const btn = document.createElement('button');
+                btn.className = 'texture-tab' + (first ? ' active' : '');
+                btn.textContent = data.textureName || data.mesh.name || 'Mesh';
+                btn.onclick = () => {
+                    document.querySelectorAll('.texture-tab').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    updateTexturePreview(data);
+                };
+                tabs.appendChild(btn);
+                if (first) {
+                    updateTexturePreview(data);
+                    first = false;
+                }
+            });
+        }
+
+        function updateTexturePreview(texData) {
+            const preview = document.getElementById('texture-preview');
+            preview.innerHTML = '';
+            const displayCanvas = document.createElement('canvas');
+            displayCanvas.width = texData.canvas.width;
+            displayCanvas.height = texData.canvas.height;
+            displayCanvas.getContext('2d').drawImage(texData.canvas, 0, 0);
+            displayCanvas.style.width = '100%';
+            displayCanvas.style.height = '100%';
+            displayCanvas.style.objectFit = 'contain';
+            preview.appendChild(displayCanvas);
+        }
+
+        function exportModel() {
+            if (!model) return;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            new GLTFExporter().parse(model, result => {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'painted_model.glb';
+                a.click();
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }, err => {
+                console.error(err);
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }, { binary: true });
+        }
+
+        function saveUndo() {
+            const state = [];
+            textureCanvases.forEach((data, uuid) => {
+                state.push({ uuid, imageData: data.ctx.getImageData(0, 0, data.canvas.width, data.canvas.height) });
+            });
+            undoStack.push(state);
+            if (undoStack.length > MAX_UNDO) undoStack.shift();
+            redoStack = [];
+            updateUndoBtns();
+        }
+
+        function undo() {
+            if (undoStack.length <= 1) return;
+            redoStack.push(undoStack.pop());
+            applyState(undoStack[undoStack.length - 1]);
+            updateUndoBtns();
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            const state = redoStack.pop();
+            undoStack.push(state);
+            applyState(state);
+            updateUndoBtns();
+        }
+
+        function applyState(state) {
+            state.forEach(s => {
+                const data = textureCanvases.get(s.uuid);
+                if (data) {
+                    data.ctx.putImageData(s.imageData, 0, 0);
+                    data.texture.needsUpdate = true;
+                    updateTexturePreview(data);
+                }
+            });
+        }
+
+        function updateUndoBtns() {
+            document.getElementById('btn-undo').disabled = undoStack.length <= 1;
+            document.getElementById('btn-redo').disabled = redoStack.length === 0;
+        }
+
+        function setTool(t) {
+            currentTool = t;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.getElementById('tool-' + t);
+            if (btn) btn.classList.add('active');
+            document.getElementById('status-tool').textContent = 'Tool: ' + t.charAt(0).toUpperCase() + t.slice(1);
+        }
+
+        function setColor(hex) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            currentColor = { r, g, b };
+            updateColorPreview();
+        }
+
+        function updateColorPreview() {
+            document.getElementById('color-preview').style.background = `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`;
+            document.getElementById('hex-input').value = '#' + [currentColor.r, currentColor.g, currentColor.b].map(c => c.toString(16).padStart(2, '0')).join('').toUpperCase();
+        }
+
+        function initColorWheel() {
+            const canvas = document.getElementById('color-wheel');
+            const size = canvas.parentElement.clientWidth;
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const center = size / 2, radius = center - 3;
+
+            for (let a = 0; a < 360; a++) {
+                ctx.beginPath();
+                ctx.moveTo(center, center);
+                ctx.arc(center, center, radius, (a - 1) * Math.PI / 180, (a + 1) * Math.PI / 180);
+                ctx.fillStyle = `hsl(${a}, 100%, 50%)`;
+                ctx.fill();
+            }
+
+            const grad = ctx.createRadialGradient(center, center, 0, center, center, radius * 0.6);
+            grad.addColorStop(0, 'white');
+            grad.addColorStop(1, 'transparent');
+            ctx.beginPath();
+            ctx.arc(center, center, radius * 0.6, 0, Math.PI * 2);
+            ctx.fillStyle = '#444';
+            ctx.fill();
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            const pick = e => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left, y = e.clientY - rect.top;
+                const dx = x - center, dy = y - center;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist <= radius) {
+                    const angle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+                    const sat = Math.min(dist / radius, 1);
+                    // Convert HSL to RGB
+                    const h = angle, s = sat, l = 0.5;
+                    const c = (1 - Math.abs(2 * l - 1)) * s;
+                    const hp = h / 60;
+                    const x2 = c * (1 - Math.abs(hp % 2 - 1));
+                    let r1, g1, b1;
+                    if (hp < 1) { r1 = c; g1 = x2; b1 = 0; }
+                    else if (hp < 2) { r1 = x2; g1 = c; b1 = 0; }
+                    else if (hp < 3) { r1 = 0; g1 = c; b1 = x2; }
+                    else if (hp < 4) { r1 = 0; g1 = x2; b1 = c; }
+                    else if (hp < 5) { r1 = x2; g1 = 0; b1 = c; }
+                    else { r1 = c; g1 = 0; b1 = x2; }
+                    const m = l - c / 2;
+                    currentColor = {
+                        r: Math.round((r1 + m) * 255),
+                        g: Math.round((g1 + m) * 255),
+                        b: Math.round((b1 + m) * 255)
+                    };
+                    updateColorPreview();
+                }
+            };
+            canvas.onmousedown = pick;
+            canvas.onmousemove = e => { if (e.buttons === 1) pick(e); };
+            updateColorPreview();
+        }
+
+        function initPalette() {
+            const cont = document.getElementById('color-palette');
+            palette.forEach(hex => {
+                const div = document.createElement('div');
+                div.className = 'palette-color';
+                div.style.background = hex;
+                div.onclick = () => setColor(hex);
+                cont.appendChild(div);
+            });
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

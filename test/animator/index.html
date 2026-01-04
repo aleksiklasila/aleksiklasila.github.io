@@ -600,17 +600,6 @@
             constructor(model, mixer) {
                 this.model = model;
                 this.mixer = mixer;
-
-                // Stack of layers. Higher index = Higher priority (overrides lower).
-                // Each layer: { boneName, clipName, action, ... }
-                // Implementation detail: 
-                // We use a Map or Array? 
-                // User wants "Assign to Bone". So Map<BoneName, LayerData> is intuitive?
-                // But priority matters. "Spine" overrides "Root". "Head" overrides "Spine".
-                // Priority is determined by Hierarchy Depth? 
-                // Yes: Deeper bones override shallower bones.
-                // So "Head" > "Spine" > "Root".
-                // If two distinct branches (LeftArm vs RightArm), they don't conflict.
                 this.activeLayers = []; // List of active assignments
 
                 this.clipCache = new Map();
@@ -885,17 +874,6 @@
                 const clip = animations.find(c => c.name === clipName);
                 if (!clip) return;
 
-                // Play on a temporary mixer action? 
-                // Or just add a temporary layer?
-                // Temp layer is safer for hierarchy.
-                // Add layer "OneShot", play, then remove on finish.
-
-                // For simplified "preview", just play it on mixer directly?
-                // But it might conflict with layers.
-                // Let's us a Mixer Action directly, but we must ensure it overrides?
-                // Or just separate mixer? No.
-
-                // Let's try adding a high-priority "Preview" layer.
                 const layerName = "Preview_OneShot";
                 this.addLayer("Root", clipName);
 
@@ -912,12 +890,6 @@
                     const onFinish = (e) => {
                         if (e.action === action) {
                             this.mixer.removeEventListener('finished', onFinish);
-                            // Maybe remove layer?
-                            // Or just pause?
-                            // User typically wants to see the end pose.
-                            // If we remove layer, it snaps back.
-                            // So let's keep it but paused at end.
-                            // We can offer a "Stop" button in UI.
                         }
                     };
                     this.mixer.addEventListener('finished', onFinish);
@@ -1357,11 +1329,6 @@
                                 },
                                 undo: () => {
                                     undoSnapshot.forEach((json, name) => {
-                                        // Only restore if it was modified?
-                                        // Note: undoSnapshot contains state of ANY clip that MIGHT have been modified.
-                                        // But clipsModified contains clips that WERE modified.
-                                        // Ideally we restore everything in snapshot to be safe, or intersect.
-                                        // Snapshots are cheap.
                                         const c = animations.find(x => x.name === name);
                                         if (c) restoreClipState(c, json);
                                     });
@@ -1371,11 +1338,7 @@
                     }
 
                     if (dragWasPlaying) {
-                        // Global Play Resume
-                        // Wait for next frame to avoid conflict? No, currentAction updates should handle it.
-                        // We set isPlaying true so the loop resumes.
                         isPlaying = true;
-                        // Also toggle the pause button state if we had one?
                     }
                 }
             });
@@ -1617,15 +1580,6 @@
                 });
             };
 
-            // 1. Prepare Main Model (Excluding Separate Props)
-            // Strategy: Clone and Clean.
-            // Note: GLTFExporter animations option relies on tracks matching node names.
-            // If we clone, node UUIDs or references might change if not careful? 
-            // GLTFExporter matches by Object Reference usually for animation tracks?
-            // Actually Three.js animation tracks use NAMES (uuid if no name). 
-            // Cloning might break animation linkage if names aren't unique updates.
-            // Safer: Temporarily DETACH or Hide Separate Props from the scene graph.
-
             // Detach Separate Props & Editor Visuals
             const parentsMap = new Map(); // Store parent/index to restore
 
@@ -1645,14 +1599,8 @@
                 if (obj.userData.isEditorVisual) {
                     obj.visible = false;
                     hiddenVisuals.push(obj);
-                    // Note: Exporter might still export invisible objects unless we filter?
-                    // GLTFExporter exports hidden objects by default usually?
-                    // Let's check docs or just DETACH them.
-                    // Safer to Detach.
                 }
             });
-            // Actually, for Locators, the axes is a child. We want the Group (Locator) but not the Axes.
-            // Let's Detach all EditorVisuals
             const visualParents = new Map();
             const visualsToDetach = [];
             currentModel.traverse(obj => {
@@ -1685,12 +1633,6 @@
 
                 // Export Separate Props
                 for (const prop of separateProps) {
-                    // Props need to be exported. 
-                    // If they are attached to bones, their local matrix is relative. 
-                    // Usually "Separate" means "Asset", so nice to have at origin?
-                    // BUT user said "preserve scale, rotation".
-                    // If we export just the Prop Object, GLTFExporter exports it.
-                    // If it has local transform data, that is preserved.
                     const propBlob = await exportToBlob(prop);
                     folder.file((prop.name || "Prop") + ".glb", propBlob);
                 }
@@ -2164,19 +2106,7 @@
                                     if (btnPlay) btnPlay.innerText = '▶';
                                 }
                             }
-                            // Update UI playhead visually without full re-render?
-                            // Full re-render is safe but maybe slow? It's fine for now.
-                            // Actually, re-rendering creates new DOM elements, killing drag?
-                            // NO! Re-rendering clears 'container'. 'timeline' is a child of 'row' child of 'container'.
-                            // If we re-render, this 'timeline' div is removed from DOM. Event listeners die.
-                            // BAD IDEA to re-render inside drag.
-
-                            // Just update Playhead CSS
                             if (isActive) {
-                                // Locate playhead in THIS timeline div?
-                                // We rendered it earlier.
-                                // Let's find it.
-                                // It has red background.
                                 const ph = Array.from(timeline.children).find(c => c.style.background === 'red');
                                 if (ph) {
                                     ph.style.left = (pct * 100) + '%';
@@ -2456,31 +2386,7 @@
             const ms = intervalSec * 1000;
 
             triggerIntervalId = setInterval(() => {
-                // Play One Shot
-                // Logic: 
-                // 1. Controller plays Action on Upper Layer.
-                // 2. We need it to return to Base Upper when done.
-                // Since we rely on mixer listeners, ensure Controller handles it.
-                // Current Controller.playOneShot fades out existing, plays new.
-                // It does NOT auto-return to "Base Upper".
-                // Workaround: In setInterval, we play OneShot. 
-                // We need to restore Base Upper after duration? 
-
-                // Let's IMPROVE Controller.playOneShot to handle "Return to Base".
-                // But for now, let's manually handle it if needed.
-                // Actually, if we just playOneShot, it stops at end. The upper body freezes.
-                // We need to resume Base Upper.
-
-                // Let's modify playOneShot in Controller to accept a "restoreClip" or "restoreCallback".
-                // Or just HACK it here:
-
                 window.hierarchicalController.playOneShot(testActionClip);
-
-                // To restore:
-                // We need to know when it finishes.
-                // The Controller adds a 'finished' listener but does nothing currently.
-                // Let's update Controller logic to actually restore.
-
             }, ms);
         };
 
@@ -2590,14 +2496,7 @@
             if (!container) return;
             container.innerHTML = '';
 
-            // Find Roots
-            // If we have a skeleton helper, use its bone list to find roots effectively?
-            // Or traverse from currentModel.
             if (!currentModel) return;
-
-            // Strategy: Recursively traverse model children, filter for Bones or Groups(Locators)
-            // But usually we just want the Skeleton.
-            // Let's traverse currentModel.children
 
             currentModel.children.forEach(child => {
                 buildTreeItem(child, container, 0);
@@ -2605,10 +2504,6 @@
         };
 
         function buildTreeItem(obj, parentElement, depth) {
-            // Filter: Only Bones, or Locators/Props if we want full hierarchy
-            // Use user req: "tree / file kind of structure thing where bones can easily be selected"
-            // So Bones are priority. But Props/Locators are children of Bones often.
-
             const isBone = obj.isBone;
             const isLocator = obj.userData && obj.userData.isLocator;
             const isMesh = obj.isMesh || obj.isGroup; // Generic props
@@ -2617,14 +2512,6 @@
             if (obj.isSkeletonHelper) return;
             if (obj === ikTargetHelper) return;
             if (obj === selectionHighlighter) return;
-
-            // We want to show: Bones, Props (Meshes/Groups that are NOT the main character mesh?)
-            // Main character mesh usually contains the skeleton? No, SkinnedMesh IS the character.
-            // Skeleton is usually adjacent or inside.
-
-            // Simple rule: Show everything that isn't a known tool helper.
-            // Refine: Show Bones and objects in our 'props' list?
-            // Let's show everything for now, can perform filtering.
 
             const hasChildren = obj.children.length > 0;
             const isExpanded = expandedBones.has(obj.uuid);
@@ -2794,15 +2681,6 @@
                 node.name = newName;
                 node.uuid = THREE.MathUtils.generateUUID(); // Three.js clone does this, but ensure
 
-                // If original was a registered prop, register this one too
-                // Note: 'props' array tracks top-level props usually.
-                // If we copy a hierarchy, we should check if we need to add to 'props'
-                // But logic is: if user explicitly imported it, it's in props.
-                // If it's just a child, it might not be.
-                // Let's being conservative: if it has 'isLocator' or we tracked it, add it.
-                // However, tracking "was in props" is hard on the clone without reference to original.
-                // But we can check if the original 'obj' was in 'props'.
-                // If we are processing the root clone:
                 if (node === clone) {
                     const originalInProps = props.includes(obj);
                     if (originalInProps || obj.userData.isLocator) { // Check if we should track it
@@ -2826,15 +2704,6 @@
                         }
                     }
                 }
-
-                // Recursion for children is automatic in 'clone', but we need to fix names/IDs if needed?
-                // clone(true) handles UUIDs. Names are copied.
-                // We should probably rename children too to avoid duplicates?
-                // Not strictly required by Three.js (names can be dupes), but good for user.
-                // Logic: Only rename the root of the copy to "Copy". Leave children names as is? 
-                // Or rename all? Standard behavior is usually just root rename.
-                // User said: "Just have new names or something."
-                // I'll stick to renaming the ROOT of the copy.
             }
 
             processClone(clone, obj.name);
@@ -3146,13 +3015,6 @@
                 if (prop === 'quaternion') value = object.quaternion.toArray();
                 if (prop === 'scale') value = object.scale.toArray();
 
-                // Check if we need to create track
-                // If track missing, we ONLY create it if the value is non-default (or user explicitly wants to key it, implied by this call)
-                // For Position/Scale, if missing, it means "Default". 
-                // To support "Auto-Key", we create it.
-                // NOTE: If we create a new track, we must seed it with default values for exisiting keyframe times 
-                // to prevent the whole animation from snapping to this new value at other times.
-
                 if (!track) {
                     // Collect all unique times from other tracks to seed default values
                     const allTimes = new Set();
@@ -3292,12 +3154,6 @@
             // 1. Identify Target Bones
             let bonesToKey = [];
 
-            // If explicit selection exists, prefer it?
-            // User says: "You should not have to select a bone... and you should be able to edit multiple bones"
-            // So if selection exists, maybe key it. 
-            // BUT this is "Add Keyframe Here" on a speciic CLIP row.
-            // It strongly implies "Keyframe relevant bones for THIS clip".
-
             // Find all bones controlled by this clip
             if (window.hierarchicalController) {
                 // Brute force check all bones
@@ -3416,11 +3272,6 @@
         };
 
         function restoreClipState(clip, json) {
-            // Re-parse tracks from JSON
-            // THREE.AnimationClip.parse(json) returns a new clip. 
-            // We want to apply it to the EXISTING clip object to keep references valid if possible,
-            // OR we replace the clip in 'animations' array and mixer.
-
             // Easiest is to replace in mixer and animations array
             const newClip = THREE.AnimationClip.parse(json);
 
@@ -3436,11 +3287,6 @@
 
             if (currentAction) currentAction.stop();
             mixer.uncacheClip(clip);
-
-            // If the clip object changed, we need to update our references
-            // But 'redo' might be called when 'clip' is already stale if we replaced it?
-            // Actually, if we replace the object in the array, the wrapper 'clip' variable in closures might be old.
-            // Better to modify the EXISTING clip's tracks.
 
             clip.tracks = newClip.tracks;
             clip.duration = newClip.duration;
@@ -3663,14 +3509,6 @@
             let changed = false;
 
             clip.tracks.forEach(track => {
-                // Find or interpolate value at 0
-                // Since this is a raw keyframe track, we can just grab value at t=0 if exists,
-                // or assume first keyframe is start? 
-                // Let's assume t=0. If keyframes start at 0.5, we interpolate? 
-                // For simplicity: Grab value of the very first keyframe (time-wise)
-                // NO, we want value at EXACTLY 0? Or just "First Frame".
-                // Usually "First Frame" means the earliest keyframe.
-
                 if (track.times.length === 0) return;
 
                 const firstTime = track.times[0];
