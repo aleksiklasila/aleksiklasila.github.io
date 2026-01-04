@@ -764,9 +764,11 @@
             const modelSize = box.getSize(new THREE.Vector3());
             const avgModelSize = (modelSize.x + modelSize.y + modelSize.z) / 3;
             const textureSize = texData.canvas.width;
-            // brushSize is in texture pixels (diameter), convert to world units radius
-            // Multiply by 2 to better match the visual brush helper size
-            return (brushSize / textureSize) * avgModelSize * 2;
+            // brushSize is in texture pixels (diameter), convert to world units
+            // The brush helper uses this as diameter (scale), so divide by 2 for radius
+            // Match the brush helper formula: (brushSize / textureSize) * avgModelSize * 2 as diameter
+            // So radius = diameter / 2 = (brushSize / textureSize) * avgModelSize
+            return (brushSize / textureSize) * avgModelSize;
         }
 
         // Paint on texture using 3D world distance
