@@ -291,6 +291,7 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 dir = DIR_UP;
             }
         }
+        
         // Priority 1: Fall straight down (only if not rising)
         if (dir == DIR_CENTER && y < params.height - 1u) {
             let down = idx + params.width;
@@ -311,15 +312,37 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
         }
-        // Priority 3: Spread horizontally into empty space - this is key for leveling!
+        
+        // Priority 3: Pressure-based horizontal spreading
+        // Fluids under pressure (something above and can't move down) spread sideways
+        // Lower friction = more likely to spread. Use random to create natural flow.
         if (dir == DIR_CENTER) {
-            let try_left_first = r < 0.5;
-            if (try_left_first) {
-                if (x > 0u && MAT_IS_EMPTY[get_pixel(idx - 1u)] > 0.5) { dir = DIR_LEFT; }
-                if (dir == DIR_CENTER && x < params.width - 1u && MAT_IS_EMPTY[get_pixel(idx + 1u)] > 0.5) { dir = DIR_RIGHT; }
-            } else {
-                if (x < params.width - 1u && MAT_IS_EMPTY[get_pixel(idx + 1u)] > 0.5) { dir = DIR_RIGHT; }
-                if (dir == DIR_CENTER && x > 0u && MAT_IS_EMPTY[get_pixel(idx - 1u)] > 0.5) { dir = DIR_LEFT; }
+            // Check if we have pressure from above (non-empty above)
+            let has_pressure = y > 0u && MAT_IS_EMPTY[get_pixel(idx - params.width)] < 0.5;
+            // Spread chance increases with low friction: (1 - friction) gives 0.98 for water/steam
+            let spread_chance = 1.0 - friction;
+            // Always try to spread if blocked, but randomize when under pressure
+            let should_spread = !has_pressure || r < spread_chance;
+            
+            if (should_spread) {
+                let try_left_first = r < 0.5;
+                if (try_left_first) {
+                    let left_mat = select(mat, get_pixel(idx - 1u), x > 0u);
+                    let can_left = x > 0u && (MAT_IS_EMPTY[left_mat] > 0.5 || can_rise_into(mat, left_mat));
+                    if (can_left) { dir = DIR_LEFT; }
+                    
+                    let right_mat = select(mat, get_pixel(idx + 1u), x < params.width - 1u);
+                    let can_right = x < params.width - 1u && (MAT_IS_EMPTY[right_mat] > 0.5 || can_rise_into(mat, right_mat));
+                    if (dir == DIR_CENTER && can_right) { dir = DIR_RIGHT; }
+                } else {
+                    let right_mat = select(mat, get_pixel(idx + 1u), x < params.width - 1u);
+                    let can_right = x < params.width - 1u && (MAT_IS_EMPTY[right_mat] > 0.5 || can_rise_into(mat, right_mat));
+                    if (can_right) { dir = DIR_RIGHT; }
+                    
+                    let left_mat = select(mat, get_pixel(idx - 1u), x > 0u);
+                    let can_left = x > 0u && (MAT_IS_EMPTY[left_mat] > 0.5 || can_rise_into(mat, left_mat));
+                    if (dir == DIR_CENTER && can_left) { dir = DIR_LEFT; }
+                }
             }
         }
     } else {
