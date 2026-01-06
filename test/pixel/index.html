@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel Sim WebGPU</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+            color: #eee;
+            font-family: 'Segoe UI', sans-serif;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            background: #1a1a1a;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Menu */
+        .menu-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            background: #2a2a2a;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #555;
+        }
+
+        button.primary {
+            background: #2a9d8f;
+        }
+
+        .join-container {
+            display: flex;
+            gap: 10px;
+        }
+
+        input {
+            padding: 10px;
+            font-size: 1rem;
+        }
+
+        /* Editor */
+        #editor {
+            flex-direction: row;
+            align-items: stretch;
+        }
+
+        .editor-sidebar {
+            width: 250px;
+            background: #222;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            border-right: 1px solid #333;
+            z-index: 20;
+        }
+
+        .canvas-container {
+            flex-grow: 1;
+            position: relative;
+            background: #111;
+            overflow: hidden;
+        }
+
+        #editor-canvas {
+            background: #eee;
+            display: block;
+            transform-origin: 0 0;
+        }
+
+        .tools,
+        .colors {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .tool-btn,
+        .color-btn {
+            flex: 1;
+            min-width: 60px;
+        }
+
+        .tool-btn.active,
+        .color-btn.active {
+            outline: 2px solid white;
+        }
+
+        /* Game */
+        #game-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #game-ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="menu" class="screen">
+        <h1>Pixel Sim WebGPU</h1>
+        <div class="menu-buttons">
+            <button id="btn-host-menu">Host Game</button>
+            <div class="join-container">
+                <input type="text" id="join-id" placeholder="Enter Host ID">
+                <button id="btn-join">Join Game</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editor" class="screen hidden">
+        <div class="editor-sidebar">
+            <h2>Map Editor</h2>
+            <div class="tools">
+                <button class="tool-btn active" data-tool="brush">Brush</button>
+                <button class="tool-btn" data-tool="fill">Fill</button>
+            </div>
+            <div class="colors" id="material-colors"></div>
+            <div class="brush-size">
+                <label>Size: <span id="brush-size-val">10</span></label>
+                <input type="range" id="brush-size" min="1" max="100" value="10">
+            </div>
+            <div class="actions">
+                <p>Right Click to Pan<br>Scroll to Zoom</p>
+                <button id="btn-start-host" class="primary">Start Game</button>
+                <div id="host-info">
+                    <input type="text" id="invite-link" readonly>
+                    <button id="btn-copy-link">Copy</button>
+                    <p id="client-count">Clients: 0</p>
+                </div>
+            </div>
+        </div>
+        <div class="canvas-container">
+            <canvas id="editor-canvas" width="3000" height="3000"></canvas>
+        </div>
+    </div>
+
+    <div id="game" class="screen hidden">
+        <canvas id="game-canvas"></canvas>
+        <div id="game-ui">
+            <span id="fps-counter">FPS: 0</span>
+            <span id="status-msg">Waiting...</span>
+        </div>
+    </div>
+
+    <script id="simulation-shader-template" type="text/wgsl">
+struct SimParams {
+    width: u32, height: u32, frame: u32, seed: u32,
+    viewX: f32, viewY: f32, zoom: f32, 
+    sw: u32, sh: u32, padding: u32, // Screen Dims
+};
+@group(0) @binding(0) var<uniform> params : SimParams;
+@group(0) @binding(1) var<storage, read> currentState : array<u32>;
+@group(0) @binding(2) var<storage, read_write> moveBuffer : array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> nextState : array<atomic<u32>>;
+
+// MATERIALS_PLACEHOLDER
+
+// Direction constants
+const DIR_CENTER: u32 = 0u;
+const DIR_LEFT: u32 = 1u;
+const DIR_RIGHT: u32 = 2u;
+const DIR_UP: u32 = 3u;
+const DIR_DOWN: u32 = 4u;
+const DIR_TL: u32 = 5u; const DIR_TR: u32 = 6u; const DIR_BL: u32 = 7u; const DIR_BR: u32 = 8u;
+
+fn get_pixel(idx: u32) -> u32 {
+    let array_idx = idx / 4u; let shift = (idx % 4u) * 8u;
+    return (currentState[array_idx] >> shift) & 0xFFu;
+}
+fn set_move(idx: u32, dir: u32) {
+    let array_idx = idx / 4u; let shift = (idx % 4u) * 8u;
+    atomicOr(&moveBuffer[array_idx], dir << shift);
+}
+fn get_move(idx: u32) -> u32 {
+    let array_idx = idx / 4u; let shift = (idx % 4u) * 8u;
+    return (atomicLoad(&moveBuffer[array_idx]) >> shift) & 0xFFu;
+}
+fn inverse_dir(d: u32) -> u32 {
+    if (d == DIR_LEFT) { return DIR_RIGHT; }
+    if (d == DIR_RIGHT) { return DIR_LEFT; }
+    if (d == DIR_UP) { return DIR_DOWN; }
+    if (d == DIR_DOWN) { return DIR_UP; }
+    if (d == DIR_TL) { return DIR_BR; }
+    if (d == DIR_TR) { return DIR_BL; }
+    if (d == DIR_BL) { return DIR_TR; }
+    if (d == DIR_BR) { return DIR_TL; }
+    return DIR_CENTER;
+}
+fn rand(id: u32) -> f32 {
+    var x = id ^ params.seed;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return f32(x) * (1.0 / 4294967296.0);
+}
+
+// Check if material 'me' can displace material 'other'
+fn can_displace(me: u32, other: u32) -> bool {
+    // Can move into air
+    if (other == MAT_AIR) { return true; }
+    // Denser materials sink through less dense materials
+    return MAT_DENSITY[me] > MAT_DENSITY[other];
+}
+
+@compute @workgroup_size(8, 8)
+fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x; let y = global_id.y;
+    if (x >= params.width || y >= params.height) { return; }
+    let idx = y * params.width + x;
+    let mat = get_pixel(idx);
+    var dir = DIR_CENTER;
+
+    // Skip immobile materials (air, stone)
+    if (MAT_MOBILE[mat] < 0.5) {
+        set_move(idx, DIR_CENTER);
+        return;
+    }
+    
+    let viscosity = MAT_VISCOSITY[mat];
+    let friction = MAT_FRICTION[mat];
+    let r = rand(idx + params.frame);
+    let r2 = rand(idx + params.frame);
+    
+    // High viscosity materials (fluids) - proper fluid behavior
+    if (viscosity > 0.5) {
+        // Priority 1: Fall straight down
+        if (y < params.height - 1u) {
+            let down = idx + params.width;
+            let down_mat = get_pixel(down);
+            let try_down_first = r2 < 0.9; // wind
+            if (try_down_first && can_displace(mat, down_mat)) {
+                dir = DIR_DOWN;
+            }
+            // Priority 2: Try diagonal down (with randomization for natural flow)
+            if (dir == DIR_CENTER) {
+                let try_left_first = r < 0.5;
+                if (try_left_first) {
+                    if (x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                    if (dir == DIR_CENTER && x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                } else {
+                    if (x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                    if (dir == DIR_CENTER && x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                }
+            }
+        }
+        // Priority 3: Spread horizontally into AIR - this is key for leveling!
+        // Water should flow sideways into air, even if sitting on top of more water
+        if (dir == DIR_CENTER) {
+            let try_left_first = r < 0.5;
+            if (try_left_first) {
+                if (x > 0u && get_pixel(idx - 1u) == MAT_AIR) { dir = DIR_LEFT; }
+                if (dir == DIR_CENTER && x < params.width - 1u && get_pixel(idx + 1u) == MAT_AIR) { dir = DIR_RIGHT; }
+            } else {
+                if (x < params.width - 1u && get_pixel(idx + 1u) == MAT_AIR) { dir = DIR_RIGHT; }
+                if (dir == DIR_CENTER && x > 0u && get_pixel(idx - 1u) == MAT_AIR) { dir = DIR_LEFT; }
+            }
+        }
+    } else {
+        // Granular behavior (sand): prefer falling straight down
+        if (y < params.height - 1u) {
+            let down = idx + params.width;
+            let down_mat = get_pixel(down);
+            if (can_displace(mat, down_mat)) { 
+                dir = DIR_DOWN; 
+            } else {
+                // Try diagonal based on friction (higher friction = harder to slide)
+                let slide_chance = 1.0 - friction;
+                if (r < slide_chance * 0.5) {
+                    let try_left = r < slide_chance * 0.25;
+                    if (try_left && x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                    else if (!try_left && x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                }
+            }
+        }
+    }
+    set_move(idx, dir);
+}
+
+fn get_priority(mat: u32) -> u32 {
+    // Priority based on density - denser materials win conflicts
+    return u32(MAT_DENSITY[mat]);
+}
+
+fn pick_winner(idx: u32, x: u32, y: u32) -> u32 {
+    var best_dir = DIR_CENTER; var best_prio = 0u; 
+    // UP (Moves Down)
+    if (y > 0u) {
+        let n = idx - params.width;
+        if (get_move(n) == DIR_DOWN) {
+           let p = get_priority(get_pixel(n));
+           if (p > best_prio) { best_prio = p; best_dir = DIR_UP; }
+        }
+        if (x > 0u) {
+            let n = idx - params.width - 1u;
+             if (get_move(n) == DIR_BR) {
+                let p = get_priority(get_pixel(n));
+                if (p > best_prio) { best_prio = p; best_dir = DIR_TL; }
+            }
+        }
+        if (x < params.width - 1u) {
+            let n = idx - params.width + 1u;
+            if (get_move(n) == DIR_BL) {
+                let p = get_priority(get_pixel(n));
+                if (p > best_prio) { best_prio = p; best_dir = DIR_TR; }
+            }
+        }
+    }
+    // SIDE
+    if (x > 0u) {
+        let n = idx - 1u;
+        if (get_move(n) == DIR_RIGHT) {
+            let p = get_priority(get_pixel(n)); 
+            if (p > best_prio) { best_prio = p; best_dir = DIR_LEFT; }
+        }
+    }
+    if (x < params.width - 1u) {
+        let n = idx + 1u;
+        if (get_move(n) == DIR_LEFT) {
+             let p = get_priority(get_pixel(n));
+             if (p > best_prio) { best_prio = p; best_dir = DIR_RIGHT; }
+        }
+    }
+    return best_dir;
+}
+
+fn get_neighbor_idx(idx: u32, dir: u32) -> u32 {
+    if (dir == DIR_UP) { return idx - params.width; }
+    if (dir == DIR_DOWN) { return idx + params.width; }
+    if (dir == DIR_LEFT) { return idx - 1u; }
+    if (dir == DIR_RIGHT) { return idx + 1u; }
+    if (dir == DIR_TL) { return idx - params.width - 1u; }
+    if (dir == DIR_TR) { return idx - params.width + 1u; }
+    if (dir == DIR_BL) { return idx + params.width - 1u; }
+    if (dir == DIR_BR) { return idx + params.width + 1u; }
+    return idx;
+}
+
+@compute @workgroup_size(8, 8)
+fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x; let y = global_id.y;
+    if (x >= params.width || y >= params.height) { return; }
+    let idx = y * params.width + x;
+    
+    var my_dir = get_move(idx);
+    var i_stay = true;
+
+    if (my_dir != DIR_CENTER) {
+        let target_idx = get_neighbor_idx(idx, my_dir);
+        let tx = x + select(0u, 1u, my_dir==DIR_RIGHT || my_dir==DIR_TR || my_dir==DIR_BR) - select(0u, 1u, my_dir==DIR_LEFT || my_dir==DIR_TL || my_dir==DIR_BL);
+        let ty = y + select(0u, 1u, my_dir==DIR_DOWN || my_dir==DIR_BL || my_dir==DIR_BR) - select(0u, 1u, my_dir==DIR_UP || my_dir==DIR_TL || my_dir==DIR_TR);
+        if (pick_winner(target_idx, tx, ty) == inverse_dir(my_dir)) { i_stay = false; }
+    }
+
+    var final_mat = MAT_AIR;
+    if (i_stay) { final_mat = get_pixel(idx); }
+    
+    let incoming_dir = pick_winner(idx, x, y);
+    if (incoming_dir != DIR_CENTER) {
+        let incoming_mat = get_pixel(get_neighbor_idx(idx, incoming_dir));
+        if (!i_stay) { 
+             final_mat = incoming_mat; 
+        } else {
+             // Denser materials displace less dense ones
+             if (final_mat == MAT_AIR) { 
+                 final_mat = incoming_mat; 
+             } else if (MAT_DENSITY[incoming_mat] > MAT_DENSITY[final_mat]) { 
+                 final_mat = incoming_mat; 
+             }
+        }
+    }
+    
+    let array_idx = idx / 4u; let shift = (idx % 4u) * 8u;
+    atomicOr(&nextState[array_idx], final_mat << shift);
+}
+    </script>
+
+    <script type="module">
+        /** CENTRALIZED MATERIALS MAP **/
+        const MATERIALS = {
+            AIR: { id: 0, color: '#111111', btnColor: '#eeeeee', textColor: 'black', density: 1.2, viscosity: 0.02, mobile: false, friction: 0.001 },
+            SAND: { id: 1, color: '#f4a261', btnColor: '#f4a261', textColor: 'white', density: 1600.0, viscosity: 0.4, mobile: true, friction: 0.7 },
+            WATER: { id: 2, color: '#2a9d8f', btnColor: '#2a9d8f', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02 },
+            STONE: { id: 3, color: '#555555', btnColor: '#555555', textColor: 'white', density: 2700.0, viscosity: 0.0, mobile: false, friction: 0.8 },
+        };
+
+        // Helper: Get material by ID
+        function getMaterialById(id) {
+            return Object.values(MATERIALS).find(m => m.id === id);
+        }
+
+        // Helper: Get color for a material ID (for editor/rendering)
+        function getColor(id) {
+            const mat = getMaterialById(id);
+            return mat ? mat.color : '#111111';
+        }
+
+        // Helper: Convert hex color to WGSL vec4
+        function hexToWgslVec4(hex) {
+            const r = parseInt(hex.slice(1, 3), 16) / 255;
+            const g = parseInt(hex.slice(3, 5), 16) / 255;
+            const b = parseInt(hex.slice(5, 7), 16) / 255;
+            return `vec4(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)},1.)`;
+        }
+
+        // Generate WGSL Material Constants
+        function generateMaterialWGSL() {
+            const names = Object.keys(MATERIALS);
+            const count = names.length;
+            let code = '// Material IDs (auto-generated)\n';
+            names.forEach((name, i) => {
+                code += `const MAT_${name}: u32 = ${i}u;\n`;
+            });
+            code += `const MAT_COUNT: u32 = ${count}u;\n\n`;
+
+            code += '// Material Properties (indexed by material ID)\n';
+            code += `const MAT_DENSITY = array<f32, ${count}>(${names.map(n => MATERIALS[n].density.toFixed(1)).join(', ')});\n`;
+            code += `const MAT_VISCOSITY = array<f32, ${count}>(${names.map(n => MATERIALS[n].viscosity.toFixed(2)).join(', ')});\n`;
+            code += `const MAT_MOBILE = array<f32, ${count}>(${names.map(n => MATERIALS[n].mobile ? '1.0' : '0.0').join(', ')});\n`;
+            code += `const MAT_FRICTION = array<f32, ${count}>(${names.map(n => MATERIALS[n].friction.toFixed(3)).join(', ')});\n`;
+            return code;
+        }
+
+        // Get complete simulation shader code
+        function getSimulationShaderCode() {
+            const template = document.getElementById('simulation-shader-template').textContent;
+            return template.replace('// MATERIALS_PLACEHOLDER', generateMaterialWGSL());
+        }
+
+        // Generate render shader color mapping
+        function generateRenderColorCode() {
+            let code = '';
+            Object.keys(MATERIALS).forEach(name => {
+                const mat = MATERIALS[name];
+                if (mat.id === 0) return; // AIR is handled as default
+                code += `if (val==${mat.id}u) {return ${hexToWgslVec4(mat.color)};}\n                        `;
+            });
+            return code;
+        }
+
+        // Generate color buttons dynamically
+        function generateMaterialButtons() {
+            const container = document.getElementById('material-colors');
+            // Sort by id but put AIR last for UI convenience
+            const sorted = Object.entries(MATERIALS)
+                .sort((a, b) => a[1].id - b[1].id)
+                .filter(([name]) => name !== 'AIR');
+            sorted.push(['AIR', MATERIALS.AIR]);
+
+            sorted.forEach(([name, mat], i) => {
+                const btn = document.createElement('button');
+                btn.className = 'color-btn' + (i === 0 ? ' active' : '');
+                btn.dataset.id = mat.id;
+                btn.style.background = mat.btnColor;
+                btn.style.color = mat.textColor;
+                btn.textContent = name.charAt(0) + name.slice(1).toLowerCase();
+                container.appendChild(btn);
+            });
+        }
+
+        // Map pixel color to material ID using exact color matching
+        function colorToMaterialId(r, g, b) {
+            const hex = '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+            for (const mat of Object.values(MATERIALS)) {
+                if (mat.color.toLowerCase() === hex.toLowerCase()) {
+                    return mat.id;
+                }
+            }
+            return MATERIALS.AIR.id;
+        }
+
+        /** NETWORK **/
+        class HostNetwork {
+            constructor() { this.peer = null; this.clients = []; this.msgHandlers = {}; }
+            async init() {
+                return new Promise((resolve, reject) => {
+                    this.peer = new Peer();
+                    this.peer.on('open', resolve);
+                    this.peer.on('connection', (conn) => {
+                        this.clients.push(conn);
+                        conn.on('data', (d) => this.msgHandlers[d.type] && this.msgHandlers[d.type](d.payload, conn));
+                        conn.on('close', () => this.clients = this.clients.filter(c => c !== conn));
+                        if (this.onConnect) this.onConnect(conn.peer);
+                    });
+                });
+            }
+            on(t, h) { this.msgHandlers[t] = h; }
+            broadcast(t, p) { this.clients.forEach(c => c.send({ type: t, payload: p })); }
+        }
+        class ClientNetwork {
+            constructor() { this.peer = null; this.conn = null; this.msgHandlers = {}; }
+            async connect(id) {
+                return new Promise((resolve) => {
+                    this.peer = new Peer();
+                    this.peer.on('open', () => {
+                        this.conn = this.peer.connect(id);
+                        this.conn.on('open', () => {
+                            this.conn.on('data', (d) => this.msgHandlers[d.type] && this.msgHandlers[d.type](d.payload));
+                            resolve();
+                        });
+                    });
+                });
+            }
+            on(t, h) { this.msgHandlers[t] = h; }
+            send(t, p) { if (this.conn) this.conn.send({ type: t, payload: p }); }
+        }
+
+        /** WEBGPU **/
+        class WebGPU {
+            constructor() { this.device = null; this.view = { x: 0, y: 0, zoom: 1 }; this.screen = { w: 1000, h: 1000 }; }
+            async init(canvas, w, h) {
+                this.width = w; this.height = h; this.canvas = canvas;
+                this.screen.w = canvas.width; this.screen.h = canvas.height;
+                if (!navigator.gpu) return alert("WebGPU not supported");
+                const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+                this.device = await adapter.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: 500 * 1024 * 1024, maxBufferSize: 500 * 1024 * 1024 } });
+                this.ctx = canvas.getContext('webgpu');
+                this.format = navigator.gpu.getPreferredCanvasFormat();
+                this.ctx.configure({ device: this.device, format: this.format, alphaMode: 'premultiplied' });
+                await this.initRes();
+                await this.initPipe();
+            }
+            setView(v) { this.view = v; }
+            setScreen(w, h) { this.screen.w = w; this.screen.h = h; }
+            async initRes() {
+                const s = this.width * this.height;
+                const ps = Math.ceil(s / 4) * 4;
+                this.bufA = this.buf(ps, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+                this.bufB = this.buf(ps, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
+                this.bufMove = this.buf(ps, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+                // 48 Bytes for SimParams (u32*2 + u32*2 + f32*3 + u32*2 + pad)
+                this.bufUni = this.buf(48, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+                this.idx = 0;
+            }
+            buf(s, u) { return this.device.createBuffer({ size: s, usage: u }); }
+            async initPipe() {
+                const module = this.device.createShaderModule({ code: getSimulationShaderCode() });
+                this.layout = this.device.createBindGroupLayout({
+                    entries: [
+                        { binding: 0, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+                    ]
+                });
+                this.pipeSim = this.compute(module, 'simulate');
+                this.pipeRes = this.compute(module, 'resolve');
+                this.bg0 = this.bg(this.bufA, this.bufB);
+                this.bg1 = this.bg(this.bufB, this.bufA);
+
+                // Generate render shader with dynamic material colors
+                const colorCode = generateRenderColorCode();
+                const rMod = this.device.createShaderModule({
+                    code: `
+                    struct VertexOutput { @builtin(position) Position : vec4<f32>, @location(0) uv : vec2<f32>, }
+                    @vertex fn vert(@builtin(vertex_index) i : u32) -> VertexOutput {
+                        var p = array<vec2<f32>, 6>(vec2(1.,1.), vec2(1.,-1.), vec2(-1.,-1.), vec2(1.,1.), vec2(-1.,-1.), vec2(-1.,1.));
+                        var o : VertexOutput; o.Position = vec4(p[i], 0., 1.); o.uv = p[i] * 0.5 + 0.5; o.uv.y = 1. - o.uv.y; return o;
+                    }
+                    struct Params { w:u32, h:u32, f:u32, s:u32, vx:f32, vy:f32, z:f32, sw:u32, sh:u32, p:u32 };
+                    @group(0) @binding(0) var<uniform> P : Params;
+                    @group(0) @binding(1) var<storage, read> S : array<u32>;
+                    @fragment fn frag(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
+                        let screen_x = uv.x * f32(P.sw);
+                        let screen_y = uv.y * f32(P.sh);
+                        let center_x = f32(P.sw) * 0.5;
+                        let center_y = f32(P.sh) * 0.5;
+                        let wx = (screen_x - center_x) / P.z + P.vx;
+                        let wy = (screen_y - center_y) / P.z + P.vy;
+                        if (wx < 0. || wy < 0. || wx >= f32(P.w) || wy >= f32(P.h)) { return ${hexToWgslVec4(MATERIALS.STONE.color)}; }
+                        let idx = u32(wy) * P.w + u32(wx);
+                        let val = (S[idx/4u] >> ((idx%4u)*8u)) & 0xFFu;
+                        ${colorCode}return ${hexToWgslVec4(MATERIALS.AIR.color)};
+                    }
+                `});
+                this.pipeRender = this.device.createRenderPipeline({
+                    layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.layout] }),
+                    vertex: { module: rMod, entryPoint: 'vert' },
+                    fragment: { module: rMod, entryPoint: 'frag', targets: [{ format: this.format }] },
+                    primitive: { topology: 'triangle-list' }
+                });
+            }
+            compute(m, e) { return this.device.createComputePipeline({ layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.layout] }), compute: { module: m, entryPoint: e } }); }
+            bg(inBuf, outBuf) { return this.device.createBindGroup({ layout: this.layout, entries: [{ binding: 0, resource: { buffer: this.bufUni } }, { binding: 1, resource: { buffer: inBuf } }, { binding: 2, resource: { buffer: this.bufMove } }, { binding: 3, resource: { buffer: outBuf } }] }); }
+
+            async step(c = 1, f = 0) {
+                if (!this.device) return;
+                const cmd = this.device.createCommandEncoder();
+                for (let i = 0; i < c; i++) {
+                    const bg = this.idx === 0 ? this.bg0 : this.bg1;
+                    const tgt = this.idx === 0 ? this.bufB : this.bufA;
+
+                    const buf = new ArrayBuffer(48);
+                    const dv = new DataView(buf);
+                    dv.setUint32(0, this.width, true); dv.setUint32(4, this.height, true);
+                    dv.setUint32(8, f + i, true); dv.setUint32(12, 12345, true);
+                    dv.setFloat32(16, this.view.x, true); dv.setFloat32(20, this.view.y, true);
+                    dv.setFloat32(24, this.view.zoom, true);
+                    dv.setUint32(28, this.screen.w, true); dv.setUint32(32, this.screen.h, true);
+                    this.device.queue.writeBuffer(this.bufUni, 0, buf);
+
+                    cmd.clearBuffer(this.bufMove); cmd.clearBuffer(tgt);
+                    const p1 = cmd.beginComputePass(); p1.setPipeline(this.pipeSim); p1.setBindGroup(0, bg);
+                    const wgX = Math.ceil(this.width / 8); const wgY = Math.ceil(this.height / 8);
+                    p1.dispatchWorkgroups(wgX, wgY); p1.end();
+
+                    const p2 = cmd.beginComputePass(); p2.setPipeline(this.pipeRes); p2.setBindGroup(0, bg);
+                    p2.dispatchWorkgroups(wgX, wgY); p2.end();
+                    this.idx = 1 - this.idx;
+                }
+                this.device.queue.submit([cmd.finish()]);
+            }
+            render() {
+                if (!this.device) return;
+                const cmd = this.device.createCommandEncoder();
+                const p = cmd.beginRenderPass({ colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' }] });
+                p.setPipeline(this.pipeRender); p.setBindGroup(0, this.idx === 0 ? this.bg0 : this.bg1); p.draw(6); p.end();
+                this.device.queue.submit([cmd.finish()]);
+            }
+            upload(u8) {
+                const u32 = new Uint32Array(Math.ceil(u8.length / 4));
+                for (let i = 0; i < u8.length; i++) u32[Math.floor(i / 4)] |= (u8[i] << ((i % 4) * 8));
+                this.device.queue.writeBuffer(this.bufA, 0, u32);
+                this.device.queue.writeBuffer(this.bufB, 0, new Uint32Array(u32.length));
+                this.idx = 0;
+            }
+        }
+
+        /** APP **/
+        const DOM = {
+            menu: document.getElementById('menu'), editor: document.getElementById('editor'), game: document.getElementById('game'),
+            editorCanvas: document.getElementById('editor-canvas'), gameCanvas: document.getElementById('game-canvas'),
+            ctx: document.getElementById('editor-canvas').getContext('2d', { willReadFrequently: true }),
+            fps: document.getElementById('fps-counter'), status: document.getElementById('status-msg')
+        };
+        const STATE = {
+            role: null, net: null, gpu: new WebGPU(), tool: 'brush', color: 1, brushSize: 10, isDrawing: false,
+            // View centers on MapCenter (1500,1500). Zoom 0.5 to see meaningful chunk.
+            view: { x: 1500, y: 1500, zoom: 0.5 },
+            isPanning: false, panStart: { x: 0, y: 0 },
+            mapWidth: 3000, mapHeight: 3000, simSteps: 0, frame: 0
+        };
+
+        DOM.editorCanvas.width = STATE.mapWidth; DOM.editorCanvas.height = STATE.mapHeight;
+        // Disable antialiasing to ensure crisp pixel edges that match exact material colors
+        DOM.ctx.imageSmoothingEnabled = false;
+
+        function resizeGame() {
+            if (STATE.role === 'client') {
+                DOM.gameCanvas.width = window.innerWidth;
+                DOM.gameCanvas.height = window.innerHeight;
+                STATE.gpu.setScreen(window.innerWidth, window.innerHeight);
+            }
+        }
+        window.onresize = resizeGame;
+
+        // --- Controls ---
+        function addControls(el, isEditor) {
+            el.addEventListener('wheel', (e) => {
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                STATE.view.zoom = Math.max(0.1, Math.min(10, STATE.view.zoom * delta));
+                if (isEditor) updateEditorTransform();
+            });
+            el.addEventListener('mousedown', (e) => {
+                if (e.button === 2) {
+                    STATE.isPanning = true;
+                    // Store Screen Mouse and Current View params
+                    STATE.panStart = { x: e.clientX, y: e.clientY, vx: STATE.view.x, vy: STATE.view.y };
+                    e.preventDefault();
+                } else if (e.button === 0 && isEditor) {
+                    STATE.isDrawing = true; paint(e);
+                }
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (STATE.isPanning) {
+                    // Pan logic:
+                    // DeltaWorld = DeltaScreen / Zoom
+                    // NewView = OldView - DeltaWorld (drag moves camera)
+                    const dx = e.clientX - STATE.panStart.x;
+                    const dy = e.clientY - STATE.panStart.y;
+                    STATE.view.x = STATE.panStart.vx - dx / STATE.view.zoom;
+                    STATE.view.y = STATE.panStart.vy - dy / STATE.view.zoom;
+
+                    if (isEditor) updateEditorTransform();
+                } else if (STATE.isDrawing && isEditor) {
+                    paint(e);
+                }
+            });
+            window.addEventListener('mouseup', () => { STATE.isPanning = false; STATE.isDrawing = false; });
+            el.addEventListener('contextmenu', e => e.preventDefault());
+        }
+
+        addControls(DOM.editorCanvas.parentElement, true);
+        addControls(DOM.gameCanvas, false); // For Client
+
+        function updateEditorTransform() {
+            // CSS Transform is Screen Space.
+            // Canvas(0,0) is at Top-Left of Container.
+            // We want (cx, cy) of Container to look at (vx, vy) of Canvas with Scale S.
+            // ScreenX = (CanvasX - ViewX) * S + CenterX
+            // CanvasX = 0 (Left edge)
+            // ScreenLeft = (0 - ViewX) * S + CenterX
+            // ScreenTop = (0 - ViewY) * S + CenterY
+
+            const container = DOM.editorCanvas.parentElement.getBoundingClientRect();
+            const cx = container.width / 2;
+            const cy = container.height / 2;
+
+            const tx = cx - STATE.view.x * STATE.view.zoom;
+            const ty = cy - STATE.view.y * STATE.view.zoom;
+
+            DOM.editorCanvas.style.transform = `translate(${tx}px, ${ty}px) scale(${STATE.view.zoom})`;
+        }
+
+        // Initial Editor Center
+        setTimeout(updateEditorTransform, 100);
+
+        function paint(e) {
+            if (STATE.tool === 'fill') return; // Click only for fill
+            // Editor Paint needs to match CSS transform inverse.
+            const container = DOM.editorCanvas.parentElement.getBoundingClientRect();
+            const cx = container.width / 2;
+            const cy = container.height / 2;
+
+            // Mouse Screen Pos relative to Container TopLeft
+            const mx = e.clientX - container.left;
+            const my = e.clientY - container.top;
+
+            // WorldX = (ScreenX - CenterX) / Zoom + ViewX
+            const wx = (mx - cx) / STATE.view.zoom + STATE.view.x;
+            const wy = (my - cy) / STATE.view.zoom + STATE.view.y;
+
+            DOM.ctx.fillStyle = getColor(STATE.color);
+            // Use fillRect instead of arc to avoid antialiasing
+            const size = STATE.brushSize;
+            DOM.ctx.fillRect(Math.floor(wx - size), Math.floor(wy - size), size * 2, size * 2);
+        }
+
+        // getColor is now defined in the centralized MATERIALS section above
+
+        // --- Logic ---
+        document.getElementById('btn-host-menu').onclick = () => {
+            document.getElementById('menu').classList.add('hidden'); document.getElementById('editor').classList.remove('hidden');
+            STATE.role = 'host'; STATE.net = new HostNetwork();
+            STATE.net.init().then(id => {
+                document.getElementById('invite-link').value = window.location.href.split('?')[0] + '?join=' + id;
+                DOM.ctx.fillStyle = '#111'; DOM.ctx.fillRect(0, 0, 3000, 3000);
+            });
+            STATE.net.onConnect = () => document.getElementById('client-count').innerText = `Clients: ${STATE.net.clients.length}`;
+            STATE.net.on('ready', (p, c) => c.isReady = true);
+        };
+
+        document.getElementById('btn-join').onclick = () => {
+            const id = document.getElementById('join-id').value; if (!id) return;
+            STATE.role = 'client'; document.getElementById('menu').classList.add('hidden'); document.getElementById('game').classList.remove('hidden');
+            initClient(id);
+        };
+
+        // Editor Fill (Needs Click Handler)
+        DOM.editorCanvas.parentElement.addEventListener('mousedown', (e) => {
+            if (STATE.tool !== 'fill' || e.button !== 0) return;
+            // Use paint logic to get World Coords, then floor.
+            const container = DOM.editorCanvas.parentElement.getBoundingClientRect();
+            const cx = container.width / 2; const cy = container.height / 2;
+            const mx = e.clientX - container.left; const my = e.clientY - container.top;
+            const wx = Math.floor((mx - cx) / STATE.view.zoom + STATE.view.x);
+            const wy = Math.floor((my - cy) / STATE.view.zoom + STATE.view.y);
+            fill(wx, wy);
+        });
+
+        function fill(x, y) {
+            const w = 3000, h = 3000; if (x < 0 || x >= w || y < 0 || y >= h) return;
+            const id = DOM.ctx.getImageData(0, 0, w, h); const d = id.data;
+            const hex = getColor(STATE.color);
+            const tr = parseInt(hex.slice(1, 3), 16), tg = parseInt(hex.slice(3, 5), 16), tb = parseInt(hex.slice(5, 7), 16);
+            const idx = (y * w + x) * 4;
+            const sr = d[idx], sg = d[idx + 1], sb = d[idx + 2];
+            if (sr === tr && sg === tg && sb === tb) return;
+            const stack = [x, y];
+
+            // Sanity limit to avoid crash on big fill
+            let count = 0;
+
+            while (stack.length && count < 1000000) {
+                count++;
+                const cy = stack.pop(), cx = stack.pop();
+                const i = (cy * w + cx) * 4;
+                if (cx < 0 || cx >= w || cy < 0 || cy >= h) continue;
+                if (d[i] === sr && d[i + 1] === sg && d[i + 2] === sb) {
+                    d[i] = tr; d[i + 1] = tg; d[i + 2] = tb; d[i + 3] = 255;
+                    stack.push(cx + 1, cy, cx - 1, cy, cx, cy + 1, cx, cy - 1);
+                }
+            }
+            DOM.ctx.putImageData(id, 0, 0);
+        }
+
+        document.getElementById('btn-start-host').onclick = () => {
+            const d = DOM.ctx.getImageData(0, 0, 3000, 3000).data;
+            const map = new Uint8Array(3000 * 3000);
+            for (let i = 0; i < d.length; i += 4) {
+                const r = d[i], g = d[i + 1], b = d[i + 2];
+                map[i / 4] = colorToMaterialId(r, g, b);
+            }
+            STATE.net.broadcast('map', { width: 3000, height: 3000, data: map });
+
+            if (!STATE.hostWorker) {
+                const worker = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage("tick"),50)'], { type: 'text/javascript' })));
+                worker.onmessage = () => {
+                    if (STATE.net.clients.length > 0 && STATE.net.clients.every(c => c.isReady)) {
+                        STATE.net.clients.forEach(c => c.isReady = false);
+                        STATE.net.broadcast('sync', {});
+                    }
+                };
+                STATE.hostWorker = worker;
+            }
+            document.getElementById('btn-start-host').innerText = "Update Map";
+        };
+
+        // Initialize material buttons dynamically from MATERIALS map
+        generateMaterialButtons();
+
+        // Tools
+        document.querySelectorAll('.tool-btn').forEach(b => b.onclick = () => {
+            document.querySelectorAll('.tool-btn').forEach(x => x.classList.remove('active'));
+            b.classList.add('active'); STATE.tool = b.dataset.tool;
+        });
+        document.querySelectorAll('.color-btn').forEach(b => b.onclick = () => {
+            document.querySelectorAll('.color-btn').forEach(x => x.classList.remove('active'));
+            b.classList.add('active'); STATE.color = parseInt(b.dataset.id);
+        });
+        document.getElementById('brush-size').oninput = e => { STATE.brushSize = parseInt(e.target.value); document.getElementById('brush-size-val').innerText = STATE.brushSize; };
+
+        // Client
+        async function initClient(id) {
+            STATE.net = new ClientNetwork();
+            await STATE.net.connect(id);
+            DOM.status.innerText = "Connected. Waiting for map...";
+            console.log("Connect to", id);
+            STATE.net.on('map', async (p) => {
+                STATE.mapWidth = p.width; STATE.mapHeight = p.height;
+                resizeGame(); // Set size
+                await STATE.gpu.init(DOM.gameCanvas, p.width, p.height);
+                STATE.gpu.upload(p.data);
+                DOM.status.innerText = "Playing";
+                STATE.net.send('ready', {});
+                loop();
+            });
+            // STATE.net.on('sync', () => STATE.simSteps += 3);
+            STATE.net.on('sync', () => STATE.simSteps += 3);
+        }
+
+        let frames = 0, lastT = performance.now();
+        function loop() {
+            requestAnimationFrame(loop);
+            frames++;
+            if (performance.now() - lastT >= 1000) { DOM.fps.innerText = `FPS: ${frames}`; frames = 0; lastT = performance.now(); }
+
+            if (STATE.simSteps > 0) {
+                STATE.gpu.step(STATE.simSteps, STATE.frame);
+                STATE.frame += STATE.simSteps;
+                STATE.simSteps = 0;
+                STATE.net.send('ready', {});
+            }
+            STATE.gpu.setView(STATE.view);
+            STATE.gpu.render();
+        }
+
+        // Auto Join
+        if (new URLSearchParams(window.location.search).get('join')) {
+            document.getElementById('join-id').value = new URLSearchParams(window.location.search).get('join');
+            setTimeout(() => document.getElementById('btn-join').click(), 500);
+        }
+    </script>
+</body>
+
+</html>
