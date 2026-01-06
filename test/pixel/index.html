@@ -242,13 +242,24 @@ fn rand(id: u32) -> f32 {
     return f32(x) * (1.0 / 4294967296.0);
 }
 
-// Check if material 'me' can displace material 'other'
-fn can_displace(me: u32, other: u32) -> bool {
-    // Can move into air
-    if (other == MAT_AIR) { return true; }
-    // Denser materials sink through less dense materials
+// Check if material 'me' can displace material 'other' when falling
+fn can_fall_into(me: u32, other: u32) -> bool {
+    // Can only fall into empty space if we're denser than the empty material
+    if (MAT_IS_EMPTY[other] > 0.5) { 
+        // Get the density of the empty material (usually air)
+        return MAT_DENSITY[me] > MAT_DENSITY[other];
+    }
+    // Otherwise, denser materials sink through less dense materials
     return MAT_DENSITY[me] > MAT_DENSITY[other];
 }
+
+// Check if material 'me' can rise through material 'other' (buoyancy)
+fn can_rise_into(me: u32, other: u32) -> bool {
+    // Can rise through anything we're lighter than
+    return MAT_DENSITY[me] < MAT_DENSITY[other];
+}
+
+// TRANSFORMATIONS_PLACEHOLDER
 
 @compute @workgroup_size(8, 8)
 fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -271,36 +282,44 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // High viscosity materials (fluids) - proper fluid behavior
     if (viscosity > 0.5) {
-        // Priority 1: Fall straight down
-        if (y < params.height - 1u) {
+        // Check buoyancy first - rise if we're lighter than what's above
+        if (y > 0u) {
+            let up = idx - params.width;
+            let up_mat = get_pixel(up);
+            // Rise through denser materials (buoyancy)
+            if (can_rise_into(mat, up_mat)) {
+                dir = DIR_UP;
+            }
+        }
+        // Priority 1: Fall straight down (only if not rising)
+        if (dir == DIR_CENTER && y < params.height - 1u) {
             let down = idx + params.width;
             let down_mat = get_pixel(down);
             let try_down_first = r2 < 0.9; // wind
-            if (try_down_first && can_displace(mat, down_mat)) {
+            if (try_down_first && can_fall_into(mat, down_mat)) {
                 dir = DIR_DOWN;
             }
             // Priority 2: Try diagonal down (with randomization for natural flow)
             if (dir == DIR_CENTER) {
                 let try_left_first = r < 0.5;
                 if (try_left_first) {
-                    if (x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
-                    if (dir == DIR_CENTER && x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                    if (x > 0u && can_fall_into(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                    if (dir == DIR_CENTER && x < params.width - 1u && can_fall_into(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
                 } else {
-                    if (x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
-                    if (dir == DIR_CENTER && x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                    if (x < params.width - 1u && can_fall_into(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                    if (dir == DIR_CENTER && x > 0u && can_fall_into(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
                 }
             }
         }
-        // Priority 3: Spread horizontally into AIR - this is key for leveling!
-        // Water should flow sideways into air, even if sitting on top of more water
+        // Priority 3: Spread horizontally into empty space - this is key for leveling!
         if (dir == DIR_CENTER) {
             let try_left_first = r < 0.5;
             if (try_left_first) {
-                if (x > 0u && get_pixel(idx - 1u) == MAT_AIR) { dir = DIR_LEFT; }
-                if (dir == DIR_CENTER && x < params.width - 1u && get_pixel(idx + 1u) == MAT_AIR) { dir = DIR_RIGHT; }
+                if (x > 0u && MAT_IS_EMPTY[get_pixel(idx - 1u)] > 0.5) { dir = DIR_LEFT; }
+                if (dir == DIR_CENTER && x < params.width - 1u && MAT_IS_EMPTY[get_pixel(idx + 1u)] > 0.5) { dir = DIR_RIGHT; }
             } else {
-                if (x < params.width - 1u && get_pixel(idx + 1u) == MAT_AIR) { dir = DIR_RIGHT; }
-                if (dir == DIR_CENTER && x > 0u && get_pixel(idx - 1u) == MAT_AIR) { dir = DIR_LEFT; }
+                if (x < params.width - 1u && MAT_IS_EMPTY[get_pixel(idx + 1u)] > 0.5) { dir = DIR_RIGHT; }
+                if (dir == DIR_CENTER && x > 0u && MAT_IS_EMPTY[get_pixel(idx - 1u)] > 0.5) { dir = DIR_LEFT; }
             }
         }
     } else {
@@ -308,15 +327,15 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (y < params.height - 1u) {
             let down = idx + params.width;
             let down_mat = get_pixel(down);
-            if (can_displace(mat, down_mat)) { 
+            if (can_fall_into(mat, down_mat)) { 
                 dir = DIR_DOWN; 
             } else {
                 // Try diagonal based on friction (higher friction = harder to slide)
                 let slide_chance = 1.0 - friction;
                 if (r < slide_chance * 0.5) {
                     let try_left = r < slide_chance * 0.25;
-                    if (try_left && x > 0u && can_displace(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
-                    else if (!try_left && x < params.width - 1u && can_displace(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
+                    if (try_left && x > 0u && can_fall_into(mat, get_pixel(down - 1u))) { dir = DIR_BL; }
+                    else if (!try_left && x < params.width - 1u && can_fall_into(mat, get_pixel(down + 1u))) { dir = DIR_BR; }
                 }
             }
         }
@@ -326,12 +345,13 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 fn get_priority(mat: u32) -> u32 {
     // Priority based on density - denser materials win conflicts
-    return u32(MAT_DENSITY[mat]);
+    // Add 1 to ensure priority is never 0 (so materials with density < 1 can still win)
+    return u32(MAT_DENSITY[mat]) + 1u;
 }
 
 fn pick_winner(idx: u32, x: u32, y: u32) -> u32 {
     var best_dir = DIR_CENTER; var best_prio = 0u; 
-    // UP (Moves Down)
+    // UP (neighbor Moves Down into this cell)
     if (y > 0u) {
         let n = idx - params.width;
         if (get_move(n) == DIR_DOWN) {
@@ -351,6 +371,14 @@ fn pick_winner(idx: u32, x: u32, y: u32) -> u32 {
                 let p = get_priority(get_pixel(n));
                 if (p > best_prio) { best_prio = p; best_dir = DIR_TR; }
             }
+        }
+    }
+    // DOWN (neighbor Moves Up into this cell - for buoyancy)
+    if (y < params.height - 1u) {
+        let n = idx + params.width;
+        if (get_move(n) == DIR_UP) {
+            let p = get_priority(get_pixel(n));
+            if (p > best_prio) { best_prio = p; best_dir = DIR_DOWN; }
         }
     }
     // SIDE
@@ -396,25 +424,72 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let target_idx = get_neighbor_idx(idx, my_dir);
         let tx = x + select(0u, 1u, my_dir==DIR_RIGHT || my_dir==DIR_TR || my_dir==DIR_BR) - select(0u, 1u, my_dir==DIR_LEFT || my_dir==DIR_TL || my_dir==DIR_BL);
         let ty = y + select(0u, 1u, my_dir==DIR_DOWN || my_dir==DIR_BL || my_dir==DIR_BR) - select(0u, 1u, my_dir==DIR_UP || my_dir==DIR_TL || my_dir==DIR_TR);
-        if (pick_winner(target_idx, tx, ty) == inverse_dir(my_dir)) { i_stay = false; }
+        
+        // Check if we win the bid at the target cell
+        let we_win = pick_winner(target_idx, tx, ty) == inverse_dir(my_dir);
+        
+        // Target must accept us. Two valid cases:
+        // 1. Target is empty (can always move into empty)
+        // 2. Target is doing a TRUE SWAP with us AND we would accept them
+        let target_mat = get_pixel(target_idx);
+        let target_is_empty = MAT_IS_EMPTY[target_mat] > 0.5;
+        let target_move = get_move(target_idx);
+        // For a true swap, target must be trying to move to where WE are
+        let target_wants_to_swap = target_move == inverse_dir(my_dir);
+        // AND they must win at OUR position (pick_winner returns direction FROM which winner comes)
+        let they_win_here = pick_winner(idx, x, y) == inverse_dir(target_move);
+        let is_valid_swap = target_wants_to_swap && they_win_here;
+        
+        // Only leave if we win AND (target is empty OR it's a valid mutual swap)
+        if (we_win && (target_is_empty || is_valid_swap)) { i_stay = false; }
     }
 
-    var final_mat = MAT_AIR;
-    if (i_stay) { final_mat = get_pixel(idx); }
+    var final_mat = EMPTY_MAT;
+    let my_mat = get_pixel(idx);
+    if (i_stay) { final_mat = my_mat; }
+    
+    // Check for reactive neighbors (adjacent materials that can transform)
+    // This allows reactive materials to transform when adjacent
+    if (MAT_IS_EMPTY[final_mat] < 0.5) {
+        let transform_rand = rand(idx + params.frame * 17u);
+        var transformed = false;
+        
+        // Check all 4 direct neighbors for reactive pairs
+        if (!transformed && y > 0u) { 
+            let n_mat = get_pixel(idx - params.width);
+            let t = check_transformation(final_mat, n_mat, transform_rand);
+            if (t != 255u) { final_mat = t; transformed = true; }
+        }
+        if (!transformed && y < params.height - 1u) { 
+            let n_mat = get_pixel(idx + params.width);
+            let t = check_transformation(final_mat, n_mat, transform_rand);
+            if (t != 255u) { final_mat = t; transformed = true; }
+        }
+        if (!transformed && x > 0u) { 
+            let n_mat = get_pixel(idx - 1u);
+            let t = check_transformation(final_mat, n_mat, transform_rand);
+            if (t != 255u) { final_mat = t; transformed = true; }
+        }
+        if (!transformed && x < params.width - 1u) { 
+            let n_mat = get_pixel(idx + 1u);
+            let t = check_transformation(final_mat, n_mat, transform_rand);
+            if (t != 255u) { final_mat = t; transformed = true; }
+        }
+    }
     
     let incoming_dir = pick_winner(idx, x, y);
     if (incoming_dir != DIR_CENTER) {
         let incoming_mat = get_pixel(get_neighbor_idx(idx, incoming_dir));
+        // Only accept incoming material if we're leaving (i_stay == false)
+        // OR if we're empty - this preserves material conservation
         if (!i_stay) { 
-             final_mat = incoming_mat; 
-        } else {
-             // Denser materials displace less dense ones
-             if (final_mat == MAT_AIR) { 
-                 final_mat = incoming_mat; 
-             } else if (MAT_DENSITY[incoming_mat] > MAT_DENSITY[final_mat]) { 
-                 final_mat = incoming_mat; 
-             }
+            final_mat = incoming_mat; 
+        } else if (MAT_IS_EMPTY[final_mat] > 0.5) { 
+            // Empty space can accept incoming materials
+            final_mat = incoming_mat; 
         }
+        // If we're staying and not empty, the incoming material doesn't enter
+        // (it will stay in its original position since it didn't win here)
     }
     
     let array_idx = idx / 4u; let shift = (idx % 4u) * 8u;
@@ -425,10 +500,22 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
     <script type="module">
         /** CENTRALIZED MATERIALS MAP **/
         const MATERIALS = {
-            AIR: { id: 0, color: '#111111', btnColor: '#eeeeee', textColor: 'black', density: 1.2, viscosity: 0.02, mobile: false, friction: 0.001 },
-            SAND: { id: 1, color: '#f4a261', btnColor: '#f4a261', textColor: 'white', density: 1600.0, viscosity: 0.4, mobile: true, friction: 0.7 },
-            WATER: { id: 2, color: '#2a9d8f', btnColor: '#2a9d8f', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02 },
-            STONE: { id: 3, color: '#555555', btnColor: '#555555', textColor: 'white', density: 2700.0, viscosity: 0.0, mobile: false, friction: 0.8 },
+            AIR: { id: 0, color: '#111111', btnColor: '#eeeeee', textColor: 'black', density: 1.2, viscosity: 0.02, mobile: false, friction: 0.001, isEmpty: true },
+            SAND: { id: 1, color: '#f4a261', btnColor: '#f4a261', textColor: 'white', density: 1600.0, viscosity: 0.4, mobile: true, friction: 0.7, isEmpty: false },
+            WATER: { id: 2, color: '#2a9d8f', btnColor: '#2a9d8f', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
+            STONE: { id: 3, color: '#555555', btnColor: '#555555', textColor: 'white', density: 2700.0, viscosity: 0.0, mobile: false, friction: 0.8, isEmpty: false },
+            LAVA: { id: 4, color: '#e76f51', btnColor: '#e76f51', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
+            STEAM: { id: 5, color: '#aabbcc', btnColor: '#aabbcc', textColor: 'black', density: 0.6, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
+        };
+
+        /** MATERIAL TRANSFORMATIONS MAP **/
+        // Format: "MAT1 MAT2" -> [[probability, resultMaterial], ...]
+        // Order of materials doesn't matter - will be normalized to alphabetical
+        // When MAT1 and MAT2 collide, roll probability to determine result
+        // Probabilities should sum to <= 1.0 (remainder = no transformation)
+        const MATERIAL_TRANSFORMATIONS = {
+            "WATER LAVA": [[0.9, "STONE"]],
+            // "WATER LAVA": [[0.9, "STONE"], [0.05, "STEAM"]],
         };
 
         // Helper: Get material by ID
@@ -458,20 +545,76 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
             names.forEach((name, i) => {
                 code += `const MAT_${name}: u32 = ${i}u;\n`;
             });
-            code += `const MAT_COUNT: u32 = ${count}u;\n\n`;
+            code += `const MAT_COUNT: u32 = ${count}u;\n`;
+
+            // Find the empty material (first one with isEmpty=true)
+            const emptyMat = names.find(n => MATERIALS[n].isEmpty);
+            const emptyId = emptyMat ? MATERIALS[emptyMat].id : 0;
+            code += `const EMPTY_MAT: u32 = ${emptyId}u;\n\n`;
 
             code += '// Material Properties (indexed by material ID)\n';
             code += `const MAT_DENSITY = array<f32, ${count}>(${names.map(n => MATERIALS[n].density.toFixed(1)).join(', ')});\n`;
             code += `const MAT_VISCOSITY = array<f32, ${count}>(${names.map(n => MATERIALS[n].viscosity.toFixed(2)).join(', ')});\n`;
             code += `const MAT_MOBILE = array<f32, ${count}>(${names.map(n => MATERIALS[n].mobile ? '1.0' : '0.0').join(', ')});\n`;
             code += `const MAT_FRICTION = array<f32, ${count}>(${names.map(n => MATERIALS[n].friction.toFixed(3)).join(', ')});\n`;
+            code += `const MAT_IS_EMPTY = array<f32, ${count}>(${names.map(n => MATERIALS[n].isEmpty ? '1.0' : '0.0').join(', ')});\n`;
+            return code;
+        }
+
+        // Generate WGSL code for material transformations
+        function generateTransformationWGSL() {
+            const names = Object.keys(MATERIALS);
+            let code = '// Material Transformation Function (auto-generated)\n';
+            code += 'fn check_transformation(mat1: u32, mat2: u32, r: f32) -> u32 {\n';
+            code += '    // Sort material IDs so order doesn\'t matter\n';
+            code += '    let lo = min(mat1, mat2);\n';
+            code += '    let hi = max(mat1, mat2);\n';
+            code += '    let pair = lo * MAT_COUNT + hi; // Unique pair ID\n\n';
+
+            // Generate cases for each transformation rule
+            let hasRules = false;
+            for (const [key, rules] of Object.entries(MATERIAL_TRANSFORMATIONS)) {
+                const [name1, name2] = key.split(' ').sort(); // Sort alphabetically
+                const id1 = MATERIALS[name1]?.id;
+                const id2 = MATERIALS[name2]?.id;
+                if (id1 === undefined || id2 === undefined) continue;
+
+                const lo = Math.min(id1, id2);
+                const hi = Math.max(id1, id2);
+                const pairId = lo * names.length + hi;
+
+                if (!hasRules) {
+                    code += '    ';
+                    hasRules = true;
+                } else {
+                    code += ' else ';
+                }
+                code += `if (pair == ${pairId}u) { // ${name1} + ${name2}\n`;
+
+                let cumProb = 0;
+                rules.forEach(([prob, resultName], i) => {
+                    const resultId = MATERIALS[resultName]?.id ?? 0;
+                    cumProb += prob;
+                    if (i === 0) {
+                        code += `        if (r < ${cumProb.toFixed(3)}) { return ${resultId}u; } // ${resultName}\n`;
+                    } else {
+                        code += `        else if (r < ${cumProb.toFixed(3)}) { return ${resultId}u; } // ${resultName}\n`;
+                    }
+                });
+                code += '    }';
+            }
+
+            code += '\n    return 255u; // No transformation (sentinel value)\n';
+            code += '}\n';
             return code;
         }
 
         // Get complete simulation shader code
         function getSimulationShaderCode() {
             const template = document.getElementById('simulation-shader-template').textContent;
-            return template.replace('// MATERIALS_PLACEHOLDER', generateMaterialWGSL());
+            return template
+                .replace('// MATERIALS_PLACEHOLDER', generateMaterialWGSL())
+                .replace('// TRANSFORMATIONS_PLACEHOLDER', generateTransformationWGSL());
         }
 
         // Generate render shader color mapping
