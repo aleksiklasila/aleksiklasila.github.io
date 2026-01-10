@@ -123,6 +123,21 @@
             outline: 2px solid white;
         }
 
+        .save-load-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .save-load-container button {
+            flex: 1;
+            background: #3a3a3a;
+        }
+
+        .save-load-container button:hover {
+            background: #4a4a4a;
+        }
+
         /* Game */
         #game-canvas {
             width: 100%;
@@ -167,7 +182,11 @@
                 <input type="range" id="brush-size" min="1" max="100" value="10">
             </div>
             <div class="actions">
-                <p>Right Click to Pan<br>Scroll to Zoom</p>
+                <div class="save-load-container">
+                    <button id="btn-save-map">Save Map</button>
+                    <button id="btn-load-map">Load Map</button>
+                    <input type="file" id="load-file-input" accept=".json" style="display: none;">
+                </div>
                 <button id="btn-start-host" class="primary">Start Game</button>
                 <div id="host-info">
                     <input type="text" id="invite-link" readonly>
@@ -282,13 +301,31 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // High viscosity materials (fluids) - proper fluid behavior
     if (viscosity > 0.5) {
+        // Virtual turbulence: random deflection to break up vertical columns
+        // Lower friction = more turbulence (water ~24%, steam ~24%, lava varies)
+        let turbulence_chance = (1.0 - friction) * 0.25;
+        let r3 = rand(idx + params.frame * 7u);
+        let apply_turbulence = r3 < turbulence_chance;
+        
         // Check buoyancy first - rise if we're lighter than what's above
         if (y > 0u) {
             let up = idx - params.width;
             let up_mat = get_pixel(up);
             // Rise through denser materials (buoyancy)
             if (can_rise_into(mat, up_mat)) {
-                dir = DIR_UP;
+                // Apply turbulence: randomly deflect rising particles diagonally
+                if (apply_turbulence) {
+                    let deflect_left = r < 0.5;
+                    if (deflect_left && x > 0u && can_rise_into(mat, get_pixel(up - 1u))) {
+                        dir = DIR_TL;
+                    } else if (!deflect_left && x < params.width - 1u && can_rise_into(mat, get_pixel(up + 1u))) {
+                        dir = DIR_TR;
+                    } else {
+                        dir = DIR_UP;
+                    }
+                } else {
+                    dir = DIR_UP;
+                }
             }
         }
         
@@ -298,7 +335,19 @@ fn simulate(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let down_mat = get_pixel(down);
             let try_down_first = r2 < 0.9; // wind
             if (try_down_first && can_fall_into(mat, down_mat)) {
-                dir = DIR_DOWN;
+                // Apply turbulence: randomly deflect falling particles diagonally
+                if (apply_turbulence) {
+                    let deflect_left = r < 0.5;
+                    if (deflect_left && x > 0u && can_fall_into(mat, get_pixel(down - 1u))) {
+                        dir = DIR_BL;
+                    } else if (!deflect_left && x < params.width - 1u && can_fall_into(mat, get_pixel(down + 1u))) {
+                        dir = DIR_BR;
+                    } else {
+                        dir = DIR_DOWN;
+                    }
+                } else {
+                    dir = DIR_DOWN;
+                }
             }
             // Priority 2: Try diagonal down (with randomization for natural flow)
             if (dir == DIR_CENTER) {
@@ -525,7 +574,7 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
         const MATERIALS = {
             AIR: { id: 0, color: '#111111', btnColor: '#eeeeee', textColor: 'black', density: 1.2, viscosity: 0.02, mobile: false, friction: 0.001, isEmpty: true },
             SAND: { id: 1, color: '#f4a261', btnColor: '#f4a261', textColor: 'white', density: 1600.0, viscosity: 0.4, mobile: true, friction: 0.7, isEmpty: false },
-            WATER: { id: 2, color: '#2a9d8f', btnColor: '#2a9d8f', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
+            WATER: { id: 2, color: '#2a9d8f', btnColor: '#2a9d8f', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.0001, isEmpty: false },
             STONE: { id: 3, color: '#555555', btnColor: '#555555', textColor: 'white', density: 2700.0, viscosity: 0.0, mobile: false, friction: 0.8, isEmpty: false },
             LAVA: { id: 4, color: '#e76f51', btnColor: '#e76f51', textColor: 'white', density: 1000.0, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
             STEAM: { id: 5, color: '#aabbcc', btnColor: '#aabbcc', textColor: 'black', density: 0.6, viscosity: 1.0, mobile: true, friction: 0.02, isEmpty: false },
@@ -537,8 +586,8 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // When MAT1 and MAT2 collide, roll probability to determine result
         // Probabilities should sum to <= 1.0 (remainder = no transformation)
         const MATERIAL_TRANSFORMATIONS = {
-            "WATER LAVA": [[0.9, "STONE"]],
-            // "WATER LAVA": [[0.9, "STONE"], [0.05, "STEAM"]],
+            // "WATER LAVA": [[0.9, "STONE"]],
+            "WATER LAVA": [[0.9, "STONE"], [0.05, "STEAM"]],
         };
 
         // Helper: Get material by ID
@@ -1042,6 +1091,87 @@ fn resolve(@builtin(global_invocation_id) global_id: vec3<u32>) {
             b.classList.add('active'); STATE.color = parseInt(b.dataset.id);
         });
         document.getElementById('brush-size').oninput = e => { STATE.brushSize = parseInt(e.target.value); document.getElementById('brush-size-val').innerText = STATE.brushSize; };
+
+        // Save/Load Map functionality
+        document.getElementById('btn-save-map').onclick = () => {
+            // Get canvas data as base64
+            const mapDataUrl = DOM.editorCanvas.toDataURL('image/png');
+
+            // Create game data object (extensible for future additions)
+            const gameData = {
+                version: 1,
+                map: {
+                    width: STATE.mapWidth,
+                    height: STATE.mapHeight,
+                    data: mapDataUrl  // base64 encoded PNG
+                },
+                // Future extensibility: textures, resources, game settings, etc.
+                // textures: {},
+                // resources: {},
+                // settings: {}
+            };
+
+            // Create and download JSON file
+            const jsonStr = JSON.stringify(gameData, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pixel-sim-map-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        document.getElementById('btn-load-map').onclick = () => {
+            document.getElementById('load-file-input').click();
+        };
+
+        document.getElementById('load-file-input').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const gameData = JSON.parse(event.target.result);
+
+                    // Validate basic structure
+                    if (!gameData.map || !gameData.map.data) {
+                        alert('Invalid save file: missing map data');
+                        return;
+                    }
+
+                    // Load the map image
+                    const img = new Image();
+                    img.onload = () => {
+                        // Update map dimensions if they differ
+                        if (gameData.map.width && gameData.map.height) {
+                            STATE.mapWidth = gameData.map.width;
+                            STATE.mapHeight = gameData.map.height;
+                            DOM.editorCanvas.width = STATE.mapWidth;
+                            DOM.editorCanvas.height = STATE.mapHeight;
+                        }
+
+                        // Draw the loaded image to the canvas
+                        DOM.ctx.imageSmoothingEnabled = false;
+                        DOM.ctx.drawImage(img, 0, 0);
+
+                        console.log('Map loaded successfully');
+                    };
+                    img.onerror = () => {
+                        alert('Failed to load map image from save file');
+                    };
+                    img.src = gameData.map.data;
+
+                } catch (err) {
+                    alert('Failed to parse save file: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+
+            // Reset file input so the same file can be loaded again
+            e.target.value = '';
+        };
 
         // Client
         async function initClient(id) {
