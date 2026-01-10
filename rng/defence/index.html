@@ -3,49 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Maze Defense: Hard Mode</title>
+    <title>Maze Defense: Architect</title>
     <style>
         * { box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
-        body { margin: 0; padding: 0; background: #1a1a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; color: white; }
+        body { margin: 0; padding: 0; background: #111; overflow: hidden; font-family: 'Segoe UI', monospace; color: white; }
         
         /* Game Canvas */
-        #gameCanvas { display: block; margin: 0 auto; background: #222; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #gameCanvas { display: block; margin: 0 auto; background: #1a1a1a; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
 
         /* UI Overlay */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
         
         /* Top HUD */
-        #hud { background: rgba(0,0,0,0.8); padding: 10px 15px; display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; pointer-events: auto; border-bottom: 1px solid #444; }
-        .stat { display: flex; align-items: center; gap: 8px; text-transform: uppercase; font-size: 14px; letter-spacing: 1px;}
-        #wave-btn { background: #29b; color: white; border: none; padding: 5px 15px; border-radius: 4px; font-weight: bold; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #157; transition: transform 0.1s; }
+        #hud { background: rgba(0,0,0,0.85); padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; pointer-events: auto; border-bottom: 2px solid #333; }
+        .stat { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; letter-spacing: 1px;}
+        #wave-btn { background: #0077ff; color: white; border: none; padding: 8px 20px; border-radius: 4px; font-weight: 900; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #004499; transition: transform 0.1s; text-transform: uppercase; }
         #wave-btn:active { transform: translateY(4px); box-shadow: none; }
 
         /* Bottom Controls */
-        #controls { pointer-events: auto; background: rgba(0,0,0,0.9); padding: 10px; overflow-x: auto; display: flex; gap: 10px; height: 90px; align-items: center; border-top: 1px solid #444; }
-        .card-slot { min-width: 65px; height: 70px; border: 2px solid #555; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; background: #333; position: relative; transition: 0.1s; }
-        .card-slot.selected { border-color: #0f0; background: #1a1; transform: translateY(-5px); }
-        .card-slot span { margin-top: 4px; font-weight: bold; }
-        .count-badge { position: absolute; top: -8px; right: -8px; background: #e33; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; border: 2px solid #222; }
+        #controls { pointer-events: auto; background: rgba(0,0,0,0.95); padding: 8px; overflow-x: auto; display: flex; gap: 8px; height: 100px; align-items: center; border-top: 2px solid #333; }
+        .card-slot { min-width: 70px; height: 80px; border: 2px solid #444; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; background: #222; position: relative; transition: 0.1s; }
+        .card-slot.selected { border-color: #0f0; background: #153315; transform: translateY(-5px); box-shadow: 0 0 10px #0f0; }
+        .card-slot span { margin-top: 4px; font-weight: bold; text-align: center; }
+        .card-slot .icon { font-size: 20px; margin-bottom: 2px; }
+        .count-badge { position: absolute; top: -6px; right: -6px; background: #f00; color: white; border-radius: 4px; padding: 2px 6px; font-size: 12px; font-weight: bold; border: 1px solid white; }
 
         /* Draft Overlay */
-        #draft-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; backdrop-filter: blur(5px); }
-        #draft-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 20px; width: 100%; max-width: 600px; }
-        .draft-card { background: linear-gradient(135deg, #444, #333); border: 2px solid #666; padding: 15px; border-radius: 8px; text-align: center; cursor: pointer; position: relative; overflow: hidden; }
+        #draft-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; backdrop-filter: blur(8px); }
+        #draft-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 10px; width: 100%; max-width: 600px; }
+        .draft-card { background: linear-gradient(145deg, #333, #222); border: 1px solid #555; padding: 15px; border-radius: 4px; text-align: center; cursor: pointer; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
         .draft-card:active { transform: scale(0.96); }
-        .draft-card.picked { border-color: gold; background: #650; opacity: 0.4; pointer-events: none; }
-        .draft-card h3 { margin: 0 0 8px 0; font-size: 15px; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
-        .draft-card p { margin: 0; font-size: 12px; color: #bbb; line-height: 1.4; }
+        .draft-card.picked { border-color: gold; background: #443300; opacity: 0.3; pointer-events: none; }
+        .draft-card h3 { margin: 0 0 5px 0; font-size: 14px; color: #fff; text-transform: uppercase; }
+        .draft-card p { margin: 0; font-size: 11px; color: #aaa; line-height: 1.3; }
         
-        #message-overlay { position: absolute; top: 35%; width: 100%; text-align: center; font-size: 32px; font-weight: 900; color: white; text-shadow: 0 4px 10px black; pointer-events: none; opacity: 0; transition: opacity 0.4s; transform: scale(1.2); letter-spacing: 2px; }
+        #message-overlay { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 28px; font-weight: 900; color: white; text-shadow: 0 0 10px #000; pointer-events: none; opacity: 0; transition: opacity 0.3s; letter-spacing: 3px; background: rgba(0,0,0,0.6); padding: 20px 0; }
     </style>
 </head>
 <body>
 
     <div id="ui-layer">
         <div id="hud">
-            <div class="stat" style="color:#f55">❤ <span id="hp-display">20</span></div>
-            <div class="stat" style="color:#4af">Wave <span id="wave-display">1</span></div>
-            <button id="wave-btn">START WAVE</button>
+            <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
+            <div class="stat" style="color:#4af">WAVE <span id="wave-display">1</span></div>
+            <button id="wave-btn">START</button>
         </div>
         <div id="message-overlay">WAVE COMPLETE</div>
         <div id="controls">
@@ -53,8 +54,8 @@
     </div>
 
     <div id="draft-screen">
-        <h2 style="margin-bottom:5px; text-transform: uppercase; letter-spacing: 2px;">Supply Drop</h2>
-        <p style="margin-top:0; color:#888; font-size: 14px;">Select <span id="picks-left" style="color:white; font-weight:bold;">3</span> upgrades</p>
+        <h2 style="margin-bottom:5px; text-transform: uppercase; letter-spacing: 2px;">Reinforcements</h2>
+        <p style="margin-top:0; color:#888; font-size: 14px;">Select <span id="picks-left" style="color:#fff">3</span></p>
         <div id="draft-grid"></div>
     </div>
 
@@ -62,21 +63,22 @@
 
 <script>
 /**
- * GAME CONFIGURATION
+ * GAME CONSTANTS
  */
 const TILE_SIZE = 32;
-const GRID_W = 15; 
+const GRID_W = 15; // Odd numbers work best for maze gen
 const GRID_H = 19;
 const FPS = 60;
 
 // Colors
-const C_BG = '#222';
-const C_GRID = '#333';
-const C_CASTLE = '#48f';
+const C_BG = '#111';
+const C_WALL = '#3a3a3a';
+const C_FLOOR = '#1a1a1a';
+const C_CASTLE = '#0077ff';
 
-// Entity Types
-const TYPE_EMPTY = 0;
-const TYPE_WALL = 1; 
+// Enums
+const TYPE_FLOOR = 0;
+const TYPE_WALL = 1;
 const TYPE_CASTLE = 2;
 
 // Global State
@@ -91,6 +93,7 @@ let particles = [];
 let inventory = {
     pistol: 1,
     sand: 2,
+    salvage: 1,
     missile: 0,
     poison: 0
 };
@@ -107,10 +110,11 @@ let gameState = {
 };
 
 const CARD_TYPES = {
-    pistol:  { name: "Pistol", color: "#ddd", range: 3.5, cd: 35, damage: 12, desc: "Fast single shot." },
-    missile: { name: "Missile", color: "#f90", range: 5.0, cd: 100, damage: 40, desc: "Splash damage area." },
-    poison:  { name: "Poison", color: "#2d2", range: 3.0, cd: 45, damage: 3, desc: "Damage over time." },
-    sand:    { name: "Sand",   color: "#c96", range: 0, desc: "Slows enemies. Breakable." } 
+    pistol:  { name: "Pistol",  icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Place on Wall. Fast single shot." },
+    missile: { name: "Missile", icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Place on Wall. Area damage." },
+    poison:  { name: "Poison",  icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "Place on Wall. Damage over time." },
+    sand:    { name: "Sand",    icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Place on Floor. Slows enemies." },
+    salvage: { name: "Salvage", icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove a turret." }
 };
 
 /**
@@ -148,18 +152,14 @@ function resize() {
 }
 
 function resetGame() {
-    // Build Grid
-    grid = [];
-    for(let y=0; y<GRID_H; y++) {
-        let row = [];
-        for(let x=0; x<GRID_W; x++) row.push({type: 0, item: null});
-        grid.push(row);
-    }
+    generateMazeMap();
     
     // Castle
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
     grid[cy][cx].type = TYPE_CASTLE;
+    // Ensure castle area is open
+    getNeighbors(cx, cy).forEach(n => grid[n.y][n.x].type = TYPE_FLOOR);
 
     towers = [];
     enemies = [];
@@ -171,10 +171,78 @@ function resetGame() {
     gameState.active = false;
     gameState.gameOver = false;
     
-    inventory = { pistol: 2, missile: 0, poison: 0, sand: 2 };
+    inventory = { pistol: 2, missile: 0, poison: 0, sand: 3, salvage: 1 };
     
     updateUI();
     calcFlowField();
+}
+
+/**
+ * MAZE GENERATION
+ */
+function generateMazeMap() {
+    // 1. Fill with walls
+    grid = [];
+    for(let y=0; y<GRID_H; y++) {
+        let row = [];
+        for(let x=0; x<GRID_W; x++) {
+            row.push({type: TYPE_WALL, item: null});
+        }
+        grid.push(row);
+    }
+
+    // 2. Recursive Backtracker for Maze
+    // Start from center
+    let cx = Math.floor(GRID_W/2);
+    let cy = Math.floor(GRID_H/2);
+    
+    let stack = [{x:cx, y:cy}];
+    grid[cy][cx].type = TYPE_FLOOR;
+
+    while(stack.length > 0) {
+        let current = stack[stack.length - 1];
+        // Check 2 steps away
+        let neighbors = [];
+        let dirs = [[0,-2], [0,2], [-2,0], [2,0]];
+        
+        for(let d of dirs) {
+            let nx = current.x + d[0];
+            let ny = current.y + d[1];
+            if(nx > 0 && nx < GRID_W-1 && ny > 0 && ny < GRID_H-1) {
+                if(grid[ny][nx].type === TYPE_WALL) {
+                    neighbors.push({x:nx, y:ny, dx:d[0]/2, dy:d[1]/2});
+                }
+            }
+        }
+
+        if(neighbors.length > 0) {
+            let next = neighbors[Math.floor(Math.random() * neighbors.length)];
+            // Carve path
+            grid[next.y][next.x].type = TYPE_FLOOR;
+            grid[current.y + next.dy][current.x + next.dx].type = TYPE_FLOOR;
+            stack.push(next);
+        } else {
+            stack.pop();
+        }
+    }
+
+    // 3. Ensure corners are open
+    let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
+    corners.forEach(c => {
+        grid[c[1]][c[0]].type = TYPE_FLOOR;
+        // Ensure connection to maze
+        if (c[0]===0) grid[c[1]][1].type = TYPE_FLOOR;
+        else grid[c[1]][GRID_W-2].type = TYPE_FLOOR;
+    });
+}
+
+function getNeighbors(x, y) {
+    let res = [];
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(d => {
+        let nx = x+d[0], ny = y+d[1];
+        if(nx>=0 && nx<GRID_W && ny>=0 && ny<GRID_H) res.push({x:nx, y:ny});
+    });
+    return res;
 }
 
 /**
@@ -183,10 +251,9 @@ function resetGame() {
 function update() {
     if (gameState.gameOver) return;
 
-    // Spawner
     if (gameState.active && gameState.spawnQueue.length > 0) {
         gameState.spawnTimer++;
-        if (gameState.spawnTimer > 35) { // Spawn rate
+        if (gameState.spawnTimer > 30) {
             spawnEnemy(gameState.spawnQueue.shift());
             gameState.spawnTimer = 0;
         }
@@ -220,46 +287,55 @@ function update() {
 }
 
 function draw() {
-    // Clear
     ctx.fillStyle = C_BG;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Grid
-    ctx.lineWidth = 1;
     for(let y=0; y<GRID_H; y++) {
         for(let x=0; x<GRID_W; x++) {
             let px = x * TILE_SIZE;
             let py = y * TILE_SIZE;
             let cell = grid[y][x];
 
-            // Grid Lines
-            ctx.strokeStyle = '#2a2a2a';
-            ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
-            
-            // Draw Sand
-            if (cell.item && cell.item.type === 'sand') {
-                ctx.fillStyle = '#654';
-                ctx.fillRect(px+1, py+1, TILE_SIZE-2, TILE_SIZE-2);
-                // Cracks based on HP
-                ctx.fillStyle = '#432';
-                let dmg = 1 - (cell.item.hp / 30);
-                if(dmg > 0.3) ctx.fillRect(px+8, py+8, 4, 12);
-                if(dmg > 0.6) ctx.fillRect(px+20, py+10, 8, 4);
+            // Render Floor vs Wall
+            if (cell.type === TYPE_WALL) {
+                // 3D effect
+                ctx.fillStyle = '#222'; // side
+                ctx.fillRect(px, py+4, TILE_SIZE, TILE_SIZE-4);
+                ctx.fillStyle = C_WALL; // top
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE-4);
+                
+                // Highlight border
+                ctx.strokeStyle = '#444';
+                ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE-4);
+            } else {
+                ctx.fillStyle = C_FLOOR;
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             }
             
-            // Draw Castle
+            // Render Sand
+            if (cell.item && cell.item.type === 'sand') {
+                ctx.fillStyle = '#764';
+                ctx.beginPath();
+                ctx.arc(px+TILE_SIZE/2, py+TILE_SIZE/2, 10, 0, Math.PI*2);
+                ctx.fill();
+                // Cracks
+                let hpPct = cell.item.hp / 30;
+                ctx.fillStyle = `rgba(0,0,0,${1-hpPct})`;
+                ctx.font = '10px Arial';
+                if(hpPct < 0.9) ctx.fillText("⚡", px+10, py+20);
+            }
+            
+            // Render Castle
             if (cell.type === TYPE_CASTLE) {
                 ctx.fillStyle = C_CASTLE;
-                ctx.fillRect(px+2, py+2, TILE_SIZE-4, TILE_SIZE-4);
-                // Castle Icon
-                ctx.fillStyle = '#fff';
-                ctx.fillRect(px+10, py+10, 12, 12);
+                ctx.fillRect(px+4, py+4, TILE_SIZE-8, TILE_SIZE-8);
+                // Pulse
+                ctx.strokeStyle = `rgba(0,120,255,${(Math.sin(Date.now()/200)+1)/2})`;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(px+2, py+2, TILE_SIZE-4, TILE_SIZE-4);
             }
         }
     }
-
-    // Path debug (optional)
-    // drawFlowField();
 
     towers.forEach(t => t.draw(ctx));
     enemies.forEach(e => e.draw(ctx));
@@ -276,10 +352,9 @@ function loop(timestamp) {
 }
 
 /**
- * PATHFINDING (Flow Field)
+ * PATHFINDING
  */
 function calcFlowField() {
-    // 1. Reset field
     flowField = [];
     for(let y=0; y<GRID_H; y++) {
         let row = [];
@@ -291,13 +366,11 @@ function calcFlowField() {
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
     
-    // 2. Start at Castle
     flowField[cy][cx] = 0;
     queue.push({x: cx, y: cy});
 
     const dirs = [[0,1], [0,-1], [1,0], [-1,0]];
     
-    // 3. Flood Fill
     while(queue.length > 0) {
         let cur = queue.shift();
         let dist = flowField[cur.y][cur.x];
@@ -306,10 +379,9 @@ function calcFlowField() {
             let nx = cur.x + d[0];
             let ny = cur.y + d[1];
 
-            // Bounds Check
             if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                // IMPORTANT: Sand is NOT a wall. It is walkable.
-                // Only TYPE_WALL (Turrets) block the path.
+                // Enemies can only walk on FLOORS (and Castle)
+                // Walls block path. Sand is on Floor, so it's walkable.
                 if (grid[ny][nx].type !== TYPE_WALL && flowField[ny][nx] === null) {
                     flowField[ny][nx] = dist + 1;
                     queue.push({x: nx, y: ny});
@@ -317,31 +389,6 @@ function calcFlowField() {
             }
         }
     }
-}
-
-function isValidPlacement(tx, ty) {
-    // Ensure we don't place on top of something
-    if (grid[ty][tx].type !== TYPE_EMPTY) return false;
-    if (grid[ty][tx].item) return false;
-
-    // Temporary Place Wall
-    grid[ty][tx].type = TYPE_WALL;
-    calcFlowField();
-    
-    // Check if spawns (corners) can reach castle (center)
-    let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
-    let valid = true;
-    for(let c of corners) {
-        if (flowField[c[1]][c[0]] === null) valid = false;
-    }
-
-    if (!valid) {
-        grid[ty][tx].type = TYPE_EMPTY; // Revert
-        calcFlowField(); // Fix field
-        showMessage("PATH BLOCKED!", "red");
-    }
-    
-    return valid;
 }
 
 /**
@@ -358,30 +405,29 @@ class Enemy {
         this.y = this.gy * TILE_SIZE + TILE_SIZE/2;
         this.type = type;
         
-        // Difficulty Scaling (Exponential)
-        let waveMult = Math.pow(1.15, gameState.wave); // 15% HP increase per wave
-        let baseHp = 30;
+        let waveMult = Math.pow(1.15, gameState.wave);
+        let baseHp = 40;
 
         if (type === 'boss') {
-            this.hp = 300 * waveMult;
+            this.hp = 400 * waveMult;
             this.speed = 0.6;
-            this.color = '#b0b';
-            this.radius = 11;
+            this.color = '#d0d';
+            this.radius = 12;
         } else if (type === 'fast') {
-            this.hp = 15 * waveMult;
-            this.speed = 2.2;
+            this.hp = 20 * waveMult;
+            this.speed = 2.4;
             this.color = '#ee0';
             this.radius = 6;
         } else if (type === 'tank') {
-            this.hp = 60 * waveMult;
-            this.speed = 0.8;
-            this.color = '#a22';
-            this.radius = 9;
+            this.hp = 80 * waveMult;
+            this.speed = 0.7;
+            this.color = '#d22';
+            this.radius = 10;
         } else {
             this.hp = baseHp * waveMult;
-            this.speed = 1.2;
-            this.color = '#e44';
-            this.radius = 7;
+            this.speed = 1.3;
+            this.color = '#f55';
+            this.radius = 8;
         }
 
         this.maxHp = this.hp;
@@ -397,7 +443,6 @@ class Enemy {
         let gx = Math.floor(this.x / TILE_SIZE);
         let gy = Math.floor(this.y / TILE_SIZE);
 
-        // Castle Collision Check (Radius based)
         let cx = Math.floor(GRID_W/2) * TILE_SIZE + TILE_SIZE/2;
         let cy = Math.floor(GRID_H/2) * TILE_SIZE + TILE_SIZE/2;
         let distToCastle = Math.hypot(this.x - cx, this.y - cy);
@@ -412,8 +457,8 @@ class Enemy {
         let speedMod = 1;
         
         if (cell && cell.item && cell.item.type === 'sand') {
-            speedMod = 0.4; // Very slow
-            if (Math.random() < 0.02) { // Sand decay
+            speedMod = 0.4;
+            if (Math.random() < 0.03) {
                 cell.item.hp--;
                 createExplosion(this.x, this.y, '#aa8', 1);
                 if (cell.item.hp <= 0) {
@@ -423,15 +468,14 @@ class Enemy {
             }
         }
 
-        // Poison
         if (this.poisoned > 0) {
-            this.hp -= (this.maxHp * 0.002) + 0.1; // % damage + flat
+            this.hp -= (this.maxHp * 0.003) + 0.1; 
             this.poisoned--;
-            createExplosion(this.x, this.y, '#0f0', 1);
+            if(Math.random()<0.1) createExplosion(this.x, this.y, '#0f0', 1);
             if (this.hp <= 0) { this.dead = true; return; }
         }
 
-        // Movement (Follow Flow Field)
+        // Move along Flow Field
         let bestDist = 9999;
         let targetX = this.x; 
         let targetY = this.y;
@@ -471,7 +515,6 @@ class Enemy {
         ctx.lineWidth = 1;
         ctx.stroke();
 
-        // HP Bar
         let pct = this.hp / this.maxHp;
         ctx.fillStyle = '#400';
         ctx.fillRect(this.x-8, this.y-12, 16, 4);
@@ -489,6 +532,7 @@ class Tower {
         this.type = type;
         this.stats = CARD_TYPES[type];
         this.cooldown = 0;
+        this.angle = 0;
     }
 
     update() {
@@ -510,34 +554,42 @@ class Tower {
 
         if (target) {
             this.cooldown = this.stats.cd;
+            this.angle = Math.atan2(target.y - this.y, target.x - this.x);
             projectiles.push(new Projectile(this.x, this.y, target, this.type));
         }
     }
 
     draw(ctx) {
-        ctx.fillStyle = this.stats.color;
-        ctx.fillRect(this.gx*TILE_SIZE+4, this.gy*TILE_SIZE+4, TILE_SIZE-8, TILE_SIZE-8);
-        ctx.strokeStyle = 'black';
-        ctx.strokeRect(this.gx*TILE_SIZE+4, this.gy*TILE_SIZE+4, TILE_SIZE-8, TILE_SIZE-8);
+        let px = this.gx*TILE_SIZE;
+        let py = this.gy*TILE_SIZE;
         
-        // Turret detail
-        ctx.fillStyle = '#111';
-        ctx.fillRect(this.x-3, this.y-3, 6, 6);
+        // Base
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y-2, 10, 0, Math.PI*2);
+        ctx.fill();
+        
+        // Turret Top
+        ctx.save();
+        ctx.translate(this.x, this.y-2);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.stats.color;
+        ctx.fillRect(-6, -6, 12, 12);
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, -2, 12, 4); // Barrel
+        ctx.restore();
     }
 }
 
 class Projectile {
     constructor(x, y, target, type) {
-        this.x = x;
-        this.y = y;
-        this.type = type;
-        this.speed = 7;
-        
+        this.x = x; this.y = y; this.type = type;
+        this.speed = 8;
         let angle = Math.atan2(target.y - y, target.x - x);
         this.vx = Math.cos(angle) * this.speed;
         this.vy = Math.sin(angle) * this.speed;
         this.damage = CARD_TYPES[type].damage;
-        this.life = 60; // Max range failsafe
+        this.life = 50;
     }
 
     update() {
@@ -546,10 +598,8 @@ class Projectile {
         this.life--;
         if(this.life <= 0) return false;
 
-        if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) return false;
-
         for(let e of enemies) {
-            if (Math.hypot(e.x - this.x, e.y - this.y) < e.radius + 6) {
+            if (Math.hypot(e.x - this.x, e.y - this.y) < e.radius + 8) {
                 this.hit(e);
                 return false; 
             }
@@ -559,7 +609,7 @@ class Projectile {
 
     hit(target) {
         if (this.type === 'missile') {
-            createExplosion(this.x, this.y, "orange", 20);
+            createExplosion(this.x, this.y, "orange", 15);
             for(let e of enemies) {
                 if (Math.hypot(e.x - this.x, e.y - this.y) < TILE_SIZE * 2.0) {
                     e.hp -= this.damage;
@@ -571,7 +621,7 @@ class Projectile {
             target.hp -= 2;
         } else {
             target.hp -= this.damage;
-            createExplosion(this.x, this.y, "#fff", 4);
+            createExplosion(this.x, this.y, "#fff", 5);
         }
         
         if (target.hp <= 0 && !target.dead) {
@@ -594,7 +644,7 @@ class Particle {
         let a = Math.random() * 6.28;
         let s = Math.random() * 3;
         this.vx = Math.cos(a)*s; this.vy = Math.sin(a)*s;
-        this.life = 20 + Math.random()*10;
+        this.life = 15 + Math.random()*15;
     }
     update() { this.x+=this.vx; this.y+=this.vy; this.life--; return this.life>0; }
     draw(ctx) { 
@@ -610,7 +660,7 @@ function createExplosion(x, y, c, n) {
 }
 
 /**
- * CONTROLS
+ * CONTROL LOGIC
  */
 function handleInput(cx, cy) {
     if (gameState.gameOver) return;
@@ -626,28 +676,47 @@ function handleInput(cx, cy) {
 
     if (gameState.selectedCard && !gameState.active && inventory[gameState.selectedCard] > 0) {
         let tile = grid[gy][gx];
-        let type = gameState.selectedCard;
+        let cardKey = gameState.selectedCard;
+        let cardData = CARD_TYPES[cardKey];
 
-        if (type === 'sand') {
-            // SAND LOGIC: Can place on empty, doesn't block path
-            if (tile.type === TYPE_EMPTY && !tile.item) {
-                tile.item = { type: 'sand', hp: 30 };
-                inventory.sand--;
-                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c96", 8);
+        // 1. SALVAGE LOGIC
+        if (cardKey === 'salvage') {
+            if (tile.type === TYPE_WALL && tile.item) {
+                // Remove tower from array
+                towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
+                // Clear tile
+                tile.item = null;
+                inventory.salvage--;
+                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#88f", 15);
+                updateUI();
             }
-        } else {
-            // TOWER LOGIC: Blocks path, must validate
-            if (tile.type === TYPE_EMPTY && !tile.item) {
-                if (isValidPlacement(gx, gy)) {
-                    tile.type = TYPE_WALL;
-                    towers.push(new Tower(gx, gy, type));
-                    calcFlowField(); 
-                    inventory[type]--;
-                    createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 8);
-                }
-            }
+            return;
         }
-        updateUI();
+
+        // 2. FLOOR PLACEMENT (Sand)
+        if (cardData.target === 'floor') {
+            // Must be floor, empty, not castle
+            if (tile.type === TYPE_FLOOR && !tile.item && tile.type !== TYPE_CASTLE) {
+                tile.item = { type: cardKey, hp: 30 };
+                inventory[cardKey]--;
+                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c96", 8);
+                updateUI();
+            }
+            return;
+        }
+
+        // 3. WALL PLACEMENT (Turrets)
+        if (cardData.target === 'wall') {
+            // Must be wall, no existing turret
+            if (tile.type === TYPE_WALL && !tile.item) {
+                tile.item = { type: cardKey };
+                towers.push(new Tower(gx, gy, cardKey));
+                inventory[cardKey]--;
+                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 8);
+                updateUI();
+            }
+            return;
+        }
     }
 }
 
@@ -655,23 +724,20 @@ function startWave() {
     if (gameState.active) return;
     gameState.active = true;
     gameState.spawnQueue = [];
-    
     document.getElementById('wave-btn').style.display = 'none';
     
-    // Wave Generation
-    let count = 5 + Math.floor(gameState.wave * 1.5);
+    let count = 6 + Math.floor(gameState.wave * 1.8);
     
-    // Boss Every 3rd
     if (gameState.wave % 3 === 0) {
-        showMessage("BOSS INCOMING", "#d4d");
+        showMessage("BOSS WAVE", "#f0f");
         gameState.spawnQueue.push('boss');
-        count += 5; 
+        count += 4; 
     }
 
     for(let i=0; i<count; i++) {
         let r = Math.random();
-        if (gameState.wave > 2 && r > 0.8) gameState.spawnQueue.push('tank');
-        else if (gameState.wave > 1 && r > 0.6) gameState.spawnQueue.push('fast');
+        if (gameState.wave > 2 && r > 0.75) gameState.spawnQueue.push('tank');
+        else if (gameState.wave > 1 && r > 0.55) gameState.spawnQueue.push('fast');
         else gameState.spawnQueue.push('norm');
     }
 }
@@ -681,8 +747,8 @@ function spawnEnemy(type) { enemies.push(new Enemy(type)); }
 function endWave() {
     gameState.active = false;
     gameState.wave++;
-    showMessage("WAVE CLEARED", "#fff");
-    setTimeout(openDraft, 1500);
+    showMessage("WAVE CLEARED");
+    setTimeout(openDraft, 1200);
 }
 
 function gameOver() {
@@ -711,10 +777,12 @@ function updateUI() {
     Object.keys(inventory).forEach(key => {
         if (inventory[key] > 0 || gameState.selectedCard === key) {
             let div = document.createElement('div');
+            let data = CARD_TYPES[key];
             div.className = 'card-slot' + (gameState.selectedCard === key ? ' selected' : '');
             div.innerHTML = `
-                <div style="font-weight:bold; color:${CARD_TYPES[key].color}">${key.toUpperCase()}</div>
                 <div class="count-badge">${inventory[key]}</div>
+                <div class="icon">${data.icon}</div>
+                <div style="color:${data.color}">${data.name}</div>
             `;
             div.onclick = () => {
                 gameState.selectedCard = (gameState.selectedCard === key) ? null : key;
@@ -734,21 +802,21 @@ function openDraft() {
     document.getElementById('picks-left').innerText = gameState.picksLeft;
     screen.style.display = 'flex';
 
-    // Progressive Card Pool
-    let pool = ['pistol', 'sand'];
+    let pool = ['pistol', 'sand', 'salvage'];
+    if (gameState.wave >= 2) pool.push('pistol'); // increase weight
     if (gameState.wave >= 3) pool.push('poison');
     if (gameState.wave >= 5) pool.push('missile');
-    // Weigh pistol/sand higher early on
-    if (gameState.wave < 4) pool.push('pistol', 'sand'); 
 
     for(let i=0; i<6; i++) {
         let type = pool[Math.floor(Math.random() * pool.length)];
+        let data = CARD_TYPES[type];
         let card = document.createElement('div');
         card.className = 'draft-card';
-        card.style.borderColor = CARD_TYPES[type].color;
+        card.style.borderBottom = `3px solid ${data.color}`;
         card.innerHTML = `
-            <h3 style="color:${CARD_TYPES[type].color}">${CARD_TYPES[type].name}</h3>
-            <p>${CARD_TYPES[type].desc}</p>
+            <div style="font-size:24px; margin-bottom:4px">${data.icon}</div>
+            <h3 style="color:${data.color}">${data.name}</h3>
+            <p>${data.desc}</p>
         `;
         card.onclick = () => pickCard(type, card);
         gridEl.appendChild(card);
