@@ -3,47 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Maze Defense</title>
+    <title>Maze Defense: Hard Mode</title>
     <style>
         * { box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
-        body { margin: 0; padding: 0; background: #222; overflow: hidden; font-family: 'Segoe UI', sans-serif; color: white; }
+        body { margin: 0; padding: 0; background: #1a1a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; color: white; }
         
         /* Game Canvas */
-        #gameCanvas { display: block; margin: 0 auto; background: #333; }
+        #gameCanvas { display: block; margin: 0 auto; background: #222; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
 
         /* UI Overlay */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
         
         /* Top HUD */
-        #hud { background: rgba(0,0,0,0.6); padding: 10px; display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; pointer-events: auto; }
-        .stat { display: flex; align-items: center; gap: 5px; }
+        #hud { background: rgba(0,0,0,0.8); padding: 10px 15px; display: flex; justify-content: space-between; font-weight: bold; font-size: 18px; pointer-events: auto; border-bottom: 1px solid #444; }
+        .stat { display: flex; align-items: center; gap: 8px; text-transform: uppercase; font-size: 14px; letter-spacing: 1px;}
+        #wave-btn { background: #29b; color: white; border: none; padding: 5px 15px; border-radius: 4px; font-weight: bold; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #157; transition: transform 0.1s; }
+        #wave-btn:active { transform: translateY(4px); box-shadow: none; }
 
-        /* Bottom Controls (Inventory) */
-        #controls { pointer-events: auto; background: rgba(0,0,0,0.8); padding: 10px; overflow-x: auto; display: flex; gap: 10px; height: 80px; align-items: center; }
-        .card-slot { min-width: 60px; height: 60px; border: 2px solid #555; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; background: #444; position: relative; }
-        .card-slot.selected { border-color: #0f0; background: #2a2; }
-        .card-slot span { margin-top: 2px; text-align: center; line-height: 1; }
-        .count-badge { position: absolute; top: -5px; right: -5px; background: red; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+        /* Bottom Controls */
+        #controls { pointer-events: auto; background: rgba(0,0,0,0.9); padding: 10px; overflow-x: auto; display: flex; gap: 10px; height: 90px; align-items: center; border-top: 1px solid #444; }
+        .card-slot { min-width: 65px; height: 70px; border: 2px solid #555; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; background: #333; position: relative; transition: 0.1s; }
+        .card-slot.selected { border-color: #0f0; background: #1a1; transform: translateY(-5px); }
+        .card-slot span { margin-top: 4px; font-weight: bold; }
+        .count-badge { position: absolute; top: -8px; right: -8px; background: #e33; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; border: 2px solid #222; }
 
         /* Draft Overlay */
-        #draft-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; }
-        #draft-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 10px; width: 100%; max-width: 500px; }
-        .draft-card { background: #444; border: 2px solid #666; padding: 15px; border-radius: 8px; text-align: center; cursor: pointer; transition: 0.2s; }
-        .draft-card:active { transform: scale(0.95); }
-        .draft-card.picked { border-color: gold; background: #554400; opacity: 0.5; pointer-events: none; }
-        .draft-card h3 { margin: 0 0 5px 0; font-size: 16px; color: #fff; }
-        .draft-card p { margin: 0; font-size: 12px; color: #ccc; }
+        #draft-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; backdrop-filter: blur(5px); }
+        #draft-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 20px; width: 100%; max-width: 600px; }
+        .draft-card { background: linear-gradient(135deg, #444, #333); border: 2px solid #666; padding: 15px; border-radius: 8px; text-align: center; cursor: pointer; position: relative; overflow: hidden; }
+        .draft-card:active { transform: scale(0.96); }
+        .draft-card.picked { border-color: gold; background: #650; opacity: 0.4; pointer-events: none; }
+        .draft-card h3 { margin: 0 0 8px 0; font-size: 15px; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
+        .draft-card p { margin: 0; font-size: 12px; color: #bbb; line-height: 1.4; }
         
-        #message-overlay { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 24px; font-weight: bold; text-shadow: 0 2px 4px #000; pointer-events: none; opacity: 0; transition: opacity 0.5s; }
+        #message-overlay { position: absolute; top: 35%; width: 100%; text-align: center; font-size: 32px; font-weight: 900; color: white; text-shadow: 0 4px 10px black; pointer-events: none; opacity: 0; transition: opacity 0.4s; transform: scale(1.2); letter-spacing: 2px; }
     </style>
 </head>
 <body>
 
     <div id="ui-layer">
         <div id="hud">
-            <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
-            <div class="stat" style="color:#4af">Wave: <span id="wave-display">1</span></div>
-            <div id="wave-btn" style="background:#4af; padding:2px 8px; border-radius:4px; font-size:14px; cursor:pointer;">Start Wave</div>
+            <div class="stat" style="color:#f55">❤ <span id="hp-display">20</span></div>
+            <div class="stat" style="color:#4af">Wave <span id="wave-display">1</span></div>
+            <button id="wave-btn">START WAVE</button>
         </div>
         <div id="message-overlay">WAVE COMPLETE</div>
         <div id="controls">
@@ -51,8 +53,8 @@
     </div>
 
     <div id="draft-screen">
-        <h2 style="margin-bottom:10px">Draft Reinforcements</h2>
-        <p style="margin-top:0; color:#aaa">Pick <span id="picks-left">3</span> more</p>
+        <h2 style="margin-bottom:5px; text-transform: uppercase; letter-spacing: 2px;">Supply Drop</h2>
+        <p style="margin-top:0; color:#888; font-size: 14px;">Select <span id="picks-left" style="color:white; font-weight:bold;">3</span> upgrades</p>
         <div id="draft-grid"></div>
     </div>
 
@@ -60,45 +62,43 @@
 
 <script>
 /**
- * GAME CONSTANTS & CONFIG
+ * GAME CONFIGURATION
  */
 const TILE_SIZE = 32;
-const GRID_W = 15; // Width in tiles
-const GRID_H = 19; // Height in tiles (mobile aspect ratio)
+const GRID_W = 15; 
+const GRID_H = 19;
 const FPS = 60;
 
 // Colors
-const C_BG = '#333';
-const C_GRID = '#444';
-const C_CASTLE = '#4af';
-const C_PATH = '#222';
+const C_BG = '#222';
+const C_GRID = '#333';
+const C_CASTLE = '#48f';
 
-// Enums
+// Entity Types
 const TYPE_EMPTY = 0;
-const TYPE_WALL = 1; // Turrets act as walls
+const TYPE_WALL = 1; 
 const TYPE_CASTLE = 2;
-const TYPE_SAND = 3;
 
-// Game State
+// Global State
 let canvas, ctx;
 let lastTime = 0;
 let grid = [];
-let flowField = []; // Direction map for enemies
+let flowField = []; 
 let enemies = [];
 let towers = [];
 let projectiles = [];
 let particles = [];
 let inventory = {
     pistol: 1,
+    sand: 2,
     missile: 0,
-    poison: 0,
-    sand: 1
+    poison: 0
 };
 
 let gameState = {
     hp: 20,
     wave: 1,
-    active: false, // is wave running?
+    active: false,
     spawnQueue: [],
     spawnTimer: 0,
     selectedCard: null,
@@ -107,10 +107,10 @@ let gameState = {
 };
 
 const CARD_TYPES = {
-    pistol: { name: "Pistol", color: "#fff", range: 3.5, cd: 40, damage: 10, desc: "Fast, single target." },
-    missile: { name: "Missile", color: "#f80", range: 4.5, cd: 90, damage: 30, desc: "Splash damage." },
-    poison: { name: "Poison", color: "#0f0", range: 3.0, cd: 50, damage: 2, desc: "Applies damage over time." },
-    sand: { name: "Sand", color: "#c94", range: 0, desc: "Slows enemies. Has durability." } // Not a tower, placed on floor
+    pistol:  { name: "Pistol", color: "#ddd", range: 3.5, cd: 35, damage: 12, desc: "Fast single shot." },
+    missile: { name: "Missile", color: "#f90", range: 5.0, cd: 100, damage: 40, desc: "Splash damage area." },
+    poison:  { name: "Poison", color: "#2d2", range: 3.0, cd: 45, damage: 3, desc: "Damage over time." },
+    sand:    { name: "Sand",   color: "#c96", range: 0, desc: "Slows enemies. Breakable." } 
 };
 
 /**
@@ -123,11 +123,11 @@ function init() {
     resize();
     window.addEventListener('resize', resize);
     
-    // Input Handling
-    canvas.addEventListener('mousedown', handleInput);
+    // Input
+    canvas.addEventListener('mousedown', (e) => handleInput(e.clientX, e.clientY));
     canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault(); // prevent scroll
-        handleInput(e.touches[0]);
+        e.preventDefault(); 
+        handleInput(e.touches[0].clientX, e.touches[0].clientY);
     }, {passive: false});
 
     document.getElementById('wave-btn').addEventListener('click', startWave);
@@ -137,21 +137,18 @@ function init() {
 }
 
 function resize() {
-    // Fit canvas to width, maintain aspect mostly
     let availW = window.innerWidth;
     let availH = window.innerHeight;
-    
-    // Scale TILE_SIZE based on width
-    let scale = availW / (GRID_W * TILE_SIZE);
+    let scale = Math.min(availW / (GRID_W * TILE_SIZE), availH / (GRID_H * TILE_SIZE));
     
     canvas.width = GRID_W * TILE_SIZE;
     canvas.height = GRID_H * TILE_SIZE;
-    
-    canvas.style.width = availW + "px";
+    canvas.style.width = (canvas.width * scale) + "px";
     canvas.style.height = (canvas.height * scale) + "px";
 }
 
 function resetGame() {
+    // Build Grid
     grid = [];
     for(let y=0; y<GRID_H; y++) {
         let row = [];
@@ -159,7 +156,7 @@ function resetGame() {
         grid.push(row);
     }
     
-    // Place Castle in center
+    // Castle
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
     grid[cy][cx].type = TYPE_CASTLE;
@@ -186,10 +183,10 @@ function resetGame() {
 function update() {
     if (gameState.gameOver) return;
 
-    // Spawning
+    // Spawner
     if (gameState.active && gameState.spawnQueue.length > 0) {
         gameState.spawnTimer++;
-        if (gameState.spawnTimer > 40) { // Spawn rate
+        if (gameState.spawnTimer > 35) { // Spawn rate
             spawnEnemy(gameState.spawnQueue.shift());
             gameState.spawnTimer = 0;
         }
@@ -197,15 +194,12 @@ function update() {
         endWave();
     }
 
-    // Entities
     towers.forEach(t => t.update());
     
-    // Projectiles
     for(let i = projectiles.length-1; i>=0; i--) {
         if (!projectiles[i].update()) projectiles.splice(i, 1);
     }
 
-    // Enemies
     for(let i = enemies.length-1; i>=0; i--) {
         let e = enemies[i];
         e.update();
@@ -214,55 +208,63 @@ function update() {
         } else if (e.reachedGoal) {
             gameState.hp -= 1;
             enemies.splice(i, 1);
-            createExplosion(e.x, e.y, "#f00", 10);
+            createExplosion(e.x, e.y, "#f44", 15);
             updateUI();
             if (gameState.hp <= 0) gameOver();
         }
     }
     
-    // Particles
     for(let i = particles.length-1; i>=0; i--) {
         if (!particles[i].update()) particles.splice(i, 1);
     }
 }
 
 function draw() {
+    // Clear
     ctx.fillStyle = C_BG;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Grid
-    ctx.strokeStyle = '#3a3a3a';
+    // Grid
     ctx.lineWidth = 1;
     for(let y=0; y<GRID_H; y++) {
         for(let x=0; x<GRID_W; x++) {
             let px = x * TILE_SIZE;
             let py = y * TILE_SIZE;
+            let cell = grid[y][x];
+
+            // Grid Lines
+            ctx.strokeStyle = '#2a2a2a';
+            ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
             
             // Draw Sand
-            if (grid[y][x].item && grid[y][x].item.type === 'sand') {
+            if (cell.item && cell.item.type === 'sand') {
                 ctx.fillStyle = '#654';
-                ctx.fillRect(px+2, py+2, TILE_SIZE-4, TILE_SIZE-4);
-            } else {
-                ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillRect(px+1, py+1, TILE_SIZE-2, TILE_SIZE-2);
+                // Cracks based on HP
+                ctx.fillStyle = '#432';
+                let dmg = 1 - (cell.item.hp / 30);
+                if(dmg > 0.3) ctx.fillRect(px+8, py+8, 4, 12);
+                if(dmg > 0.6) ctx.fillRect(px+20, py+10, 8, 4);
             }
             
             // Draw Castle
-            if (grid[y][x].type === TYPE_CASTLE) {
+            if (cell.type === TYPE_CASTLE) {
                 ctx.fillStyle = C_CASTLE;
-                ctx.fillRect(px+4, py+4, TILE_SIZE-8, TILE_SIZE-8);
+                ctx.fillRect(px+2, py+2, TILE_SIZE-4, TILE_SIZE-4);
+                // Castle Icon
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(px+10, py+10, 12, 12);
             }
         }
     }
+
+    // Path debug (optional)
+    // drawFlowField();
 
     towers.forEach(t => t.draw(ctx));
     enemies.forEach(e => e.draw(ctx));
     projectiles.forEach(p => p.draw(ctx));
     particles.forEach(p => p.draw(ctx));
-
-    // Draw Placement Preview
-    if (gameState.selectedCard && !gameState.active) {
-       // Visual hint could go here, but touch is direct
-    }
 }
 
 function loop(timestamp) {
@@ -277,7 +279,7 @@ function loop(timestamp) {
  * PATHFINDING (Flow Field)
  */
 function calcFlowField() {
-    // Reset field
+    // 1. Reset field
     flowField = [];
     for(let y=0; y<GRID_H; y++) {
         let row = [];
@@ -289,13 +291,13 @@ function calcFlowField() {
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
     
-    // Target is castle (distance 0)
+    // 2. Start at Castle
     flowField[cy][cx] = 0;
     queue.push({x: cx, y: cy});
 
-    // BFS
     const dirs = [[0,1], [0,-1], [1,0], [-1,0]];
     
+    // 3. Flood Fill
     while(queue.length > 0) {
         let cur = queue.shift();
         let dist = flowField[cur.y][cur.x];
@@ -304,10 +306,10 @@ function calcFlowField() {
             let nx = cur.x + d[0];
             let ny = cur.y + d[1];
 
-            // Check bounds
+            // Bounds Check
             if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                // Check if empty or sand (not wall/tower)
-                // Castle is valid (start point), Wall is invalid
+                // IMPORTANT: Sand is NOT a wall. It is walkable.
+                // Only TYPE_WALL (Turrets) block the path.
                 if (grid[ny][nx].type !== TYPE_WALL && flowField[ny][nx] === null) {
                     flowField[ny][nx] = dist + 1;
                     queue.push({x: nx, y: ny});
@@ -317,15 +319,16 @@ function calcFlowField() {
     }
 }
 
-// Check if placing a tower at tx,ty would block all paths from spawns
 function isValidPlacement(tx, ty) {
+    // Ensure we don't place on top of something
     if (grid[ty][tx].type !== TYPE_EMPTY) return false;
+    if (grid[ty][tx].item) return false;
 
-    // Temporarily place wall
+    // Temporary Place Wall
     grid[ty][tx].type = TYPE_WALL;
     calcFlowField();
     
-    // Check all 4 corners
+    // Check if spawns (corners) can reach castle (center)
     let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
     let valid = true;
     for(let c of corners) {
@@ -333,21 +336,19 @@ function isValidPlacement(tx, ty) {
     }
 
     if (!valid) {
-        // Revert
-        grid[ty][tx].type = TYPE_EMPTY;
-        calcFlowField();
-        showMessage("Blocking path!");
+        grid[ty][tx].type = TYPE_EMPTY; // Revert
+        calcFlowField(); // Fix field
+        showMessage("PATH BLOCKED!", "red");
     }
     
     return valid;
 }
 
 /**
- * GAMEPLAY CLASSES
+ * ENTITIES
  */
 class Enemy {
     constructor(type) {
-        // Spawn randomly at one of 4 corners
         let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
         let corner = corners[Math.floor(Math.random()*corners.length)];
         
@@ -355,33 +356,37 @@ class Enemy {
         this.gy = corner[1];
         this.x = this.gx * TILE_SIZE + TILE_SIZE/2;
         this.y = this.gy * TILE_SIZE + TILE_SIZE/2;
-        
-        // Stats based on type
         this.type = type;
-        this.frozen = 0; // Poison/Slow timer
-        this.poisoned = 0;
-        this.slowFactor = 1;
         
+        // Difficulty Scaling (Exponential)
+        let waveMult = Math.pow(1.15, gameState.wave); // 15% HP increase per wave
+        let baseHp = 30;
+
         if (type === 'boss') {
-            this.hp = 100 + (gameState.wave * 20);
-            this.maxHp = this.hp;
-            this.speed = 0.5;
-            this.color = '#a0a';
-            this.radius = 10;
+            this.hp = 300 * waveMult;
+            this.speed = 0.6;
+            this.color = '#b0b';
+            this.radius = 11;
         } else if (type === 'fast') {
-            this.hp = 15 + (gameState.wave * 2);
-            this.maxHp = this.hp;
-            this.speed = 2.0;
+            this.hp = 15 * waveMult;
+            this.speed = 2.2;
             this.color = '#ee0';
-            this.radius = 5;
-        } else { // standard
-            this.hp = 30 + (gameState.wave * 4);
-            this.maxHp = this.hp;
-            this.speed = 1.0;
+            this.radius = 6;
+        } else if (type === 'tank') {
+            this.hp = 60 * waveMult;
+            this.speed = 0.8;
+            this.color = '#a22';
+            this.radius = 9;
+        } else {
+            this.hp = baseHp * waveMult;
+            this.speed = 1.2;
             this.color = '#e44';
             this.radius = 7;
         }
-        
+
+        this.maxHp = this.hp;
+        this.frozen = 0;
+        this.poisoned = 0;
         this.vx = 0;
         this.vy = 0;
         this.reachedGoal = false;
@@ -389,40 +394,44 @@ class Enemy {
     }
 
     update() {
-        // Logic: Move towards center of tile with lowest flow value
         let gx = Math.floor(this.x / TILE_SIZE);
         let gy = Math.floor(this.y / TILE_SIZE);
 
-        // Handle Sand/Slow
-        let currentTile = grid[gy] && grid[gy][gx];
-        let onSand = (currentTile && currentTile.item && currentTile.item.type === 'sand');
+        // Castle Collision Check (Radius based)
+        let cx = Math.floor(GRID_W/2) * TILE_SIZE + TILE_SIZE/2;
+        let cy = Math.floor(GRID_H/2) * TILE_SIZE + TILE_SIZE/2;
+        let distToCastle = Math.hypot(this.x - cx, this.y - cy);
         
-        if (onSand) {
-            this.slowFactor = 0.5;
-            if (Math.random() < 0.05) { // Damage sand
-                currentTile.item.hp--;
-                if (currentTile.item.hp <= 0) {
-                    currentTile.item = null; // Sand destroyed
-                    createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c94", 5);
+        if (distToCastle < TILE_SIZE * 0.7) {
+            this.reachedGoal = true;
+            return;
+        }
+
+        // Sand Logic
+        let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
+        let speedMod = 1;
+        
+        if (cell && cell.item && cell.item.type === 'sand') {
+            speedMod = 0.4; // Very slow
+            if (Math.random() < 0.02) { // Sand decay
+                cell.item.hp--;
+                createExplosion(this.x, this.y, '#aa8', 1);
+                if (cell.item.hp <= 0) {
+                    cell.item = null;
+                    createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c94", 8);
                 }
             }
-        } else {
-            this.slowFactor = 1;
         }
 
-        // Apply Poison
+        // Poison
         if (this.poisoned > 0) {
-            this.hp -= 0.05; 
+            this.hp -= (this.maxHp * 0.002) + 0.1; // % damage + flat
             this.poisoned--;
-            if (this.hp <= 0) {
-                 this.dead = true;
-                 createExplosion(this.x, this.y, "#0f0", 5);
-                 return;
-            }
+            createExplosion(this.x, this.y, '#0f0', 1);
+            if (this.hp <= 0) { this.dead = true; return; }
         }
 
-        // Pathfinding Movement
-        // Get neighbors flow values
+        // Movement (Follow Flow Field)
         let bestDist = 9999;
         let targetX = this.x; 
         let targetY = this.y;
@@ -441,21 +450,15 @@ class Enemy {
             }
         }
 
-        // Move towards target
         let dx = targetX - this.x;
         let dy = targetY - this.y;
-        let dist = Math.sqrt(dx*dx + dy*dy);
+        let dist = Math.hypot(dx, dy);
         
         if (dist > 1) {
-            this.vx = (dx/dist) * this.speed * this.slowFactor;
-            this.vy = (dy/dist) * this.speed * this.slowFactor;
+            this.vx = (dx/dist) * this.speed * speedMod;
+            this.vy = (dy/dist) * this.speed * speedMod;
             this.x += this.vx;
             this.y += this.vy;
-        } else {
-            // Reached center of tile
-            if (grid[gy][gx].type === TYPE_CASTLE) {
-                this.reachedGoal = true;
-            }
         }
     }
 
@@ -464,12 +467,16 @@ class Enemy {
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
         ctx.fill();
-        
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
         // HP Bar
-        ctx.fillStyle = 'red';
-        ctx.fillRect(this.x-8, this.y-12, 16, 3);
-        ctx.fillStyle = '#0f0';
-        ctx.fillRect(this.x-8, this.y-12, 16 * (this.hp/this.maxHp), 3);
+        let pct = this.hp / this.maxHp;
+        ctx.fillStyle = '#400';
+        ctx.fillRect(this.x-8, this.y-12, 16, 4);
+        ctx.fillStyle = pct > 0.5 ? '#0f0' : '#f00';
+        ctx.fillRect(this.x-8, this.y-12, 16 * pct, 4);
     }
 }
 
@@ -480,7 +487,7 @@ class Tower {
         this.x = gx * TILE_SIZE + TILE_SIZE/2;
         this.y = gy * TILE_SIZE + TILE_SIZE/2;
         this.type = type;
-        this.data = CARD_TYPES[type];
+        this.stats = CARD_TYPES[type];
         this.cooldown = 0;
     }
 
@@ -490,9 +497,8 @@ class Tower {
     }
 
     shoot() {
-        // Find closest enemy
         let target = null;
-        let minD = this.data.range * TILE_SIZE;
+        let minD = this.stats.range * TILE_SIZE;
 
         for(let e of enemies) {
             let d = Math.hypot(e.x - this.x, e.y - this.y);
@@ -503,19 +509,20 @@ class Tower {
         }
 
         if (target) {
-            this.cooldown = this.data.cd;
+            this.cooldown = this.stats.cd;
             projectiles.push(new Projectile(this.x, this.y, target, this.type));
         }
     }
 
     draw(ctx) {
-        ctx.fillStyle = this.data.color;
-        // Draw base
+        ctx.fillStyle = this.stats.color;
         ctx.fillRect(this.gx*TILE_SIZE+4, this.gy*TILE_SIZE+4, TILE_SIZE-8, TILE_SIZE-8);
+        ctx.strokeStyle = 'black';
+        ctx.strokeRect(this.gx*TILE_SIZE+4, this.gy*TILE_SIZE+4, TILE_SIZE-8, TILE_SIZE-8);
         
-        // Draw turret barrel hint
-        ctx.fillStyle = 'black';
-        ctx.fillRect(this.x-2, this.y-2, 4, 4);
+        // Turret detail
+        ctx.fillStyle = '#111';
+        ctx.fillRect(this.x-3, this.y-3, 6, 6);
     }
 }
 
@@ -523,138 +530,123 @@ class Projectile {
     constructor(x, y, target, type) {
         this.x = x;
         this.y = y;
-        this.target = target; // Just for initial vector or homing
         this.type = type;
-        this.speed = 6;
-        this.active = true;
+        this.speed = 7;
         
-        // Calculate velocity once (no homing for pistol/missile usually better)
         let angle = Math.atan2(target.y - y, target.x - x);
         this.vx = Math.cos(angle) * this.speed;
         this.vy = Math.sin(angle) * this.speed;
-        
         this.damage = CARD_TYPES[type].damage;
+        this.life = 60; // Max range failsafe
     }
 
     update() {
         this.x += this.vx;
         this.y += this.vy;
+        this.life--;
+        if(this.life <= 0) return false;
 
-        // Check collision
         if (this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height) return false;
 
-        // Simple Hit Check against all enemies
         for(let e of enemies) {
-            let dist = Math.hypot(e.x - this.x, e.y - this.y);
-            if (dist < e.radius + 5) {
+            if (Math.hypot(e.x - this.x, e.y - this.y) < e.radius + 6) {
                 this.hit(e);
-                return false; // destroy projectile
+                return false; 
             }
         }
         return true;
     }
 
-    hit(primaryTarget) {
+    hit(target) {
         if (this.type === 'missile') {
-            // AOE
-            createExplosion(this.x, this.y, "orange", 15);
+            createExplosion(this.x, this.y, "orange", 20);
             for(let e of enemies) {
-                if (Math.hypot(e.x - this.x, e.y - this.y) < TILE_SIZE * 1.5) {
+                if (Math.hypot(e.x - this.x, e.y - this.y) < TILE_SIZE * 2.0) {
                     e.hp -= this.damage;
-                    if (e.hp <= 0) { e.dead = true; createExplosion(e.x, e.y, "#e44", 8); }
+                    if(e.hp<=0) { e.dead=true; createExplosion(e.x, e.y, "#e44", 8); }
                 }
             }
         } else if (this.type === 'poison') {
-            primaryTarget.poisoned = 100; // frames
-            primaryTarget.hp -= 2;
+            target.poisoned = 150; 
+            target.hp -= 2;
         } else {
-            primaryTarget.hp -= this.damage;
-            createExplosion(this.x, this.y, "#fff", 5);
-            if (primaryTarget.hp <= 0) { primaryTarget.dead = true; createExplosion(primaryTarget.x, primaryTarget.y, "#e44", 8); }
+            target.hp -= this.damage;
+            createExplosion(this.x, this.y, "#fff", 4);
+        }
+        
+        if (target.hp <= 0 && !target.dead) {
+            target.dead = true;
+            createExplosion(target.x, target.y, "#e44", 8);
         }
     }
 
     draw(ctx) {
         ctx.fillStyle = CARD_TYPES[this.type].color;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 3, 0, Math.PI*2);
+        ctx.arc(this.x, this.y, 4, 0, Math.PI*2);
         ctx.fill();
     }
 }
 
 class Particle {
     constructor(x, y, color) {
-        this.x = x;
-        this.y = y;
-        this.color = color;
-        let angle = Math.random() * Math.PI * 2;
-        let spd = Math.random() * 2;
-        this.vx = Math.cos(angle) * spd;
-        this.vy = Math.sin(angle) * spd;
-        this.life = 30;
+        this.x = x; this.y = y; this.color = color;
+        let a = Math.random() * 6.28;
+        let s = Math.random() * 3;
+        this.vx = Math.cos(a)*s; this.vy = Math.sin(a)*s;
+        this.life = 20 + Math.random()*10;
     }
-    update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.life--;
-        return this.life > 0;
-    }
-    draw(ctx) {
-        ctx.globalAlpha = this.life / 30;
-        ctx.fillStyle = this.color;
-        ctx.fillRect(this.x, this.y, 2, 2);
-        ctx.globalAlpha = 1;
+    update() { this.x+=this.vx; this.y+=this.vy; this.life--; return this.life>0; }
+    draw(ctx) { 
+        ctx.globalAlpha = this.life/30; 
+        ctx.fillStyle = this.color; 
+        ctx.fillRect(this.x, this.y, 3, 3); 
+        ctx.globalAlpha = 1; 
     }
 }
 
-function createExplosion(x, y, color, count) {
-    for(let i=0; i<count; i++) particles.push(new Particle(x, y, color));
+function createExplosion(x, y, c, n) {
+    for(let i=0; i<n; i++) particles.push(new Particle(x, y, c));
 }
 
 /**
- * GAME CONTROL
+ * CONTROLS
  */
-function handleInput(e) {
+function handleInput(cx, cy) {
     if (gameState.gameOver) return;
 
     let rect = canvas.getBoundingClientRect();
-    let x = e.clientX - rect.left;
-    let y = e.clientY - rect.top;
-    
-    // Scale coords to canvas size
-    x = x * (canvas.width / rect.width);
-    y = y * (canvas.height / rect.height);
+    let x = (cx - rect.left) * (canvas.width / rect.width);
+    let y = (cy - rect.top) * (canvas.height / rect.height);
     
     let gx = Math.floor(x / TILE_SIZE);
     let gy = Math.floor(y / TILE_SIZE);
 
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
 
-    // Place Tower/Sand
     if (gameState.selectedCard && !gameState.active && inventory[gameState.selectedCard] > 0) {
-        
-        // Check if tile is empty
-        if (grid[gy][gx].type !== TYPE_EMPTY) return;
-
+        let tile = grid[gy][gx];
         let type = gameState.selectedCard;
-        
+
         if (type === 'sand') {
-            // Sand does not block path, just sits on floor
-            if (grid[gy][gx].item) return; // already has item
-            grid[gy][gx].item = { type: 'sand', hp: 30 }; // Durability 30
-            inventory.sand--;
-            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c94", 10);
+            // SAND LOGIC: Can place on empty, doesn't block path
+            if (tile.type === TYPE_EMPTY && !tile.item) {
+                tile.item = { type: 'sand', hp: 30 };
+                inventory.sand--;
+                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c96", 8);
+            }
         } else {
-            // Tower blocks path
-            if (isValidPlacement(gx, gy)) {
-                grid[gy][gx].type = TYPE_WALL;
-                towers.push(new Tower(gx, gy, type));
-                calcFlowField(); // Recalculate paths
-                inventory[type]--;
-                createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 10);
+            // TOWER LOGIC: Blocks path, must validate
+            if (tile.type === TYPE_EMPTY && !tile.item) {
+                if (isValidPlacement(gx, gy)) {
+                    tile.type = TYPE_WALL;
+                    towers.push(new Tower(gx, gy, type));
+                    calcFlowField(); 
+                    inventory[type]--;
+                    createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 8);
+                }
             }
         }
-        
         updateUI();
     }
 }
@@ -666,57 +658,53 @@ function startWave() {
     
     document.getElementById('wave-btn').style.display = 'none';
     
-    // Generate Wave
+    // Wave Generation
     let count = 5 + Math.floor(gameState.wave * 1.5);
     
-    // Boss Wave
+    // Boss Every 3rd
     if (gameState.wave % 3 === 0) {
+        showMessage("BOSS INCOMING", "#d4d");
         gameState.spawnQueue.push('boss');
-        count = 5; // adds some minions
+        count += 5; 
     }
 
     for(let i=0; i<count; i++) {
         let r = Math.random();
-        if (r > 0.7) gameState.spawnQueue.push('tank');
-        else if (r > 0.9) gameState.spawnQueue.push('fast');
+        if (gameState.wave > 2 && r > 0.8) gameState.spawnQueue.push('tank');
+        else if (gameState.wave > 1 && r > 0.6) gameState.spawnQueue.push('fast');
         else gameState.spawnQueue.push('norm');
     }
 }
 
-function spawnEnemy(type) {
-    enemies.push(new Enemy(type));
-}
+function spawnEnemy(type) { enemies.push(new Enemy(type)); }
 
 function endWave() {
     gameState.active = false;
     gameState.wave++;
-    showMessage("WAVE COMPLETE");
-    
-    setTimeout(() => {
-        openDraft();
-    }, 1500);
+    showMessage("WAVE CLEARED", "#fff");
+    setTimeout(openDraft, 1500);
 }
 
 function gameOver() {
     gameState.gameOver = true;
-    showMessage("GAME OVER");
+    showMessage("GAME OVER", "red");
 }
 
-function showMessage(msg) {
+function showMessage(msg, col) {
     let el = document.getElementById('message-overlay');
     el.innerText = msg;
+    el.style.color = col || 'white';
     el.style.opacity = 1;
-    setTimeout(() => el.style.opacity = 0, 2000);
+    setTimeout(() => el.style.opacity = 0, 2500);
 }
 
 /**
- * UI & DRAFT SYSTEM
+ * UI & DRAFT
  */
 function updateUI() {
     document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
     document.getElementById('wave-display').innerText = gameState.wave;
     
-    // Update Inventory Strip
     let c = document.getElementById('controls');
     c.innerHTML = '';
     
@@ -739,21 +727,22 @@ function updateUI() {
 
 function openDraft() {
     let screen = document.getElementById('draft-screen');
-    let grid = document.getElementById('draft-grid');
-    grid.innerHTML = '';
+    let gridEl = document.getElementById('draft-grid');
+    gridEl.innerHTML = '';
     
     gameState.picksLeft = 3;
     document.getElementById('picks-left').innerText = gameState.picksLeft;
     screen.style.display = 'flex';
 
-    // Generate 6 random cards
-    let keys = Object.keys(CARD_TYPES);
-    let options = [];
-    for(let i=0; i<6; i++) {
-        options.push(keys[Math.floor(Math.random() * keys.length)]);
-    }
+    // Progressive Card Pool
+    let pool = ['pistol', 'sand'];
+    if (gameState.wave >= 3) pool.push('poison');
+    if (gameState.wave >= 5) pool.push('missile');
+    // Weigh pistol/sand higher early on
+    if (gameState.wave < 4) pool.push('pistol', 'sand'); 
 
-    options.forEach(type => {
+    for(let i=0; i<6; i++) {
+        let type = pool[Math.floor(Math.random() * pool.length)];
         let card = document.createElement('div');
         card.className = 'draft-card';
         card.style.borderColor = CARD_TYPES[type].color;
@@ -762,8 +751,8 @@ function openDraft() {
             <p>${CARD_TYPES[type].desc}</p>
         `;
         card.onclick = () => pickCard(type, card);
-        grid.appendChild(card);
-    });
+        gridEl.appendChild(card);
+    }
 }
 
 function pickCard(type, element) {
@@ -780,11 +769,10 @@ function pickCard(type, element) {
             document.getElementById('draft-screen').style.display = 'none';
             document.getElementById('wave-btn').style.display = 'block';
             updateUI();
-        }, 500);
+        }, 300);
     }
 }
 
-// Start
 init();
 </script>
 </body>
