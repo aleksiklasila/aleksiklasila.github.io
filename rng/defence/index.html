@@ -187,10 +187,14 @@
 
         #message-overlay {
             position: absolute;
-            top: 35%;
+            top: 0;
             width: 100%;
-            text-align: center;
-            font-size: 28px;
+            height: 52px;
+            /* Cover HUD + border */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
             font-weight: 900;
             color: white;
             text-shadow: 0 0 10px #000;
@@ -198,8 +202,8 @@
             opacity: 0;
             transition: opacity 0.3s;
             letter-spacing: 3px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 20px 0;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 0;
             z-index: 100;
         }
 
@@ -437,8 +441,10 @@
             missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg", weight: 1 },
             poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT", weight: 1 },
             sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies", weight: 1 },
-            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret", weight: 0.25 },
-            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 100, target: 'any', desc: "Massive Area Dmg", weight: 0.5 }
+            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret", weight: 0.2 },
+            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 200, target: 'any', desc: "Massive Area Dmg", weight: 0.15 },
+            heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "+5 Lives", weight: 0.15 },
+            sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "-5 ♥, +80 $", weight: 0.15 }
         };
 
         /**
@@ -682,6 +688,12 @@
                     ctx.arc(sx, sy, range, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.stroke();
+                } else if (selectedEntity instanceof Enemy) {
+                    ctx.strokeStyle = "rgba(255, 50, 50, 0.6)";
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, selectedEntity.r + 5, 0, Math.PI * 2);
+                    ctx.stroke();
                 }
             }
 
@@ -748,7 +760,12 @@
             }
             let data = CARD_TYPES[card.type];
 
-            if (gameState.money < data.price) {
+            if (data.hpCost) {
+                if (gameState.hp <= data.hpCost) {
+                    showMessage("NOT ENOUGH HP", "red");
+                    return;
+                }
+            } else if (gameState.money < data.price) {
                 showMessage("TOO EXPENSIVE", "red");
                 return;
             }
@@ -918,13 +935,12 @@
                 this.currentStats.damage = this.baseStats.damage * lvlMult;
 
                 if (this.type === 'pistol') {
-                    // Pistol gets faster
                     this.currentStats.cd = Math.max(10, this.baseStats.cd * (1 - (this.level - 1) * 0.1));
                 } else if (this.type === 'missile') {
-                    // Missile gets slightly more range
                     this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
                 } else if (this.type === 'poison') {
                     this.currentStats.damage = this.baseStats.damage * lvlMult;
+                    this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
                 }
             }
 
@@ -1164,6 +1180,29 @@
                     return;
                 }
 
+                // Check for Enemy
+                // Check physically clicked enemies (not grid based, but distance based)
+                let clickedEnemy = null;
+                // Check closest enemy to click
+                let minDist = 30; // hit radius
+                for (let e of enemies) {
+                    let d = Math.hypot(e.x - x, e.y - y);
+                    if (d < minDist) {
+                        minDist = d;
+                        clickedEnemy = e;
+                    }
+                }
+
+                if (clickedEnemy) {
+                    if (selectedEntity === clickedEnemy) {
+                        selectedEntity = null;
+                    } else {
+                        selectedEntity = clickedEnemy;
+                    }
+                    updateStatsPanel();
+                    return;
+                }
+
                 // Nothing found -> Deselect
                 selectedEntity = null;
                 updateStatsPanel();
@@ -1176,7 +1215,12 @@
             let cardKey = marketCard.type;
             let data = CARD_TYPES[cardKey];
 
-            if (gameState.money < data.price) {
+            if (data.hpCost) {
+                if (gameState.hp <= data.hpCost) {
+                    showMessage("NOT ENOUGH HP", "red");
+                    return;
+                }
+            } else if (gameState.money < data.price) {
                 showMessage("NOT ENOUGH CASH", "red");
                 return;
             }
@@ -1185,7 +1229,21 @@
             let actionTaken = false;
 
             // --- POWER CARD LOGIC (NUKE) ---
-            if (data.target === 'any') {
+            if (data.target === 'global') {
+                if (cardKey === 'heart') {
+                    gameState.hp += 5;
+                    createExplosion(cx, cy, "#f00", 10);
+                    showMessage("+5 HEARTS", "#f00");
+                    actionTaken = true;
+                } else if (cardKey === 'sacrifice') {
+                    gameState.hp -= 5;
+                    gameState.money += 80;
+                    createExplosion(cx, cy, "#800", 15);
+                    showMessage("SACRIFICE!", "#800");
+                    actionTaken = true;
+                }
+            }
+            else if (data.target === 'any') {
                 // Apply immediately at clicked location (or center of tile)
                 let tx = gx * TILE_SIZE + 16;
                 let ty = gy * TILE_SIZE + 16;
@@ -1255,7 +1313,13 @@
             }
 
             if (actionTaken) {
-                gameState.money -= data.price;
+                if (data.hpCost) {
+                    // HP cost applied via logic above
+                    // Ensure we don't deduct money if price is 0
+                    if (data.price > 0) gameState.money -= data.price;
+                } else {
+                    gameState.money -= data.price;
+                }
                 marketCard.bought = true;
                 selectedMarketIndex = -1;
                 updateUI();
@@ -1347,16 +1411,18 @@
             marketCards.forEach((card, i) => {
                 let data = CARD_TYPES[card.type];
                 let d = children[i];
-                let canAfford = gameState.money >= data.price;
+                let canAfford = data.hpCost ? (gameState.hp > data.hpCost) : (gameState.money >= data.price);
                 let isSelected = selectedMarketIndex === i;
 
                 d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''} ${card.locked ? 'locked' : ''}`;
                 d.style.borderColor = isSelected ? '#0f0' : (card.locked ? '#fca' : (card.bought ? '#333' : data.color));
 
+                let costDisplay = data.hpCost ? `<span style="color:#f44">${data.hpCost} ♥</span>` : `$${data.price}`;
+
                 d.innerHTML = `
             <div class="m-icon">${data.icon}</div>
             <div class="m-name" style="color:${card.bought ? '#555' : data.color}">${data.name}</div>
-            <div class="m-cost">$${data.price}</div>
+            <div class="m-cost">${costDisplay}</div>
             <div class="sold-badge">SOLD</div>
             <div class="lock-icon">🔒</div>
         `;
@@ -1384,6 +1450,12 @@
                     panel.style.display = 'none';
                     return;
                 }
+            } else if (selectedEntity instanceof Enemy) {
+                if (selectedEntity.dead || selectedEntity.reachedGoal || !enemies.includes(selectedEntity)) {
+                    selectedEntity = null;
+                    panel.style.display = 'none';
+                    return;
+                }
             }
             // For items, we'd need to check grid, but good enough for now to check if null
             // (The item object itself might still exist in memory)
@@ -1401,6 +1473,26 @@
                 contentEl.innerHTML += `<div class="stat-row"><span>Range</span><span class="stat-val">${data.range.toFixed(1)}</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Cooldown</span><span class="stat-val">${data.cd.toFixed(1)}f</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${t.stacks}</span></div>`;
+            }
+            else if (selectedEntity instanceof Enemy) {
+                let e = selectedEntity;
+                nameEl.innerText = `${e.type.toUpperCase()} ENEMY`;
+                iconEl.innerText = "👾"; // Generic enemy icon
+
+                contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val" style="color:${(e.hp / e.maxHp) < 0.3 ? '#f44' : '#fd0'}">${Math.ceil(e.hp)}/${Math.ceil(e.maxHp)}</span></div>`;
+                contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span class="stat-val">${e.speed.toFixed(2)}</span></div>`;
+
+                let immunities = [];
+                if (e.type === 'poison_resistant') immunities.push("Poison");
+                if (e.type === 'flying') immunities.push("Sand (Slow)");
+
+                if (immunities.length > 0) {
+                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:4px;border-top:1px solid #444;padding-top:2px;"><span>Immune:</span><span class="stat-val" style="color:#f88;font-size:10px;">${immunities.join(", ")}</span></div>`;
+                }
+
+                if (e.poisoned > 0) {
+                    contentEl.innerHTML += `<div class="stat-row"><span>Poisoned</span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
+                }
             }
             else if (selectedEntity.type) {
                 // Item (Sand/etc)
