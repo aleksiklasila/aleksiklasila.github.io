@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Maze Defense: Hand Management</title>
+    <title>Maze Defense: Fixed</title>
     <style>
         * { box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
         body { margin: 0; padding: 0; background: #0d0d0d; overflow: hidden; font-family: 'Courier New', monospace; color: white; }
@@ -19,10 +19,10 @@
         .stat { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; }
         #wave-btn { background: #0077ff; color: white; border: none; padding: 8px 24px; border-radius: 2px; font-weight: 900; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #004499; transition: all 0.1s; text-transform: uppercase; letter-spacing: 1px; }
         #wave-btn:active { transform: translateY(4px); box-shadow: none; }
-        #wave-btn:disabled { background: #444; box-shadow: none; color: #888; transform: translateY(4px); }
+        #wave-btn:disabled { background: #444; box-shadow: none; color: #888; transform: translateY(4px); cursor: not-allowed; }
 
         /* Bottom Controls (Hand) */
-        #hand-container { pointer-events: auto; background: rgba(0,0,0,0.9); padding: 10px; display: flex; justify-content: center; gap: 8px; height: 110px; align-items: center; border-top: 2px solid #333; }
+        #hand-container { pointer-events: auto; background: rgba(0,0,0,0.95); padding: 10px; display: flex; justify-content: center; gap: 8px; height: 110px; align-items: center; border-top: 2px solid #333; }
         
         .card-slot { width: 18%; max-width: 80px; height: 85px; border: 2px dashed #444; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; background: #111; position: relative; transition: 0.1s; }
         
@@ -34,7 +34,7 @@
         .card-slot .type { font-size: 8px; color: #aaa; margin-top: 2px; }
 
         /* Empty Slot Animation */
-        .card-slot.empty { opacity: 0.5; }
+        .card-slot.empty { opacity: 0.3; }
         
         /* Message Overlay */
         #message-overlay { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 28px; font-weight: 900; color: white; text-shadow: 0 0 10px #000; pointer-events: none; opacity: 0; transition: opacity 0.3s; letter-spacing: 3px; background: rgba(0,0,0,0.7); padding: 20px 0; z-index: 50; }
@@ -86,7 +86,7 @@ let projectiles = [];
 let particles = [];
 
 // Inventory System
-let hand = [null, null, null, null, null]; // The fixed 5 slots
+let hand = [null, null, null, null, null]; 
 let selectedSlotIndex = -1;
 
 let gameState = {
@@ -143,10 +143,11 @@ function resize() {
 function resetGame() {
     generateMazeMap();
     
-    // Castle
+    // Castle Setup
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
     grid[cy][cx].type = TYPE_CASTLE;
+    // Ensure 3x3 area around castle is floor
     getNeighbors(cx, cy).forEach(n => grid[n.y][n.x].type = TYPE_FLOOR);
 
     towers = [];
@@ -159,7 +160,7 @@ function resetGame() {
     gameState.active = false;
     gameState.gameOver = false;
     
-    // Initial Hand: 3 Pistols, 2 Sand
+    // Initial Hand
     hand = ['pistol', 'pistol', 'pistol', 'sand', 'sand'];
     selectedSlotIndex = -1;
     
@@ -183,6 +184,7 @@ function generateMazeMap() {
     let stack = [{x:cx, y:cy}];
     grid[cy][cx].type = TYPE_FLOOR;
 
+    // Recursive Backtracker
     while(stack.length > 0) {
         let current = stack[stack.length - 1];
         let neighbors = [];
@@ -208,11 +210,13 @@ function generateMazeMap() {
         }
     }
 
-    // Open Corners
+    // Open Corners for Spawns
     let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
     corners.forEach(c => {
         grid[c[1]][c[0]].type = TYPE_FLOOR;
-        if (c[0]===0) grid[c[1]][1].type = TYPE_FLOOR; else grid[c[1]][GRID_W-2].type = TYPE_FLOOR;
+        // Ensure connection to maze
+        if (c[0]===0) grid[c[1]][1].type = TYPE_FLOOR; 
+        else grid[c[1]][GRID_W-2].type = TYPE_FLOOR;
     });
 }
 
@@ -231,6 +235,7 @@ function getNeighbors(x, y) {
 function update() {
     if (gameState.gameOver) return;
 
+    // Spawning Logic
     if (gameState.active && gameState.spawnQueue.length > 0) {
         gameState.spawnTimer++;
         if (gameState.spawnTimer > 30) {
@@ -241,6 +246,7 @@ function update() {
         endWave();
     }
 
+    // Update Entities
     towers.forEach(t => t.update());
     
     for(let i = projectiles.length-1; i>=0; i--) {
@@ -278,11 +284,19 @@ function draw() {
 
             // Render Map
             if (cell.type === TYPE_WALL) {
-                ctx.fillStyle = '#222'; ctx.fillRect(px, py+4, TILE_SIZE, TILE_SIZE-4); // Side
-                ctx.fillStyle = C_WALL; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE-4); // Top
-                ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE-4);
+                // Wall Side
+                ctx.fillStyle = '#222'; 
+                ctx.fillRect(px, py+4, TILE_SIZE, TILE_SIZE-4); 
+                // Wall Top
+                ctx.fillStyle = C_WALL; 
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE-4); 
+                // Border
+                ctx.strokeStyle = '#444'; 
+                ctx.lineWidth = 1;
+                ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE-4);
             } else {
-                ctx.fillStyle = C_FLOOR; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = C_FLOOR; 
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
             }
             
             // Sand
@@ -330,6 +344,7 @@ function calcFlowField() {
     let queue = [];
     let cx = Math.floor(GRID_W/2);
     let cy = Math.floor(GRID_H/2);
+    
     flowField[cy][cx] = 0;
     queue.push({x: cx, y: cy});
 
@@ -341,6 +356,8 @@ function calcFlowField() {
             let nx = cur.x + d[0];
             let ny = cur.y + d[1];
             if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                // Enemies can walk on Floor or Castle. Walls block them.
+                // Sand is an item on Floor, so it is walkable.
                 if (grid[ny][nx].type !== TYPE_WALL && flowField[ny][nx] === null) {
                     flowField[ny][nx] = dist + 1;
                     queue.push({x: nx, y: ny});
@@ -357,8 +374,11 @@ class Enemy {
     constructor(type) {
         let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
         let corner = corners[Math.floor(Math.random()*corners.length)];
-        this.gx = corner[0]; this.gy = corner[1];
-        this.x = this.gx * TILE_SIZE + 16; this.y = this.gy * TILE_SIZE + 16;
+        this.gx = corner[0]; 
+        this.gy = corner[1];
+        // Center position
+        this.x = this.gx * TILE_SIZE + 16; 
+        this.y = this.gy * TILE_SIZE + 16;
         this.type = type;
         
         let mult = Math.pow(1.15, gameState.wave);
@@ -370,14 +390,23 @@ class Enemy {
         this.maxHp = this.hp;
         this.poisoned = 0;
         this.vx=0; this.vy=0;
-        this.dead = false; this.reachedGoal = false;
+        this.dead = false; 
+        this.reachedGoal = false;
     }
 
     update() {
-        let gx = Math.floor(this.x/32); let gy = Math.floor(this.y/32);
-        let cx = Math.floor(GRID_W/2)*32+16; let cy = Math.floor(GRID_H/2)*32+16;
-        if (Math.hypot(this.x-cx, this.y-cy) < 22) { this.reachedGoal = true; return; }
+        let gx = Math.floor(this.x/TILE_SIZE); 
+        let gy = Math.floor(this.y/TILE_SIZE);
+        let cx = Math.floor(GRID_W/2)*TILE_SIZE+16; 
+        let cy = Math.floor(GRID_H/2)*TILE_SIZE+16;
+        
+        // Check Castle Hit
+        if (Math.hypot(this.x-cx, this.y-cy) < 20) { 
+            this.reachedGoal = true; 
+            return; 
+        }
 
+        // Sand Effect
         let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
         let speedMod = 1;
         if (cell && cell.item && cell.item.type === 'sand') {
@@ -388,17 +417,23 @@ class Enemy {
                 if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx*32+16, gy*32+16, "#c94", 8); }
             }
         }
+        
+        // Poison Effect
         if (this.poisoned > 0) {
             this.hp -= (this.maxHp * 0.003) + 0.1; this.poisoned--;
             if (this.hp <= 0) { this.dead = true; return; }
         }
 
-        let best = 9999; let tx = this.x; let ty = this.y;
+        // Movement
+        let best = 9999; 
+        let tx = this.x; 
+        let ty = this.y;
+        
         [[0,1],[0,-1],[1,0],[-1,0]].forEach(d => {
             let nx=gx+d[0], ny=gy+d[1];
             if(nx>=0 && nx<GRID_W && ny>=0 && ny<GRID_H) {
                 let dist = flowField[ny][nx];
-                if(dist!==null && dist<best) { best=dist; tx=nx*32+16; ty=ny*32+16; }
+                if(dist!==null && dist<best) { best=dist; tx=nx*TILE_SIZE+16; ty=ny*TILE_SIZE+16; }
             }
         });
 
@@ -410,8 +445,11 @@ class Enemy {
             this.x+=this.vx; this.y+=this.vy;
         }
     }
+    
     draw(ctx) {
-        ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
+        ctx.fillStyle = this.color; 
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
+        // HP Bar
         ctx.fillStyle = '#400'; ctx.fillRect(this.x-8, this.y-12, 16, 4);
         ctx.fillStyle = (this.hp/this.maxHp)>0.5?'#0f0':'#f00'; ctx.fillRect(this.x-8, this.y-12, 16*(this.hp/this.maxHp), 4);
     }
@@ -420,12 +458,12 @@ class Enemy {
 class Tower {
     constructor(gx, gy, type) {
         this.gx=gx; this.gy=gy; this.type=type;
-        this.x=gx*32+16; this.y=gy*32+16;
+        this.x=gx*TILE_SIZE+16; this.y=gy*TILE_SIZE+16;
         this.stats=CARD_TYPES[type]; this.cd=0; this.angle=0;
     }
     update() { if(this.cd>0) this.cd--; else this.shoot(); }
     shoot() {
-        let target=null, min=this.stats.range*32;
+        let target=null, min=this.stats.range*TILE_SIZE;
         for(let e of enemies) {
             let d = Math.hypot(e.x-this.x, e.y-this.y);
             if(d<min) { min=d; target=e; }
@@ -436,7 +474,9 @@ class Tower {
         }
     }
     draw(ctx) {
+        // Draw Base
         ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(this.x, this.y-2, 10, 0, 6.28); ctx.fill();
+        // Draw Turret
         ctx.save(); ctx.translate(this.x, this.y-2); ctx.rotate(this.angle);
         ctx.fillStyle=this.stats.color; ctx.fillRect(-6,-6,12,12);
         ctx.fillStyle='black'; ctx.fillRect(0,-2,12,4); ctx.restore();
@@ -468,10 +508,32 @@ class Projectile {
     draw(ctx) { ctx.fillStyle=CARD_TYPES[this.type].color; ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, 6.28); ctx.fill(); }
 }
 
-function createExplosion(x,y,c,n) { for(let i=0;i<n;i++) particles.push({x:x,y:y,c:c,vx:Math.cos(Math.random()*6)*2,vy:Math.sin(Math.random()*6)*2,l:20}); }
+class Particle {
+    constructor(x, y, color) {
+        this.x = x; this.y = y; this.color = color;
+        let a = Math.random() * 6.28;
+        let s = Math.random() * 3;
+        this.vx = Math.cos(a)*s; this.vy = Math.sin(a)*s;
+        this.life = 20 + Math.random()*15;
+    }
+    update() { 
+        this.x+=this.vx; 
+        this.y+=this.vy; 
+        this.life--; 
+        return this.life > 0; 
+    }
+    draw(ctx) { 
+        ctx.globalAlpha = this.life/35; 
+        ctx.fillStyle = this.color; 
+        ctx.fillRect(this.x, this.y, 3, 3); 
+        ctx.globalAlpha = 1; 
+    }
+}
+
+function createExplosion(x,y,c,n) { for(let i=0;i<n;i++) particles.push(new Particle(x, y, c)); }
 
 /**
- * INPUT & HAND LOGIC
+ * INPUT & LOGIC
  */
 function handleInput(cx, cy) {
     if (gameState.gameOver || selectedSlotIndex === -1) return;
@@ -495,7 +557,7 @@ function handleInput(cx, cy) {
         if (tile.type === TYPE_WALL && tile.item) {
             towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
             tile.item = null;
-            createExplosion(gx*32+16, gy*32+16, "#88f", 15);
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#88f", 15);
             placed = true;
         }
     } 
@@ -503,7 +565,7 @@ function handleInput(cx, cy) {
     else if (data.target === 'floor') {
         if (tile.type === TYPE_FLOOR && !tile.item && tile.type !== TYPE_CASTLE) {
             tile.item = { type: cardKey, hp: 30 };
-            createExplosion(gx*32+16, gy*32+16, "#c96", 8);
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c96", 8);
             placed = true;
         }
     }
@@ -512,13 +574,13 @@ function handleInput(cx, cy) {
         if (tile.type === TYPE_WALL && !tile.item) {
             tile.item = { type: cardKey };
             towers.push(new Tower(gx, gy, cardKey));
-            createExplosion(gx*32+16, gy*32+16, "#fff", 8);
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 8);
             placed = true;
         }
     }
 
     if (placed) {
-        hand[selectedSlotIndex] = null; // Remove card
+        hand[selectedSlotIndex] = null; // Remove card from hand
         selectedSlotIndex = -1; // Deselect
         updateUI();
     }
@@ -604,7 +666,7 @@ function updateUI() {
                 <div class="type">${data.desc}</div>
             `;
             div.onclick = () => {
-                if (gameState.active) return; // Optional: prevent placement during wave? (or allow it)
+                if (gameState.active) return; // Can't build during wave (balance choice)
                 selectedSlotIndex = (selectedSlotIndex === index) ? -1 : index;
                 updateUI();
             };
@@ -617,6 +679,7 @@ function updateUI() {
     });
 }
 
+// Start
 init();
 </script>
 </body>
