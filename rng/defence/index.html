@@ -24,7 +24,7 @@
 
         #gameCanvas {
             display: block;
-            margin: 0 auto;
+            margin: 52px auto 0;
             background: #1a1a1a;
             box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
         }
@@ -203,15 +203,20 @@
             z-index: 100;
         }
 
-        #invest-info {
+        .market-card .lock-icon {
             position: absolute;
-            bottom: 125px;
-            width: 100%;
-            text-align: center;
-            font-size: 10px;
-            color: #8f8;
-            text-shadow: 0 1px 2px black;
-            pointer-events: none;
+            top: 2px;
+            right: 2px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .market-card.locked .lock-icon {
+            display: block;
+        }
+
+        .market-card.locked {
+            border-color: #fca !important;
         }
 
         #stats-panel {
@@ -254,6 +259,94 @@
             color: #fd0;
             font-weight: bold;
         }
+
+        #help-btn {
+            background: #444;
+            color: #ddd;
+            border: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            font-weight: 900;
+            cursor: pointer;
+            box-shadow: 0 2px 0 #222;
+            margin-right: 15px;
+            /* Changed from margin-left to margin-right */
+            font-size: 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            /* Ensure it's clickable */
+        }
+
+        #help-btn:active {
+            transform: translateY(2px);
+            box-shadow: none;
+        }
+
+        #help-modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(15, 15, 15, 0.95);
+            border: 2px solid #555;
+            padding: 20px;
+            width: 320px;
+            border-radius: 8px;
+            z-index: 200;
+            display: none;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+            pointer-events: auto;
+            /* CRITICAL FIX: Enable clicks inside modal */
+        }
+
+        #help-modal h2 {
+            margin-top: 0;
+            color: #fd0;
+            text-align: center;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+
+        #help-modal ul {
+            padding-left: 20px;
+            line-height: 1.5;
+            color: #ccc;
+            font-size: 14px;
+        }
+
+        #help-modal li {
+            margin-bottom: 10px;
+        }
+
+        #help-modal li span.key {
+            color: #fd0;
+            /* Highlight key terms */
+            font-weight: bold;
+        }
+
+
+        #help-modal strong {
+            color: #fff;
+        }
+
+        #close-help {
+            display: block;
+            margin: 20px auto 0;
+            padding: 8px 20px;
+            background: #333;
+            color: white;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        #close-help:hover {
+            background: #555;
+        }
     </style>
 </head>
 
@@ -261,6 +354,7 @@
 
     <div id="ui-layer">
         <div id="hud">
+            <button id="help-btn">?</button>
             <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
             <div class="stat money-stat">$<span id="money-display">150</span></div>
             <div class="stat" style="color:#4af">WAVE <span id="wave-display">1</span></div>
@@ -268,7 +362,19 @@
         </div>
 
         <div id="message-overlay">WAVE COMPLETE</div>
-        <div id="invest-info">STACK CARDS TO UPGRADE TOWERS</div>
+
+        <div id="help-modal">
+            <h2>HOW TO PLAY</h2>
+            <ul>
+                <li><strong>UPGRADE:</strong> Stack duplicates of cards on existing towers or items to upgrade them
+                    (Level up).</li>
+                <li><strong>INTEREST:</strong> Any cards left unbought in the shop give <strong>50%</strong> of their
+                    value as CASH at the end of the wave.</li>
+                <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
+                    of the wave.</li>
+            </ul>
+            <button id="close-help">CLOSE</button>
+        </div>
 
         <div id="stats-panel">
             <h3><span id="sp-name">NAME</span> <span id="sp-icon"></span></h3>
@@ -327,11 +433,12 @@
         };
 
         const CARD_TYPES = {
-            pistol: { name: "Pistol", price: 50, icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Fast shot" },
-            missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg" },
-            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT" },
-            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies" },
-            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret" }
+            pistol: { name: "Pistol", price: 50, icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Fast shot", weight: 1 },
+            missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg", weight: 1 },
+            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT", weight: 1 },
+            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies", weight: 1 },
+            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret", weight: 0.25 },
+            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 100, target: 'any', desc: "Massive Area Dmg", weight: 0.5 }
         };
 
         /**
@@ -361,13 +468,20 @@
                 }
             });
 
+            document.getElementById('help-btn').addEventListener('click', () => {
+                document.getElementById('help-modal').style.display = 'block';
+            });
+            document.getElementById('close-help').addEventListener('click', () => {
+                document.getElementById('help-modal').style.display = 'none';
+            });
+
             resetGame();
             requestAnimationFrame(loop);
         }
 
         function resize() {
             let availW = window.innerWidth;
-            let availH = window.innerHeight - 110;
+            let availH = window.innerHeight - 165;
             let scale = Math.min(availW / (GRID_W * TILE_SIZE), availH / (GRID_H * TILE_SIZE));
             canvas.width = GRID_W * TILE_SIZE;
             canvas.height = GRID_H * TILE_SIZE;
@@ -557,6 +671,18 @@
                 ctx.beginPath();
                 ctx.arc(sx, sy, 14, 0, Math.PI * 2);
                 ctx.stroke();
+
+                // Draw Range Selection
+                if (selectedEntity instanceof Tower) {
+                    let range = selectedEntity.currentStats.range * TILE_SIZE;
+                    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+                    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, range, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
             }
 
             requestAnimationFrame(loop);
@@ -566,12 +692,49 @@
          * MARKET & ECONOMY
          */
         function generateMarket() {
-            marketCards = [];
-            let keys = Object.keys(CARD_TYPES);
+            let newCards = new Array(MARKET_SIZE).fill(null);
+
+            // Keep locked cards in their exact positions
             for (let i = 0; i < MARKET_SIZE; i++) {
-                let type = keys[Math.floor(Math.random() * keys.length)];
-                marketCards.push({ type: type, bought: false });
+                if (marketCards[i] && marketCards[i].locked && !marketCards[i].bought) {
+                    newCards[i] = marketCards[i];
+                }
             }
+
+            let keys = Object.keys(CARD_TYPES);
+
+            // Calculate total weight
+            let totalWeight = 0;
+            keys.forEach(k => totalWeight += (CARD_TYPES[k].weight || 1));
+
+            // Fill empty slots
+            for (let i = 0; i < MARKET_SIZE; i++) {
+                if (newCards[i] === null) {
+                    let r = Math.random() * totalWeight;
+                    let selectedType = keys[0];
+                    let currentW = 0;
+
+                    for (let k of keys) {
+                        currentW += (CARD_TYPES[k].weight || 1);
+                        if (r <= currentW) {
+                            selectedType = k;
+                            break;
+                        }
+                    }
+
+                    newCards[i] = { type: selectedType, bought: false, locked: false };
+                }
+            }
+            marketCards = newCards;
+            updateUI();
+        }
+
+        function toggleLock(index) {
+            if (gameState.gameOver) return;
+            let card = marketCards[index];
+            if (card.bought) return; // Cannot lock bought cards
+
+            card.locked = !card.locked;
             updateUI();
         }
 
@@ -615,10 +778,13 @@
                 if (type === 'boss') { this.hp = 400 * mult; this.speed = 0.6; this.color = '#c0c'; this.r = 12; }
                 else if (type === 'fast') { this.hp = 20 * mult; this.speed = 2.4; this.color = '#ee0'; this.r = 6; }
                 else if (type === 'tank') { this.hp = 80 * mult; this.speed = 0.7; this.color = '#c22'; this.r = 10; }
+                else if (type === 'poison_resistant') { this.hp = 60 * mult; this.speed = 1.2; this.color = '#2d2'; this.r = 9; }
+                else if (type === 'flying') { this.hp = 45 * mult; this.speed = 1.5; this.color = '#a74'; this.r = 7; } // Flying
                 else { this.hp = 40 * mult; this.speed = 1.3; this.color = '#f55'; this.r = 8; }
 
                 this.maxHp = this.hp;
                 this.poisoned = 0;
+                this.poisonTickDamage = 0;
                 this.vx = 0; this.vy = 0;
                 this.dead = false;
                 this.reachedGoal = false;
@@ -663,7 +829,7 @@
 
                 let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
                 let speedMod = 1;
-                if (cell && cell.item && cell.item.type === 'sand') {
+                if (cell && cell.item && cell.item.type === 'sand' && this.type !== 'flying') {
                     speedMod = 0.4;
                     if (Math.random() < 0.03) {
                         cell.item.hp--;
@@ -673,7 +839,7 @@
                 }
 
                 if (this.poisoned > 0) {
-                    this.hp -= (this.maxHp * 0.003) + 0.1; this.poisoned--;
+                    this.hp -= this.poisonTickDamage; this.poisoned--;
                     if (this.hp <= 0) { this.dead = true; return; }
                 }
 
@@ -820,7 +986,11 @@
                     createExplosion(this.x, this.y, "orange", radius);
                     for (let e of enemies) { if (Math.hypot(e.x - this.x, e.y - this.y) < 64) e.hp -= this.dmg; if (e.hp <= 0) e.dead = true; }
                 } else if (this.type === 'poison') {
-                    t.poisoned = 150 + (this.level * 50);
+                    if (t.type !== 'poison_resistant') {
+                        t.poisoned = 150 + (this.level * 50);
+                        let pd = this.dmg * 0.1;
+                        if (pd > t.poisonTickDamage) t.poisonTickDamage = pd;
+                    }
                     t.hp -= this.dmg; // Initial hit
                 }
                 else { t.hp -= this.dmg; createExplosion(this.x, this.y, "#fff", 5); }
@@ -1014,8 +1184,30 @@
             let tile = grid[gy][gx];
             let actionTaken = false;
 
+            // --- POWER CARD LOGIC (NUKE) ---
+            if (data.target === 'any') {
+                // Apply immediately at clicked location (or center of tile)
+                let tx = gx * TILE_SIZE + 16;
+                let ty = gy * TILE_SIZE + 16;
+
+                // Visuals
+                createExplosion(tx, ty, data.color || "#f44", 50); // Big explosion
+
+                // Damage Logic
+                let rangePx = (data.range || 4) * TILE_SIZE;
+                for (let e of enemies) {
+                    if (Math.hypot(e.x - tx, e.y - ty) <= rangePx) {
+                        e.hp -= (data.damage || 100);
+                        if (e.hp <= 0) {
+                            e.dead = true;
+                            createExplosion(e.x, e.y, "#ffcc00", 10);
+                        }
+                    }
+                }
+                actionTaken = true;
+            }
             // --- SALVAGE LOGIC ---
-            if (cardKey === 'salvage') {
+            else if (cardKey === 'salvage') {
                 if (tile.type === TYPE_WALL && tile.item) {
                     towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
                     tile.item = null;
@@ -1082,8 +1274,10 @@
 
             for (let i = 0; i < count; i++) {
                 let r = Math.random();
-                if (gameState.wave > 2 && r > 0.75) gameState.spawnQueue.push('tank');
-                else if (gameState.wave > 1 && r > 0.55) gameState.spawnQueue.push('fast');
+                if (gameState.wave > 2 && r > 0.85) gameState.spawnQueue.push('tank');
+                else if (gameState.wave > 1 && r > 0.70) gameState.spawnQueue.push('fast');
+                else if (gameState.wave > 3 && r > 0.55) gameState.spawnQueue.push('poison_resistant');
+                else if (gameState.wave > 4 && r > 0.40) gameState.spawnQueue.push('flying');
                 else gameState.spawnQueue.push('norm');
             }
         }
@@ -1096,7 +1290,7 @@
 
             let investmentReturn = 0;
             marketCards.forEach(card => {
-                if (!card.bought) {
+                if (!card.bought && !card.locked) {
                     let val = Math.floor(CARD_TYPES[card.type].price * 0.5);
                     investmentReturn += val;
                 }
@@ -1132,24 +1326,40 @@
             document.getElementById('wave-display').innerText = gameState.wave;
 
             let marketEl = document.getElementById('market-strip');
-            marketEl.innerHTML = '';
+
+            // Re-create DOM only if count changes (or empty)
+            if (marketEl.children.length !== marketCards.length) {
+                marketEl.innerHTML = '';
+                marketCards.forEach((card, i) => {
+                    let d = document.createElement('div');
+                    // Attach listeners ONCE
+                    d.onclick = () => selectCard(i);
+                    d.ondblclick = (e) => {
+                        e.stopPropagation();
+                        toggleLock(i);
+                    };
+                    marketEl.appendChild(d);
+                });
+            }
+
+            // Update content/styles of existing elements
+            let children = marketEl.children;
             marketCards.forEach((card, i) => {
                 let data = CARD_TYPES[card.type];
-                let d = document.createElement('div');
+                let d = children[i];
                 let canAfford = gameState.money >= data.price;
                 let isSelected = selectedMarketIndex === i;
 
-                d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''}`;
-                d.style.borderColor = isSelected ? '#0f0' : (card.bought ? '#333' : data.color);
+                d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''} ${card.locked ? 'locked' : ''}`;
+                d.style.borderColor = isSelected ? '#0f0' : (card.locked ? '#fca' : (card.bought ? '#333' : data.color));
 
                 d.innerHTML = `
             <div class="m-icon">${data.icon}</div>
             <div class="m-name" style="color:${card.bought ? '#555' : data.color}">${data.name}</div>
             <div class="m-cost">$${data.price}</div>
             <div class="sold-badge">SOLD</div>
+            <div class="lock-icon">🔒</div>
         `;
-                d.onclick = () => selectCard(i);
-                marketEl.appendChild(d);
             });
         }
 
@@ -1187,7 +1397,7 @@
                 nameEl.innerText = `${t.baseStats.name} TOWER (L${t.level})`;
                 iconEl.innerText = t.baseStats.icon;
 
-                contentEl.innerHTML += `<div class="stat-row"><span>Damage</span><span class="stat-val">${Math.floor(data.damage)}</span></div>`;
+                contentEl.innerHTML += `<div class="stat-row"><span>Damage</span><span class="stat-val">${data.damage.toFixed(1)}</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Range</span><span class="stat-val">${data.range.toFixed(1)}</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Cooldown</span><span class="stat-val">${data.cd.toFixed(1)}f</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${t.stacks}</span></div>`;
