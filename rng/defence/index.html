@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Maze Defense: Direct Market</title>
+    <style>
+        * { box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
+        body { margin: 0; padding: 0; background: #0d0d0d; overflow: hidden; font-family: 'Courier New', monospace; color: white; }
+        
+        /* Game Canvas */
+        #gameCanvas { display: block; margin: 0 auto; background: #1a1a1a; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
+
+        /* UI Overlay */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+        
+        /* Top HUD */
+        #hud { background: rgba(0,0,0,0.9); padding: 5px 15px; display: flex; justify-content: space-between; align-items: center; pointer-events: auto; border-bottom: 2px solid #333; height: 50px; }
+        .stat { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; }
+        .money-stat { color: #fd0; text-shadow: 0 0 5px #aa0; font-size: 20px; }
+        
+        #wave-btn { background: #0077ff; color: white; border: none; padding: 6px 16px; border-radius: 2px; font-weight: 900; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #004499; transition: all 0.1s; text-transform: uppercase; letter-spacing: 1px; font-size: 12px; }
+        #wave-btn:active { transform: translateY(4px); box-shadow: none; }
+        #wave-btn:disabled { background: #444; box-shadow: none; color: #888; transform: translateY(4px); cursor: not-allowed; }
+
+        /* BOTTOM MARKET STRIP */
+        #market-strip {
+            height: 110px;
+            background: rgba(10,10,10,0.95);
+            border-top: 2px solid #444;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            pointer-events: auto;
+            padding: 10px;
+            z-index: 10;
+        }
+
+        .market-card {
+            width: 70px;
+            height: 90px;
+            background: #222;
+            border: 2px solid #555;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px;
+            cursor: pointer;
+            transition: 0.1s;
+            position: relative;
+        }
+        
+        /* Card States */
+        .market-card:active { transform: scale(0.95); }
+        
+        /* Selected State */
+        .market-card.selected { 
+            border-color: #0f0; 
+            background: #153315; 
+            transform: translateY(-10px); 
+            box-shadow: 0 0 15px rgba(0,255,0,0.3); 
+            z-index: 20;
+        }
+
+        /* Bought/Sold State */
+        .market-card.bought { 
+            opacity: 0.3; 
+            pointer-events: none; 
+            border-color: #333; 
+            background: #111;
+            filter: grayscale(1); 
+        }
+        
+        /* Too Expensive State */
+        .market-card.too-expensive { 
+            opacity: 0.5; 
+            border-color: #500; 
+            cursor: not-allowed;
+        }
+        
+        .market-card .m-icon { font-size: 24px; }
+        .market-card .m-name { font-size: 9px; text-transform: uppercase; font-weight: bold; text-align: center; color: #ccc;}
+        .market-card .m-cost { color: #fd0; font-size: 12px; font-weight: bold; }
+        .market-card .sold-badge { position: absolute; top: 35%; width: 100%; text-align: center; background: #a00; color: white; font-size: 10px; transform: rotate(-15deg); font-weight: bold; display: none; }
+        .market-card.bought .sold-badge { display: block; }
+
+        #message-overlay { position: absolute; top: 35%; width: 100%; text-align: center; font-size: 28px; font-weight: 900; color: white; text-shadow: 0 0 10px #000; pointer-events: none; opacity: 0; transition: opacity 0.3s; letter-spacing: 3px; background: rgba(0,0,0,0.7); padding: 20px 0; z-index: 100; }
+        
+        #invest-info {
+            position: absolute;
+            bottom: 115px;
+            width: 100%;
+            text-align: center;
+            font-size: 10px;
+            color: #8f8;
+            text-shadow: 0 1px 2px black;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="hud">
+            <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
+            <div class="stat money-stat">$<span id="money-display">150</span></div>
+            <div class="stat" style="color:#4af">WAVE <span id="wave-display">1</span></div>
+            <button id="wave-btn">START</button>
+        </div>
+        
+        <div id="message-overlay">WAVE COMPLETE</div>
+        
+        <div id="invest-info">UNUSED CARDS AUTO-SELL FOR 50% VALUE AFTER WAVE</div>
+        
+        <div id="market-strip">
+            </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * GAME CONFIGURATION
+ */
+const TILE_SIZE = 32;
+const GRID_W = 15; 
+const GRID_H = 19;
+const MARKET_SIZE = 6;
+
+// Colors
+const C_BG = '#111';
+const C_WALL = '#3a3a3a';
+const C_FLOOR = '#161616';
+const C_CASTLE = '#0077ff';
+
+// Enums
+const TYPE_FLOOR = 0;
+const TYPE_WALL = 1;
+const TYPE_CASTLE = 2;
+
+// Global State
+let canvas, ctx;
+let lastTime = 0;
+let grid = [];
+let flowField = []; 
+let enemies = [];
+let towers = [];
+let projectiles = [];
+let particles = [];
+
+// Economy & Market
+let marketCards = []; // Array of objects { type: string, bought: boolean }
+let selectedMarketIndex = -1;
+
+let gameState = {
+    hp: 20,
+    money: 200, 
+    wave: 1,
+    active: false,
+    spawnQueue: [],
+    spawnTimer: 0,
+    gameOver: false
+};
+
+const CARD_TYPES = {
+    pistol:  { name: "Pistol",  price: 50,  icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Fast shot" },
+    missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg" },
+    poison:  { name: "Poison",  price: 80,  icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT" },
+    sand:    { name: "Sand",    price: 30,  icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies" },
+    salvage: { name: "Salvage", price: 20,  icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret" }
+};
+
+/**
+ * INITIALIZATION
+ */
+function init() {
+    canvas = document.getElementById('gameCanvas');
+    ctx = canvas.getContext('2d');
+    
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // Input
+    canvas.addEventListener('mousedown', (e) => handleInput(e.clientX, e.clientY));
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault(); 
+        handleInput(e.touches[0].clientX, e.touches[0].clientY);
+    }, {passive: false});
+
+    document.getElementById('wave-btn').addEventListener('click', () => {
+        if(!gameState.active) startWave();
+    });
+
+    resetGame();
+    requestAnimationFrame(loop);
+}
+
+function resize() {
+    let availW = window.innerWidth;
+    let availH = window.innerHeight - 110; // Reserve space for bottom market
+    let scale = Math.min(availW / (GRID_W * TILE_SIZE), availH / (GRID_H * TILE_SIZE));
+    canvas.width = GRID_W * TILE_SIZE;
+    canvas.height = GRID_H * TILE_SIZE;
+    canvas.style.width = (canvas.width * scale) + "px";
+    canvas.style.height = (canvas.height * scale) + "px";
+}
+
+function resetGame() {
+    generateMazeMap();
+    let cx = Math.floor(GRID_W/2);
+    let cy = Math.floor(GRID_H/2);
+    grid[cy][cx].type = TYPE_CASTLE;
+    getNeighbors(cx, cy).forEach(n => grid[n.y][n.x].type = TYPE_FLOOR);
+
+    towers = [];
+    enemies = [];
+    projectiles = [];
+    particles = [];
+    
+    gameState.hp = 20;
+    gameState.money = 200; 
+    gameState.wave = 1;
+    gameState.active = false;
+    gameState.gameOver = false;
+    
+    selectedMarketIndex = -1;
+    generateMarket(); 
+    calcFlowField();
+}
+
+/**
+ * MAP GENERATION
+ */
+function generateMazeMap() {
+    grid = [];
+    for(let y=0; y<GRID_H; y++) {
+        let row = [];
+        for(let x=0; x<GRID_W; x++) row.push({type: TYPE_WALL, item: null});
+        grid.push(row);
+    }
+    let cx = Math.floor(GRID_W/2);
+    let cy = Math.floor(GRID_H/2);
+    let stack = [{x:cx, y:cy}];
+    grid[cy][cx].type = TYPE_FLOOR;
+
+    while(stack.length > 0) {
+        let current = stack[stack.length - 1];
+        let neighbors = [];
+        let dirs = [[0,-2], [0,2], [-2,0], [2,0]];
+        for(let d of dirs) {
+            let nx = current.x + d[0];
+            let ny = current.y + d[1];
+            if(nx > 0 && nx < GRID_W-1 && ny > 0 && ny < GRID_H-1) {
+                if(grid[ny][nx].type === TYPE_WALL) neighbors.push({x:nx, y:ny, dx:d[0]/2, dy:d[1]/2});
+            }
+        }
+        if(neighbors.length > 0) {
+            let next = neighbors[Math.floor(Math.random() * neighbors.length)];
+            grid[next.y][next.x].type = TYPE_FLOOR;
+            grid[current.y + next.dy][current.x + next.dx].type = TYPE_FLOOR;
+            stack.push(next);
+        } else {
+            stack.pop();
+        }
+    }
+    // Open Corners
+    let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
+    corners.forEach(c => {
+        grid[c[1]][c[0]].type = TYPE_FLOOR;
+        if (c[0]===0) grid[c[1]][1].type = TYPE_FLOOR; else grid[c[1]][GRID_W-2].type = TYPE_FLOOR;
+    });
+}
+
+function getNeighbors(x, y) {
+    let res = [];
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(d => {
+        let nx = x+d[0], ny = y+d[1];
+        if(nx>=0 && nx<GRID_W && ny>=0 && ny<GRID_H) res.push({x:nx, y:ny});
+    });
+    return res;
+}
+
+/**
+ * GAME LOOP
+ */
+function update() {
+    if (gameState.gameOver) return;
+
+    if (gameState.active && gameState.spawnQueue.length > 0) {
+        gameState.spawnTimer++;
+        if (gameState.spawnTimer > 30) {
+            spawnEnemy(gameState.spawnQueue.shift());
+            gameState.spawnTimer = 0;
+        }
+    } else if (gameState.active && gameState.spawnQueue.length === 0 && enemies.length === 0) {
+        endWave();
+    }
+
+    towers.forEach(t => t.update());
+    for(let i = projectiles.length-1; i>=0; i--) { if (!projectiles[i].update()) projectiles.splice(i, 1); }
+    for(let i = enemies.length-1; i>=0; i--) {
+        let e = enemies[i];
+        e.update();
+        if (e.dead) {
+            enemies.splice(i, 1);
+        } else if (e.reachedGoal) {
+            gameState.hp -= 1;
+            enemies.splice(i, 1);
+            createExplosion(e.x, e.y, "#f44", 15);
+            updateUI();
+            if (gameState.hp <= 0) gameOver();
+        }
+    }
+    for(let i = particles.length-1; i>=0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
+}
+
+function draw() {
+    ctx.fillStyle = C_BG;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for(let y=0; y<GRID_H; y++) {
+        for(let x=0; x<GRID_W; x++) {
+            let px = x * TILE_SIZE;
+            let py = y * TILE_SIZE;
+            let cell = grid[y][x];
+
+            if (cell.type === TYPE_WALL) {
+                ctx.fillStyle = '#222'; ctx.fillRect(px, py+4, TILE_SIZE, TILE_SIZE-4); 
+                ctx.fillStyle = C_WALL; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE-4); 
+                ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE-4);
+            } else {
+                ctx.fillStyle = C_FLOOR; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            }
+            
+            if (cell.item && cell.item.type === 'sand') {
+                ctx.fillStyle = '#875';
+                ctx.beginPath(); ctx.arc(px+16, py+16, 12, 0, Math.PI*2); ctx.fill();
+                let pct = cell.item.hp / 30;
+                ctx.fillStyle = `rgba(0,0,0,${1-pct})`; 
+                ctx.beginPath(); ctx.arc(px+16, py+16, 8, 0, Math.PI*2); ctx.fill();
+            }
+            
+            if (cell.type === TYPE_CASTLE) {
+                ctx.fillStyle = C_CASTLE;
+                ctx.fillRect(px+4, py+4, TILE_SIZE-8, TILE_SIZE-8);
+                ctx.strokeStyle = 'white'; ctx.lineWidth=2; ctx.strokeRect(px+6, py+6, TILE_SIZE-12, TILE_SIZE-12);
+            }
+        }
+    }
+
+    towers.forEach(t => t.draw(ctx));
+    enemies.forEach(e => e.draw(ctx));
+    projectiles.forEach(p => p.draw(ctx));
+    particles.forEach(p => p.draw(ctx));
+    
+    // Draw placement preview if a card is selected
+    if (selectedMarketIndex !== -1) {
+        // We can't easily draw mouse cursor position here without tracking it in a global
+        // But we can highlight valid tiles? Let's just keep it simple.
+    }
+}
+
+function loop(timestamp) {
+    let dt = timestamp - lastTime;
+    lastTime = timestamp;
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+/**
+ * MARKET & ECONOMY
+ */
+function generateMarket() {
+    marketCards = [];
+    let keys = Object.keys(CARD_TYPES);
+    for(let i=0; i<MARKET_SIZE; i++) {
+        let type = keys[Math.floor(Math.random() * keys.length)];
+        marketCards.push({ type: type, bought: false });
+    }
+    updateUI();
+}
+
+function selectCard(index) {
+    if (gameState.gameOver) return;
+    let card = marketCards[index];
+    if (card.bought) return;
+    let data = CARD_TYPES[card.type];
+    
+    if (gameState.money < data.price) {
+        showMessage("TOO EXPENSIVE", "red");
+        return;
+    }
+    
+    // Toggle selection
+    if (selectedMarketIndex === index) {
+        selectedMarketIndex = -1;
+    } else {
+        selectedMarketIndex = index;
+    }
+    updateUI();
+}
+
+/**
+ * ENTITIES & CLASSES
+ */
+class Enemy {
+    constructor(type) {
+        let corners = [[0,0], [GRID_W-1, 0], [0, GRID_H-1], [GRID_W-1, GRID_H-1]];
+        let corner = corners[Math.floor(Math.random()*corners.length)];
+        this.gx = corner[0]; 
+        this.gy = corner[1];
+        this.x = this.gx * TILE_SIZE + 16; 
+        this.y = this.gy * TILE_SIZE + 16;
+        this.type = type;
+        
+        let mult = Math.pow(1.15, gameState.wave);
+        if (type === 'boss') { this.hp=400*mult; this.speed=0.6; this.color='#c0c'; this.r=12; }
+        else if (type === 'fast') { this.hp=20*mult; this.speed=2.4; this.color='#ee0'; this.r=6; }
+        else if (type === 'tank') { this.hp=80*mult; this.speed=0.7; this.color='#c22'; this.r=10; }
+        else { this.hp=40*mult; this.speed=1.3; this.color='#f55'; this.r=8; }
+        
+        this.maxHp = this.hp;
+        this.poisoned = 0;
+        this.vx=0; this.vy=0;
+        this.dead = false; 
+        this.reachedGoal = false;
+    }
+
+    update() {
+        let gx = Math.floor(this.x/TILE_SIZE); 
+        let gy = Math.floor(this.y/TILE_SIZE);
+        let cx = Math.floor(GRID_W/2)*TILE_SIZE+16; 
+        let cy = Math.floor(GRID_H/2)*TILE_SIZE+16;
+        
+        if (Math.hypot(this.x-cx, this.y-cy) < 20) { this.reachedGoal = true; return; }
+
+        let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
+        let speedMod = 1;
+        if (cell && cell.item && cell.item.type === 'sand') {
+            speedMod = 0.4;
+            if (Math.random() < 0.03) {
+                cell.item.hp--;
+                createExplosion(this.x, this.y, '#aa8', 1);
+                if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx*32+16, gy*32+16, "#c94", 8); }
+            }
+        }
+        
+        if (this.poisoned > 0) {
+            this.hp -= (this.maxHp * 0.003) + 0.1; this.poisoned--;
+            if (this.hp <= 0) { this.dead = true; return; }
+        }
+
+        let best = 9999; let tx = this.x; let ty = this.y;
+        [[0,1],[0,-1],[1,0],[-1,0]].forEach(d => {
+            let nx=gx+d[0], ny=gy+d[1];
+            if(nx>=0 && nx<GRID_W && ny>=0 && ny<GRID_H) {
+                let dist = flowField[ny][nx];
+                if(dist!==null && dist<best) { best=dist; tx=nx*TILE_SIZE+16; ty=ny*TILE_SIZE+16; }
+            }
+        });
+
+        let dx = tx-this.x, dy = ty-this.y;
+        let dist = Math.hypot(dx, dy);
+        if(dist>1) {
+            this.vx = (dx/dist)*this.speed*speedMod;
+            this.vy = (dy/dist)*this.speed*speedMod;
+            this.x+=this.vx; this.y+=this.vy;
+        }
+    }
+    
+    draw(ctx) {
+        ctx.fillStyle = this.color; 
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
+        ctx.fillStyle = '#400'; ctx.fillRect(this.x-8, this.y-12, 16, 4);
+        ctx.fillStyle = (this.hp/this.maxHp)>0.5?'#0f0':'#f00'; ctx.fillRect(this.x-8, this.y-12, 16*(this.hp/this.maxHp), 4);
+    }
+}
+
+class Tower {
+    constructor(gx, gy, type) {
+        this.gx=gx; this.gy=gy; this.type=type;
+        this.x=gx*TILE_SIZE+16; this.y=gy*TILE_SIZE+16;
+        this.stats=CARD_TYPES[type]; this.cd=0; this.angle=0;
+    }
+    update() { if(this.cd>0) this.cd--; else this.shoot(); }
+    shoot() {
+        let target=null, min=this.stats.range*TILE_SIZE;
+        for(let e of enemies) {
+            let d = Math.hypot(e.x-this.x, e.y-this.y);
+            if(d<min) { min=d; target=e; }
+        }
+        if(target) {
+            this.cd=this.stats.cd; this.angle=Math.atan2(target.y-this.y, target.x-this.x);
+            projectiles.push(new Projectile(this.x, this.y, target, this.type));
+        }
+    }
+    draw(ctx) {
+        ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(this.x, this.y-2, 10, 0, 6.28); ctx.fill();
+        ctx.save(); ctx.translate(this.x, this.y-2); ctx.rotate(this.angle);
+        ctx.fillStyle=this.stats.color; ctx.fillRect(-6,-6,12,12);
+        ctx.fillStyle='black'; ctx.fillRect(0,-2,12,4); ctx.restore();
+    }
+}
+
+class Projectile {
+    constructor(x,y,t,type) {
+        this.x=x; this.y=y; this.type=type; this.speed=8; this.life=50;
+        let a=Math.atan2(t.y-y, t.x-x); this.vx=Math.cos(a)*8; this.vy=Math.sin(a)*8;
+        this.dmg=CARD_TYPES[type].damage;
+    }
+    update() {
+        this.x+=this.vx; this.y+=this.vy; this.life--;
+        if(this.life<=0) return false;
+        for(let e of enemies) {
+            if(Math.hypot(e.x-this.x, e.y-this.y) < e.r+8) { this.hit(e); return false; }
+        }
+        return true;
+    }
+    hit(t) {
+        if(this.type==='missile') {
+            createExplosion(this.x, this.y, "orange", 12);
+            for(let e of enemies) { if(Math.hypot(e.x-this.x, e.y-this.y)<64) e.hp-=this.dmg; if(e.hp<=0) e.dead=true; }
+        } else if(this.type==='poison') { t.poisoned=150; t.hp-=5; } 
+        else { t.hp-=this.dmg; createExplosion(this.x, this.y, "#fff", 5); }
+        if(t.hp<=0) { t.dead=true; createExplosion(t.x, t.y, "#e44", 8); }
+    }
+    draw(ctx) { ctx.fillStyle=CARD_TYPES[this.type].color; ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, 6.28); ctx.fill(); }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x; this.y = y; this.color = color;
+        let a = Math.random() * 6.28;
+        let s = Math.random() * 3;
+        this.vx = Math.cos(a)*s; this.vy = Math.sin(a)*s;
+        this.life = 20 + Math.random()*15;
+    }
+    update() { this.x+=this.vx; this.y+=this.vy; this.life--; return this.life > 0; }
+    draw(ctx) { ctx.globalAlpha = this.life/35; ctx.fillStyle = this.color; ctx.fillRect(this.x, this.y, 3, 3); ctx.globalAlpha = 1; }
+}
+
+function createExplosion(x,y,c,n) { for(let i=0;i<n;i++) particles.push(new Particle(x, y, c)); }
+
+/**
+ * PATHFINDING
+ */
+function calcFlowField() {
+    flowField = [];
+    for(let y=0; y<GRID_H; y++) {
+        let row = [];
+        for(let x=0; x<GRID_W; x++) row.push(null);
+        flowField.push(row);
+    }
+    let queue = [];
+    let cx = Math.floor(GRID_W/2);
+    let cy = Math.floor(GRID_H/2);
+    
+    flowField[cy][cx] = 0;
+    queue.push({x: cx, y: cy});
+
+    const dirs = [[0,1], [0,-1], [1,0], [-1,0]];
+    while(queue.length > 0) {
+        let cur = queue.shift();
+        let dist = flowField[cur.y][cur.x];
+        for(let d of dirs) {
+            let nx = cur.x + d[0];
+            let ny = cur.y + d[1];
+            if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                if (grid[ny][nx].type !== TYPE_WALL && flowField[ny][nx] === null) {
+                    flowField[ny][nx] = dist + 1;
+                    queue.push({x: nx, y: ny});
+                }
+            }
+        }
+    }
+}
+
+/**
+ * INPUT & LOGIC
+ */
+function handleInput(cx, cy) {
+    if (gameState.gameOver || selectedMarketIndex === -1) return;
+
+    let rect = canvas.getBoundingClientRect();
+    let x = (cx - rect.left) * (canvas.width / rect.width);
+    let y = (cy - rect.top) * (canvas.height / rect.height);
+    let gx = Math.floor(x / TILE_SIZE); let gy = Math.floor(y / TILE_SIZE);
+    
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
+
+    let marketCard = marketCards[selectedMarketIndex];
+    if (marketCard.bought) return; // Should not happen given logic, but safety check
+
+    let cardKey = marketCard.type;
+    let data = CARD_TYPES[cardKey];
+    
+    // Double check money
+    if (gameState.money < data.price) {
+        showMessage("NOT ENOUGH CASH", "red");
+        return;
+    }
+
+    let tile = grid[gy][gx];
+    let placed = false;
+
+    if (cardKey === 'salvage') {
+        if (tile.type === TYPE_WALL && tile.item) {
+            towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
+            tile.item = null;
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#88f", 15);
+            placed = true;
+        }
+    } 
+    else if (data.target === 'floor') {
+        if (tile.type === TYPE_FLOOR && !tile.item && tile.type !== TYPE_CASTLE) {
+            tile.item = { type: cardKey, hp: 30 };
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#c96", 8);
+            placed = true;
+        }
+    }
+    else if (data.target === 'wall') {
+        if (tile.type === TYPE_WALL && !tile.item) {
+            tile.item = { type: cardKey };
+            towers.push(new Tower(gx, gy, cardKey));
+            createExplosion(gx*TILE_SIZE+16, gy*TILE_SIZE+16, "#fff", 8);
+            placed = true;
+        }
+    }
+
+    if (placed) {
+        // PURCHASE LOGIC HERE
+        gameState.money -= data.price;
+        marketCard.bought = true;
+        selectedMarketIndex = -1; // Deselect after use
+        updateUI();
+    }
+}
+
+function startWave() {
+    if (gameState.active) return;
+    gameState.active = true;
+    gameState.spawnQueue = [];
+    document.getElementById('wave-btn').disabled = true;
+    document.getElementById('wave-btn').innerText = "IN PROGRESS";
+    
+    let count = 6 + Math.floor(gameState.wave * 1.8);
+    if (gameState.wave % 3 === 0) { showMessage("BOSS WAVE", "#f0f"); gameState.spawnQueue.push('boss'); count += 4; }
+
+    for(let i=0; i<count; i++) {
+        let r = Math.random();
+        if (gameState.wave > 2 && r > 0.75) gameState.spawnQueue.push('tank');
+        else if (gameState.wave > 1 && r > 0.55) gameState.spawnQueue.push('fast');
+        else gameState.spawnQueue.push('norm');
+    }
+}
+
+function spawnEnemy(type) { enemies.push(new Enemy(type)); }
+
+function endWave() {
+    gameState.active = false;
+    gameState.wave++;
+    
+    // INVESTMENT LOGIC: Sell unbought market cards
+    let investmentReturn = 0;
+    marketCards.forEach(card => {
+        if (!card.bought) {
+            let val = Math.floor(CARD_TYPES[card.type].price * 0.5);
+            investmentReturn += val;
+        }
+    });
+
+    if (investmentReturn > 0) {
+        gameState.money += investmentReturn;
+        showMessage(`MARKET RETURN: +$${investmentReturn}`, "#4f4");
+    }
+
+    generateMarket();
+    selectedMarketIndex = -1;
+
+    document.getElementById('wave-btn').disabled = false;
+    document.getElementById('wave-btn').innerText = "START";
+    updateUI();
+}
+
+function gameOver() {
+    gameState.gameOver = true;
+    showMessage("GAME OVER", "red");
+}
+
+function showMessage(msg, col) {
+    let el = document.getElementById('message-overlay');
+    el.innerText = msg; el.style.color = col || 'white'; el.style.opacity = 1;
+    setTimeout(() => el.style.opacity = 0, 2500);
+}
+
+function updateUI() {
+    document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
+    document.getElementById('money-display').innerText = gameState.money;
+    document.getElementById('wave-display').innerText = gameState.wave;
+    
+    // UPDATE MARKET
+    let marketEl = document.getElementById('market-strip');
+    marketEl.innerHTML = '';
+    marketCards.forEach((card, i) => {
+        let data = CARD_TYPES[card.type];
+        let d = document.createElement('div');
+        let canAfford = gameState.money >= data.price;
+        let isSelected = selectedMarketIndex === i;
+        
+        d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''}`;
+        d.style.borderColor = isSelected ? '#0f0' : (card.bought ? '#333' : data.color);
+        
+        d.innerHTML = `
+            <div class="m-icon">${data.icon}</div>
+            <div class="m-name" style="color:${card.bought ? '#555' : data.color}">${data.name}</div>
+            <div class="m-cost">$${data.price}</div>
+            <div class="sold-badge">SOLD</div>
+        `;
+        d.onclick = () => selectCard(i);
+        marketEl.appendChild(d);
+    });
+}
+
+// Start
+init();
+</script>
+</body>
+</html>
