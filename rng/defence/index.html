@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Maze Defense: Investment</title>
+    <title>Maze Defense: Market</title>
     <style>
         * { box-sizing: border-box; touch-action: none; user-select: none; -webkit-user-select: none; }
         body { margin: 0; padding: 0; background: #0d0d0d; overflow: hidden; font-family: 'Courier New', monospace; color: white; }
@@ -15,13 +15,51 @@
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
         
         /* Top HUD */
-        #hud { background: rgba(0,0,0,0.9); padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; pointer-events: auto; border-bottom: 2px solid #333; height: 50px; }
-        .stat { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; }
-        .money-stat { color: #fd0; text-shadow: 0 0 5px #aa0; font-size: 20px; }
+        #hud { background: rgba(0,0,0,0.95); padding: 5px 15px; display: flex; justify-content: space-between; align-items: center; pointer-events: auto; border-bottom: 2px solid #333; height: 45px; z-index: 20; }
+        .stat { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 14px; }
+        .money-stat { color: #fd0; text-shadow: 0 0 5px #aa0; font-size: 18px; }
         
         #wave-btn { background: #0077ff; color: white; border: none; padding: 6px 16px; border-radius: 2px; font-weight: 900; cursor: pointer; pointer-events: auto; box-shadow: 0 4px 0 #004499; transition: all 0.1s; text-transform: uppercase; letter-spacing: 1px; font-size: 12px; }
         #wave-btn:active { transform: translateY(4px); box-shadow: none; }
         #wave-btn:disabled { background: #444; box-shadow: none; color: #888; transform: translateY(4px); cursor: not-allowed; }
+
+        /* MARKET STRIP */
+        #market-strip {
+            height: 90px;
+            background: rgba(20,20,20,0.9);
+            border-bottom: 1px solid #444;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            pointer-events: auto;
+            padding: 5px;
+            z-index: 10;
+        }
+
+        .market-card {
+            width: 55px;
+            height: 75px;
+            background: #222;
+            border: 1px solid #555;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px;
+            cursor: pointer;
+            transition: 0.1s;
+            position: relative;
+        }
+        .market-card:active { transform: scale(0.95); }
+        .market-card.bought { opacity: 0.2; pointer-events: none; border-color: #333; filter: grayscale(1); }
+        .market-card.too-expensive { opacity: 0.6; border-color: #500; }
+        
+        .market-card .m-icon { font-size: 18px; }
+        .market-card .m-name { font-size: 8px; text-transform: uppercase; font-weight: bold; text-align: center;}
+        .market-card .m-cost { color: #fd0; font-size: 10px; font-weight: bold; }
+        .market-card .m-invest { position: absolute; top: -5px; right: -5px; background: #060; color: #fff; font-size: 8px; padding: 2px 4px; border-radius: 4px; display: none; }
 
         /* Bottom Controls (Hand) */
         #hand-container { pointer-events: auto; background: rgba(0,0,0,0.95); padding: 10px; display: flex; justify-content: center; gap: 6px; height: 100px; align-items: center; border-top: 2px solid #333; }
@@ -37,22 +75,9 @@
 
         .card-slot.empty { opacity: 0.3; }
         
-        /* SHOP OVERLAY */
-        #shop-screen { position: absolute; top: 50px; left: 0; width: 100%; bottom: 100px; background: rgba(0,0,0,0.95); z-index: 50; display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; backdrop-filter: blur(5px); }
-        #shop-grid { display: flex; gap: 15px; margin-bottom: 20px; }
-        .shop-item { width: 90px; height: 130px; background: #222; border: 2px solid #555; border-radius: 8px; display: flex; flex-direction: column; align-items: center; padding: 10px; cursor: pointer; transition: 0.1s; position: relative; }
-        .shop-item:active { transform: scale(0.95); }
-        .shop-item h3 { margin: 5px 0; font-size: 12px; color: #fff; text-transform: uppercase;}
-        .shop-item .cost { color: #fd0; font-weight: bold; font-size: 16px; margin-top: auto; }
-        .shop-item p { font-size: 10px; color: #aaa; text-align: center; line-height: 1.2; }
-        .shop-item.too-expensive { opacity: 0.5; border-color: #500; cursor: not-allowed; }
-
-        #shop-controls { display: flex; gap: 20px; }
-        .shop-btn { padding: 10px 20px; border: 2px solid #555; background: #333; color: white; font-family: inherit; font-weight: bold; cursor: pointer; text-transform: uppercase; }
-        .shop-btn.reroll { border-color: #d80; color: #d80; }
-        .shop-btn.done { border-color: #0f0; background: #050; }
-
-        #message-overlay { position: absolute; top: 30%; width: 100%; text-align: center; font-size: 28px; font-weight: 900; color: white; text-shadow: 0 0 10px #000; pointer-events: none; opacity: 0; transition: opacity 0.3s; letter-spacing: 3px; background: rgba(0,0,0,0.7); padding: 20px 0; z-index: 100; }
+        #message-overlay { position: absolute; top: 40%; width: 100%; text-align: center; font-size: 28px; font-weight: 900; color: white; text-shadow: 0 0 10px #000; pointer-events: none; opacity: 0; transition: opacity 0.3s; letter-spacing: 3px; background: rgba(0,0,0,0.7); padding: 20px 0; z-index: 100; }
+        
+        #invest-info { font-size: 10px; color: #8f8; text-align: center; width: 100%; position: absolute; top: 135px; pointer-events: none; opacity: 0.8; }
     </style>
 </head>
 <body>
@@ -65,17 +90,11 @@
             <button id="wave-btn">START</button>
         </div>
         
-        <div id="message-overlay">WAVE COMPLETE</div>
-
-        <div id="shop-screen">
-            <h2 style="color:#fd0; margin-top:0;">BLACK MARKET</h2>
-            <div id="shop-grid"></div>
-            <div id="shop-controls">
-                <button class="shop-btn reroll" onclick="rerollShop()">Reroll ($10)</button>
-                <button class="shop-btn done" onclick="closeShop()">Ready</button>
+        <div id="market-strip">
             </div>
-            <p style="color:#888; font-size: 12px; margin-top: 15px;">Buy weapons. Unused cards convert to cash after wave.</p>
-        </div>
+        <div id="invest-info">UNBOUGHT CARDS CONVERT TO CASH (50% VALUE)</div>
+
+        <div id="message-overlay">WAVE COMPLETE</div>
 
         <div id="hand-container">
             </div>
@@ -91,6 +110,7 @@ const TILE_SIZE = 32;
 const GRID_W = 15; 
 const GRID_H = 19;
 const HAND_SIZE = 5;
+const MARKET_SIZE = 6;
 
 // Colors
 const C_BG = '#111';
@@ -116,23 +136,22 @@ let particles = [];
 // Inventory & Economy
 let hand = [null, null, null, null, null]; 
 let selectedSlotIndex = -1;
-let shopItems = []; // Array of 3 card keys
+let marketCards = []; // Array of objects { type: string, bought: boolean }
 
 let gameState = {
     hp: 20,
-    money: 250, // Starting money
+    money: 200, 
     wave: 1,
     active: false,
     spawnQueue: [],
     spawnTimer: 0,
-    gameOver: false,
-    shopOpen: false
+    gameOver: false
 };
 
 const CARD_TYPES = {
-    pistol:  { name: "Pistol",  price: 50,  icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Fast single shot" },
-    missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash damage" },
-    poison:  { name: "Poison",  price: 80,  icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "Damage over time" },
+    pistol:  { name: "Pistol",  price: 50,  icon: "🔫", color: "#ddd", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Fast shot" },
+    missile: { name: "Missile", price: 150, icon: "🚀", color: "#f90", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg" },
+    poison:  { name: "Poison",  price: 80,  icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT" },
     sand:    { name: "Sand",    price: 30,  icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies" },
     salvage: { name: "Salvage", price: 20,  icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret" }
 };
@@ -155,7 +174,7 @@ function init() {
     }, {passive: false});
 
     document.getElementById('wave-btn').addEventListener('click', () => {
-        if(!gameState.active && !gameState.shopOpen) startWave();
+        if(!gameState.active) startWave();
     });
 
     resetGame();
@@ -185,18 +204,16 @@ function resetGame() {
     particles = [];
     
     gameState.hp = 20;
-    gameState.money = 250; 
+    gameState.money = 200; 
     gameState.wave = 1;
     gameState.active = false;
     gameState.gameOver = false;
     
     hand = [null, null, null, null, null];
     
+    generateMarket(); // Initial Market
     updateUI();
     calcFlowField();
-    
-    // Start with empty hand and open shop
-    openShop();
 }
 
 /**
@@ -273,7 +290,6 @@ function update() {
         let e = enemies[i];
         e.update();
         if (e.dead) {
-            // NO MONEY FROM KILLS
             enemies.splice(i, 1);
         } else if (e.reachedGoal) {
             gameState.hp -= 1;
@@ -335,94 +351,44 @@ function loop(timestamp) {
 }
 
 /**
- * ECONOMY & SHOP LOGIC
+ * MARKET & ECONOMY
  */
-function openShop() {
-    gameState.shopOpen = true;
-    document.getElementById('shop-screen').style.display = 'flex';
-    document.getElementById('wave-btn').style.display = 'none';
-    rerollShop(true); // Initial free roll or standard roll
-    updateUI();
-}
-
-function closeShop() {
-    gameState.shopOpen = false;
-    document.getElementById('shop-screen').style.display = 'none';
-    document.getElementById('wave-btn').style.display = 'block';
-    updateUI();
-}
-
-function rerollShop(free) {
-    if (!free) {
-        if (gameState.money >= 10) {
-            gameState.money -= 10;
-        } else {
-            return;
-        }
-    }
-    
-    // Generate 3 random items
-    shopItems = [];
+function generateMarket() {
+    marketCards = [];
     let keys = Object.keys(CARD_TYPES);
-    for(let i=0; i<3; i++) {
-        shopItems.push(keys[Math.floor(Math.random() * keys.length)]);
+    for(let i=0; i<MARKET_SIZE; i++) {
+        let type = keys[Math.floor(Math.random() * keys.length)];
+        marketCards.push({ type: type, bought: false });
     }
-    updateShopUI();
     updateUI();
 }
 
-function buyCard(index) {
-    let type = shopItems[index];
-    let price = CARD_TYPES[type].price;
+function buyMarketCard(index) {
+    if (gameState.gameOver) return;
     
-    // Check if hand full
+    let card = marketCards[index];
+    if (card.bought) return;
+
+    let data = CARD_TYPES[card.type];
+    
+    // Check Hand Space
     let emptySlot = hand.indexOf(null);
     if (emptySlot === -1) {
-        showMessage("HAND FULL!", "red");
+        showMessage("HAND FULL", "red");
         return;
     }
 
-    if (gameState.money >= price) {
-        gameState.money -= price;
-        hand[emptySlot] = type;
-        updateUI();
-        updateShopUI();
-    }
-}
-
-function updateShopUI() {
-    let grid = document.getElementById('shop-grid');
-    grid.innerHTML = '';
-    
-    shopItems.forEach((type, i) => {
-        let data = CARD_TYPES[type];
-        let el = document.createElement('div');
-        let canAfford = gameState.money >= data.price;
+    if (gameState.money >= data.price) {
+        gameState.money -= data.price;
+        hand[emptySlot] = card.type;
+        card.bought = true; // Mark as bought
         
-        el.className = 'shop-item' + (canAfford ? '' : ' too-expensive');
-        el.innerHTML = `
-            <div style="font-size:24px">${data.icon}</div>
-            <h3>${data.name}</h3>
-            <p>${data.desc}</p>
-            <div class="cost">$${data.price}</div>
-        `;
-        el.onclick = () => buyCard(i);
-        grid.appendChild(el);
-    });
-}
-
-function sellHand() {
-    let gain = 0;
-    for(let i=0; i<HAND_SIZE; i++) {
-        if (hand[i] !== null) {
-            gain += CARD_TYPES[hand[i]].price;
-            hand[i] = null;
-        }
+        // Visuals
+        updateUI();
+    } else {
+        // Visual feedback for not enough money handled in render
     }
-    gameState.money += gain;
-    if(gain > 0) showMessage(`SOLD UNUSED: +$${gain}`, "#fd0");
 }
-
 
 /**
  * ENTITIES & CLASSES
@@ -603,7 +569,7 @@ function calcFlowField() {
  * INPUT & LOGIC
  */
 function handleInput(cx, cy) {
-    if (gameState.gameOver || gameState.shopOpen || selectedSlotIndex === -1) return;
+    if (gameState.gameOver || selectedSlotIndex === -1) return;
 
     let rect = canvas.getBoundingClientRect();
     let x = (cx - rect.left) * (canvas.width / rect.width);
@@ -674,15 +640,30 @@ function endWave() {
     gameState.active = false;
     gameState.wave++;
     
-    // 1. Sell Hand
-    sellHand();
-    
-    // 2. Open Shop
-    setTimeout(() => {
-        openShop();
-        document.getElementById('wave-btn').disabled = false;
-        document.getElementById('wave-btn').innerText = "START";
-    }, 1500);
+    // INVESTMENT LOGIC: Sell unbought market cards
+    let investmentReturn = 0;
+    marketCards.forEach(card => {
+        if (!card.bought) {
+            let val = Math.floor(CARD_TYPES[card.type].price * 0.5);
+            investmentReturn += val;
+        }
+    });
+
+    if (investmentReturn > 0) {
+        gameState.money += investmentReturn;
+        showMessage(`MARKET RETURN: +$${investmentReturn}`, "#4f4");
+    }
+
+    // Sell Hand (Optional, keeps inventory clean)
+    // sellHand(); // Commented out: keep cards in hand between waves? 
+    // Usually standard to keep them, but let's stick to cleaning up to force new choices
+    // Let's keep cards in hand, only refresh market.
+
+    generateMarket();
+
+    document.getElementById('wave-btn').disabled = false;
+    document.getElementById('wave-btn').innerText = "START";
+    updateUI();
 }
 
 function gameOver() {
@@ -701,6 +682,26 @@ function updateUI() {
     document.getElementById('money-display').innerText = gameState.money;
     document.getElementById('wave-display').innerText = gameState.wave;
     
+    // UPDATE MARKET
+    let marketEl = document.getElementById('market-strip');
+    marketEl.innerHTML = '';
+    marketCards.forEach((card, i) => {
+        let data = CARD_TYPES[card.type];
+        let d = document.createElement('div');
+        let canAfford = gameState.money >= data.price;
+        
+        d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford ? 'too-expensive' : ''}`;
+        d.style.borderColor = data.color;
+        d.innerHTML = `
+            <div class="m-icon">${data.icon}</div>
+            <div class="m-name" style="color:${data.color}">${data.name}</div>
+            <div class="m-cost">$${data.price}</div>
+        `;
+        d.onclick = () => buyMarketCard(i);
+        marketEl.appendChild(d);
+    });
+
+    // UPDATE HAND
     let container = document.getElementById('hand-container');
     container.innerHTML = '';
     
@@ -717,7 +718,7 @@ function updateUI() {
                 <div class="price-tag">$${data.price}</div>
             `;
             div.onclick = () => {
-                if (gameState.active) {
+                if (gameState.active || true) { // Allow selecting anytime
                      selectedSlotIndex = (selectedSlotIndex === index) ? -1 : index;
                      updateUI();
                 }
