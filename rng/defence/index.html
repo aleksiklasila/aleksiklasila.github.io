@@ -464,6 +464,8 @@
 
         let marketCards = [];
         let selectedMarketIndex = -1;
+        let lastClickTime = 0;
+        let lastClickIndex = -1;
 
         let gameState = {
             hp: 20,
@@ -857,6 +859,18 @@
 
             card.locked = !card.locked;
             updateUI();
+        }
+
+        function handleCardClick(index) {
+            let now = Date.now();
+            if (index === lastClickIndex && (now - lastClickTime) < 300) {
+                toggleLock(index);
+                lastClickIndex = -1; // Reset
+            } else {
+                selectCard(index);
+                lastClickIndex = index;
+                lastClickTime = now;
+            }
         }
 
         function selectCard(index) {
@@ -1540,11 +1554,8 @@
                 marketCards.forEach((card, i) => {
                     let d = document.createElement('div');
                     // Attach listeners ONCE
-                    d.onclick = () => selectCard(i);
-                    d.ondblclick = (e) => {
-                        e.stopPropagation();
-                        toggleLock(i);
-                    };
+                    d.onclick = () => handleCardClick(i);
+                    // Double click locking handled by handleCardClick
                     marketEl.appendChild(d);
                 });
             }
