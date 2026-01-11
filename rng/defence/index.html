@@ -185,28 +185,6 @@
             display: block;
         }
 
-        #message-overlay {
-            position: absolute;
-            top: 0;
-            width: 100%;
-            height: 52px;
-            /* Cover HUD + border */
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 24px;
-            font-weight: 900;
-            color: white;
-            text-shadow: 0 0 10px #000;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.3s;
-            letter-spacing: 3px;
-            background: rgba(0, 0, 0, 0.9);
-            padding: 0;
-            z-index: 100;
-        }
-
         .market-card .lock-icon {
             position: absolute;
             top: 2px;
@@ -348,8 +326,64 @@
             width: 100%;
         }
 
-        #close-help:hover {
-            background: #555;
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(20, 0, 0, 0.95);
+            border: 4px solid #f44;
+            padding: 30px;
+            width: 320px;
+            text-align: center;
+            border-radius: 12px;
+            z-index: 300;
+            display: none;
+            box-shadow: 0 0 50px rgba(255, 0, 0, 0.4);
+            pointer-events: auto;
+        }
+
+        #game-over h1 {
+            color: #f44;
+            margin: 0 0 20px 0;
+            font-size: 32px;
+            text-transform: uppercase;
+            text-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+
+        .go-stat {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            font-size: 16px;
+            color: #ddd;
+            border-bottom: 1px solid #444;
+            padding-bottom: 4px;
+        }
+
+        .go-stat b {
+            color: #fd0;
+        }
+
+        #restart-btn {
+            background: #f44;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            width: 100%;
+            text-transform: uppercase;
+            box-shadow: 0 4px 0 #900;
+            transition: 0.1s;
+        }
+
+        #restart-btn:active {
+            transform: translateY(4px);
+            box-shadow: none;
         }
     </style>
 </head>
@@ -365,7 +399,13 @@
             <button id="wave-btn">START</button>
         </div>
 
-        <div id="message-overlay">WAVE COMPLETE</div>
+        <div id="game-over">
+            <h1>Game Over</h1>
+            <div class="go-stat"><span>Wave Reached</span> <b id="go-wave">1</b></div>
+            <div class="go-stat"><span>Enemies Killed</span> <b id="go-killed">0</b></div>
+            <div class="go-stat"><span>Fully Cleared</span> <b id="go-cleared">0</b></div>
+            <button id="restart-btn">TRY AGAIN</button>
+        </div>
 
         <div id="help-modal">
             <h2>HOW TO PLAY</h2>
@@ -431,9 +471,11 @@
             money: 200,
             wave: 1,
             active: false,
-            spawnQueue: [],
+            spawnQueue: [], // Array of {type, waveIndex}
             spawnTimer: 0,
-            gameOver: false
+            gameOver: false,
+            killedEnemies: 0,
+            waveStats: {} // { [waveIndex]: { total: 0, killed: 0 } }
         };
 
         const CARD_TYPES = {
@@ -465,7 +507,11 @@
             }, { passive: false });
 
             document.getElementById('wave-btn').addEventListener('click', () => {
-                if (!gameState.active) startWave();
+                startWave();
+            });
+
+            document.getElementById('restart-btn').addEventListener('click', () => {
+                resetGame();
             });
 
             document.getElementById('market-strip').addEventListener('click', (e) => {
@@ -513,9 +559,11 @@
             gameState.wave = 1;
             gameState.active = false;
             gameState.gameOver = false;
+            gameState.killedEnemies = 0;
+            gameState.waveStats = {};
 
-            selectedMarketIndex = -1;
-            generateMarket();
+            document.getElementById('game-over').style.display = 'none';
+
             selectedMarketIndex = -1;
             generateMarket();
             calcFlowField();
@@ -596,6 +644,8 @@
                 e.update();
                 if (e.dead) {
                     enemies.splice(i, 1);
+                    gameState.killedEnemies++;
+                    if (gameState.waveStats[e.waveIndex]) gameState.waveStats[e.waveIndex].killed++;
                 } else if (e.reachedGoal) {
                     gameState.hp -= 1;
                     enemies.splice(i, 1);
@@ -763,11 +813,9 @@
 
             if (data.hpCost) {
                 if (gameState.hp <= data.hpCost) {
-                    showMessage("NOT ENOUGH HP", "red");
                     return;
                 }
             } else if (gameState.money < data.price) {
-                showMessage("TOO EXPENSIVE", "red");
                 return;
             }
 
@@ -783,7 +831,7 @@
          * ENTITIES
          */
         class Enemy {
-            constructor(type) {
+            constructor(type, waveIndex) {
                 let corners = [[0, 0], [GRID_W - 1, 0], [0, GRID_H - 1], [GRID_W - 1, GRID_H - 1]];
                 let corner = corners[Math.floor(Math.random() * corners.length)];
                 this.gx = corner[0];
@@ -791,8 +839,9 @@
                 this.x = this.gx * TILE_SIZE + 16;
                 this.y = this.gy * TILE_SIZE + 16;
                 this.type = type;
+                this.waveIndex = waveIndex;
 
-                let mult = Math.pow(1.15, gameState.wave);
+                let mult = Math.pow(1.15, waveIndex);
                 if (type === 'boss') { this.hp = 400 * mult; this.speed = 0.6; this.color = '#c0c'; this.r = 12; }
                 else if (type === 'fast') { this.hp = 20 * mult; this.speed = 2.4; this.color = '#ee0'; this.r = 6; }
                 else if (type === 'tank') { this.hp = 80 * mult; this.speed = 0.7; this.color = '#c22'; this.r = 10; }
@@ -806,6 +855,10 @@
                 this.vx = 0; this.vy = 0;
                 this.dead = false;
                 this.reachedGoal = false;
+
+                // Stats Tracking
+                if (!gameState.waveStats[waveIndex]) gameState.waveStats[waveIndex] = { total: 0, killed: 0 };
+                gameState.waveStats[waveIndex].total++;
 
                 // Pick a route
                 this.path = null;
@@ -1219,11 +1272,9 @@
 
             if (data.hpCost) {
                 if (gameState.hp <= data.hpCost) {
-                    showMessage("NOT ENOUGH HP", "red");
                     return;
                 }
             } else if (gameState.money < data.price) {
-                showMessage("NOT ENOUGH CASH", "red");
                 return;
             }
 
@@ -1235,13 +1286,11 @@
                 if (cardKey === 'heart') {
                     gameState.hp += 5;
                     createExplosion(cx, cy, "#f00", 10);
-                    showMessage("+5 HEARTS", "#f00");
                     actionTaken = true;
                 } else if (cardKey === 'sacrifice') {
                     gameState.hp -= 5;
                     gameState.money += 80;
                     createExplosion(cx, cy, "#800", 15);
-                    showMessage("SACRIFICE!", "#800");
                     actionTaken = true;
                 }
             }
@@ -1329,31 +1378,34 @@
         }
 
         function startWave() {
-            if (gameState.active) return;
-            gameState.active = true;
-            gameState.spawnQueue = [];
-            document.getElementById('wave-btn').disabled = true;
-            document.getElementById('wave-btn').innerText = "IN PROGRESS";
+            // Re-entrant: Can be called even if active
+            if (gameState.active) {
+                // If already active, we are effectively "finishing" the shopping phase for the current wave
+                // and starting the next one immediately.
+                resolveMarket();
+                gameState.wave++;
+            } else {
+                gameState.active = true;
+            }
+
+            updateUI(); // Updates button text
 
             let count = 6 + Math.floor(gameState.wave * 1.8);
-            if (gameState.wave % 3 === 0) { showMessage("BOSS WAVE", "#f0f"); gameState.spawnQueue.push('boss'); count += 4; }
+            if (gameState.wave % 3 === 0) { gameState.spawnQueue.push({ type: 'boss', waveIndex: gameState.wave }); count += 4; }
 
             for (let i = 0; i < count; i++) {
                 let r = Math.random();
-                if (gameState.wave > 2 && r > 0.85) gameState.spawnQueue.push('tank');
-                else if (gameState.wave > 1 && r > 0.70) gameState.spawnQueue.push('fast');
-                else if (gameState.wave > 3 && r > 0.55) gameState.spawnQueue.push('poison_resistant');
-                else if (gameState.wave > 4 && r > 0.40) gameState.spawnQueue.push('flying');
-                else gameState.spawnQueue.push('norm');
+                let type = 'norm';
+                if (gameState.wave > 2 && r > 0.85) type = 'tank';
+                else if (gameState.wave > 1 && r > 0.70) type = 'fast';
+                else if (gameState.wave > 3 && r > 0.55) type = 'poison_resistant';
+                else if (gameState.wave > 4 && r > 0.40) type = 'flying';
+
+                gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
             }
         }
 
-        function spawnEnemy(type) { enemies.push(new Enemy(type)); }
-
-        function endWave() {
-            gameState.active = false;
-            gameState.wave++;
-
+        function resolveMarket() {
             let investmentReturn = 0;
             marketCards.forEach(card => {
                 if (!card.bought && !card.locked) {
@@ -1364,32 +1416,75 @@
 
             if (investmentReturn > 0) {
                 gameState.money += investmentReturn;
-                showMessage(`MARKET RETURN: +$${investmentReturn}`, "#4f4");
+                // Optional: Show floating text for interest?
             }
 
             generateMarket();
             selectedMarketIndex = -1;
-
-            document.getElementById('wave-btn').disabled = false;
-            document.getElementById('wave-btn').innerText = "START";
             updateUI();
+        }
+
+        function spawnEnemy(data) { enemies.push(new Enemy(data.type, data.waveIndex)); }
+
+        function endWave() {
+            // Called when all enemies derived from spawnQueue are dead
+            // AND spawnQueue is empty.
+            // This prepares the game for the next "Start" click if not already handled manually.
+
+            gameState.active = false; // Go back to waiting state
+
+            resolveMarket();
+            gameState.wave++;
+
+            updateUI();
+        }
+
+        function getFullyClearedWaveCount() {
+            let cleared = 0;
+            let w = 1;
+            while (true) {
+                // Check if wave is recorded in stats
+                if (!gameState.waveStats[w]) break;
+
+                let s = gameState.waveStats[w];
+                // Only count as fully cleared if spawned > 0 AND killed == total
+                // This implies "No Leaks".
+                // If user dies in middle of wave, total might equal killed for that partial wave,
+                // but we should probably constrain it to waves < current wave or check if wave is "done".
+                // However, tracking "done" is complex.
+                // Simplest robust check: total == killed AND total > 0.
+                if (s.total > 0 && s.total === s.killed) {
+                    cleared++;
+                    w++;
+                } else {
+                    break;
+                }
+            }
+            return cleared;
         }
 
         function gameOver() {
             gameState.gameOver = true;
-            showMessage("GAME OVER", "red");
-        }
-
-        function showMessage(msg, col) {
-            let el = document.getElementById('message-overlay');
-            el.innerText = msg; el.style.color = col || 'white'; el.style.opacity = 1;
-            setTimeout(() => el.style.opacity = 0, 2500);
+            document.getElementById('game-over').style.display = 'block';
+            document.getElementById('go-wave').innerText = gameState.wave;
+            document.getElementById('go-killed').innerText = gameState.killedEnemies;
+            document.getElementById('go-cleared').innerText = getFullyClearedWaveCount();
         }
 
         function updateUI() {
             document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
             document.getElementById('money-display').innerText = gameState.money;
             document.getElementById('wave-display').innerText = gameState.wave;
+
+            // Button Text Logic
+            let btn = document.getElementById('wave-btn');
+            if (gameState.active) {
+                // If active, clicking starts NEXT wave (current + 1)
+                btn.innerText = "START WAVE " + (gameState.wave + 1);
+            } else {
+                // If waiting, clicking starts CURRENT wave
+                btn.innerText = "START WAVE " + gameState.wave;
+            }
 
             let marketEl = document.getElementById('market-strip');
 
