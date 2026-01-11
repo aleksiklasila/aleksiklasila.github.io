@@ -395,8 +395,6 @@
             <button id="help-btn">?</button>
             <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
             <div class="stat money-stat">$<span id="money-display">150</span></div>
-            <div class="stat" style="color:#4af">WAVE <span id="wave-display">1</span></div>
-            <div class="stat" style="color:#f8eb1a">SHOP L<span id="shop-level-display">1</span></div>
             <button id="wave-btn">START</button>
         </div>
 
@@ -1529,8 +1527,6 @@
         function updateUI() {
             document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
             document.getElementById('money-display').innerText = gameState.money;
-            document.getElementById('wave-display').innerText = gameState.wave;
-            document.getElementById('shop-level-display').innerText = gameState.shopLevel;
 
             // Button Text Logic
             let btn = document.getElementById('wave-btn');
