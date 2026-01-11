@@ -811,7 +811,7 @@
                     let price = CARD_TYPES[selectedType].price; // Base
 
                     if (selectedType === 'shop_up') {
-                        price = Math.floor(price * gameState.shopLevel);
+                        price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
                         level = gameState.shopLevel + 1; // Visual mostly
                     } else {
                         // Weighted Random for Shop Level
@@ -841,7 +841,7 @@
                             // price is 0 for sacrifice, but hpCost is defined.
                             // We deal with price storage here.
                         } else {
-                            price = price * level;
+                            price = Math.floor(price * (1 + (level - 1) * 0.5));
                         }
                     }
 
@@ -1346,12 +1346,12 @@
             // --- POWER CARD LOGIC (NUKE) ---
             if (data.target === 'global') {
                 if (cardKey === 'heart') {
-                    gameState.hp += 5;
+                    gameState.hp += Math.floor(5 * (1 + (marketCard.level - 1) * 0.5));
                     createExplosion(cx, cy, "#f00", 10);
                     actionTaken = true;
                 } else if (cardKey === 'sacrifice') {
                     gameState.hp -= 5;
-                    gameState.money += 80;
+                    gameState.money += Math.floor(80 * (1 + (marketCard.level - 1) * 0.5));
                     createExplosion(cx, cy, "#800", 15);
                     actionTaken = true;
                 } else if (cardKey === 'shop_up') {
@@ -1534,13 +1534,7 @@
 
             // Button Text Logic
             let btn = document.getElementById('wave-btn');
-            if (gameState.active) {
-                // If active, clicking starts NEXT wave (current + 1)
-                btn.innerText = "START WAVE " + (gameState.wave + 1);
-            } else {
-                // If waiting, clicking starts CURRENT wave
-                btn.innerText = "START WAVE " + gameState.wave;
-            }
+            btn.innerText = "NEXT";
 
             let marketEl = document.getElementById('market-strip');
 
