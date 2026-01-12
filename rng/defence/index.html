@@ -766,7 +766,7 @@
             if (gameState.difficulty === 'easy') {
                 // Shortest is dists[0]
                 // Others are dists[1], dists[2], dists[3]
-                let valid = (dists[0] >= 27 && dists[1] >= 38);
+                let valid = (dists[0] >= 50 && dists[1] >= 70);
                 if (valid) console.log(`Easy match: ${dists.join(',')}`);
                 return valid;
             }
@@ -777,7 +777,7 @@
             // If min is, say, 28. Are the "others" <= 30?
             // Yes, implies Range [27, 30] for ALL corners.
             else if (gameState.difficulty === 'medium') {
-                return (dists[0] >= 24 && dists[1] < 30 && dists[3] < 38);
+                return (dists[0] < 27 && dists[1] < 27 && dists[2] >= 40);
             }
             // Hard: all <= 20
             else if (gameState.difficulty === 'hard') {
@@ -889,7 +889,7 @@
                 ctx.textAlign = "center";
                 ctx.fillText("GENERATING MAZE...", canvas.width / 2, canvas.height / 2);
                 ctx.font = "12px Courier New";
-                ctx.fillText(`Target: ${gameState.difficulty.toUpperCase()}`, canvas.width / 2, canvas.height / 2 + 25);
+                ctx.fillText(`Target: ${gameState.difficulty.toUpperCase()} (This may take a few seconds)`, canvas.width / 2, canvas.height / 2 + 25);
                 return;
             }
 
