@@ -591,20 +591,20 @@
         };
 
         const CARD_TYPES = {
-            water: { name: "Water", price: 50, icon: "�", color: "#4af", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Rapid Fire", weight: 1 },
-            smg: { name: "SMG", price: 50, icon: "⚡", color: "#aaf", range: 3.5, cd: 17, damage: 5, target: 'wall', desc: "Super fast", weight: 0.3 },
-            fire: { name: "Fire", price: 150, icon: "�", color: "#f50", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Splash dmg", weight: 1 },
-            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "DoT", weight: 1 },
-            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows enemies", weight: 1 },
-            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns & Slows", weight: 0.1 },
-            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Remove turret", weight: 0.2 },
-            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 300, target: 'any', desc: "Massive Area Dmg", weight: 0.15 },
-            heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "+5 Lives", weight: 0.15 },
-            sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "-5 ♥, +80 $", weight: 0.15 },
-            reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refresh Shop", weight: 0.2 },
-            farm: { name: "Farm", price: 75, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Kill on top=+$$$", weight: 0.2 },
-            shop_up: { name: "Shop Up", price: 150, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Lvl Up Items", weight: 0.2 },
-            sand_gun: { name: "Sand Gun", price: 60, icon: "⏳", color: "#c96", range: 3.5, cd: 300, damage: 5, target: 'wall', desc: "Slows (3s)", weight: 0.15 }
+            water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1 },
+            smg: { name: "SMG", price: 50, icon: "⚡", color: "#aaf", range: 3.5, cd: 17, damage: 5, target: 'wall', desc: "Extremely fast firing speed but low damage.", weight: 0.3 },
+            fire: { name: "Fire", price: 150, icon: "🔥", color: "#f50", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Deals splash damage to a small area.", weight: 1 },
+            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "Applies damage over time to enemies.", weight: 1 },
+            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 1 },
+            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.1 },
+            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Removes a tower or item for a refund.", weight: 0.2 },
+            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 300, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15 },
+            heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "Restores 5 lives to your castle.", weight: 0.15 },
+            sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "Trades 5 lives for extra money.", weight: 0.15 },
+            reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2 },
+            farm: { name: "Farm", price: 75, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Earn extra money when enemies die on this tile.", weight: 0.2 },
+            shop_up: { name: "Shop Up", price: 150, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Increases the level of future shop items.", weight: 0.2 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "⏳", color: "#c96", range: 3.5, cd: 300, damage: 5, target: 'wall', desc: "Shoots bullets that slow enemies briefly.", weight: 0.15 }
         };
 
         /**
@@ -2185,6 +2185,10 @@
                 if (data.range !== undefined) contentEl.innerHTML += `<div class="stat-row"><span>Range</span><span class="stat-val">${data.range.toFixed(1)}</span></div>`;
                 if (data.cd !== undefined) contentEl.innerHTML += `<div class="stat-row"><span>Cooldown</span><span class="stat-val">${data.cd.toFixed(1)}f</span></div>`;
                 contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${t.stacks}</span></div>`;
+
+                if (t.baseStats.desc) {
+                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${t.baseStats.desc}</div>`;
+                }
             }
             else if (selectedEntity instanceof Enemy) {
                 let e = selectedEntity;
@@ -2224,6 +2228,10 @@
 
                 if (item.hp !== undefined) {
                     contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val">${item.hp}/${item.maxHp}</span></div>`;
+                }
+
+                if (data && data.desc) {
+                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${data.desc}</div>`;
                 }
             }
         }
