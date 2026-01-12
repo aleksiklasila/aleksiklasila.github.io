@@ -385,6 +385,92 @@
             transform: translateY(4px);
             box-shadow: none;
         }
+
+        /* --- MAIN MENU / DIFFICULTY --- */
+        #main-menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(10, 10, 10, 0.98);
+            border: 4px solid #0077ff;
+            padding: 40px;
+            width: 320px;
+            text-align: center;
+            border-radius: 12px;
+            z-index: 400;
+            box-shadow: 0 0 50px rgba(0, 100, 255, 0.4);
+            pointer-events: auto;
+            display: flex;
+            /* Flex by default, hidden via style or js */
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #main-menu h1 {
+            color: #0077ff;
+            margin: 0 0 20px 0;
+            font-size: 32px;
+            text-transform: uppercase;
+            text-shadow: 0 0 10px rgba(0, 100, 255, 0.5);
+        }
+
+        .diff-btn {
+            background: #222;
+            color: white;
+            border: 2px solid #555;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            text-transform: uppercase;
+            transition: 0.1s;
+        }
+
+        .diff-btn:hover {
+            background: #333;
+            border-color: #888;
+        }
+
+        .diff-btn:active {
+            transform: translateY(2px);
+        }
+
+        .diff-btn.easy {
+            color: #4f4;
+            border-color: #282;
+        }
+
+        .diff-btn.medium {
+            color: #fd0;
+            border-color: #aa0;
+        }
+
+        .diff-btn.hard {
+            color: #f44;
+            border-color: #822;
+        }
+
+        .diff-btn.easy:hover {
+            background: #131;
+        }
+
+        .diff-btn.medium:hover {
+            background: #331;
+        }
+
+        .diff-btn.hard:hover {
+            background: #311;
+        }
+
+        /* Game Over buttons container */
+        #go-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 20px;
+        }
     </style>
 </head>
 
@@ -398,12 +484,24 @@
             <button id="wave-btn">START</button>
         </div>
 
+        <div id="main-menu">
+            <h1>MAZE DEFENSE</h1>
+            <div>SELECT DIFFICULTY</div>
+            <button class="diff-btn easy" onclick="startGame('easy')">Easy</button>
+            <button class="diff-btn medium" onclick="startGame('medium')">Medium</button>
+            <button class="diff-btn hard" onclick="startGame('hard')">Hard</button>
+        </div>
+
         <div id="game-over">
             <h1>Game Over</h1>
             <div class="go-stat"><span>Wave Reached</span> <b id="go-wave">1</b></div>
             <div class="go-stat"><span>Enemies Killed</span> <b id="go-killed">0</b></div>
             <div class="go-stat"><span>Fully Cleared</span> <b id="go-cleared">0</b></div>
-            <button id="restart-btn">TRY AGAIN</button>
+            <div id="go-buttons">
+                <button class="diff-btn easy" onclick="startGame('easy')">TRY AGAIN (EASY)</button>
+                <button class="diff-btn medium" onclick="startGame('medium')">TRY AGAIN (MEDIUM)</button>
+                <button class="diff-btn hard" onclick="startGame('hard')">TRY AGAIN (HARD)</button>
+            </div>
         </div>
 
         <div id="help-modal">
@@ -477,7 +575,10 @@
             gameOver: false,
             killedEnemies: 0,
             waveStats: {}, // { [waveIndex]: { total: 0, killed: 0 } }
-            shopLevel: 1
+            shopLevel: 1,
+            shopLevel: 1,
+            difficulty: 'easy',
+            generating: false
         };
 
         const CARD_TYPES = {
@@ -513,9 +614,6 @@
                 startWave();
             });
 
-            document.getElementById('restart-btn').addEventListener('click', () => {
-                resetGame();
-            });
 
             document.getElementById('market-strip').addEventListener('click', (e) => {
                 if (e.target.id === 'market-strip') {
@@ -531,9 +629,29 @@
                 document.getElementById('help-modal').style.display = 'none';
             });
 
-            resetGame();
+            // STARTUP: Show Main Menu, Hide others
+            document.getElementById('main-menu').style.display = 'flex';
+            document.getElementById('game-over').style.display = 'none';
+            document.getElementById('help-modal').style.display = 'none';
+            document.getElementById('hud').style.display = 'none'; // Optional: Hide HUD in menu
+
+            // Initial render (black or whatever) behind menu
+            // We need a dummy grid for start
+            generateMazeMap();
+            calcFlowField(); // Just to be safe if draw depends on it (it doesn't heavily)
+
+            resize();
             requestAnimationFrame(loop);
         }
+
+        // Global function for buttons
+        window.startGame = function (difficulty) {
+            gameState.difficulty = difficulty;
+            document.getElementById('main-menu').style.display = 'none';
+            document.getElementById('game-over').style.display = 'none';
+            document.getElementById('hud').style.display = 'flex';
+            resetGame();
+        };
 
         function resize() {
             let availW = window.innerWidth;
@@ -546,16 +664,26 @@
         }
 
         function resetGame() {
-            generateMazeMap();
-            let cx = Math.floor(GRID_W / 2);
-            let cy = Math.floor(GRID_H / 2);
-            grid[cy][cx].type = TYPE_CASTLE;
-            getNeighbors(cx, cy).forEach(n => grid[n.y][n.x].type = TYPE_FLOOR);
+            // Set state to generating
+            gameState.generating = true;
+            document.getElementById('hud').style.display = 'none'; // Hide HUD while generating
 
+            // Clear entities immediately
             towers = [];
             enemies = [];
             projectiles = [];
             particles = [];
+            grid = []; // Clear grid to show black or loading
+
+            // Start Async Loop
+            generateLevelAsync();
+        }
+
+        function finalizeGameStart() {
+            let cx = Math.floor(GRID_W / 2);
+            let cy = Math.floor(GRID_H / 2);
+
+            // Castle is already placed during generation loop
 
             gameState.hp = 20;
             gameState.money = 200;
@@ -565,14 +693,98 @@
             gameState.killedEnemies = 0;
             gameState.waveStats = {};
             gameState.shopLevel = 1;
+            gameState.spawnQueue = [];
+            gameState.spawnTimer = 0;
+            gameState.generating = false;
+
+            selectedEntity = null;
+            updateStatsPanel();
 
             document.getElementById('game-over').style.display = 'none';
+            document.getElementById('hud').style.display = 'flex'; // Show HUD now
 
             selectedMarketIndex = -1;
             marketCards = [];
             generateMarket();
+
+            // Recalc flow field and routes for the FINAL map
             calcFlowField();
             precalculateRoutes();
+        }
+
+        function generateLevelAsync() {
+            let batchSize = 100; // Attempts per frame
+            let attempts = 0;
+
+            function runBatch() {
+                for (let i = 0; i < batchSize; i++) {
+                    generateMazeMap();
+
+                    // Apply Castle Geometry BEFORE Checking Constraints
+                    // This ensures any shortcuts created by opening the castle area are accounted for.
+                    let cx = Math.floor(GRID_W / 2);
+                    let cy = Math.floor(GRID_H / 2);
+                    grid[cy][cx].type = TYPE_CASTLE;
+                    getNeighbors(cx, cy).forEach(n => grid[n.y][n.x].type = TYPE_FLOOR);
+
+                    calcFlowField();
+                    if (checkDifficultyConditions()) {
+                        console.log(`Success! Level generated.`);
+                        finalizeGameStart();
+                        return; // Done
+                    }
+                }
+                // If not done, schedule next batch
+                // Draw "Generating..." text in the loop
+                requestAnimationFrame(runBatch);
+            }
+            runBatch();
+        }
+
+        function checkDifficultyConditions() {
+            // Get distances to 4 corners
+            let cx = Math.floor(GRID_W / 2); // Center X
+            let cy = Math.floor(GRID_H / 2); // Center Y
+            // flowField[y][x] is distance from center
+
+            let corners = [
+                { x: 0, y: 0 },
+                { x: GRID_W - 1, y: 0 },
+                { x: 0, y: GRID_H - 1 },
+                { x: GRID_W - 1, y: GRID_H - 1 }
+            ];
+
+            let dists = [];
+            for (let c of corners) {
+                let d = flowField[c.y][c.x];
+                if (d === null) return false; // Unreachable corner
+                dists.push(d);
+            }
+            dists.sort((a, b) => a - b); // Ascending
+
+            // Easy: shortest >= 27, others >= 38
+            if (gameState.difficulty === 'easy') {
+                // Shortest is dists[0]
+                // Others are dists[1], dists[2], dists[3]
+                let valid = (dists[0] >= 27 && dists[1] >= 38);
+                if (valid) console.log(`Easy match: ${dists.join(',')}`);
+                return valid;
+            }
+            // Medium: shortest >= 27, others <= 30 => All in [27, 30]?
+            // "medium = the distance to any corner is at least 27, and to other corners it is no more than 30"
+            // This phrasing is tricky. "to any corner... at least 27" -> min >= 27.
+            // "to other corners... no more than 30".
+            // If min is, say, 28. Are the "others" <= 30?
+            // Yes, implies Range [27, 30] for ALL corners.
+            else if (gameState.difficulty === 'medium') {
+                return (dists[0] >= 24 && dists[1] < 30 && dists[3] < 38);
+            }
+            // Hard: all <= 20
+            else if (gameState.difficulty === 'hard') {
+                return (dists[3] <= 20); // Max distance <= 20
+            }
+
+            return true; // Fallback
         }
 
         /**
@@ -671,6 +883,16 @@
             ctx.fillStyle = C_BG;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+            if (gameState.generating) {
+                ctx.fillStyle = "white";
+                ctx.font = "20px Courier New";
+                ctx.textAlign = "center";
+                ctx.fillText("GENERATING MAZE...", canvas.width / 2, canvas.height / 2);
+                ctx.font = "12px Courier New";
+                ctx.fillText(`Target: ${gameState.difficulty.toUpperCase()}`, canvas.width / 2, canvas.height / 2 + 25);
+                return;
+            }
+
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let px = x * TILE_SIZE;
@@ -686,19 +908,7 @@
                     }
 
                     if (cell.item && cell.item.type === 'sand') {
-                        ctx.fillStyle = '#875';
-                        ctx.beginPath(); ctx.arc(px + 16, py + 16, 12, 0, Math.PI * 2); ctx.fill();
-                        let pct = cell.item.hp / cell.item.maxHp;
-                        ctx.fillStyle = `rgba(0,0,0,${1 - pct})`;
-                        ctx.beginPath(); ctx.arc(px + 16, py + 16, 8, 0, Math.PI * 2); ctx.fill();
-
-                        // Draw Level for Sand
-                        if (cell.item.stacks > 1) {
-                            ctx.fillStyle = "white";
-                            ctx.font = "8px Arial";
-                            ctx.textAlign = "center";
-                            ctx.fillText(cell.item.stacks, px + 16, py + 20);
-                        }
+                        drawSandIcon(ctx, px + 16, py + 16, cell.item.hp / cell.item.maxHp, cell.item.stacks);
                     }
 
                     if (cell.type === TYPE_CASTLE) {
@@ -713,6 +923,28 @@
             enemies.forEach(e => e.draw(ctx));
             projectiles.forEach(p => p.draw(ctx));
             particles.forEach(p => p.draw(ctx));
+        }
+
+        // --- RENDER HELPERS ---
+        function drawTowerIcon(ctx, x, y, color, angle, level = 0) {
+            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y - 2, 10, 0, 6.28); ctx.fill();
+            ctx.save(); ctx.translate(x, y - 2); ctx.rotate(angle);
+            ctx.fillStyle = color; ctx.fillRect(-6, -6, 12, 12);
+            ctx.fillStyle = 'black'; ctx.fillRect(0, -2, 12, 4); ctx.restore();
+        }
+
+        function drawSandIcon(ctx, x, y, hpPct, stacks) {
+            ctx.fillStyle = '#875';
+            ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = `rgba(0,0,0,${1 - hpPct})`;
+            ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
+
+            if (stacks > 1) {
+                ctx.fillStyle = "white";
+                ctx.font = "8px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText(stacks, x, y + 4);
+            }
         }
 
         function loop(timestamp) {
@@ -1088,10 +1320,8 @@
             }
 
             draw(ctx) {
-                ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(this.x, this.y - 2, 10, 0, 6.28); ctx.fill();
-                ctx.save(); ctx.translate(this.x, this.y - 2); ctx.rotate(this.angle);
-                ctx.fillStyle = this.baseStats.color; ctx.fillRect(-6, -6, 12, 12);
-                ctx.fillStyle = 'black'; ctx.fillRect(0, -2, 12, 4); ctx.restore();
+                // Use the helper
+                drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level);
 
                 // Draw Level Info
                 let reqForNext = Math.pow(2, this.level);
@@ -1548,19 +1778,29 @@
 
             let marketEl = document.getElementById('market-strip');
 
-            // Re-create DOM only if count changes (or empty)
-            if (marketEl.children.length !== marketCards.length) {
-                marketEl.innerHTML = '';
-                marketCards.forEach((card, i) => {
-                    let d = document.createElement('div');
-                    // Attach listeners ONCE
-                    d.onclick = () => handleCardClick(i);
-                    // Double click locking handled by handleCardClick
-                    marketEl.appendChild(d);
-                });
+            // 1. Sync Child Count
+            while (marketEl.children.length < marketCards.length) {
+                let d = document.createElement('div');
+                let index = marketEl.children.length;
+                d.onclick = () => handleCardClick(index);
+
+                // Create Structure ONCE
+                d.innerHTML = `
+                    <div class="canvas-container" style="width:32px;height:32px;margin-bottom:4px;">
+                        <canvas width="32" height="32"></canvas>
+                    </div>
+                    <div class="m-name"></div>
+                    <div class="m-cost"></div>
+                    <div class="sold-badge">SOLD</div>
+                    <div class="lock-icon">🔒</div>
+                `;
+                marketEl.appendChild(d);
+            }
+            while (marketEl.children.length > marketCards.length) {
+                marketEl.removeChild(marketEl.lastChild);
             }
 
-            // Update content/styles of existing elements
+            // 2. Update Content
             let children = marketEl.children;
             marketCards.forEach((card, i) => {
                 let data = CARD_TYPES[card.type];
@@ -1572,19 +1812,47 @@
                 d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''} ${card.locked ? 'locked' : ''}`;
                 d.style.borderColor = isSelected ? '#0f0' : (card.locked ? '#fca' : (card.bought ? '#333' : data.color));
 
-                let costDisplay = data.hpCost ? `<span style="color:#f44">${data.hpCost} ♥</span>` : `$${actualPrice}`;
+                // Name & Level
+                let nameHtml = data.name;
+                if (card.type !== 'shop_up') nameHtml += `<br><span style="font-size:8px;color:#fff">L${card.level}</span>`;
+                d.querySelector('.m-name').innerHTML = nameHtml;
+                d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
 
-                d.innerHTML = `
-            <div class="m-icon">${data.icon}</div>
-            <div class="m-name" style="color:${card.bought ? '#555' : data.color}">
-               ${data.name}
-               ${(card.type !== 'shop_up') ? `<br><span style="font-size:8px;color:#fff">L${card.level}</span>` : ''}
-            </div>
-            <div class="m-cost">${costDisplay}</div>
-            <div class="sold-badge">SOLD</div>
-            <div class="lock-icon">🔒</div>
-        `;
+                // Cost
+                let costDisplay = data.hpCost ? `<span style="color:#f44">${data.hpCost} ♥</span>` : `$${actualPrice}`;
+                d.querySelector('.m-cost').innerHTML = costDisplay;
+
+                // Canvas Icon
+                let canvas = d.querySelector('canvas');
+                renderMarketIcon(canvas, card, data);
             });
+        }
+
+        function renderMarketIcon(canvas, card, data) {
+            let ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            let cx = canvas.width / 2;
+            let cy = canvas.height / 2;
+
+            if (data.target === 'wall') {
+                // Tower
+                // Use simplified level for visual? Or true level? True level inside shop.
+                // Angle -90 deg (pointing up)
+                drawTowerIcon(ctx, cx, cy + 2, data.color, -Math.PI / 2, 0);
+                // Note: passing level 0 to icon to skip "L1" text INSIDE the icon if that function draws it?
+                // Wait, drawTowerIcon does NOT draw text. Tower.draw does.
+                // drawTowerIcon draws the circles and rects.
+            } else if (card.type === 'sand') {
+                drawSandIcon(ctx, cx, cy, 1.0, 1);
+                // Draw 1 stack visually, level is shown in text below
+            } else {
+                // Fallback / Other Items -> Draw Emoji
+                ctx.font = "24px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(data.icon, cx, cy + 2);
+            }
         }
 
         // Start
