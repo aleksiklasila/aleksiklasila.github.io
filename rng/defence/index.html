@@ -2025,8 +2025,14 @@
         }
 
         function getFullyClearedWaveCount() {
-            if (enemies.length === 0) return Math.max(0, gameState.wave - 1);
             let minWave = gameState.wave;
+
+            // Check spawn queue (oldest items are at index 0 if acting as stack/queue mix)
+            if (gameState.spawnQueue.length > 0) {
+                let qWave = gameState.spawnQueue[0].waveIndex;
+                if (qWave < minWave) minWave = qWave;
+            }
+
             for (let e of enemies) {
                 if (e.waveIndex < minWave) minWave = e.waveIndex;
             }
@@ -2136,10 +2142,7 @@
             ctx.restore();
         }
 
-        function getFullyClearedWaveCount() {
-            // Generous interpretation: Current wave index (pays out even on wave 1)
-            return Math.max(1, gameState.wave);
-        }
+
 
         // Start
         init();
