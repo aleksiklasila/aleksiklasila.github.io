@@ -599,33 +599,33 @@
         };
 
         const CARD_TYPES = {
-            water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 3.5, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
-            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 1, unlock_wave: 2 },
+            water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
+            sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 0.78, unlock_wave: 5 },
             lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.1, unlock_wave: 6 },
 
             // Boss Level 1 (Wave 3)
-            pistol: { name: "Pistol", price: 40, icon: "⚡", color: "#964B00", range: 3.5, cd: 40, damage: 8, target: 'wall', desc: "Cheap but low firing speed and damage.", weight: 0.25, unlock_wave: 0 },
-            smg: { name: "SMG", price: 50, icon: "⚡", color: "#aaf", range: 3.5, cd: 17, damage: 5, target: 'wall', desc: "Extremely fast firing speed but low damage.", weight: 0.25, unlock_wave: 0 },
-            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 3.0, cd: 50, damage: 3, target: 'wall', desc: "Applies damage over time to enemies.", weight: 1, unlock_wave: 3 },
+            pistol: { name: "Pistol", price: 35, icon: "⚡", color: "#964B00", range: 1.86, cd: 40, damage: 8, target: 'wall', desc: "Cheap but low firing speed and damage.", weight: 0.25, unlock_wave: 0 },
+            smg: { name: "SMG", price: 45, icon: "⚡", color: "#aaf", range: 1.86, cd: 17, damage: 5, target: 'wall', desc: "Extremely fast firing speed but low damage.", weight: 0.25, unlock_wave: 0 },
+            poison: { name: "Poison", price: 80, icon: "🧪", color: "#2d2", range: 1.5, cd: 50, damage: 3, target: 'wall', desc: "Applies damage over time to enemies.", weight: 1, unlock_wave: 3 },
 
             // Boss Level 2 (Wave 6)
-            fire: { name: "Fire", price: 150, icon: "🔥", color: "#f50", range: 5.0, cd: 110, damage: 45, target: 'wall', desc: "Deals splash damage to a small area.", weight: 1, unlock_wave: 6 },
+            fire: { name: "Fire", price: 150, icon: "🔥", color: "#f50", range: 2.5, cd: 110, damage: 45, target: 'wall', desc: "Deals splash damage to a small area.", weight: 1, unlock_wave: 6 },
 
             // Boss Level 3 (Wave 9)
-            sand_gun: { name: "Sand Gun", price: 60, icon: "⏳", color: "#c96", range: 3.5, cd: 150, damage: 5, target: 'wall', desc: "Shoots bullets that slow enemies briefly.", weight: 0.15, unlock_wave: 9 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "⏳", color: "#c96", range: 1.75, cd: 150, damage: 5, target: 'wall', desc: "Shoots bullets that slow enemies briefly.", weight: 0.15, unlock_wave: 11 },
 
             // Utilities (Available early or staggered)
-            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Removes a tower or item for a refund.", weight: 0.2, unlock_wave: 2 },
-            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 4.0, damage: 300, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15, unlock_wave: 6 },
+            salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Removes a tower or item for a refund.", weight: 0.2, unlock_wave: 15 },
+            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 2, damage: 300, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15, unlock_wave: 6 },
             heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "Restores 5 lives to your castle.", weight: 0.15, unlock_wave: 3 },
             sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "Trades 5 lives for extra money.", weight: 0.15, unlock_wave: 3 },
             reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2, unlock_wave: 3 },
-            farm: { name: "Farm", price: 75, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Earn extra money when enemies die on this tile.", weight: 0.2, unlock_wave: 3 },
-            shop_up: { name: "Shop Up", price: 150, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Increases the level of future shop items.", weight: 0.2, unlock_wave: 3 },
+            farm: { name: "Farm", price: 40, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Earn extra money when enemies die on this tile.", weight: 0.2, unlock_wave: 3 },
+            shop_up: { name: "Shop Up", price: 40, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Increases the level of future shop items.", weight: 0.2, unlock_wave: 3 },
 
-            mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 3.5, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
-            ice: { name: "Ice", price: 200, icon: "❄️", color: "#afe", range: 5.0, cd: 40, damage: 5, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 0.5, unlock_wave: 15 },
-            elements: { name: "Elements", price: 250, icon: "🌈", color: "#fff", range: 4.0, cd: 17, damage: 0, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 20 }
+            mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
+            ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
+            elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 0, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 }
         };
 
         /**
@@ -743,11 +743,7 @@
             // Castle is already placed during generation loop
 
             gameState.hp = 20;
-            gameState.money = {
-                "easy": 200,
-                "medium": 400,
-                "hard": 800
-            }[gameState.difficulty]
+            gameState.money = 800
             gameState.wave = 1;
             gameState.active = false;
             gameState.gameOver = false;
@@ -922,6 +918,7 @@
                 let e = enemies[i];
                 e.update();
                 if (e.dead) {
+                    handleEnemySplit(e);
                     enemies.splice(i, 1);
                     gameState.killedEnemies++;
                     if (gameState.waveStats[e.waveIndex]) gameState.waveStats[e.waveIndex].killed++;
@@ -1370,6 +1367,8 @@
                 this.poisonSource = null; // { x: gx, y: gy }
                 this.burnSource = null;   // { x: gx, y: gy }
 
+                this.splits_left = (type === 'poison_resistant') ? 1 : 0;
+
                 // Stats Tracking
                 if (!gameState.waveStats[waveIndex]) gameState.waveStats[waveIndex] = { total: 0, killed: 0 };
                 gameState.waveStats[waveIndex].total++;
@@ -1632,7 +1631,12 @@
 
             shoot() {
                 let rangePx = this.currentStats.range * TILE_SIZE;
-                let closestVuln = null; let minVuln = rangePx;
+
+                // Priority 1: Vulnerable AND Not Affected (Spread the effect)
+                let closestPrimary = null; let minPrimary = rangePx;
+                // Priority 2: Vulnerable AND Affected (Focus fire / maintenance)
+                let closestSecondary = null; let minSecondary = rangePx;
+                // Priority 3: Immune (Last resort)
                 let closestImmune = null; let minImmune = rangePx;
 
                 for (let e of enemies) {
@@ -1648,13 +1652,25 @@
                     if (isImmune) {
                         if (d < minImmune) { minImmune = d; closestImmune = e; }
                     } else {
-                        if (d < minVuln) { minVuln = d; closestVuln = e; }
+                        // Check if already affected by THIS tower's effect
+                        let isAffected = false;
+                        if (this.type === 'fire') isAffected = e.burning > 0;
+                        else if (this.type === 'poison') isAffected = e.poisoned > 0;
+                        else if (this.type === 'water') isAffected = e.wet > 0;
+                        else if (this.type === 'ice') isAffected = e.frozen > 0;
+                        else if (this.type === 'sand_gun') isAffected = e.slowed > 0;
+                        else if (this.type === 'elements') isAffected = (e.burning > 0 && e.poisoned > 0 && e.wet > 0 && e.frozen > 0);
+
+                        if (!isAffected) {
+                            if (d < minPrimary) { minPrimary = d; closestPrimary = e; }
+                        } else {
+                            if (d < minSecondary) { minSecondary = d; closestSecondary = e; }
+                        }
                     }
                 }
 
-
-
-                let target = closestVuln || closestImmune;
+                // Pick best target based on priority
+                let target = closestPrimary || closestSecondary || closestImmune;
 
                 if (target) {
                     this.cd = this.currentStats.cd;
@@ -2220,6 +2236,29 @@
             gameState.wave++;
 
             updateUI();
+        }
+
+        function handleEnemySplit(parent) {
+            if (parent.splits_left <= 0) return;
+
+            for (let i = 0; i < 2; i++) {
+                let child = new Enemy(parent.type, parent.waveIndex);
+                child.x = parent.x + (Math.random() * 10 - 5);
+                child.y = parent.y + (Math.random() * 10 - 5);
+                child.vx = Math.random() - 0.5; // Slight impulse
+                child.vy = Math.random() - 0.5;
+
+                child.r = parent.r * 0.5;
+                child.maxHp = parent.maxHp * 0.5;
+                child.hp = child.maxHp;
+                child.splits_left = parent.splits_left - 1;
+
+                // Inherit path progress so they don't restart at beginning of map if they have a path
+                child.path = parent.path;
+                child.pathIndex = parent.pathIndex;
+
+                enemies.push(child);
+            }
         }
 
         function getFullyClearedWaveCount() {
