@@ -565,6 +565,13 @@
         // Global State
         let canvas, ctx;
         let lastTime = 0;
+        // --- LOOT TABLES & DROPS ---
+        const LOOT_TABLES = {
+            'boss': { 'money': 100 },
+            'tank': { 'nothing': 70, 'money': 30 },
+            'default': { 'nothing': 100, 'money': 1 }
+        };
+        let droppedItems = [];
         let grid = [];
         let flowField = [];
         let flowFieldFlying = []; // For flying units (ignore walls, blocked by turrets)
@@ -572,6 +579,8 @@
         let towers = [];
         let projectiles = [];
         let particles = [];
+        let collectorSpawners = [];
+        let collectors = [];
 
         let routesCache = {}; // Cache for precalculated paths from each corner
 
@@ -626,7 +635,8 @@
 
             mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
             ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
-            elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 }
+            elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 },
+            spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 }
         };
 
         /**
@@ -731,6 +741,9 @@
             enemies = [];
             projectiles = [];
             particles = [];
+            droppedItems = [];
+            collectors = [];
+            collectorSpawners = [];
             grid = []; // Clear grid to show black or loading
 
             // Start Async Loop
@@ -831,7 +844,7 @@
                 return valid;
             }
             // Medium: shortest >= 27, others <= 30 => All in [27, 30]?
-            // "medium = the distance to any corner is at least 27, and to other corners it is no more than 30"
+            // "medium = the distance to any corner is at least 27, and to other corners it is no more than 30".
             // This phrasing is tricky. "to any corner... at least 27" -> min >= 27.
             // "to other corners... no more than 30".
             // If min is, say, 28. Are the "others" <= 30?
@@ -934,6 +947,44 @@
             }
             for (let i = particles.length - 1; i >= 0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
 
+            // Update Spawners
+            for (let i = collectorSpawners.length - 1; i >= 0; i--) {
+                if (collectorSpawners[i].hp <= 0) {
+                    // Destroyed
+                    grid[collectorSpawners[i].gy][collectorSpawners[i].gx].item = null;
+                    createExplosion(collectorSpawners[i].x, collectorSpawners[i].y, '#643', 10);
+                    collectorSpawners.splice(i, 1);
+                }
+            }
+
+            // Update Collectors
+            // Iterate safe copy or reverse?
+            for (let i = collectors.length - 1; i >= 0; i--) {
+                let c = collectors[i];
+                // If spawner dead, logic is inside update to return/stop...
+                // Actually if spawner is dead, collector should vanish or die?
+                // User: "if spaner is salvaged / destroyed... the collector ai will not be destroyable, unless the spaner itself gets destroyed."
+                if (!c.spawner || c.spawner.hp <= 0) {
+                    if (c.targetItem) c.targetItem.lockedBy = null; // Unmark
+                    collectors.splice(i, 1);
+                    continue;
+                }
+                c.update();
+            }
+
+            // Update Dropped Items
+            for (let i = droppedItems.length - 1; i >= 0; i--) {
+                let drop = droppedItems[i];
+                drop.timer--;
+                if (drop.timer <= 0) {
+                    // Despawn
+                    if (grid[drop.gy][drop.gx].droppedItem === drop) {
+                        grid[drop.gy][drop.gx].droppedItem = null;
+                    }
+                    droppedItems.splice(i, 1);
+                }
+            }
+
             // Periodically refresh stats if something is selected (to show live CD, HP etc)
             if (selectedEntity && gameState.active) {
                 if (gameState.spawnTimer % 5 === 0) updateStatsPanel();
@@ -988,7 +1039,24 @@
                 }
             }
 
+            // DRAW DROPPED ITEMS (After grid, before others)
+            droppedItems.forEach(drop => {
+                if (drop.type === 'money') {
+                    // Static
+                    ctx.fillStyle = '#fd0';
+                    ctx.font = "900 20px Arial";
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.shadowColor = 'black';
+                    ctx.shadowBlur = 4;
+                    ctx.fillText('$', drop.x, drop.y);
+                    ctx.shadowBlur = 0;
+                }
+            });
+
             towers.forEach(t => t.draw(ctx));
+            collectorSpawners.forEach(s => s.draw(ctx));
+            collectors.forEach(c => c.draw(ctx));
             enemies.forEach(e => e.draw(ctx));
             projectiles.forEach(p => p.draw(ctx));
             particles.forEach(p => p.draw(ctx));
@@ -1441,8 +1509,54 @@
                         updateUI();
                     }
                 }
-            }
 
+                // --- DROP LOGIC ---
+                // 1. Determine Loot Table
+                let table = LOOT_TABLES[this.type] || LOOT_TABLES['default'];
+                // 2. Roll
+                let totalWeight = 0;
+                for (let k in table) totalWeight += table[k];
+                let r = Math.random() * totalWeight;
+                let selectedDrop = 'nothing';
+                let currentWeight = 0;
+                for (let k in table) {
+                    currentWeight += table[k];
+                    if (r <= currentWeight) {
+                        selectedDrop = k;
+                        break;
+                    }
+                }
+
+                if (selectedDrop !== 'nothing') {
+                    let gx = Math.floor(this.x / TILE_SIZE);
+                    let gy = Math.floor(this.y / TILE_SIZE);
+
+                    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                        let cell = grid[gy][gx];
+                        // Check if cell already has a DROPPED item (can overlay path items)
+                        if (cell && !cell.droppedItem) {
+                            // Determine Value (Money scales with wave)
+                            let value = 0;
+                            if (selectedDrop === 'money') {
+                                value = Math.floor(this.maxHp / 20);
+                            }
+
+                            let drop = {
+                                type: selectedDrop,
+                                value: value,
+                                gx: gx,
+                                gy: gy,
+                                x: gx * TILE_SIZE + 16,
+                                y: gy * TILE_SIZE + 16,
+                                timer: 60 * 120,
+                                maxTimer: 60 * 10
+                            };
+                            cell.droppedItem = drop;
+                            droppedItems.push(drop);
+                        }
+                    }
+                }
+            }
             update() {
                 let gx = Math.floor(this.x / TILE_SIZE);
                 let gy = Math.floor(this.y / TILE_SIZE);
@@ -1487,6 +1601,11 @@
                         if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#500", 8); }
                     }
                 }
+                else if (cell && cell.item && cell.item.type === 'spawner' && this.type !== 'flying') {
+                    // Destroy Spawner
+                    cell.item.hp -= 2; // Damage it?
+                    if (Math.random() < 0.1) createExplosion(this.x, this.y, '#643', 1);
+                }
                 else if (cell && cell.item && cell.item.type === 'mine' && this.type !== 'flying') {
                     // MINE TRIGGER
                     let mineDmg = (CARD_TYPES['mine'].damage || 135) * (cell.item.stacks || 1);
@@ -1497,8 +1616,6 @@
                     createExplosion(gx * 32 + 16, gy * 32 + 16, "#f44", 20); // Big Boom visual
 
                     // AoE Damage
-                    // We can reuse a "virtual" projectile or just iterate enemies here
-                    // Iterate all to apply damage
                     for (let oe of enemies) {
                         if (Math.hypot(oe.x - this.x, oe.y - this.y) < range) {
                             oe.hp -= mineDmg;
@@ -1638,9 +1755,6 @@
 
                 if (this.visualization === 'triangle') {
                     ctx.stroke(); // Stroke the triangle path we just closed?
-                    // The path is already closed above. stroke() uses current path?
-                    // Yes, but we need to redraw path or stroke it immediately.
-                    // Let's refactor slightly to stroke immediately or re-path.
                     ctx.beginPath();
                     let r = this.r * 0.5;
                     ctx.moveTo(this.x, this.y + r);
@@ -1691,18 +1805,30 @@
                 } else if (this.type === 'poison') {
                     this.currentStats.damage = this.baseStats.damage * lvlMult;
                     this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
-                    this.currentStats.cooldown = this.baseStats.range * (1 + (this.level - 1) * 0.1);
+                    this.currentStats.cooldown = (this.baseStats.cd || 60) * (1 - (this.level - 1) * 0.1);
                 } else if (this.type === 'sand_gun') {
                     this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
                     this.currentStats.damage = this.baseStats.damage * lvlMult;
                     this.currentStats.cd = this.baseStats.cd * (0.9 ** this.level);
                 }
+
+                // Generic fallback if not handled above
+                if (!this.currentStats.cd) this.currentStats.cd = this.baseStats.cd;
+                if (!this.currentStats.range) this.currentStats.range = this.baseStats.range;
             }
 
-            update() { if (this.cd > 0) this.cd--; else this.shoot(); }
+            update() {
+                if (this.cd > 0) this.cd--;
+                this.shoot();
+            }
 
             shoot() {
-                let rangePx = this.currentStats.range * TILE_SIZE;
+                if (this.cd > 0) return;
+                let stats = this.currentStats;
+                let rangePx = stats.range * TILE_SIZE;
+
+                let enemiesInRange = enemies.filter(e => Math.hypot(e.x - this.x, e.y - this.y) <= rangePx);
+                if (enemiesInRange.length === 0) return;
 
                 // Priority 1: Vulnerable AND Not Affected (Spread the effect)
                 let closestPrimary = null; let minPrimary = rangePx;
@@ -1714,6 +1840,8 @@
                 for (let e of enemies) {
                     let d = Math.hypot(e.x - this.x, e.y - this.y);
                     if (d > rangePx) continue;
+                    // Skip if dead or reached goal (handled by filter above? enemies struct might have them)
+                    if (e.dead || e.reachedGoal) continue;
 
                     let isImmune = (this.type === 'fire' && e.fireResistant) ||
                         (this.type === 'water' && e.waterResistant) ||
@@ -1745,9 +1873,11 @@
                 let target = closestPrimary || closestSecondary || closestImmune;
 
                 if (target) {
-                    this.cd = this.currentStats.cd;
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.level));
+                    this.cd = this.currentStats.cd || this.currentStats.cooldown; // CD Fix
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.level, this));
+                    if (this.type === 'blaster') createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#acf', 3);
+                    else createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 3);
                 }
             }
 
@@ -1770,6 +1900,266 @@
                 ctx.shadowBlur = 0;
             }
         }
+
+        class CollectorSpawner {
+            constructor(gx, gy, stacks = 1) {
+                this.gx = gx;
+                this.gy = gy;
+                this.x = gx * TILE_SIZE + 16;
+                this.y = gy * TILE_SIZE + 16;
+                this.stacks = stacks; // Track stacks
+                this.hp = 60;
+                this.maxHp = 60;
+                this.type = 'spawner';
+                this.storedMoney = 0;
+                this.collector = new CollectorAI(this);
+                collectors.push(this.collector);
+            }
+
+            draw(ctx) {
+                // Dark Brown Wall-like
+                let x = this.gx * TILE_SIZE;
+                let y = this.gy * TILE_SIZE;
+                ctx.fillStyle = '#432'; // Dark Brown
+                ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                ctx.strokeStyle = '#210';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+
+                // Indicator if money stored
+                if (this.storedMoney > 0) {
+                    ctx.fillStyle = '#fd0';
+                    ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill();
+                }
+
+                // HP Bar
+                if (this.hp < this.maxHp) {
+                    ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
+                    ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6, 20 * (this.hp / this.maxHp), 3);
+                }
+            }
+        }
+
+        class CollectorAI {
+            constructor(spawner) {
+                this.spawner = spawner;
+                this.x = spawner.x;
+                this.y = spawner.y;
+                this.state = 'IDLE'; // IDLE, MOVING_TO, RETURNING
+                this.targetItem = null; // Reference to droppedItem
+                this.path = [];
+                this.pathIndex = 0;
+                this.carryingValue = 0;
+            }
+
+            get speed() {
+                // Base 0.5, +0.05 per stack
+                // Level 1 = 0.5
+                // Level 30 = 0.5 + 29*0.05 = 1.95 (~2.0)
+                let s = 1.2 + (this.spawner.stacks - 1) * 0.05;
+                if (s > 4.0) s = 4.0;
+                return s;
+            }
+
+            update() {
+                if (!this.spawner || this.spawner.hp <= 0) {
+                    // Should be removed by manager
+                    return;
+                }
+
+                if (this.state === 'IDLE') {
+                    // Find closest unlocked dropped item
+                    let bestDist = 99999;
+                    let bestItem = null;
+
+                    for (let drop of droppedItems) {
+                        if (!drop.lockedBy) {
+                            let d = Math.hypot(drop.x - this.x, drop.y - this.y);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestItem = drop;
+                            }
+                        }
+                    }
+
+                    if (bestItem) {
+                        this.targetItem = bestItem;
+                        this.targetItem.lockedBy = this;
+                        // Calculate Path
+                        this.path = this.findPath(this.spawner.gx, this.spawner.gy, bestItem.gx, bestItem.gy);
+                        if (this.path) {
+                            this.state = 'MOVING_TO';
+                            this.pathIndex = 0;
+                        } else {
+                            // No path? Unlock and ignore for a bit?
+                            this.targetItem.lockedBy = null;
+                            this.targetItem = null;
+                        }
+                    }
+                }
+                else if (this.state === 'MOVING_TO') {
+                    if (!this.targetItem || !droppedItems.includes(this.targetItem)) {
+                        // Item gone
+                        this.state = 'RETURNING'; // Just go back
+                        this.targetItem = null;
+                        // Reverse path from current index?
+                        // Current Path is Spawner -> Target.
+                        // We are at pathIndex. We need to go pathIndex -> 0.
+                        // Let's just create a new reverse path from current pos.
+                        // optimization: The path array is set. We can just walk it backwards.
+                        // But we might be between nodes.
+                        // Easiest: Re-calc path back to spawner OR just reverse list if valid.
+                        // Since we are friendly walking, simple reverse of the *taken* path is fine.
+                        // Let's just simply set path to reverse of full path and set index to length - index?
+                        // actually, let's just use the existing path array and decrement index?
+                        // Complicated if we are mid-way.
+                        // Simplest: Just re-path to spawner.
+                        this.path = this.findPath(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
+                        this.pathIndex = 0;
+                        return;
+                    }
+
+                    if (this.followPath()) {
+                        // Reached Target
+                        // Pickup
+                        if (this.targetItem && droppedItems.includes(this.targetItem)) {
+                            this.carryingValue = this.targetItem.value;
+                            // Remove item from world
+                            let idx = droppedItems.indexOf(this.targetItem);
+                            if (idx !== -1) {
+                                if (grid[this.targetItem.gy][this.targetItem.gx].droppedItem === this.targetItem) {
+                                    grid[this.targetItem.gy][this.targetItem.gx].droppedItem = null;
+                                }
+                                droppedItems.splice(idx, 1);
+                            }
+                        }
+                        this.targetItem = null;
+                        this.state = 'RETURNING';
+                        // Reverse Path
+                        this.path = this.path.reverse();
+                        this.pathIndex = 0;
+                    }
+                }
+                else if (this.state === 'RETURNING') {
+                    if (this.followPath()) {
+                        // Reached Spawner - Auto Collect
+                        if (this.carryingValue > 0) {
+                            gameState.money += this.carryingValue;
+                            createExplosion(this.spawner.x, this.spawner.y, '#fd0', 10);
+                            updateUI();
+                        }
+                        this.carryingValue = 0;
+                        this.state = 'IDLE';
+                        this.path = [];
+                    }
+                }
+            }
+
+            findPath(sx, sy, ex, ey) {
+                // BFS
+                let q = [[sx, sy]];
+                let cameFrom = {}; // 'x,y' -> {x, y}
+                cameFrom[`${sx},${sy}`] = null;
+                let visited = new Set();
+                visited.add(`${sx},${sy}`);
+
+                while (q.length > 0) {
+                    let curr = q.shift();
+                    let cx = curr[0], cy = curr[1];
+
+                    if (cx === ex && cy === ey) break;
+
+                    [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
+                        let nx = cx + d[0], ny = cy + d[1];
+                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                            let key = `${nx},${ny}`;
+                            if (!visited.has(key)) {
+                                let cell = grid[ny][nx];
+                                // Avoid Walls
+                                if (cell.type !== TYPE_WALL) {
+                                    visited.add(key);
+                                    cameFrom[key] = { x: cx, y: cy };
+                                    q.push([nx, ny]);
+                                }
+                            }
+                        }
+                    });
+                }
+
+                if (!cameFrom[`${ex},${ey}`] && (sx !== ex || sy !== ey)) return null; // No path
+
+                // Reconstruct
+                let path = [];
+                let curr = { x: ex, y: ey };
+                while (curr) {
+                    path.push(curr);
+                    let prev = cameFrom[`${curr.x},${curr.y}`];
+                    // If prev is null, we are at start (or unreachable, but check handled above)
+                    // Wait, if start==end, path is [{x,y}]. Length 1.
+                    if (!prev && (curr.x !== sx || curr.y !== sy)) break; // Should not happen
+                    curr = prev;
+                }
+                return path.reverse(); // Start -> End
+            }
+
+            followPath() {
+                if (!this.path || this.path.length === 0) return true; // Reached?
+
+                let target = this.path[this.pathIndex];
+                let tx = target.x * TILE_SIZE + 16;
+                let ty = target.y * TILE_SIZE + 16;
+
+                let dx = tx - this.x;
+                let dy = ty - this.y;
+                let dist = Math.hypot(dx, dy);
+
+                if (dist < 4) {
+                    this.pathIndex++;
+                    if (this.pathIndex >= this.path.length) return true; // Reached End
+                    return false;
+                }
+
+                // Move
+                // Check Sand
+                let gx = Math.floor(this.x / TILE_SIZE);
+                let gy = Math.floor(this.y / TILE_SIZE);
+                let spd = this.speed;
+                if (grid[gy] && grid[gy][gx] && grid[gy][gx].item && grid[gy][gx].item.type === 'sand') {
+                    spd *= 0.5;
+                }
+
+                this.x += (dx / dist) * spd;
+                this.y += (dy / dist) * spd;
+                return false;
+            }
+
+            draw(ctx) {
+                // Gray Star
+                ctx.fillStyle = '#aaa';
+                ctx.beginPath();
+                // 5 point star
+                for (let i = 0; i < 5; i++) {
+                    let angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+                    let r = 8;
+                    ctx.lineTo(this.x + Math.cos(angle) * r, this.y + Math.sin(angle) * r);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                if (this.carryingValue > 0) {
+                    // Small dollar
+                    ctx.fillStyle = '#fd0';
+                    ctx.font = '10px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('$', this.x, this.y - 10);
+                }
+            }
+        }
+
+
 
         class Projectile {
             constructor(x, y, t, type, dmg, level, sourceTower) {
@@ -2084,6 +2474,24 @@
                 return;
             }
 
+            // --- CHECK FOR DROPPED ITEM PICKUP ---
+            let clickedCellIn = grid[gy][gx];
+            // REMOVED CLICK ITEM PICKUP
+
+            // CHECK FOR SPAWNER CLICK (COLLECT)
+            if (clickedCellIn && clickedCellIn.item && clickedCellIn.item.type === 'spawner') {
+                let spawner = clickedCellIn.item;
+                if (spawner.storedMoney > 0) {
+                    gameState.money += spawner.storedMoney;
+                    createExplosion(spawner.x, spawner.y, '#fd0', 10);
+                    spawner.storedMoney = 0;
+                    updateUI();
+                    return; // Don't select if we just collected money
+                }
+                // Don't Select? Or Select to see stats?
+                // Let's allow selecting it too
+            }
+
             if (selectedMarketIndex === -1) {
                 // SELECTION LOGIC
                 // Check for Tower
@@ -2234,7 +2642,17 @@
                         // New Item
                         let hp = 30 * marketCard.level;
                         if (cardKey === 'farm') { hp = 10; }
-                        tile.item = { type: cardKey, hp: hp, maxHp: hp, stacks: marketCard.level };
+
+                        if (cardKey === 'spawner') {
+                            let spawner = new CollectorSpawner(gx, gy, marketCard.level);
+                            // Apply level scaling to HP?
+                            spawner.hp = 60 + (marketCard.level - 1) * 20;
+                            spawner.maxHp = spawner.hp;
+                            tile.item = spawner;
+                            collectorSpawners.push(spawner);
+                        } else {
+                            tile.item = { type: cardKey, hp: hp, maxHp: hp, stacks: marketCard.level };
+                        }
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, data.color, 8);
                         actionTaken = true;
                     } else if (tile.item.type === cardKey) {
@@ -2348,12 +2766,12 @@
             // AND spawnQueue is empty.
             // This prepares the game for the next "Start" click if not already handled manually.
 
-            gameState.active = false; // Go back to waiting state
+            // gameState.active = false; // Go back to waiting state
 
-            resolveMarket();
-            gameState.wave++;
+            // resolveMarket();
+            // gameState.wave++;
 
-            updateUI();
+            // updateUI();
         }
 
         function handleEnemySplit(parent) {
@@ -2528,6 +2946,12 @@
                     panel.style.display = 'none';
                     return;
                 }
+            } else if (selectedEntity instanceof CollectorSpawner) {
+                if (selectedEntity.hp <= 0 || !collectorSpawners.includes(selectedEntity)) {
+                    selectedEntity = null;
+                    panel.style.display = 'none';
+                    return;
+                }
             }
             // For items, we'd need to check grid, but good enough for now to check if null
             // (The item object itself might still exist in memory)
@@ -2592,6 +3016,16 @@
                 if (e.sandy > 0) {
                     contentEl.innerHTML += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${Math.ceil(e.sandy / 30)}s</span></div>`;
                 }
+            }
+            else if (selectedEntity instanceof CollectorSpawner) {
+                let s = selectedEntity;
+                nameEl.innerText = `COLLECTOR SPAWNER`;
+                iconEl.innerText = "🏭";
+
+                contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${s.stacks}</span></div>`;
+                contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val">${Math.ceil(s.hp)}/${Math.ceil(s.maxHp)}</span></div>`;
+                contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span class="stat-val">${s.collector.speed.toFixed(2)}</span></div>`;
+                contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px;">Collects dropped money automatically.</div>`;
             }
             else if (selectedEntity.type) {
                 // Item (Sand/etc)
