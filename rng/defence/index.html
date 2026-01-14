@@ -567,6 +567,7 @@
         let lastTime = 0;
         let grid = [];
         let flowField = [];
+        let flowFieldFlying = []; // For flying units (ignore walls, blocked by turrets)
         let enemies = [];
         let towers = [];
         let projectiles = [];
@@ -625,7 +626,7 @@
 
             mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
             ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
-            elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 0, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 }
+            elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 }
         };
 
         /**
@@ -743,7 +744,7 @@
             // Castle is already placed during generation loop
 
             gameState.hp = 20;
-            gameState.money = 800
+            gameState.money = 2000
             gameState.wave = 1;
             gameState.active = false;
             gameState.gameOver = false;
@@ -767,6 +768,7 @@
 
             // Recalc flow field and routes for the FINAL map
             calcFlowField();
+            calcFlowFieldFlying();
             precalculateRoutes();
         }
 
@@ -1345,8 +1347,25 @@
                 else if (type === 'fire_resistant') { this.hp = 70 * mult; this.speed = 1.0; this.color = '#f50'; this.r = 10; }
                 else if (type === 'water_resistant') { this.hp = 50 * mult; this.speed = 1.6; this.color = '#4af'; this.r = 8; }
                 else if (type === 'ice_resistant') { this.hp = 65 * mult; this.speed = 1.1; this.color = '#afe'; this.r = 9; }
+                else if (type === 'fly_bird') { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; } // Generic?
+                // NEW BIRDS
+                else if (type === 'ice_bird') { this.hp = 55 * mult; this.speed = 1.4; this.color = '#acf'; this.r = 8; }
+                else if (type === 'water_bird') { this.hp = 50 * mult; this.speed = 1.45; this.color = '#4af'; this.r = 16; }
+                else if (type === 'fire_bird') { this.hp = 50 * mult; this.speed = 1.5; this.color = '#f50'; this.r = 14; }
+                else if (type === 'poison_bird') { this.hp = 60 * mult; this.speed = 1.4; this.color = '#2d2'; this.r = 18; }
+                else if (type === 'sand_bird') { this.hp = 65 * mult; this.speed = 2; this.color = '#aa8'; this.r = 15; }
                 else if (type === 'flying') { this.hp = 45 * mult; this.speed = 1.5; this.color = '#dd0'; this.r = 7; }
                 else { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; }
+
+                // Properties
+                this.iceResistant = (type === 'ice_resistant' || type === 'ice_bird');
+                this.fireResistant = (type === 'fire_resistant' || type === 'fire_bird');
+                this.waterResistant = (type === 'water_resistant' || type === 'water_bird');
+                this.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird');
+                this.sandResistant = (type === 'sand_bird' || type === 'flying');
+
+                this.isFlying = (type === 'ice_bird' || type === 'water_bird' || type === 'fire_bird' || type === 'poison_bird' || type === 'sand_bird');
+                this.visualization = (this.isFlying) ? 'triangle' : 'circle';
 
                 this.maxHp = this.hp;
                 this.poisoned = 0;
@@ -1356,11 +1375,11 @@
                 this.vx = 0; this.vy = 0;
                 this.dead = false;
                 this.reachedGoal = false;
-                this.reachedGoal = false;
-                this.slowed = 0; // Duration of slow effect
-                this.wet = 0; // Duration of water effect
-                this.frozen = 0; // Duration of ice effect
-                this.iceTickDamage = 0; // Damage potential if wet
+
+                this.sandy = 0; // NEW: Replaces slowed
+                this.wet = 0;
+                this.frozen = 0;
+                this.iceTickDamage = 0;
 
                 // Damage Source Tracking
                 this.lastSource = null;   // { x: gx, y: gy }
@@ -1377,7 +1396,7 @@
                 this.path = null;
                 this.pathIndex = 0;
                 let key = `${this.gx},${this.gy}`;
-                if (routesCache[key] && routesCache[key].length > 0) {
+                if (!this.isFlying && routesCache[key] && routesCache[key].length > 0) {
                     this.pickRoute(routesCache[key]);
                 }
             }
@@ -1434,12 +1453,20 @@
 
                 let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
                 let speedMod = 1;
-                if (this.slowed > 0) speedMod *= 0.4;
+
+                // Sandy Effect (previously slowed)
+                if (this.sandy > 0) {
+                    if (!this.sandResistant) speedMod *= 0.4;
+                    this.sandy--;
+                }
+
                 if (this.frozen > 0) speedMod *= 0.7; // Ice Slow (less than Sand)
-                if (this.slowed > 0) this.slowed--;
 
                 if (cell && cell.item && cell.item.type === 'sand' && this.type !== 'flying') {
-                    speedMod = 0.4;
+                    // Apply Sandy Status instead of direct slow
+                    this.sandy = 10; // Short duration, refreshes while on tile
+
+                    // Consume Sand
                     if (Math.random() < 0.03) {
                         cell.item.hp--;
                         createExplosion(this.x, this.y, '#aa8', 1);
@@ -1454,7 +1481,7 @@
                     this.burnTickDamage = 0.1 * (cell.item.stacks || 1);
 
                     // Direct Damage from Lava (Check Resistance)
-                    if (this.type !== 'fire_resistant' && Math.random() < 0.05) {
+                    if (!this.fireResistant && Math.random() < 0.05) {
                         cell.item.hp--;
                         createExplosion(this.x, this.y, '#f50', 1);
                         if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#500", 8); }
@@ -1486,7 +1513,7 @@
 
                 if (this.poisoned > 0) {
                     this.poisoned--;
-                    if (this.type !== 'poison_resistant') {
+                    if (!this.poisonResistant) {
                         this.hp -= this.poisonTickDamage;
                         if (this.hp <= 0) {
                             this.dead = true;
@@ -1498,7 +1525,7 @@
 
                 if (this.burning > 0) {
                     this.burning--;
-                    if (this.type !== 'fire_resistant') {
+                    if (!this.fireResistant) {
                         this.hp -= this.burnTickDamage;
                         if (this.hp <= 0) {
                             this.dead = true;
@@ -1513,7 +1540,7 @@
                 if (this.frozen > 0) {
                     this.frozen--;
                     // Combo Check
-                    if (this.wet > 0 && this.type !== 'ice_resistant' && this.type !== 'water_resistant') {
+                    if (this.wet > 0 && !this.iceResistant && !this.waterResistant) {
                         this.hp -= this.iceTickDamage; // Apply Combo Damage
                         if (this.hp <= 0) {
                             this.dead = true;
@@ -1547,10 +1574,22 @@
                 // 2. Fallback to flow field
                 else {
                     let best = 9999;
+                    let field = this.isFlying ? flowFieldFlying : flowField;
+
+                    // If flying and no field generated yet (shouldn't happen), fallback to ground?
+                    // Or if field is empty at current pos (unreachable?), stay put or random.
+
+                    if (field && field[gy] && field[gy][gx] !== null) { // Check if we are in valid field
+                        // Standard Flow follow
+                    }
+
                     [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
                         let nx = gx + d[0], ny = gy + d[1];
                         if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            let dist = flowField[ny][nx];
+                            // For flying, we can go over walls if flowFieldFlying says so.
+                            // The flowFieldFlying generation logic handles accessibility.
+                            let dist = (field && field[ny]) ? field[ny][nx] : null;
+
                             if (dist !== null && dist < best) { best = dist; tx = nx * TILE_SIZE + 16; ty = ny * TILE_SIZE + 16; }
                         }
                     });
@@ -1566,8 +1605,25 @@
             }
 
             draw(ctx) {
-                ctx.fillStyle = this.color;
-                ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
+                if (this.visualization === 'triangle') {
+                    // Triangle pointing down
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    // Center is x,y. r is roughly radius.
+                    // Point 1 (Bottom): x, y + r
+                    // Point 2 (Top Left): x - r, y - r
+                    // Point 3 (Top Right): x + r, y - r
+                    // "one corner down, and the two others up left, and up right" matches this description.
+                    let r = this.r * 0.5;
+                    ctx.moveTo(this.x, this.y + r); // Bottom Tip
+                    ctx.lineTo(this.x - r, this.y - r); // Top Left
+                    ctx.lineTo(this.x + r, this.y - r); // Top Right
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
+                }
 
                 // Add stroke for visibility (esp for white/black enemies)
                 ctx.strokeStyle = '#000';
@@ -1579,7 +1635,23 @@
                 else if (this.color === '#222' || this.color === '#555') ctx.strokeStyle = '#fff';
 
                 ctx.lineWidth = (this.burning > 0 || this.poisoned > 0 || this.frozen > 0 || this.wet > 0) ? 2 : 1;
-                ctx.stroke();
+
+                if (this.visualization === 'triangle') {
+                    ctx.stroke(); // Stroke the triangle path we just closed?
+                    // The path is already closed above. stroke() uses current path?
+                    // Yes, but we need to redraw path or stroke it immediately.
+                    // Let's refactor slightly to stroke immediately or re-path.
+                    ctx.beginPath();
+                    let r = this.r * 0.5;
+                    ctx.moveTo(this.x, this.y + r);
+                    ctx.lineTo(this.x - r, this.y - r);
+                    ctx.lineTo(this.x + r, this.y - r);
+                    ctx.closePath();
+                    ctx.stroke();
+                } else {
+                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28);
+                    ctx.stroke();
+                }
 
                 ctx.fillStyle = '#400'; ctx.fillRect(this.x - 8, this.y - 12, 16, 4);
                 ctx.fillStyle = (this.hp / this.maxHp) > 0.5 ? '#0f0' : '#f00'; ctx.fillRect(this.x - 8, this.y - 12, 16 * (this.hp / this.maxHp), 4);
@@ -1643,11 +1715,11 @@
                     let d = Math.hypot(e.x - this.x, e.y - this.y);
                     if (d > rangePx) continue;
 
-                    let isImmune = (this.type === 'fire' && e.type === 'fire_resistant') ||
-                        (this.type === 'water' && e.type === 'water_resistant') ||
-                        (this.type === 'poison' && e.type === 'poison_resistant') ||
-                        (this.type === 'ice' && e.type === 'ice_resistant') ||
-                        (this.type === 'elements' && (e.type === 'water_resistant' || e.type === 'fire_resistant' || e.type === 'poison_resistant' || e.type === 'ice_resistant'));
+                    let isImmune = (this.type === 'fire' && e.fireResistant) ||
+                        (this.type === 'water' && e.waterResistant) ||
+                        (this.type === 'poison' && e.poisonResistant) ||
+                        (this.type === 'ice' && e.iceResistant) ||
+                        (this.type === 'elements' && (e.waterResistant || e.fireResistant || e.poisonResistant || e.iceResistant));
 
                     if (isImmune) {
                         if (d < minImmune) { minImmune = d; closestImmune = e; }
@@ -1658,7 +1730,7 @@
                         else if (this.type === 'poison') isAffected = e.poisoned > 0;
                         else if (this.type === 'water') isAffected = e.wet > 0;
                         else if (this.type === 'ice') isAffected = e.frozen > 0;
-                        else if (this.type === 'sand_gun') isAffected = e.slowed > 0;
+                        else if (this.type === 'sand_gun') isAffected = e.sandy > 0;
                         else if (this.type === 'elements') isAffected = (e.burning > 0 && e.poisoned > 0 && e.wet > 0 && e.frozen > 0);
 
                         if (!isAffected) {
@@ -1730,7 +1802,7 @@
                     let burnDmgVal = Math.max(0.1, this.dmg * 0.05);
                     if (burnDmgVal > t.burnTickDamage) t.burnTickDamage = burnDmgVal;
 
-                    if (t.type !== 'fire_resistant') {
+                    if (!t.fireResistant) {
                         t.hp -= this.dmg;
                         if (t.hp <= 0 && !t.dead) { t.dead = true; t.checkDeathBonus(); }
                     } else {
@@ -1749,7 +1821,7 @@
                             let sBurn = Math.max(0.1, this.dmg * 0.05);
                             if (sBurn > e.burnTickDamage) e.burnTickDamage = sBurn;
 
-                            if (e.type !== 'fire_resistant') {
+                            if (!e.fireResistant) {
                                 e.hp -= this.dmg;
                                 if (e.hp <= 0 && !e.dead) { e.dead = true; e.checkDeathBonus(); }
                             }
@@ -1762,7 +1834,7 @@
                     let comboDmg = Math.max(0.5, this.dmg * 0.2);
                     if (comboDmg > t.iceTickDamage) t.iceTickDamage = comboDmg;
 
-                    if (t.type !== 'ice_resistant') {
+                    if (!t.iceResistant) {
                         t.hp -= this.dmg; // Small direct damage
                     } else {
                         createExplosion(t.x, t.y, "#888", 5);
@@ -1773,16 +1845,16 @@
                     t.poisoned = 100 + (this.level * 20);
                     t.burning = 100 + (this.level * 20);
                     t.wet = 100 + (this.level * 20);
-                    t.slowed = 60;
+                    t.sandy = 60;
 
                 } else if (this.type === 'elements') {
                     // Apply All Effects (Always)
-                    if (t.type !== 'poison_resistant' && t.type !== 'fire_resistant' && t.type !== 'water_resistant' && t.type !== 'ice_resistant') {
+                    if (!t.poisonResistant && !t.fireResistant && !t.waterResistant && !t.iceResistant) {
                         t.poisoned = 100 + (this.level * 20);
                         t.burning = 100 + (this.level * 20);
                         t.wet = 100 + (this.level * 20);
                         t.frozen = 100 + (this.level * 20);
-                        t.slowed = 60;
+                        t.sandy = 60;
 
                         // Set Tick Damage
                         let tickDmg = Math.max(0.1, this.dmg * 0.2);
@@ -1798,7 +1870,7 @@
                     // Always Apply Wet
                     t.wet = 120 + (this.level * 20);
 
-                    if (t.type === 'water_resistant') {
+                    if (t.waterResistant) {
                         createExplosion(t.x, t.y, "#888", 5); // Resisted
                         return;
                     }
@@ -1811,14 +1883,20 @@
                     let pd = this.dmg * 0.1;
                     if (pd > t.poisonTickDamage) t.poisonTickDamage = pd;
 
-                    if (t.type !== 'poison_resistant') {
+                    if (!t.poisonResistant) {
                         t.hp -= this.dmg; // Initial hit
                     } else {
                         createExplosion(t.x, t.y, "#888", 5); // Direct Hit Resisted
                     }
                 }
                 else if (this.type === 'sand_gun') {
-                    t.slowed = 180; // 3 seconds
+                    // Apply Sandy
+                    t.sandy = 180; // 3 seconds
+                    if (!t.sandResistant) {
+                        // damage + slow from effect
+                    } else {
+                        createExplosion(t.x, t.y, "#888", 2);
+                    }
                     t.hp -= this.dmg;
                     createExplosion(this.x, this.y, "#c96", 5);
                 }
@@ -1878,6 +1956,41 @@
                     if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
                         if (grid[ny][nx].type !== TYPE_WALL && flowField[ny][nx] === null) {
                             flowField[ny][nx] = dist + 1;
+                            queue.push({ x: nx, y: ny });
+                        }
+                    }
+                }
+            }
+        }
+
+        function calcFlowFieldFlying() {
+            flowFieldFlying = [];
+            for (let y = 0; y < GRID_H; y++) {
+                let row = [];
+                for (let x = 0; x < GRID_W; x++) row.push(null);
+                flowFieldFlying.push(row);
+            }
+            let queue = [];
+            let cx = Math.floor(GRID_W / 2);
+            let cy = Math.floor(GRID_H / 2);
+
+            flowFieldFlying[cy][cx] = 0;
+            queue.push({ x: cx, y: cy });
+
+            const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+            while (queue.length > 0) {
+                let cur = queue.shift();
+                let dist = flowFieldFlying[cur.y][cur.x];
+                for (let d of dirs) {
+                    let nx = cur.x + d[0];
+                    let ny = cur.y + d[1];
+                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                        let cell = grid[ny][nx];
+                        let isTower = (cell.type === TYPE_WALL && cell.item);
+
+                        // We check flowFieldFlying[ny][nx] === null to avoid cycles
+                        if (!isTower && flowFieldFlying[ny][nx] === null) {
+                            flowFieldFlying[ny][nx] = dist + 1;
                             queue.push({ x: nx, y: ny });
                         }
                     }
@@ -2110,6 +2223,7 @@
                     towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
                     tile.item = null;
                     createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#88f", 15);
+                    calcFlowFieldFlying(); // Recalc flying path
                     actionTaken = true;
                 }
             }
@@ -2144,6 +2258,7 @@
                         tile.item = { type: cardKey };
                         towers.push(new Tower(gx, gy, cardKey, marketCard.level));
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#fff", 8);
+                        calcFlowFieldFlying(); // Recalc flying path
                         actionTaken = true;
                     } else if (existingTower.type === cardKey) {
                         // Upgrade Existing
@@ -2189,15 +2304,18 @@
             for (let i = 0; i < count; i++) {
                 let r = Math.random();
                 let type = 'norm';
-                // Adjusted spawn rates to include new types
                 if (gameState.wave > 2 && r > 0.85) type = 'tank';
                 else if (gameState.wave > 1 && r > 0.75) type = 'fast';
                 else if (gameState.wave > 3 && r > 0.65) type = 'poison_resistant';
                 else if (gameState.wave > 4 && r > 0.55) type = 'flying';
-                else if (gameState.wave > 4 && r > 0.55) type = 'flying';
                 else if (gameState.wave > 5 && r > 0.45) type = 'fire_resistant';
                 else if (gameState.wave > 5 && r > 0.35) type = 'water_resistant';
                 else if (gameState.wave > 15 && r > 0.30) type = 'ice_resistant';
+                else if (gameState.wave >= 20 && r > 0.26) type = 'ice_bird';
+                else if (gameState.wave >= 25 && r > 0.23) type = 'water_bird';
+                else if (gameState.wave >= 28 && r > 0.20) type = 'fire_bird';
+                else if (gameState.wave >= 30 && r > 0.18) type = 'poison_bird';
+                else if (gameState.wave >= 40 && r > 0.16) type = 'sand_bird';
 
                 gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
             }
@@ -2441,27 +2559,38 @@
                 contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span class="stat-val">${e.speed.toFixed(2)}</span></div>`;
 
                 let immunities = [];
-                if (e.type === 'poison_resistant') immunities.push("Poison");
-                if (e.type === 'fire_resistant') immunities.push("Fire");
-                if (e.type === 'water_resistant') immunities.push("Water");
-                if (e.type === 'ice_resistant') immunities.push("Ice");
-                if (e.type === 'flying') immunities.push("Floor (Sand/Lava)");
+                if (e.poisonResistant) immunities.push("Poison");
+                if (e.fireResistant) immunities.push("Fire");
+                if (e.waterResistant) immunities.push("Water");
+                if (e.iceResistant) immunities.push("Ice");
+                if (e.sandResistant) immunities.push("Sand");
+                if (e.isFlying) immunities.push("Floor");
 
                 if (immunities.length > 0) {
                     contentEl.innerHTML += `<div class="stat-row" style="margin-top:4px;border-top:1px solid #444;padding-top:2px;"><span>Immune:</span><span class="stat-val" style="color:#f88;font-size:10px;">${immunities.join(", ")}</span></div>`;
                 }
 
                 if (e.poisoned > 0) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Poisoned</span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
+                    let dps = Math.round(e.poisonTickDamage * 30);
+                    contentEl.innerHTML += `<div class="stat-row"><span>Poisoned <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
                 }
                 if (e.burning > 0) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Burning</span><span class="stat-val" style="color:#f50">${Math.ceil(e.burning / 30)}s</span></div>`;
+                    let dps = Math.round(e.burnTickDamage * 30);
+                    contentEl.innerHTML += `<div class="stat-row"><span>Burning <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#f50">${Math.ceil(e.burning / 30)}s</span></div>`;
                 }
                 if (e.wet > 0) {
                     contentEl.innerHTML += `<div class="stat-row"><span>Wet</span><span class="stat-val" style="color:#4af">${Math.ceil(e.wet / 30)}s</span></div>`;
                 }
                 if (e.frozen > 0) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Frozen</span><span class="stat-val" style="color:#afe">${Math.ceil(e.frozen / 30)}s</span></div>`;
+                    let cv = "";
+                    if (e.wet > 0) {
+                        let dps = Math.round(e.iceTickDamage * 30);
+                        cv = ` <span style="color:#fa0;font-size:11px">(${dps} dps)</span>`;
+                    }
+                    contentEl.innerHTML += `<div class="stat-row"><span>Frozen${cv}</span><span class="stat-val" style="color:#afe">${Math.ceil(e.frozen / 30)}s</span></div>`;
+                }
+                if (e.sandy > 0) {
+                    contentEl.innerHTML += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${Math.ceil(e.sandy / 30)}s</span></div>`;
                 }
             }
             else if (selectedEntity.type) {
