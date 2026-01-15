@@ -3372,6 +3372,7 @@
                     contentEl.innerHTML += createDualStatRow("Range", "stat-range");
                     contentEl.innerHTML += createDualStatRow("Cooldown", "stat-cd");
                     contentEl.innerHTML += createDualStatRow("Stacks", "stat-stacks");
+                    contentEl.innerHTML += createDualStatRow("Value", "stat-value");
 
                     if (t.baseStats.desc) {
                         contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${t.baseStats.desc}</div>`;
@@ -3404,6 +3405,7 @@
                     contentEl.innerHTML += createDualStatRow("Stacks", "stat-stacks");
                     contentEl.innerHTML += createDualStatRow("Health", "stat-hp");
                     contentEl.innerHTML += createDualStatRow("Speed", "stat-speed");
+                    contentEl.innerHTML += createDualStatRow("Value", "stat-value");
 
                     let desc = isSalvager ? "Destroy Marked items for 10% refund." : "Collects dropped money automatically.";
                     contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px;">${desc}</div>`;
@@ -3428,6 +3430,7 @@
 
                     if (item.type === 'mine') contentEl.innerHTML += createDualStatRow("Damage", "stat-dmg");
                     if (item.type === 'lava') contentEl.innerHTML += createDualStatRow("Burn DPS", "stat-dmg");
+                    contentEl.innerHTML += createDualStatRow("Value", "stat-value");
 
                     if (data && data.desc) {
                         contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${data.desc}</div>`;
@@ -3498,6 +3501,12 @@
                 if (data.range !== undefined) updateDualStat('stat-range', baseData.range.toFixed(1), data.range.toFixed(1));
                 if (data.cd !== undefined) updateDualStat('stat-cd', baseData.cd.toFixed(1), data.cd.toFixed(1), 'f');
                 updateDualStat('stat-stacks', t.stacks, t.effectiveStacks);
+
+                // Value Calculation
+                let basePrice = CARD_TYPES[t.type].price;
+                let origVal = basePrice * t.stacks;
+                let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
+                updateDualStat('stat-value', origVal, marketVal, '$');
             }
             else if (selectedEntity instanceof Enemy) {
                 let e = selectedEntity;
@@ -3551,6 +3560,12 @@
                 if (baseSpeed > 4.0) baseSpeed = 4.0;
                 let curSpeed = s.collector.speed;
                 updateDualStat('stat-speed', baseSpeed.toFixed(2), curSpeed.toFixed(2));
+
+                // Value Calculation
+                let basePrice = CARD_TYPES[s.type].price;
+                let origVal = basePrice * s.stacks;
+                let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
+                updateDualStat('stat-value', origVal, marketVal, '$');
             }
             else if (selectedEntity.type) {
                 let item = selectedEntity;
@@ -3565,6 +3580,16 @@
                     let baseDmg = 0.1 * item.stacks * 30; // DPS approx
                     let effDmg = 0.1 * (item.effectiveStacks || item.stacks) * 30;
                     updateDualStat('stat-dmg', baseDmg.toFixed(1), effDmg.toFixed(1));
+                }
+
+                // Value Calculation
+                if (CARD_TYPES[item.type]) {
+                    let basePrice = CARD_TYPES[item.type].price;
+                    let origVal = basePrice * item.stacks;
+                    let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
+                    // Check for HP cost items? (e.g. Sacrifice, Heart) - usually not placed items
+                    // Placed items (sand, lava, mine, farm) have prices.
+                    updateDualStat('stat-value', origVal, marketVal, '$');
                 }
             }
 
