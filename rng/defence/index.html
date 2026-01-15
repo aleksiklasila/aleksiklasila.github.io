@@ -228,7 +228,7 @@
             padding: 10px;
             display: none;
             /* Hidden by default */
-            pointer-events: auto;
+            pointer-events: none;
             flex-direction: column;
             gap: 5px;
             z-index: 90;
@@ -528,6 +528,7 @@
                     value as CASH at the end of the wave.</li>
                 <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
                     of the wave.</li>
+                <li><strong>SALVAGE:</strong> Double-click a tower or item to mark it for salvager pickup.</li>
                 <li><strong>GROUPS</strong> Connect similar turrets / items together to multiply their effective levels.
                 </li>
             </ul>
@@ -610,6 +611,9 @@
             maxHpAchieved: 20
         };
 
+        let clickTimer = null;
+        let pendingClickEntity = null;
+
         const CARD_TYPES = {
             water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
             sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 0.78, unlock_wave: 5 },
@@ -671,23 +675,7 @@
                 }
             });
 
-            document.getElementById('stats-panel').addEventListener('click', (e) => {
-                // Check if click was on the Salvage Row (or its children)
-                let target = e.target;
-                let onSalvage = false;
-                while (target && target.id !== 'stats-panel') {
-                    if (target.classList && target.classList.contains('salvage-row')) {
-                        onSalvage = true;
-                        break;
-                    }
-                    target = target.parentNode;
-                }
-
-                if (onSalvage) return;
-
-                selectedEntity = null;
-                updateStatsPanel();
-            });
+            // Stats Panel Listener Removed (pointer-events: none)
 
             document.getElementById('help-btn').addEventListener('click', () => {
                 document.getElementById('help-modal').style.display = 'block';
@@ -2831,59 +2819,78 @@
 
             if (selectedMarketIndex === -1) {
                 // SELECTION LOGIC
-                // Check for Tower
+                let clickedEntity = null;
+
+                // 1. Check for Tower
                 let tower = towers.find(t => t.gx === gx && t.gy === gy);
-                if (tower) {
-                    if (selectedEntity === tower) { // Clicked on already selected tower
-                        selectedEntity = null;
-                    } else {
-                        selectedEntity = tower;
+                if (tower) clickedEntity = tower;
+
+                // 2. Check for Item (Sand, Spawner, etc)
+                if (!clickedEntity) {
+                    let cell = grid[gy][gx];
+                    if (cell && cell.item) {
+                        // Add coords for visuals if missing
+                        let clickedItem = cell.item;
+                        clickedItem.x = gx * TILE_SIZE + 16;
+                        clickedItem.y = gy * TILE_SIZE + 16;
+                        clickedEntity = clickedItem;
                     }
-                    updateStatsPanel();
+                }
+
+                // 3. Check for Enemy (Distance based)
+                if (!clickedEntity) {
+                    let minDist = 30; // hit radius
+                    for (let e of enemies) {
+                        let d = Math.hypot(e.x - x, e.y - y);
+                        if (d < minDist) {
+                            minDist = d;
+                            clickedEntity = e;
+                        }
+                    }
+                }
+
+                if (clickedEntity) {
+                    // Check for Double Click
+                    if (clickTimer && pendingClickEntity === clickedEntity) {
+                        // --- DOUBLE CLICK CONFIRMED ---
+                        clearTimeout(clickTimer);
+                        clickTimer = null;
+                        pendingClickEntity = null;
+
+                        // Toggle Salvage
+                        if (clickedEntity.markedForSalvage !== undefined) {
+                            clickedEntity.markedForSalvage = !clickedEntity.markedForSalvage;
+                            try {
+                                if (clickedEntity.markedForSalvage) createExplosion(clickedEntity.x, clickedEntity.y, "#f00", 5);
+                                else createExplosion(clickedEntity.x, clickedEntity.y, "#0f0", 5);
+                            } catch (e) { }
+                            updateStatsPanel();
+                        }
+                        return; // Prevent Single Click
+                    }
+
+                    // --- START SINGLE CLICK TIMER ---
+                    if (clickTimer) clearTimeout(clickTimer); // Cancel pending on other entity
+                    pendingClickEntity = clickedEntity;
+
+                    clickTimer = setTimeout(() => {
+                        clickTimer = null;
+                        pendingClickEntity = null;
+
+                        // Single Click Action: Toggle Selection
+                        if (selectedEntity === clickedEntity) {
+                            selectedEntity = null; // Close
+                        } else {
+                            selectedEntity = clickedEntity; // Open
+                        }
+                        updateStatsPanel();
+                    }, 200);
+
                     return;
                 }
 
-                // Check for Item (Sand)
-                let cell = grid[gy][gx];
-                if (cell && cell.item) {
-                    // Add coords for drawing highlight if not present (Item object structure in map gen doesn't have x/y)
-                    let clickedItem = cell.item;
-                    clickedItem.x = gx * TILE_SIZE + 16;
-                    clickedItem.y = gy * TILE_SIZE + 16;
-
-                    if (selectedEntity === clickedItem) { // Clicked on already selected item
-                        selectedEntity = null;
-                    } else {
-                        selectedEntity = clickedItem;
-                    }
-                    updateStatsPanel();
-                    return;
-                }
-
-                // Check for Enemy
-                // Check physically clicked enemies (not grid based, but distance based)
-                let clickedEnemy = null;
-                // Check closest enemy to click
-                let minDist = 30; // hit radius
-                for (let e of enemies) {
-                    let d = Math.hypot(e.x - x, e.y - y);
-                    if (d < minDist) {
-                        minDist = d;
-                        clickedEnemy = e;
-                    }
-                }
-
-                if (clickedEnemy) {
-                    if (selectedEntity === clickedEnemy) {
-                        selectedEntity = null;
-                    } else {
-                        selectedEntity = clickedEnemy;
-                    }
-                    updateStatsPanel();
-                    return;
-                }
-
-                // Nothing found -> Deselect
+                // Nothing found -> Deselect Immediately (and cancel any pending)
+                if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; pendingClickEntity = null; }
                 selectedEntity = null;
                 updateStatsPanel();
                 return;
@@ -3437,42 +3444,7 @@
                     }
                 }
 
-                // Checkbox for Salvage - Build Once
-                // Remove generic existing row if switching entities
-                if (existingRow) existingRow.remove();
-                existingRow = null; // Reset reference for create logic
-
-                if (selectedEntity && typeof selectedEntity.markedForSalvage !== 'undefined') {
-                    let row = document.createElement('div');
-                    row.className = 'stat-row salvage-row';
-                    row.style.marginTop = '10px';
-                    row.style.borderTop = '1px solid #444';
-                    row.style.paddingTop = '4px';
-
-                    let label = document.createElement('span');
-                    label.innerText = "Mark for Salvage";
-
-                    let cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.checked = selectedEntity.markedForSalvage;
-
-                    cb.onclick = (e) => { e.stopPropagation(); };
-                    cb.onchange = (e) => { selectedEntity.markedForSalvage = e.target.checked; };
-
-                    row.onclick = (e) => {
-                        e.stopPropagation();
-                        if (e.target !== cb) {
-                            cb.checked = !cb.checked;
-                            selectedEntity.markedForSalvage = cb.checked;
-                        }
-                    };
-                    row.onmousedown = (e) => { e.stopPropagation(); };
-                    row.style.cursor = 'pointer';
-
-                    row.appendChild(label);
-                    row.appendChild(cb);
-                    panel.appendChild(row);
-                }
+                // Checkbox Removed
             }
 
             // UPDATE PHASE
@@ -3594,21 +3566,7 @@
             }
 
             // Sync checkbox state if it exists (for external changes or re-selection)
-            if (selectedEntity && typeof selectedEntity.markedForSalvage !== 'undefined') {
-                // Checkbox might have been created in Build phase or exists from previous
-                // existingRow reference might be stale if we removed it, so fetch again
-                let row = panel.querySelector('.salvage-row');
-                if (row) {
-                    let cb = row.querySelector('input');
-                    if (cb && cb.checked !== selectedEntity.markedForSalvage) {
-                        cb.checked = selectedEntity.markedForSalvage;
-                    }
-                }
-            } else {
-                // If entity selected doesn't have salvage (e.g. basic item?), ensure row is gone
-                let row = panel.querySelector('.salvage-row');
-                if (row) row.remove();
-            }
+            // Removed persistent checkbox sync
         }
 
 
