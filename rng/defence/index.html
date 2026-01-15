@@ -228,7 +228,7 @@
             padding: 10px;
             display: none;
             /* Hidden by default */
-            pointer-events: none;
+            pointer-events: auto;
             flex-direction: column;
             gap: 5px;
             z-index: 90;
@@ -528,6 +528,8 @@
                     value as CASH at the end of the wave.</li>
                 <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
                     of the wave.</li>
+                <li><strong>GROUPS</strong> Connect similar turrets / items together to multiply their effective levels.
+                </li>
             </ul>
             <button id="close-help">CLOSE</button>
         </div>
@@ -572,7 +574,6 @@
             'default': { 'nothing': 100, 'money': 1 }
         };
         let droppedItems = [];
-        let grid = [];
         let flowField = [];
         let flowFieldFlying = []; // For flying units (ignore walls, blocked by turrets)
         let enemies = [];
@@ -585,6 +586,7 @@
         let routesCache = {}; // Cache for precalculated paths from each corner
 
         let selectedEntity = null; // Tower or Item
+        let renderedEntity = null; // For cached stats panel rendering
 
         let marketCards = [];
         let selectedMarketIndex = -1;
@@ -611,7 +613,7 @@
         const CARD_TYPES = {
             water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
             sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 0.78, unlock_wave: 5 },
-            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.1, unlock_wave: 6 },
+            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.1, unlock_wave: 5 },
 
             // Boss Level 1 (Wave 3)
             pistol: { name: "Pistol", price: 35, icon: "⚡", color: "#964B00", range: 1.86, cd: 40, damage: 8, target: 'wall', desc: "Cheap but low firing speed and damage.", weight: 0.25, unlock_wave: 0 },
@@ -636,7 +638,9 @@
             mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
             ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
             elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 },
-            spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 }
+            spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 },
+            laser: { name: "Laser", price: 125, icon: "⚡", color: "#f00", range: 0, damage: 150, target: 'wall', desc: "Connects to other lasers. Beams damage enemies.", weight: 1, unlock_wave: 9 },
+            salvager: { name: "Salvager", price: 150, icon: "♻️", color: "#543", hp: 60, target: 'floor', desc: "Spawns AI to salvage marked buildings (10% return).", weight: 0.15, unlock_wave: 9 }
         };
 
         /**
@@ -665,6 +669,24 @@
                     selectedEntity = null;
                     updateStatsPanel();
                 }
+            });
+
+            document.getElementById('stats-panel').addEventListener('click', (e) => {
+                // Check if click was on the Salvage Row (or its children)
+                let target = e.target;
+                let onSalvage = false;
+                while (target && target.id !== 'stats-panel') {
+                    if (target.classList && target.classList.contains('salvage-row')) {
+                        onSalvage = true;
+                        break;
+                    }
+                    target = target.parentNode;
+                }
+
+                if (onSalvage) return;
+
+                selectedEntity = null;
+                updateStatsPanel();
             });
 
             document.getElementById('help-btn').addEventListener('click', () => {
@@ -756,7 +778,7 @@
 
             // Castle is already placed during generation loop
 
-            gameState.hp = 20;
+            gameState.hp = 100;
             gameState.money = 2000
             gameState.wave = 1;
             gameState.active = false;
@@ -783,6 +805,7 @@
             calcFlowField();
             calcFlowFieldFlying();
             precalculateRoutes();
+            recalculateAdjacency(); // NEW: Init adjacency
         }
 
         function generateLevelAsync() {
@@ -1029,6 +1052,14 @@
                         } else if (cell.item.type === 'mine') {
                             drawMineIcon(ctx, px + 16, py + 16, cell.item.stacks);
                         }
+
+                        if (cell.item.markedForSalvage) {
+                            ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.moveTo(px + 16 - 6, py + 16 - 6); ctx.lineTo(px + 16 + 6, py + 16 + 6);
+                            ctx.moveTo(px + 16 + 6, py + 16 - 6); ctx.lineTo(px + 16 - 6, py + 16 + 6);
+                            ctx.stroke();
+                        }
                     }
 
                     if (cell.type === TYPE_CASTLE) {
@@ -1063,8 +1094,14 @@
         }
 
         // --- RENDER HELPERS ---
-        function drawTowerIcon(ctx, x, y, color, angle, level = 0, type = '') {
-            if (type === 'blaster') {
+        function drawTowerIcon(ctx, x, y, color, angle, level = 0, type = '', active = false) {
+            if (type === 'laser') {
+                ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.28); ctx.fill();
+                ctx.stroke(); // Outline
+                ctx.fillStyle = active ? '#f00' : '#400';
+                ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.28); ctx.fill();
+                return;
+            } else if (type === 'blaster') {
                 ctx.save(); ctx.translate(x, y - 2); ctx.rotate(angle);
                 // Half Green Half White
                 ctx.fillStyle = "#cfc"; // light green/white mix
@@ -1177,6 +1214,9 @@
             update();
             draw();
 
+            // Continuous UI update for selected entity (HP, Cooldowns)
+            if (selectedEntity) updateStatsPanel();
+
             // Draw Selection Highlight
             if (selectedEntity) {
                 let sx = selectedEntity.x;
@@ -1249,27 +1289,35 @@
 
                 if (emptyIndices.length > 0) {
                     let idx = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
-                    // Farm logic
+                    // Farm logic (reusing random logic roughly)
                     let basePrice = CARD_TYPES['farm'].price;
-                    // Use standard scaling logic or just base? 
-                    // Let's use standard shopLevel scaling for price/level to be consistent with random rolls
+                    // Base level 1 for boss farms usually
                     let level = 1;
-                    // Calculate level roughly based on shopLevel like random cards
-                    let pool = [];
-                    for (let l = 1; l <= gameState.shopLevel; l++) {
-                        let weight = 1 / Math.pow(2, gameState.shopLevel - l);
-                        pool.push({ l: l, w: weight });
-                    }
-                    let totalW = pool.reduce((a, b) => a + b.w, 0);
-                    let rL = Math.random() * totalW;
-                    let sumL = 0;
-                    for (let p of pool) {
-                        sumL += p.w;
-                        if (rL <= sumL) { level = p.l; break; }
-                    }
-
                     let price = Math.floor(basePrice * (1 + (level - 1) * 0.5));
                     newCards[idx] = { type: 'farm', bought: false, locked: false, level: level, price: price };
+                }
+            }
+
+            // Wave 3 Guarantee: Collector (spawner) and Salvager (salvager)
+            if ((gameState.wave + 1) === 3) {
+                const guarantees = ['spawner', 'salvager'];
+                for (let gType of guarantees) {
+                    let hasIt = newCards.some(c => c && c.type === gType);
+                    if (!hasIt) {
+                        let emptyIndices = [];
+                        for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
+
+                        // If no empty spots, overwrite a non-locked card? Or random?
+                        // Ideally replace empty. If locked cards fill board, we can't do much.
+                        // But generating into newCards which has nulls for non-locked.
+                        if (emptyIndices.length > 0) {
+                            let idx = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+                            let basePrice = CARD_TYPES[gType].price;
+                            let level = 1; // Base level
+                            let price = basePrice; // Level 1 price
+                            newCards[idx] = { type: gType, bought: false, locked: false, level: level, price: price };
+                        }
+                    }
                 }
             }
 
@@ -1502,7 +1550,7 @@
                 if (farmCell) {
                     let bonus = getFullyClearedWaveCount();
                     // Scale with stacks
-                    bonus *= (farmCell.item.stacks || 1);
+                    bonus *= (farmCell.item.effectiveStacks || farmCell.item.stacks || 1);
 
                     if (bonus > 0) {
                         gameState.money += bonus;
@@ -1570,7 +1618,14 @@
 
                 // Sandy Effect (previously slowed)
                 if (this.sandy > 0) {
-                    if (!this.sandResistant) speedMod *= 0.4;
+                    if (!this.sandResistant) {
+                        // Base 0.4 multiplier (60% slow)
+                        // If we want scaling, we need to know source strength.
+                        // Difficult since 'sandy' is just int duration.
+                        // We'll stick to fixed slow but add damage in the tile logic below.
+                        // OR: store sandyStrength? Too complex to add prop now?
+                        speedMod *= 0.4;
+                    }
                     this.sandy--;
                 }
 
@@ -1578,7 +1633,19 @@
 
                 if (cell && cell.item && cell.item.type === 'sand' && this.type !== 'flying') {
                     // Apply Sandy Status instead of direct slow
-                    this.sandy = 10; // Short duration, refreshes while on tile
+                    this.sandy = 10;
+                    // Scale slow effectiveness or damage?
+                    // User requested group sizes affect them.
+                    // Let's add slight damage based on stacks for Sand (abrasion)
+                    // limit slow to max 90%
+                    let stacks = (cell.item.effectiveStacks || cell.item.stacks || 1);
+                    if (stacks > 1) {
+                        // Apply abrasion damage
+                        this.hp -= 0.05 * stacks;
+                        // Note: Speed modification is handled above by 'sandy' flag check
+                        // We could scale the slow multiplier in the check above?
+                    }
+
 
                     // Consume Sand
                     if (Math.random() < 0.03) {
@@ -1592,7 +1659,7 @@
 
                     // Apply Burning (Always)
                     this.burning = 120; // 2s duration
-                    this.burnTickDamage = 0.1 * (cell.item.stacks || 1);
+                    this.burnTickDamage = 0.1 * (cell.item.effectiveStacks || cell.item.stacks || 1);
 
                     // Direct Damage from Lava (Check Resistance)
                     if (!this.fireResistant && Math.random() < 0.05) {
@@ -1601,14 +1668,14 @@
                         if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#500", 8); }
                     }
                 }
-                else if (cell && cell.item && cell.item.type === 'spawner' && this.type !== 'flying') {
+                else if (cell && cell.item && (cell.item.type === 'spawner' || cell.item.type === 'salvager') && this.type !== 'flying') {
                     // Destroy Spawner
                     cell.item.hp -= 2; // Damage it?
                     if (Math.random() < 0.1) createExplosion(this.x, this.y, '#643', 1);
                 }
                 else if (cell && cell.item && cell.item.type === 'mine' && this.type !== 'flying') {
                     // MINE TRIGGER
-                    let mineDmg = (CARD_TYPES['mine'].damage || 135) * (cell.item.stacks || 1);
+                    let mineDmg = (CARD_TYPES['mine'].damage || 135) * (cell.item.effectiveStacks || cell.item.stacks || 1);
                     let range = (CARD_TYPES['mine'].range || 3.5) * TILE_SIZE;
 
                     // Consume Mine
@@ -1772,16 +1839,67 @@
             }
         }
 
+        function recalculateLaserConnections() {
+            // Reset
+            towers.forEach(t => { if (t.type === 'laser') t.connectedLasers = []; });
+
+            // Connect
+            for (let i = 0; i < towers.length; i++) {
+                let t1 = towers[i];
+                if (t1.type !== 'laser') continue;
+                for (let j = i + 1; j < towers.length; j++) {
+                    let t2 = towers[j];
+                    if (t2.type !== 'laser') continue;
+
+                    let alignedX = t1.gx === t2.gx;
+                    let alignedY = t1.gy === t2.gy;
+                    if (!alignedX && !alignedY) continue;
+
+                    let blocked = false;
+                    if (alignedX) {
+                        dist = Math.abs(t1.gy - t2.gy);
+                        let min = Math.min(t1.gy, t2.gy), max = Math.max(t1.gy, t2.gy);
+                        for (let y = min + 1; y < max; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true;
+                    } else {
+                        dist = Math.abs(t1.gx - t2.gx);
+                        let min = Math.min(t1.gx, t2.gx), max = Math.max(t1.gx, t2.gx);
+                        for (let x = min + 1; x < max; x++) if (grid[t1.gy][x].type === TYPE_WALL) blocked = true;
+                    }
+
+                    // Range Check: Gap <= Min Level
+                    let gap = dist - 1;
+                    let limit = Math.min(t1.level, t2.level);
+                    if (gap > limit) blocked = true;
+                    if (gap < 1) blocked = true;
+
+                    if (!blocked) {
+                        t1.connectedLasers.push(t2);
+                        t2.connectedLasers.push(t1);
+                    }
+                }
+            }
+        }
+
         class Tower {
             constructor(gx, gy, type, startStacks = 1) {
                 this.gx = gx; this.gy = gy; this.type = type;
                 this.x = gx * TILE_SIZE + 16; this.y = gy * TILE_SIZE + 16;
                 this.stacks = startStacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.effectiveStacks = startStacks;
+
+                this.level = Math.floor(Math.log2(this.stacks)) + 1; // Base Visual Level
+                this.effectiveLevel = Math.floor(Math.log2(this.effectiveStacks)) + 1; // For Calcs
+
                 this.baseStats = CARD_TYPES[type];
                 this.currentStats = { ...this.baseStats };
                 this.updateStats(); // Init stats
                 this.cd = 0; this.angle = 0;
+
+                this.connectedLasers = [];
+                this.laserState = 0; // 0=IDLE, 1=FIRING, 2=COOLDOWN
+                this.laserTimer = 0;
+
+                this.markedForSalvage = false;
             }
 
             upgrade() {
@@ -1791,33 +1909,79 @@
             }
 
             updateStats() {
-                // SCALING LOGIC
-                // Every level adds approx 30% stats
-                let lvlMult = Math.pow(1.3, this.level - 1);
+                this.currentStats = this.calculateStatsForLevel(this.effectiveLevel || this.level);
+                this.displayBaseStats = this.calculateStatsForLevel(this.level);
+            }
 
-                this.currentStats.damage = this.baseStats.damage * lvlMult;
+            calculateStatsForLevel(lvl) {
+                let stats = { ...this.baseStats };
+                let lvlMult = Math.pow(1.3, lvl - 1);
+
+                stats.damage = this.baseStats.damage * lvlMult;
 
                 if (this.type === 'water' || this.type === 'smg' || this.type === 'pistol') {
-                    this.currentStats.cd = Math.max(5, this.baseStats.cd * (1 - (this.level - 1) * 0.1));
-                    this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
+                    stats.cd = Math.max(5, this.baseStats.cd * (1 - (lvl - 1) * 0.1));
+                    stats.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
                 } else if (this.type === 'fire') {
-                    this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
+                    stats.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
                 } else if (this.type === 'poison') {
-                    this.currentStats.damage = this.baseStats.damage * lvlMult;
-                    this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
-                    this.currentStats.cooldown = (this.baseStats.cd || 60) * (1 - (this.level - 1) * 0.1);
+                    stats.damage = this.baseStats.damage * lvlMult;
+                    stats.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
+                    stats.cooldown = (this.baseStats.cd || 60) * (1 - (lvl - 1) * 0.1);
+                    stats.cd = stats.cooldown;
                 } else if (this.type === 'sand_gun') {
-                    this.currentStats.range = this.baseStats.range * (1 + (this.level - 1) * 0.1);
-                    this.currentStats.damage = this.baseStats.damage * lvlMult;
-                    this.currentStats.cd = this.baseStats.cd * (0.9 ** this.level);
+                    stats.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
+                    stats.damage = this.baseStats.damage * lvlMult;
+                    stats.cd = this.baseStats.cd * (0.9 ** lvl);
                 }
 
-                // Generic fallback if not handled above
-                if (!this.currentStats.cd) this.currentStats.cd = this.baseStats.cd;
-                if (!this.currentStats.range) this.currentStats.range = this.baseStats.range;
+                // Generic fallback
+                if (!stats.cd) stats.cd = this.baseStats.cd;
+                if (!stats.range) stats.range = this.baseStats.range;
+
+                return stats;
             }
 
             update() {
+                if (this.type === 'laser') {
+                    // Continuous Firing Logic (No Cooldown)
+                    this.laserState = 0; // Reset to "Not Firing" this frame for beam drawing
+
+                    for (let other of this.connectedLasers) {
+                        // Only process logic if we are the "primary" in this pair to handle it once per pair
+                        if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
+
+                            // Check for Enemies & Apply Damage
+                            let dmg = this.currentStats.damage + other.currentStats.damage;
+                            let sx = this.x, sy = this.y, ex = other.x, ey = other.y;
+                            let isVert = (this.gx === other.gx);
+                            let min = isVert ? Math.min(sy, ey) : Math.min(sx, ex);
+                            let max = isVert ? Math.max(sy, ey) : Math.max(sx, ex);
+                            let hitAny = false;
+
+                            for (let e of enemies) {
+                                let hit = false;
+                                if (isVert) {
+                                    if (Math.abs(e.x - sx) < e.r + 4 && e.y >= min && e.y <= max) hit = true;
+                                } else {
+                                    if (Math.abs(e.y - sy) < e.r + 4 && e.x >= min && e.x <= max) hit = true;
+                                }
+                                if (hit) {
+                                    hitAny = true;
+                                    e.hp -= (dmg / 60);
+                                    if (Math.random() < 0.1) createExplosion(e.x, e.y, "#f00", 1);
+                                    if (e.hp <= 0 && !e.dead) { e.dead = true; e.checkDeathBonus(); }
+                                }
+                            }
+
+                            if (hitAny) {
+                                this.laserState = 1; // Mark as firing to enable beam drawing
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if (this.cd > 0) this.cd--;
                 this.shoot();
             }
@@ -1882,8 +2046,34 @@
             }
 
             draw(ctx) {
-                // Use the helper
-                drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level, this.type);
+                if (this.type === 'laser') {
+                    // Draw Beams only if FIRING
+                    if (this.laserState === 1) {
+                        ctx.strokeStyle = '#f00';
+                        ctx.lineWidth = 4;
+                        ctx.shadowColor = '#f00'; ctx.shadowBlur = 10;
+                        for (let other of this.connectedLasers) {
+                            // Draw only if we own the line to avoid double draw?
+                            // Drawing line twice is fine, actually makes it brighter.
+                            // But let's stick to unique draw to be clean?
+                            // Nah, if "other" is IDLE, we still want to show the beam if I am FIRING?
+                            // The prompt says "keep both lasers lit".
+                            // Let's draw beam to all connected.
+                            // Optimization: Only draw if gx < other.gx ...
+                            if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
+                                // Check if OTHER is also firing? Or just me?
+                                // If I am firing, beam is active.
+                                ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(other.x, other.y); ctx.stroke();
+                            }
+                        }
+                        ctx.shadowBlur = 0;
+                        ctx.lineWidth = 1;
+                    }
+                    // Lit if connected
+                    drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, 0, this.level, this.type, this.connectedLasers.length > 0);
+                } else {
+                    drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level, this.type);
+                }
 
                 // Draw Level Info
                 let reqForNext = Math.pow(2, this.level);
@@ -1898,133 +2088,177 @@
                 ctx.fillStyle = "#aaa";
                 ctx.fillText(`${this.stacks}/${reqForNext}`, this.x, this.y + 16);
                 ctx.shadowBlur = 0;
+
+                if (this.markedForSalvage) {
+                    ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
+                    ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke(); ctx.lineWidth = 1;
+                }
             }
+        }
+
+        // --- AI HELPERS ---
+        function findPathBFS(sx, sy, ex, ey) {
+            let q = [[sx, sy]];
+            let cameFrom = {}; cameFrom[`${sx},${sy}`] = null;
+            let visited = new Set(); visited.add(`${sx},${sy}`);
+            while (q.length > 0) {
+                let curr = q.shift();
+                let cx = curr[0], cy = curr[1];
+                if (cx === ex && cy === ey) break;
+
+                const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+                for (let d of dirs) {
+                    let nx = cx + d[0], ny = cy + d[1];
+                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                        let key = `${nx},${ny}`;
+                        if (!visited.has(key)) {
+                            if (grid[ny][nx].type !== TYPE_WALL) {
+                                visited.add(key); cameFrom[key] = { x: cx, y: cy }; q.push([nx, ny]);
+                            }
+                        }
+                    }
+                }
+            }
+            if (!cameFrom[`${ex},${ey}`] && (sx !== ex || sy !== ey)) return null;
+            let path = []; let curr = { x: ex, y: ey };
+            while (curr) {
+                path.push(curr);
+                let prev = cameFrom[`${curr.x},${curr.y}`];
+                if (!prev && (curr.x !== sx || curr.y !== sy)) break;
+                curr = prev;
+            }
+            return path.reverse();
+        }
+
+        function findNearestWalkableNeighbor(gx, gy) {
+            const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+            for (let d of dirs) {
+                let nx = gx + d[0], ny = gy + d[1];
+                if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                    if (grid[ny][nx].type !== TYPE_WALL) return { x: nx, y: ny };
+                }
+            }
+            return { x: gx, y: gy };
         }
 
         class CollectorSpawner {
             constructor(gx, gy, stacks = 1) {
-                this.gx = gx;
-                this.gy = gy;
-                this.x = gx * TILE_SIZE + 16;
-                this.y = gy * TILE_SIZE + 16;
-                this.stacks = stacks; // Track stacks
-                this.hp = 60;
-                this.maxHp = 60;
+                this.gx = gx; this.gy = gy;
+                this.x = gx * TILE_SIZE + 16; this.y = gy * TILE_SIZE + 16;
+                this.stacks = stacks;
+                this.hp = 60; this.maxHp = 60;
                 this.type = 'spawner';
                 this.storedMoney = 0;
                 this.collector = new CollectorAI(this);
                 collectors.push(this.collector);
+                this.markedForSalvage = false;
             }
-
             draw(ctx) {
-                // Dark Brown Wall-like
-                let x = this.gx * TILE_SIZE;
-                let y = this.gy * TILE_SIZE;
-                ctx.fillStyle = '#432'; // Dark Brown
-                ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
-                ctx.strokeStyle = '#210';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
-
-                // Indicator if money stored
-                if (this.storedMoney > 0) {
-                    ctx.fillStyle = '#fd0';
-                    ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill();
-                }
-
-                // HP Bar
+                let x = this.gx * TILE_SIZE; let y = this.gy * TILE_SIZE;
+                ctx.fillStyle = '#432'; ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                ctx.strokeStyle = '#210'; ctx.lineWidth = 2; ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+                if (this.storedMoney > 0) { ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill(); }
                 if (this.hp < this.maxHp) {
                     ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
                     ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6, 20 * (this.hp / this.maxHp), 3);
                 }
+                if (this.markedForSalvage) {
+                    ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
+                    ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke();
+                }
             }
         }
 
-        class CollectorAI {
-            constructor(spawner) {
-                this.spawner = spawner;
-                this.x = spawner.x;
-                this.y = spawner.y;
-                this.state = 'IDLE'; // IDLE, MOVING_TO, RETURNING
-                this.targetItem = null; // Reference to droppedItem
-                this.path = [];
-                this.pathIndex = 0;
-                this.carryingValue = 0;
+        class SalvagerSpawner {
+            constructor(gx, gy, stacks = 1) {
+                this.gx = gx; this.gy = gy;
+                this.x = gx * TILE_SIZE + 16; this.y = gy * TILE_SIZE + 16;
+                this.stacks = stacks;
+                this.hp = 60; this.maxHp = 60;
+                this.type = 'salvager';
+                this.storedMoney = 0;
+                this.collector = new SalvagerAI(this);
+                collectors.push(this.collector);
+                this.markedForSalvage = false;
             }
-
-            get speed() {
-                // Base 0.5, +0.05 per stack
-                // Level 1 = 0.5
-                // Level 30 = 0.5 + 29*0.05 = 1.95 (~2.0)
-                let s = 1.2 + (this.spawner.stacks - 1) * 0.05;
-                if (s > 4.0) s = 4.0;
-                return s;
-            }
-
-            update() {
-                if (!this.spawner || this.spawner.hp <= 0) {
-                    // Should be removed by manager
-                    return;
+            draw(ctx) {
+                let x = this.gx * TILE_SIZE; let y = this.gy * TILE_SIZE;
+                ctx.fillStyle = '#543'; ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                ctx.strokeStyle = '#321'; ctx.lineWidth = 2; ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+                if (this.storedMoney > 0) { ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill(); }
+                if (this.hp < this.maxHp) {
+                    ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
+                    ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6, 20 * (this.hp / this.maxHp), 3);
                 }
+                if (this.markedForSalvage) {
+                    ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
+                    ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke();
+                }
+            }
+        }
 
+        class BaseAI {
+            constructor(spawner) {
+                this.spawner = spawner; this.x = spawner.x; this.y = spawner.y;
+                this.state = 'IDLE'; this.targetItem = null; this.path = []; this.pathIndex = 0; this.carryingValue = 0;
+            }
+            get speed() {
+                let stacks = this.spawner.effectiveStacks || this.spawner.stacks || 1;
+                let s = 1.2 + (stacks - 1) * 0.05; return (s > 4.0) ? 4.0 : s;
+            }
+            followPath() {
+                if (!this.path || this.path.length === 0) return true;
+                let target = this.path[this.pathIndex];
+                let tx = target.x * TILE_SIZE + 16; let ty = target.y * TILE_SIZE + 16;
+                let dx = tx - this.x; let dy = ty - this.y;
+                let dist = Math.hypot(dx, dy);
+                if (dist < 4) {
+                    this.pathIndex++;
+                    if (this.pathIndex >= this.path.length) return true;
+                    return false;
+                }
+                let gx = Math.floor(this.x / TILE_SIZE); let gy = Math.floor(this.y / TILE_SIZE);
+                let spd = this.speed;
+                if (grid[gy] && grid[gy][gx] && grid[gy][gx].item && grid[gy][gx].item.type === 'sand') { spd *= 0.5; }
+                this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                return false;
+            }
+        }
+
+        class CollectorAI extends BaseAI {
+            update() {
+                if (!this.spawner || this.spawner.hp <= 0) return;
                 if (this.state === 'IDLE') {
-                    // Find closest unlocked dropped item
-                    let bestDist = 99999;
-                    let bestItem = null;
-
+                    let bestDist = 99999; let bestItem = null;
                     for (let drop of droppedItems) {
                         if (!drop.lockedBy) {
                             let d = Math.hypot(drop.x - this.x, drop.y - this.y);
-                            if (d < bestDist) {
-                                bestDist = d;
-                                bestItem = drop;
-                            }
+                            if (d < bestDist) { bestDist = d; bestItem = drop; }
                         }
                     }
-
                     if (bestItem) {
-                        this.targetItem = bestItem;
-                        this.targetItem.lockedBy = this;
-                        // Calculate Path
-                        this.path = this.findPath(this.spawner.gx, this.spawner.gy, bestItem.gx, bestItem.gy);
-                        if (this.path) {
-                            this.state = 'MOVING_TO';
-                            this.pathIndex = 0;
-                        } else {
-                            // No path? Unlock and ignore for a bit?
-                            this.targetItem.lockedBy = null;
-                            this.targetItem = null;
-                        }
-                    }
-                }
-                else if (this.state === 'MOVING_TO') {
-                    if (!this.targetItem || !droppedItems.includes(this.targetItem)) {
-                        // Item gone
-                        this.state = 'RETURNING'; // Just go back
-                        this.targetItem = null;
-                        // Reverse path from current index?
-                        // Current Path is Spawner -> Target.
-                        // We are at pathIndex. We need to go pathIndex -> 0.
-                        // Let's just create a new reverse path from current pos.
-                        // optimization: The path array is set. We can just walk it backwards.
-                        // But we might be between nodes.
-                        // Easiest: Re-calc path back to spawner OR just reverse list if valid.
-                        // Since we are friendly walking, simple reverse of the *taken* path is fine.
-                        // Let's just simply set path to reverse of full path and set index to length - index?
-                        // actually, let's just use the existing path array and decrement index?
-                        // Complicated if we are mid-way.
-                        // Simplest: Just re-path to spawner.
-                        this.path = this.findPath(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
-                        this.pathIndex = 0;
-                        return;
-                    }
+                        this.targetItem = bestItem; this.targetItem.lockedBy = this;
+                        // Path to neighbor if item is on wall/unreachable
+                        let dest = (grid[bestItem.gy][bestItem.gx].type === TYPE_WALL)
+                            ? findNearestWalkableNeighbor(bestItem.gx, bestItem.gy)
+                            : { x: bestItem.gx, y: bestItem.gy };
 
+                        this.path = findPathBFS(this.spawner.gx, this.spawner.gy, dest.x, dest.y);
+                        if (this.path) { this.state = 'MOVING_TO'; this.pathIndex = 0; }
+                        else { this.targetItem.lockedBy = null; this.targetItem = null; }
+                    }
+                } else if (this.state === 'MOVING_TO') {
+                    if (!this.targetItem || !droppedItems.includes(this.targetItem)) {
+                        this.state = 'RETURNING'; this.targetItem = null; this.path = []; return;
+                    }
                     if (this.followPath()) {
-                        // Reached Target
-                        // Pickup
-                        if (this.targetItem && droppedItems.includes(this.targetItem)) {
+                        // Interaction Check
+                        let dist = Math.hypot(this.targetItem.x - this.x, this.targetItem.y - this.y);
+                        if (dist <= 48) { // Reachable
                             this.carryingValue = this.targetItem.value;
-                            // Remove item from world
                             let idx = droppedItems.indexOf(this.targetItem);
                             if (idx !== -1) {
                                 if (grid[this.targetItem.gy][this.targetItem.gx].droppedItem === this.targetItem) {
@@ -2032,130 +2266,131 @@
                                 }
                                 droppedItems.splice(idx, 1);
                             }
+                            this.targetItem = null; this.state = 'RETURNING';
+                            this.path = this.path.reverse(); this.pathIndex = 0;
+                        } else {
+                            // Failed to reach?
+                            this.targetItem.lockedBy = null; this.targetItem = null;
+                            this.state = 'RETURNING'; this.path = [];
                         }
-                        this.targetItem = null;
-                        this.state = 'RETURNING';
-                        // Reverse Path
-                        this.path = this.path.reverse();
-                        this.pathIndex = 0;
                     }
-                }
-                else if (this.state === 'RETURNING') {
-                    if (this.followPath()) {
-                        // Reached Spawner - Auto Collect
+                } else if (this.state === 'RETURNING') {
+                    if (this.followPath()) { // Simplification: assume path back is valid reverse
                         if (this.carryingValue > 0) {
                             gameState.money += this.carryingValue;
                             createExplosion(this.spawner.x, this.spawner.y, '#fd0', 10);
                             updateUI();
                         }
-                        this.carryingValue = 0;
-                        this.state = 'IDLE';
-                        this.path = [];
+                        this.carryingValue = 0; this.state = 'IDLE';
                     }
                 }
             }
-
-            findPath(sx, sy, ex, ey) {
-                // BFS
-                let q = [[sx, sy]];
-                let cameFrom = {}; // 'x,y' -> {x, y}
-                cameFrom[`${sx},${sy}`] = null;
-                let visited = new Set();
-                visited.add(`${sx},${sy}`);
-
-                while (q.length > 0) {
-                    let curr = q.shift();
-                    let cx = curr[0], cy = curr[1];
-
-                    if (cx === ex && cy === ey) break;
-
-                    [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
-                        let nx = cx + d[0], ny = cy + d[1];
-                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            let key = `${nx},${ny}`;
-                            if (!visited.has(key)) {
-                                let cell = grid[ny][nx];
-                                // Avoid Walls
-                                if (cell.type !== TYPE_WALL) {
-                                    visited.add(key);
-                                    cameFrom[key] = { x: cx, y: cy };
-                                    q.push([nx, ny]);
-                                }
-                            }
-                        }
-                    });
-                }
-
-                if (!cameFrom[`${ex},${ey}`] && (sx !== ex || sy !== ey)) return null; // No path
-
-                // Reconstruct
-                let path = [];
-                let curr = { x: ex, y: ey };
-                while (curr) {
-                    path.push(curr);
-                    let prev = cameFrom[`${curr.x},${curr.y}`];
-                    // If prev is null, we are at start (or unreachable, but check handled above)
-                    // Wait, if start==end, path is [{x,y}]. Length 1.
-                    if (!prev && (curr.x !== sx || curr.y !== sy)) break; // Should not happen
-                    curr = prev;
-                }
-                return path.reverse(); // Start -> End
-            }
-
-            followPath() {
-                if (!this.path || this.path.length === 0) return true; // Reached?
-
-                let target = this.path[this.pathIndex];
-                let tx = target.x * TILE_SIZE + 16;
-                let ty = target.y * TILE_SIZE + 16;
-
-                let dx = tx - this.x;
-                let dy = ty - this.y;
-                let dist = Math.hypot(dx, dy);
-
-                if (dist < 4) {
-                    this.pathIndex++;
-                    if (this.pathIndex >= this.path.length) return true; // Reached End
-                    return false;
-                }
-
-                // Move
-                // Check Sand
-                let gx = Math.floor(this.x / TILE_SIZE);
-                let gy = Math.floor(this.y / TILE_SIZE);
-                let spd = this.speed;
-                if (grid[gy] && grid[gy][gx] && grid[gy][gx].item && grid[gy][gx].item.type === 'sand') {
-                    spd *= 0.5;
-                }
-
-                this.x += (dx / dist) * spd;
-                this.y += (dy / dist) * spd;
-                return false;
-            }
-
             draw(ctx) {
-                // Gray Star
-                ctx.fillStyle = '#aaa';
-                ctx.beginPath();
-                // 5 point star
+                ctx.fillStyle = '#aaa'; ctx.beginPath();
                 for (let i = 0; i < 5; i++) {
                     let angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
-                    let r = 8;
-                    ctx.lineTo(this.x + Math.cos(angle) * r, this.y + Math.sin(angle) * r);
+                    let r = 8; ctx.lineTo(this.x + Math.cos(angle) * r, this.y + Math.sin(angle) * r);
                 }
-                ctx.closePath();
-                ctx.fill();
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 1;
-                ctx.stroke();
+                ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+                if (this.carryingValue > 0) { ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - 10); }
+            }
+        }
 
-                if (this.carryingValue > 0) {
-                    // Small dollar
-                    ctx.fillStyle = '#fd0';
-                    ctx.font = '10px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.fillText('$', this.x, this.y - 10);
+        class SalvagerAI extends BaseAI {
+            update() {
+                if (!this.spawner || this.spawner.hp <= 0) return;
+
+                if (this.state === 'IDLE') {
+                    let bestDist = 99999; let bestItem = null; let targets = [];
+                    // Scan targets
+                    for (let t of towers) { if (t.markedForSalvage) targets.push(t); }
+                    for (let s of collectorSpawners) { if (s !== this.spawner && s.markedForSalvage) targets.push(s); }
+                    for (let y = 0; y < GRID_H; y++) {
+                        for (let x = 0; x < GRID_W; x++) {
+                            let cell = grid[y][x];
+                            if (cell.item && cell.item.markedForSalvage && cell.item.type !== 'salvager') targets.push(cell.item);
+                        }
+                    }
+
+                    for (let t of targets) {
+                        if (t.lockedBy && t.lockedBy !== this) continue;
+                        let dist = Math.hypot(t.x - this.x, t.y - this.y);
+                        if (dist < bestDist) { bestDist = dist; bestItem = t; }
+                    }
+                    if (bestItem) {
+                        this.targetItem = bestItem; this.targetItem.lockedBy = this;
+                        // Path to NEIGHBOR
+                        let dest = findNearestWalkableNeighbor(bestItem.gx, bestItem.gy);
+                        this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), dest.x, dest.y);
+                        if (this.path) { this.state = 'MOVING_TO'; this.pathIndex = 0; }
+                        else { this.targetItem.lockedBy = null; this.targetItem = null; }
+                    }
+                } else if (this.state === 'MOVING_TO') {
+                    if (!this.targetItem || !this.targetItem.markedForSalvage) {
+                        this.targetItem = null;
+                        this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
+
+                        // If path found, return home. If not (stuck?), stick to IDLE/RETURNING with empty path which snaps home if close?
+                        if (this.path) {
+                            this.state = 'RETURNING';
+                            this.pathIndex = 0;
+                        } else {
+                            // If no path home found, maybe just reset to IDLE and hope next tick helps or drift?
+                            this.state = 'RETURNING';
+                            this.path = [];
+                        }
+                        return;
+                    }
+                    if (this.followPath()) {
+                        this.state = 'SALVAGING';
+                    }
+                } else if (this.state === 'SALVAGING') {
+                    // Destroy
+                    let val = 0;
+                    if (this.targetItem instanceof Tower) {
+                        val = this.targetItem.baseStats.price * this.targetItem.stacks;
+                        towers = towers.filter(t => t !== this.targetItem);
+                        if (this.targetItem instanceof Tower && this.targetItem.type === 'laser') recalculateLaserConnections();
+                    } else if (this.targetItem.type === 'spawner' || this.targetItem.type === 'salvager') {
+                        val = 150 * this.targetItem.stacks;
+                        collectorSpawners = collectorSpawners.filter(s => s !== this.targetItem);
+                        grid[this.targetItem.gy][this.targetItem.gx].item = null;
+                    } else {
+                        let data = CARD_TYPES[this.targetItem.type];
+                        let price = data ? data.price : 10;
+                        val = price * (this.targetItem.stacks || 1); // Refund based on Base Stacks (Investment)
+                        grid[Math.floor(this.targetItem.y / TILE_SIZE)][Math.floor(this.targetItem.x / TILE_SIZE)].item = null;
+                    }
+                    this.carryingValue = Math.floor(val * 0.1);
+                    createExplosion(this.targetItem.x, this.targetItem.y, '#888', 10);
+                    recalculateAdjacency(); // NEW: Item destroyed
+                    calcFlowFieldFlying();
+
+                    this.targetItem = null;
+                    this.state = 'RETURNING';
+                    // Re-path home
+                    this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
+                    this.pathIndex = 0;
+                } else if (this.state === 'RETURNING') {
+                    if (this.followPath()) {
+                        if (this.carryingValue > 0) {
+                            gameState.money += this.carryingValue;
+                            createExplosion(this.spawner.x, this.spawner.y, '#fd0', 10);
+                            updateUI();
+                        }
+                        this.carryingValue = 0; this.state = 'IDLE';
+                    }
                 }
+            }
+            draw(ctx) {
+                // Recycle Icon (Green triangle thing?)
+                ctx.fillStyle = '#8d8'; ctx.beginPath();
+                for (let i = 0; i < 3; i++) {
+                    let angle = (i * 2 * Math.PI) / 3 - Math.PI / 2;
+                    let r = 8; ctx.lineTo(this.x + Math.cos(angle) * r, this.y + Math.sin(angle) * r);
+                }
+                ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+                if (this.carryingValue > 0) { ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - 10); }
             }
         }
 
@@ -2456,6 +2691,108 @@
             return paths;
         }
 
+        function recalculateAdjacency() {
+            // 1. Reset everyone to base
+            towers.forEach(t => {
+                t.effectiveStacks = t.stacks;
+                t.effectiveLevel = Math.floor(Math.log2(t.stacks)) + 1;
+                t.level = t.effectiveLevel; // Visual level (Base)
+                // We will overwrite effectiveLevel if boosted
+            });
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].item) {
+                        grid[y][x].item.effectiveStacks = grid[y][x].item.stacks || 1;
+                    }
+                }
+            }
+
+            let visited = new Set();
+            const getId = (x, y) => `${x},${y}`;
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let startCell = grid[y][x];
+                    let type = null;
+                    let isTower = false;
+
+                    // Determine Type
+                    if (startCell.type === TYPE_WALL) {
+                        // Tower?
+                        let t = towers.find(t => t.gx === x && t.gy === y);
+                        if (t) { type = t.type; isTower = true; }
+                    } else if (startCell.item) {
+                        type = startCell.item.type;
+                        isTower = false;
+                    }
+
+                    if (!type) continue;
+                    if (visited.has(getId(x, y))) continue;
+
+                    // BFS for Group
+                    let group = [];
+                    let queue = [{ x, y }];
+                    visited.add(getId(x, y));
+
+                    if (isTower) {
+                        let t = towers.find(t => t.gx === x && t.gy === y);
+                        if (t) group.push(t);
+                    } else {
+                        group.push(startCell.item);
+                    }
+
+                    while (queue.length > 0) {
+                        let cur = queue.shift();
+                        [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
+                            let nx = cur.x + d[0];
+                            let ny = cur.y + d[1];
+                            if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                                let key = getId(nx, ny);
+                                if (!visited.has(key)) {
+                                    let neighborCell = grid[ny][nx];
+                                    let nType = null;
+                                    let nObj = null;
+
+                                    if (isTower) { // Only connect to towers
+                                        if (neighborCell.type === TYPE_WALL) {
+                                            let nt = towers.find(t => t.gx === nx && t.gy === ny);
+                                            if (nt) { nType = nt.type; nObj = nt; }
+                                        }
+                                    } else { // Only connect to floor items
+                                        if (neighborCell.item) {
+                                            nType = neighborCell.item.type;
+                                            nObj = neighborCell.item;
+                                        }
+                                    }
+
+                                    if (nType === type) {
+                                        visited.add(key);
+                                        queue.push({ x: nx, y: ny });
+                                        group.push(nObj);
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    // Apply Bonus
+                    let groupSize = group.length;
+                    if (groupSize > 1) {
+                        group.forEach(obj => {
+                            obj.effectiveStacks = (obj.stacks || 1) * groupSize;
+                            if (obj.updateStats) { // Wrapper for Tower
+                                obj.effectiveLevel = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
+                                obj.effectiveGroupSize = groupSize; // Store for UI
+                                obj.updateStats(); // Recalc damage etc
+                            } else {
+                                obj.effectiveGroupSize = groupSize;
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
         /**
          * INPUT & LOGIC
          */
@@ -2627,10 +2964,20 @@
             }
             // --- SALVAGE LOGIC ---
             else if (cardKey === 'salvage') {
-                if (tile.type === TYPE_WALL && tile.item) {
+                let existingTower = towers.find(t => t.gx === gx && t.gy === gy);
+                if (existingTower) {
+                    // Refund 50% of Value
+                    let value = existingTower.baseStats.price * existingTower.stacks;
+                    let refund = Math.floor(value * 0.5);
+                    gameState.money += refund;
+                    // Visual Text
+                    // (Optional: floating text)
+
                     towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
                     tile.item = null;
                     createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#88f", 15);
+                    recalculateLaserConnections();
+                    recalculateAdjacency(); // NEW: Update groups
                     calcFlowFieldFlying(); // Recalc flying path
                     actionTaken = true;
                 }
@@ -2650,10 +2997,17 @@
                             spawner.maxHp = spawner.hp;
                             tile.item = spawner;
                             collectorSpawners.push(spawner);
+                        } else if (cardKey === 'salvager') {
+                            let spawner = new SalvagerSpawner(gx, gy, marketCard.level);
+                            spawner.hp = 60 + (marketCard.level - 1) * 20;
+                            spawner.maxHp = spawner.hp;
+                            tile.item = spawner;
+                            collectorSpawners.push(spawner);
                         } else {
-                            tile.item = { type: cardKey, hp: hp, maxHp: hp, stacks: marketCard.level };
+                            tile.item = { type: cardKey, hp: hp, maxHp: hp, stacks: marketCard.level, markedForSalvage: false };
                         }
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, data.color, 8);
+                        recalculateAdjacency();
                         actionTaken = true;
                     } else if (tile.item.type === cardKey) {
                         // Upgrade
@@ -2661,6 +3015,7 @@
                         tile.item.maxHp += (30 * marketCard.level); // Add Max HP per stack
                         tile.item.hp = tile.item.maxHp; // Heal to full
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#ffd", 10);
+                        recalculateAdjacency();
                         actionTaken = true;
                     }
                 }
@@ -2676,6 +3031,8 @@
                         tile.item = { type: cardKey };
                         towers.push(new Tower(gx, gy, cardKey, marketCard.level));
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#fff", 8);
+                        recalculateLaserConnections();
+                        recalculateAdjacency(); // NEW: Update groups
                         calcFlowFieldFlying(); // Recalc flying path
                         actionTaken = true;
                     } else if (existingTower.type === cardKey) {
@@ -2683,6 +3040,10 @@
                         existingTower.stacks += marketCard.level;
                         existingTower.level = Math.floor(Math.log2(existingTower.stacks)) + 1;
                         existingTower.updateStats(); // Recalculate stats based on new stacks
+
+                        if (existingTower.type === 'laser') recalculateLaserConnections(); // Level change affects range
+                        recalculateAdjacency(); // NEW: Update groups (upgrade might change things if we used level grouping, but we use type, still good to refresh effectiveStacks)
+
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#0f0", 12);
                         actionTaken = true;
                     }
@@ -2877,7 +3238,27 @@
 
                 // Name & Level
                 let nameHtml = data.name;
-                if (card.type !== 'shop_up') nameHtml += `<br><span style="font-size:8px;color:#fff">L${card.level}</span>`;
+                if (card.type !== 'shop_up') {
+                    // card.level is STACKS.
+                    // Calculate Display Level
+                    let trueLevel = Math.floor(Math.log2(card.level)) + 1;
+                    let nextThreshold = Math.pow(2, trueLevel);
+
+                    nameHtml += `<br><span style="font-size:8px;color:#fff">L${trueLevel}</span>`;
+
+                    // Add Stack Info to card
+                    if (!d.querySelector('.stack-info')) {
+                        let si = document.createElement('div');
+                        si.className = 'stack-info';
+                        si.style.cssText = "position:absolute;top:2px;right:2px;font-size:8px;color:#aaa;";
+                        d.appendChild(si);
+                    }
+                    d.querySelector('.stack-info').innerText = `${card.level}/${nextThreshold}`;
+                    d.querySelector('.stack-info').style.display = 'block';
+
+                } else {
+                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
+                }
                 d.querySelector('.m-name').innerHTML = nameHtml;
                 d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
 
@@ -2952,100 +3333,267 @@
                     panel.style.display = 'none';
                     return;
                 }
+            } else if (selectedEntity instanceof SalvagerSpawner) {
+                if (selectedEntity.hp <= 0 || !collectorSpawners.includes(selectedEntity)) {
+                    selectedEntity = null;
+                    panel.style.display = 'none';
+                    return;
+                }
             }
             // For items, we'd need to check grid, but good enough for now to check if null
             // (The item object itself might still exist in memory)
 
             panel.style.display = 'flex';
-            contentEl.innerHTML = '';
+            // Checkbox for Salvage - Persistent Management
+            // Managed as a child of panel (footer), not inside contentEl which is wiped
+            let existingRow = panel.querySelector('.salvage-row');
+
+            if (selectedEntity !== renderedEntity) {
+                // BUILD PHASE
+                renderedEntity = selectedEntity;
+                contentEl.innerHTML = '';
+
+                if (selectedEntity instanceof Tower) {
+                    let t = selectedEntity;
+                    let eLvl = t.effectiveLevel || t.level;
+                    let grp = t.effectiveGroupSize || 1;
+
+                    let headerHtml = `${t.baseStats.name} TOWER <span style="font-size:12px;color:#aaa">(L${t.level}`;
+                    if (eLvl > t.level) {
+                        headerHtml += ` <span style="color:#4f4">L${eLvl}</span> <span style="color:#4af">G${grp}</span>`;
+                    }
+                    headerHtml += `)</span>`;
+
+                    // Allow HTML in nameEl? If not, use innerHTML
+                    nameEl.innerHTML = headerHtml;
+                    iconEl.innerText = t.baseStats.icon;
+
+                    contentEl.innerHTML += createDualStatRow("Damage", "stat-damage");
+                    contentEl.innerHTML += createDualStatRow("Range", "stat-range");
+                    contentEl.innerHTML += createDualStatRow("Cooldown", "stat-cd");
+                    contentEl.innerHTML += createDualStatRow("Stacks", "stat-stacks");
+
+                    if (t.baseStats.desc) {
+                        contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${t.baseStats.desc}</div>`;
+                    }
+                }
+                else if (selectedEntity instanceof Enemy) {
+                    let e = selectedEntity;
+                    nameEl.innerText = `${e.type.toUpperCase()} ENEMY`;
+                    iconEl.innerText = "👾";
+
+                    contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span id="stat-hp" class="stat-val">...</span></div>`;
+                    contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span id="stat-speed" class="stat-val">...</span></div>`;
+                    contentEl.innerHTML += `<div id="stat-immunities"></div>`;
+                    contentEl.innerHTML += `<div id="stat-statuses"></div>`;
+                }
+                else if (selectedEntity instanceof CollectorSpawner || selectedEntity instanceof SalvagerSpawner) {
+                    let s = selectedEntity;
+                    let isSalvager = selectedEntity instanceof SalvagerSpawner;
+
+                    let eStk = s.effectiveStacks || s.stacks || 1;
+                    let grp = s.effectiveGroupSize || 1;
+                    let baseStk = s.stacks || 1;
+
+                    let headerHtml = `${isSalvager ? 'SALVAGER' : 'COLLECTOR'} <span style="font-size:12px;color:#aaa">(L${baseStk}`;
+                    if (eStk > baseStk) { headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`; }
+                    headerHtml += `)</span>`;
+                    nameEl.innerHTML = headerHtml;
+                    iconEl.innerText = isSalvager ? "♻️" : "🏭";
+
+                    contentEl.innerHTML += createDualStatRow("Stacks", "stat-stacks");
+                    contentEl.innerHTML += createDualStatRow("Health", "stat-hp");
+                    contentEl.innerHTML += createDualStatRow("Speed", "stat-speed");
+
+                    let desc = isSalvager ? "Destroy Marked items for 10% refund." : "Collects dropped money automatically.";
+                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px;">${desc}</div>`;
+                }
+                else if (selectedEntity.type) {
+                    let item = selectedEntity;
+                    let data = CARD_TYPES[item.type];
+                    let prettyName = data ? data.name : item.type.toUpperCase();
+
+                    let eStk = item.effectiveStacks || item.stacks || 1;
+                    let grp = item.effectiveGroupSize || 1;
+                    let baseStk = item.stacks || 1;
+
+                    let headerHtml = `${prettyName} <span style="font-size:12px;color:#aaa">(L${baseStk}`;
+                    if (eStk > baseStk) { headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`; }
+                    headerHtml += `)</span>`;
+                    nameEl.innerHTML = headerHtml;
+                    iconEl.innerText = data ? data.icon : "📦";
+
+                    contentEl.innerHTML += createDualStatRow("Stacks", "stat-stacks");
+                    if (item.hp !== undefined) contentEl.innerHTML += createDualStatRow("Health", "stat-hp");
+
+                    if (item.type === 'mine') contentEl.innerHTML += createDualStatRow("Damage", "stat-dmg");
+                    if (item.type === 'lava') contentEl.innerHTML += createDualStatRow("Burn DPS", "stat-dmg");
+
+                    if (data && data.desc) {
+                        contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${data.desc}</div>`;
+                    }
+                }
+
+                // Checkbox for Salvage - Build Once
+                // Remove generic existing row if switching entities
+                if (existingRow) existingRow.remove();
+                existingRow = null; // Reset reference for create logic
+
+                if (selectedEntity && typeof selectedEntity.markedForSalvage !== 'undefined') {
+                    let row = document.createElement('div');
+                    row.className = 'stat-row salvage-row';
+                    row.style.marginTop = '10px';
+                    row.style.borderTop = '1px solid #444';
+                    row.style.paddingTop = '4px';
+
+                    let label = document.createElement('span');
+                    label.innerText = "Mark for Salvage";
+
+                    let cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = selectedEntity.markedForSalvage;
+
+                    cb.onclick = (e) => { e.stopPropagation(); };
+                    cb.onchange = (e) => { selectedEntity.markedForSalvage = e.target.checked; };
+
+                    row.onclick = (e) => {
+                        e.stopPropagation();
+                        if (e.target !== cb) {
+                            cb.checked = !cb.checked;
+                            selectedEntity.markedForSalvage = cb.checked;
+                        }
+                    };
+                    row.onmousedown = (e) => { e.stopPropagation(); };
+                    row.style.cursor = 'pointer';
+
+                    row.appendChild(label);
+                    row.appendChild(cb);
+                    panel.appendChild(row);
+                }
+            }
+
+            // UPDATE PHASE
+            // Helper defined at top of update phase for scope access
+            const updateDualStat = (id, baseVal, effVal, suffix = "") => {
+                let baseEl = document.getElementById(`${id}-base`);
+                let effEl = document.getElementById(`${id}-eff`);
+                if (baseEl) baseEl.innerText = baseVal + suffix;
+
+                if (effEl) {
+                    // Always show effective value (Green) as requested, even if same as Base
+                    // Default to baseVal if effVal is strictly undefined (e.g. initial state?)
+                    let valToShow = (effVal !== undefined) ? effVal : baseVal;
+
+                    effEl.innerText = valToShow + suffix;
+                    effEl.style.display = 'block';
+                }
+            };
 
             if (selectedEntity instanceof Tower) {
                 let t = selectedEntity;
                 let data = t.currentStats;
-                nameEl.innerText = `${t.baseStats.name} TOWER (L${t.level})`;
-                iconEl.innerText = t.baseStats.icon;
+                let baseData = t.displayBaseStats || t.currentStats;
 
-                if (data.damage !== undefined) contentEl.innerHTML += `<div class="stat-row"><span>Damage</span><span class="stat-val">${data.damage.toFixed(1)}</span></div>`;
-                if (data.range !== undefined) contentEl.innerHTML += `<div class="stat-row"><span>Range</span><span class="stat-val">${data.range.toFixed(1)}</span></div>`;
-                if (data.cd !== undefined) contentEl.innerHTML += `<div class="stat-row"><span>Cooldown</span><span class="stat-val">${data.cd.toFixed(1)}f</span></div>`;
-                contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${t.stacks}</span></div>`;
-
-                if (t.baseStats.desc) {
-                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${t.baseStats.desc}</div>`;
-                }
+                if (data.damage !== undefined) updateDualStat('stat-damage', baseData.damage.toFixed(1), data.damage.toFixed(1));
+                if (data.range !== undefined) updateDualStat('stat-range', baseData.range.toFixed(1), data.range.toFixed(1));
+                if (data.cd !== undefined) updateDualStat('stat-cd', baseData.cd.toFixed(1), data.cd.toFixed(1), 'f');
+                updateDualStat('stat-stacks', t.stacks, t.effectiveStacks);
             }
             else if (selectedEntity instanceof Enemy) {
                 let e = selectedEntity;
-                nameEl.innerText = `${e.type.toUpperCase()} ENEMY`;
-                iconEl.innerText = "👾"; // Generic enemy icon
+                let el;
+                if (el = document.getElementById('stat-hp')) {
+                    el.innerText = `${Math.ceil(e.hp)}/${Math.ceil(e.maxHp)}`;
+                    el.style.color = (e.hp / e.maxHp) < 0.3 ? '#f44' : '#fd0';
+                }
+                if (el = document.getElementById('stat-speed')) el.innerText = e.speed.toFixed(2);
 
-                contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val" style="color:${(e.hp / e.maxHp) < 0.3 ? '#f44' : '#fd0'}">${Math.ceil(e.hp)}/${Math.ceil(e.maxHp)}</span></div>`;
-                contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span class="stat-val">${e.speed.toFixed(2)}</span></div>`;
-
-                let immunities = [];
-                if (e.poisonResistant) immunities.push("Poison");
-                if (e.fireResistant) immunities.push("Fire");
-                if (e.waterResistant) immunities.push("Water");
-                if (e.iceResistant) immunities.push("Ice");
-                if (e.sandResistant) immunities.push("Sand");
-                if (e.isFlying) immunities.push("Floor");
-
-                if (immunities.length > 0) {
-                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:4px;border-top:1px solid #444;padding-top:2px;"><span>Immune:</span><span class="stat-val" style="color:#f88;font-size:10px;">${immunities.join(", ")}</span></div>`;
+                let immDiv = document.getElementById('stat-immunities');
+                if (immDiv) {
+                    let immunities = [];
+                    if (e.poisonResistant) immunities.push("Poison");
+                    if (e.fireResistant) immunities.push("Fire");
+                    if (e.waterResistant) immunities.push("Water");
+                    if (e.iceResistant) immunities.push("Ice");
+                    if (e.sandResistant) immunities.push("Sand");
+                    if (e.isFlying) immunities.push("Floor");
+                    if (immunities.length > 0) {
+                        immDiv.innerHTML = `<div class="stat-row" style="margin-top:4px;border-top:1px solid #444;padding-top:2px;"><span>Immune:</span><span class="stat-val" style="color:#f88;font-size:10px;">${immunities.join(", ")}</span></div>`;
+                    } else { immDiv.innerHTML = ''; }
                 }
 
-                if (e.poisoned > 0) {
-                    let dps = Math.round(e.poisonTickDamage * 30);
-                    contentEl.innerHTML += `<div class="stat-row"><span>Poisoned <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
-                }
-                if (e.burning > 0) {
-                    let dps = Math.round(e.burnTickDamage * 30);
-                    contentEl.innerHTML += `<div class="stat-row"><span>Burning <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#f50">${Math.ceil(e.burning / 30)}s</span></div>`;
-                }
-                if (e.wet > 0) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Wet</span><span class="stat-val" style="color:#4af">${Math.ceil(e.wet / 30)}s</span></div>`;
-                }
-                if (e.frozen > 0) {
-                    let cv = "";
-                    if (e.wet > 0) {
-                        let dps = Math.round(e.iceTickDamage * 30);
-                        cv = ` <span style="color:#fa0;font-size:11px">(${dps} dps)</span>`;
+                let statDiv = document.getElementById('stat-statuses');
+                if (statDiv) {
+                    let html = '';
+                    if (e.poisoned > 0) {
+                        let dps = Math.round(e.poisonTickDamage * 30);
+                        html += `<div class="stat-row"><span>Poisoned <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
                     }
-                    contentEl.innerHTML += `<div class="stat-row"><span>Frozen${cv}</span><span class="stat-val" style="color:#afe">${Math.ceil(e.frozen / 30)}s</span></div>`;
-                }
-                if (e.sandy > 0) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${Math.ceil(e.sandy / 30)}s</span></div>`;
+                    if (e.burning > 0) {
+                        let dps = Math.round(e.burnTickDamage * 30);
+                        html += `<div class="stat-row"><span>Burning <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#f50">${Math.ceil(e.burning / 30)}s</span></div>`;
+                    }
+                    if (e.wet > 0) html += `<div class="stat-row"><span>Wet</span><span class="stat-val" style="color:#4af">${Math.ceil(e.wet / 30)}s</span></div>`;
+                    if (e.frozen > 0) {
+                        let cv = (e.wet > 0) ? ` <span style="color:#fa0;font-size:11px">(${Math.round(e.iceTickDamage * 30)} dps)</span>` : "";
+                        html += `<div class="stat-row"><span>Frozen${cv}</span><span class="stat-val" style="color:#afe">${Math.ceil(e.frozen / 30)}s</span></div>`;
+                    }
+                    if (e.sandy > 0) html += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${Math.ceil(e.sandy / 30)}s</span></div>`;
+                    statDiv.innerHTML = html;
                 }
             }
-            else if (selectedEntity instanceof CollectorSpawner) {
+            else if (selectedEntity instanceof CollectorSpawner || selectedEntity instanceof SalvagerSpawner) {
                 let s = selectedEntity;
-                nameEl.innerText = `COLLECTOR SPAWNER`;
-                iconEl.innerText = "🏭";
+                updateDualStat('stat-stacks', s.stacks, s.effectiveStacks);
+                updateDualStat('stat-hp', Math.ceil(s.hp), Math.ceil(s.hp));
 
-                contentEl.innerHTML += `<div class="stat-row"><span>Stacks</span><span class="stat-val">${s.stacks}</span></div>`;
-                contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val">${Math.ceil(s.hp)}/${Math.ceil(s.maxHp)}</span></div>`;
-                contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span class="stat-val">${s.collector.speed.toFixed(2)}</span></div>`;
-                contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px;">Collects dropped money automatically.</div>`;
+                let baseSpeed = 1.2 + (s.stacks - 1) * 0.05;
+                if (baseSpeed > 4.0) baseSpeed = 4.0;
+                let curSpeed = s.collector.speed;
+                updateDualStat('stat-speed', baseSpeed.toFixed(2), curSpeed.toFixed(2));
             }
             else if (selectedEntity.type) {
-                // Item (Sand/etc)
                 let item = selectedEntity;
-                let data = CARD_TYPES[item.type]; // Might be undefined if not in card types? Sand is there.
+                updateDualStat('stat-stacks', item.stacks, item.effectiveStacks);
+                if (item.hp !== undefined) updateDualStat('stat-hp', item.hp, item.hp);
 
-                let prettyName = data ? data.name : item.type.toUpperCase();
-                let icon = data ? data.icon : "📦";
-
-                nameEl.innerText = `${prettyName} (L${item.stacks || 1})`;
-                iconEl.innerText = icon;
-
-                if (item.hp !== undefined) {
-                    contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span class="stat-val">${item.hp}/${item.maxHp}</span></div>`;
-                }
-
-                if (data && data.desc) {
-                    contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${data.desc}</div>`;
+                if (item.type === 'mine') {
+                    let baseDmg = (CARD_TYPES['mine'].damage || 135) * item.stacks;
+                    let effDmg = (CARD_TYPES['mine'].damage || 135) * (item.effectiveStacks || item.stacks);
+                    updateDualStat('stat-dmg', baseDmg, effDmg);
+                } else if (item.type === 'lava') {
+                    let baseDmg = 0.1 * item.stacks * 30; // DPS approx
+                    let effDmg = 0.1 * (item.effectiveStacks || item.stacks) * 30;
+                    updateDualStat('stat-dmg', baseDmg.toFixed(1), effDmg.toFixed(1));
                 }
             }
+
+            // Sync checkbox state if it exists (for external changes or re-selection)
+            if (selectedEntity && typeof selectedEntity.markedForSalvage !== 'undefined') {
+                // Checkbox might have been created in Build phase or exists from previous
+                // existingRow reference might be stale if we removed it, so fetch again
+                let row = panel.querySelector('.salvage-row');
+                if (row) {
+                    let cb = row.querySelector('input');
+                    if (cb && cb.checked !== selectedEntity.markedForSalvage) {
+                        cb.checked = selectedEntity.markedForSalvage;
+                    }
+                }
+            } else {
+                // If entity selected doesn't have salvage (e.g. basic item?), ensure row is gone
+                let row = panel.querySelector('.salvage-row');
+                if (row) row.remove();
+            }
+        }
+
+
+        function createDualStatRow(label, id) {
+            return `
+            <div class="stat-row" style="display:flex; justify-content:space-between; align-items:center;">
+                <span class="label" style="flex:1; text-align:left;">${label}</span>
+                <span id="${id}-base" class="stat-val" style="color:#fd0; flex:1; text-align:center;">...</span>
+                <span id="${id}-eff" class="stat-val" style="color:#4f4; display:none; flex:1; text-align:center;">...</span>
+            </div>`;
         }
     </script>
 </body>
