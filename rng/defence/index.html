@@ -329,6 +329,56 @@
             color: #fff;
         }
 
+
+        /* Collapsible Styles */
+        .collapsible {
+            background-color: #252525;
+            color: #eee;
+            cursor: pointer;
+            padding: 12px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 14px;
+            font-weight: bold;
+            transition: 0.2s;
+            border-bottom: 1px solid #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: 'Courier New', monospace;
+        }
+
+        .collapsible:hover,
+        .collapsible.active {
+            background-color: #353535;
+        }
+
+        .collapsible:after {
+            content: '+';
+            font-size: 18px;
+            color: #fd0;
+            font-weight: 800;
+        }
+
+        .collapsible.active:after {
+            content: '-';
+        }
+
+        .content {
+            padding: 0 15px;
+            display: none;
+            overflow: hidden;
+            background-color: #151515;
+            border-bottom: 1px solid #333;
+        }
+
+        .content ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+
         #close-help {
             display: block;
             margin: 20px auto 0;
@@ -521,26 +571,45 @@
 
         <div id="help-modal">
             <h2>HOW TO PLAY</h2>
-            <ul>
-                <li><strong>STACK:</strong> This determines the tower / item level. Level determines the tower / item
-                    damage, range, cooldown, etc.
-                </li>
-                <li><strong>UPGRADE:</strong> Stack dublicate cards on existing towers / items to increase the stack.
-                </li>
 
-                <li><strong>MONEY:</strong> Unbought cards at the end of the wave give <strong>50%</strong> of their
-                    value as CASH. Waves do not otherwise give money out.
-                </li>
-                <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
-                    of the wave.</li>
-                <li><strong>SALVAGE:</strong> Long click a tower or item to mark it for salvager pickup.</li>
-                <li><strong>GROUPS:</strong> Connect similar turrets / items together to multiply their effective
-                    stacks by the size of the group.
-                </li>
-                <li><strong>AREAS:</strong> Filling in outlined areas with a group will multiply the stacks of all the
-                    turrets / items in the group.
-                </li>
-            </ul>
+            <button class="collapsible">GENERAL GAMEPLAY</button>
+            <div class="content">
+                <ul>
+                    <li>Defend the castle at the center with turrets & items.</li>
+                </ul>
+            </div>
+
+            <button class="collapsible">TURRETS / ITEMS</button>
+            <div class="content">
+                <ul>
+                    <li><strong>STACK:</strong> Determines level. Level improves damage, range, cooldown.</li>
+                    <li><strong>UPGRADE:</strong> Stack duplicate cards on existing towers to upgrade.</li>
+                </ul>
+            </div>
+
+            <button class="collapsible">CARDS</button>
+            <div class="content">
+                <ul>
+                    <li><strong>MONEY:</strong> Unbought cards give <strong>50%</strong> cash at wave end.</li>
+                    <li><strong>LOCK:</strong> Double-click card to lock (prevents auto-sell).</li>
+                </ul>
+            </div>
+
+            <button class="collapsible">CONTROLS</button>
+            <div class="content">
+                <ul>
+                    <li><strong>SALVAGE:</strong> Long click (>0.5s) a tower/item to mark for salvage.</li>
+                </ul>
+            </div>
+
+            <button class="collapsible">GROUPS / AREAS</button>
+            <div class="content">
+                <ul>
+                    <li><strong>GROUPS:</strong> Connect similar towers to multiply effective stacks by group size.</li>
+                    <li><strong>AREAS:</strong> Fill outlined areas with one group to multiply stacks by area size.</li>
+                </ul>
+            </div>
+
             <button id="close-help">CLOSE</button>
         </div>
 
@@ -576,6 +645,10 @@
 
         // Global State
         let canvas, ctx;
+        let bgCanvas, bgCtx; // Cached Background (Walls/Floors)
+        let areaCanvas, areaCtx; // Cached Area Outlines
+        let dirtyGrid = true;
+        let dirtyAreas = true;
         let lastTime = 0;
         // --- LOOT TABLES & DROPS ---
         const LOOT_TABLES = {
@@ -645,7 +718,7 @@
 
             // Utilities (Available early or staggered)
             salvage: { name: "Salvage", price: 20, icon: "🔧", color: "#88f", range: 0, target: 'turret', desc: "Removes a tower or item for a refund.", weight: 0.2, unlock_wave: 15 },
-            nuke: { name: "Nuke", price: 50, icon: "☢️", color: "#f44", range: 2, damage: 300, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15, unlock_wave: 6 },
+            nuke: { name: "Nuke", price: 120, icon: "☢️", color: "#f44", range: 2, damage: 5000, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15, unlock_wave: 6 },
             heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "Restores 5 lives to your castle.", weight: 0.15, unlock_wave: 3 },
             sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "Trades 5 lives for extra money.", weight: 0.15, unlock_wave: 3 },
             reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2, unlock_wave: 3 },
@@ -656,7 +729,7 @@
             ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
             elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 },
             spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 },
-            laser: { name: "Laser", price: 125, icon: "⚡", color: "#f00", range: 0, damage: 150, target: 'wall', desc: "Connects to other lasers. Beams damage enemies.", weight: 1, unlock_wave: 9 },
+            laser: { name: "Laser", price: 125, icon: "⚡", color: "#f00", range: 0, damage: 750, target: 'wall', desc: "Connects to other lasers. Beams damage enemies.", weight: 1, unlock_wave: 9 },
             salvager: { name: "Salvager", price: 150, icon: "♻️", color: "#543", hp: 60, target: 'floor', desc: "Spawns AI to salvage marked buildings (10% return).", weight: 0.15, unlock_wave: 9 }
         };
 
@@ -666,6 +739,12 @@
         function init() {
             canvas = document.getElementById('gameCanvas');
             ctx = canvas.getContext('2d');
+
+            // Init Offscreen Canvases
+            bgCanvas = document.createElement('canvas');
+            bgCtx = bgCanvas.getContext('2d');
+            areaCanvas = document.createElement('canvas');
+            areaCtx = areaCanvas.getContext('2d');
 
             resize();
             window.addEventListener('resize', resize);
@@ -705,6 +784,20 @@
                 document.getElementById('help-modal').style.display = 'none';
             });
 
+            // Collapsible Logic
+            let coll = document.getElementsByClassName("collapsible");
+            for (let i = 0; i < coll.length; i++) {
+                coll[i].addEventListener("click", function () {
+                    this.classList.toggle("active");
+                    let content = this.nextElementSibling;
+                    if (content.style.display === "block") {
+                        content.style.display = "none";
+                    } else {
+                        content.style.display = "block";
+                    }
+                });
+            }
+
             // STARTUP: Show Main Menu, Hide others
             document.getElementById('main-menu').style.display = 'flex';
             document.getElementById('game-over').style.display = 'none';
@@ -736,6 +829,10 @@
             let scale = Math.min(availW / (GRID_W * TILE_SIZE), availH / (GRID_H * TILE_SIZE));
             canvas.width = GRID_W * TILE_SIZE;
             canvas.height = GRID_H * TILE_SIZE;
+
+            // Resize Offscreens
+            if (bgCanvas) { bgCanvas.width = canvas.width; bgCanvas.height = canvas.height; dirtyGrid = true; }
+            if (areaCanvas) { areaCanvas.width = canvas.width; areaCanvas.height = canvas.height; dirtyAreas = true; }
             canvas.style.width = (canvas.width * scale) + "px";
             canvas.style.height = (canvas.height * scale) + "px";
 
@@ -816,6 +913,8 @@
             precalculateRoutes();
             generateAreas(); // NEW: Generate Flood Fill Areas
             recalculateAdjacency(); // NEW: Init adjacency
+            dirtyGrid = true;
+            dirtyAreas = true;
         }
 
         function generateLevelAsync() {
@@ -1104,9 +1203,6 @@
         }
 
         function draw() {
-            ctx.fillStyle = C_BG;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
             if (gameState.generating) {
                 ctx.fillStyle = "white";
                 ctx.font = "20px Courier New";
@@ -1117,35 +1213,30 @@
                 return;
             }
 
+            // 1. Draw Background & Static Grid (Cached)
+            if (dirtyGrid) renderStaticGrid();
+            ctx.drawImage(bgCanvas, 0, 0);
 
-
+            // 2. Draw Dynamic Grid Overlays (Area Active Highlights & Spawners/Items)
+            // We still need to iterate for Items, but we can skip Wall/Floor drawing
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
-                    let px = x * TILE_SIZE;
-                    let py = y * TILE_SIZE;
                     let cell = grid[y][x];
 
-                    if (cell.type === TYPE_WALL) {
-                        ctx.fillStyle = '#222'; ctx.fillRect(px, py + 4, TILE_SIZE, TILE_SIZE - 4);
-                        ctx.fillStyle = C_WALL; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE - 4);
-                        // ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE - 4); // Remove old grid lines? Keep partial?
-                        // Let's keep distinct wall look but maybe thinner or less obtrusive if outlines are there
-                        ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE - 4);
-                    } else {
-                        ctx.fillStyle = C_FLOOR; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                    }
-
-                    // Highlight active area cells?
-                    // Maybe faint tint
+                    // Highlight active area cells (Dynamic Check)
                     if (cell.areaId !== -1) {
                         let area = areas.find(a => a.id === cell.areaId);
                         if (area && area.active) {
-                            ctx.fillStyle = "rgba(0, 255, 0, 0.1)";
-                            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                            let px = x * TILE_SIZE;
+                            let py = y * TILE_SIZE;
+                            // ctx.fillStyle = "rgba(0, 255, 0, 0.1)";
+                            // ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
                         }
                     }
 
                     if (cell.item) {
+                        let px = x * TILE_SIZE;
+                        let py = y * TILE_SIZE;
                         if (cell.item.type === 'sand') {
                             drawSandIcon(ctx, px + 16, py + 16, cell.item.hp / cell.item.maxHp, cell.item.stacks);
                         } else if (cell.item.type === 'lava') {
@@ -1164,18 +1255,14 @@
                             ctx.stroke();
                         }
                     }
-
-                    if (cell.type === TYPE_CASTLE) {
-                        ctx.fillStyle = C_CASTLE;
-                        ctx.fillRect(px + 4, py + 4, TILE_SIZE - 8, TILE_SIZE - 8);
-                        ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.strokeRect(px + 6, py + 6, TILE_SIZE - 12, TILE_SIZE - 12);
-                    }
                 }
             }
 
-            drawAreaOutlines(ctx); // NEW: Draw Area Outlines - Moved after grid
+            // 3. Draw Area Outlines (Cached)
+            if (dirtyAreas) renderAreaOutlinesToCache();
+            ctx.drawImage(areaCanvas, 0, 0);
 
-            // DRAW DROPPED ITEMS (After grid, before others)
+            // 4. Dropped Items
             droppedItems.forEach(drop => {
                 if (drop.type === 'money') {
                     // Static
@@ -1190,6 +1277,7 @@
                 }
             });
 
+            // 5. Entities
             towers.forEach(t => t.draw(ctx));
             collectorSpawners.forEach(s => s.draw(ctx));
             collectors.forEach(c => c.draw(ctx));
@@ -1197,17 +1285,17 @@
             projectiles.forEach(p => p.draw(ctx));
             particles.forEach(p => p.draw(ctx));
 
-            // DRAW CLICK WAIT ANIMATION (LONG PRESS)
+            // 6. UI Overlays (Click Animation)
             if (pendingClickEntity && !isLongPressActionTaken) {
                 ctx.save();
                 let entity = pendingClickEntity;
-                let cx = entity.x; // Entities have .x .y updated in findEntity logic or native
+                let cx = entity.x;
                 let cy = entity.y;
 
                 let progress = (Date.now() - longPressStartTime) / 500;
                 if (progress > 1) progress = 1;
 
-                ctx.strokeStyle = `rgba(255, 0, 0, 0.8)`; // Color indicating destructive action? Or just filling.
+                ctx.strokeStyle = `rgba(255, 0, 0, 0.8)`;
                 ctx.lineWidth = 4;
                 ctx.beginPath();
                 ctx.arc(cx, cy, 20, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress));
@@ -1216,9 +1304,37 @@
             }
         }
 
-        function drawAreaOutlines(ctx) {
+        function renderStaticGrid() {
+            bgCtx.fillStyle = C_BG;
+            bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let px = x * TILE_SIZE;
+                    let py = y * TILE_SIZE;
+                    let cell = grid[y][x];
+
+                    if (cell.type === TYPE_WALL) {
+                        bgCtx.fillStyle = '#222'; bgCtx.fillRect(px, py + 4, TILE_SIZE, TILE_SIZE - 4);
+                        bgCtx.fillStyle = C_WALL; bgCtx.fillRect(px, py, TILE_SIZE, TILE_SIZE - 4);
+                        bgCtx.strokeStyle = '#444'; bgCtx.strokeRect(px, py, TILE_SIZE, TILE_SIZE - 4);
+                    } else {
+                        bgCtx.fillStyle = C_FLOOR; bgCtx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                    }
+                    if (cell.type === TYPE_CASTLE) {
+                        bgCtx.fillStyle = C_CASTLE;
+                        bgCtx.fillRect(px + 4, py + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+                        bgCtx.strokeStyle = 'white'; bgCtx.lineWidth = 2; bgCtx.strokeRect(px + 6, py + 6, TILE_SIZE - 12, TILE_SIZE - 12);
+                    }
+                }
+            }
+            dirtyGrid = false;
+        }
+
+        function renderAreaOutlinesToCache() {
+            areaCtx.clearRect(0, 0, areaCanvas.width, areaCanvas.height);
             let lw = 2;
-            ctx.lineWidth = lw;
+            areaCtx.lineWidth = lw;
 
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
@@ -1229,11 +1345,11 @@
                     let area = areas.find(a => a.id === aid);
                     if (!area) continue;
 
+                    // Only drawing the outline, NOT the fill (fill is dynamic in draw loop)
                     let color;
                     if (area.active) {
                         color = 'rgba(0, 255, 0, 1)'; // Green for active
                     } else {
-                        // Inactive: Red for Walls, Gray for Floors
                         if (cell.type === TYPE_WALL) {
                             color = 'rgba(255, 0, 0, 1)';
                         } else {
@@ -1241,58 +1357,38 @@
                         }
                     }
 
-                    ctx.strokeStyle = color;
+                    areaCtx.strokeStyle = color;
                     let px = x * TILE_SIZE;
                     let py = y * TILE_SIZE;
-
-                    // Draw Inset Borders (Inside the cell)
-                    // Offset by lw/2 ensures the line is fully inside (assuming centered stroke) if we step in by lw/2 from edge?
-                    // Actually, to be "inside", with lw=2:
-                    // Edge at 0. Line centered at 1 covers 0..2. This is inside.
-                    // Edge at 32. Line centered at 31 covers 30..32. This is inside.
                     let offset = lw / 2;
 
                     // Right Neighbor
                     if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) {
-                        ctx.beginPath();
-                        ctx.moveTo(px + TILE_SIZE - offset, py);
-                        ctx.lineTo(px + TILE_SIZE - offset, py + TILE_SIZE);
-                        ctx.stroke();
+                        areaCtx.beginPath(); areaCtx.moveTo(px + TILE_SIZE - offset, py); areaCtx.lineTo(px + TILE_SIZE - offset, py + TILE_SIZE); areaCtx.stroke();
                     }
-
                     // Left Neighbor
                     if (x === 0 || grid[y][x - 1].areaId !== aid) {
-                        ctx.beginPath();
-                        ctx.moveTo(px + offset, py);
-                        ctx.lineTo(px + offset, py + TILE_SIZE);
-                        ctx.stroke();
+                        areaCtx.beginPath(); areaCtx.moveTo(px + offset, py); areaCtx.lineTo(px + offset, py + TILE_SIZE); areaCtx.stroke();
                     }
-
                     // Bottom Neighbor
                     if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) {
-                        ctx.beginPath();
-                        ctx.moveTo(px, py + TILE_SIZE - offset);
-                        ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE - offset);
-                        ctx.stroke();
+                        areaCtx.beginPath(); areaCtx.moveTo(px, py + TILE_SIZE - offset); areaCtx.lineTo(px + TILE_SIZE, py + TILE_SIZE - offset); areaCtx.stroke();
                     }
-
                     // Top Neighbor
                     if (y === 0 || grid[y - 1][x].areaId !== aid) {
-                        ctx.beginPath();
-                        ctx.moveTo(px, py + offset);
-                        ctx.lineTo(px + TILE_SIZE, py + offset);
-                        ctx.stroke();
+                        areaCtx.beginPath(); areaCtx.moveTo(px, py + offset); areaCtx.lineTo(px + TILE_SIZE, py + offset); areaCtx.stroke();
                     }
                 }
             }
-            ctx.lineWidth = 1; // Reset
+            areaCtx.lineWidth = 1; // Reset
+            dirtyAreas = false;
         }
 
         // --- RENDER HELPERS ---
         function drawTowerIcon(ctx, x, y, color, angle, level = 0, type = '', active = false) {
             if (type === 'laser') {
                 ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.28); ctx.fill();
-                ctx.stroke(); // Outline
+                ctx.strokeStyle = '#000'; ctx.stroke(); // Outline
                 ctx.fillStyle = active ? '#f00' : '#400';
                 ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.28); ctx.fill();
                 return;
@@ -2207,7 +2303,8 @@
 
                     // Range Check: Gap <= Min Level
                     let gap = dist - 1;
-                    let limit = Math.min(t1.level, t2.level);
+                    let limit = Math.min(t1.effectiveLevel, t2.effectiveLevel);
+                    if (!limit) limit = Math.min(t1.level, t2.level); // Fallback
                     if (gap > limit) blocked = true;
                     if (gap < 1) blocked = true;
 
@@ -2231,6 +2328,13 @@
 
                 this.baseStats = CARD_TYPES[type];
                 this.currentStats = { ...this.baseStats };
+
+                // TEXT CACHING
+                this.textCanvas = document.createElement('canvas');
+                this.textCanvas.width = 32; this.textCanvas.height = 48;
+                this.textCtx = this.textCanvas.getContext('2d');
+                this.updateTextCache();
+
                 this.updateStats(); // Init stats
                 this.cd = 0; this.angle = 0;
 
@@ -2244,12 +2348,37 @@
             upgrade() {
                 this.stacks++;
                 this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.updateTextCache();
                 this.updateStats();
             }
 
+            updateTextCache() {
+                this.textCtx.clearRect(0, 0, 32, 48);
+                let reqForNext = Math.pow(2, this.level);
+                this.textCtx.fillStyle = "white";
+                this.textCtx.font = "bold 9px Arial";
+                this.textCtx.textAlign = "center";
+                this.textCtx.shadowColor = "black"; this.textCtx.shadowBlur = 3;
+                this.textCtx.fillText(`L${this.level}`, 16, 24 - 12);
+
+                this.textCtx.font = "8px Arial";
+                this.textCtx.fillStyle = "#aaa";
+                this.textCtx.fillText(`${this.stacks}/${reqForNext}`, 16, 24 + 16);
+                this.textCtx.shadowBlur = 0;
+            }
+
             updateStats() {
-                this.currentStats = this.calculateStatsForLevel(this.effectiveLevel || this.level);
-                this.displayBaseStats = this.calculateStatsForLevel(this.level);
+                let baseLevel = Math.floor(Math.log2(this.stacks)) + 1;
+                let effLevel = this.effectiveLevel || baseLevel;
+
+                // Visual Level Update
+                if (this.level !== effLevel) {
+                    this.level = effLevel;
+                    this.updateTextCache();
+                }
+
+                this.currentStats = this.calculateStatsForLevel(effLevel);
+                this.displayBaseStats = this.calculateStatsForLevel(baseLevel);
             }
 
             calculateStatsForLevel(lvl) {
@@ -2460,18 +2589,8 @@
                 }
 
                 // Draw Level Info
-                let reqForNext = Math.pow(2, this.level);
-                ctx.fillStyle = "white";
-                ctx.font = "bold 9px Arial";
-                ctx.textAlign = "center";
-                ctx.shadowColor = "black"; ctx.shadowBlur = 3;
-                ctx.fillText(`L${this.level}`, this.x, this.y - 12);
-
-                // Progress bar/text (Total Stacks / Next Threshold)
-                ctx.font = "8px Arial";
-                ctx.fillStyle = "#aaa";
-                ctx.fillText(`${this.stacks}/${reqForNext}`, this.x, this.y + 16);
-                ctx.shadowBlur = 0;
+                // Draw Level Info (Cached)
+                ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
 
                 if (this.markedForSalvage) {
                     ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
@@ -3086,6 +3205,7 @@
         function recalculateAdjacency() {
             // 0. Reset Areas
             areas.forEach(a => a.active = false);
+            dirtyAreas = true;
 
             // 1. Reset everyone to base
             towers.forEach(t => {
@@ -3519,10 +3639,11 @@
                         // Upgrade Existing
                         existingTower.stacks += marketCard.level;
                         existingTower.level = Math.floor(Math.log2(existingTower.stacks)) + 1;
-                        existingTower.updateStats(); // Recalculate stats based on new stacks
 
                         if (existingTower.type === 'laser') recalculateLaserConnections(); // Level change affects range
-                        recalculateAdjacency(); // NEW: Update groups (upgrade might change things if we used level grouping, but we use type, still good to refresh effectiveStacks)
+                        recalculateAdjacency(); // NEW: Update groups FIRST so effectiveLevel is correct
+
+                        existingTower.updateStats(); // Recalculate stats based on new effective stacks
 
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#0f0", 12);
                         actionTaken = true;
@@ -3852,11 +3973,12 @@
 
                 if (selectedEntity instanceof Tower) {
                     let t = selectedEntity;
-                    let eLvl = t.effectiveLevel || t.level;
+                    let baseLevel = Math.floor(Math.log2(t.stacks)) + 1;
+                    let eLvl = t.effectiveLevel || baseLevel;
                     let grp = t.effectiveGroupSize || 1;
 
-                    let headerHtml = `${t.baseStats.name} TOWER <span style="font-size:12px;color:#aaa">(L${t.level}`;
-                    if (eLvl > t.level) {
+                    let headerHtml = `${t.baseStats.name} TOWER <span style="font-size:12px;color:#aaa">(L${baseLevel}`;
+                    if (eLvl > baseLevel) {
                         headerHtml += ` <span style="color:#4f4">L${eLvl}</span> <span style="color:#4af">G${grp}</span>`;
                     }
                     headerHtml += `)</span>`;
