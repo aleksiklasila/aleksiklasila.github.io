@@ -959,7 +959,7 @@
                     gameState.killedEnemies++;
                     if (gameState.waveStats[e.waveIndex]) gameState.waveStats[e.waveIndex].killed++;
                 } else if (e.reachedGoal) {
-                    gameState.hp -= 1;
+                    gameState.hp -= e.damageToCastle;
                     enemies.splice(i, 1);
                     createExplosion(e.x, e.y, "#f44", 15);
                     updateUI();
@@ -1487,17 +1487,44 @@
                 else if (type === 'poison_bird') { this.hp = 60 * mult; this.speed = 1.4; this.color = '#2d2'; this.r = 18; }
                 else if (type === 'sand_bird') { this.hp = 65 * mult; this.speed = 2; this.color = '#aa8'; this.r = 15; }
                 else if (type === 'flying') { this.hp = 45 * mult; this.speed = 1.5; this.color = '#dd0'; this.r = 7; }
+                else if (type === 'snake') { this.hp = 3000 * mult; this.speed = 1.6; this.color = '#0f0'; this.r = 7; } // Snake: Tanky, Long
+                else if (type.startsWith('snake_boss')) {
+                    // BOSS SNAKE STATS
+                    this.hp = 12000 * mult; // Very tanky (Boss)
+                    this.speed = 0.32; // Slower, majestic (Halved from 1.3)
+                    this.r = 12; // Big
+
+                    if (type === 'snake_boss_poison') { this.color = '#2d2'; }
+                    else if (type === 'snake_boss_water') { this.color = '#4af'; }
+                    else if (type === 'snake_boss_fire') { this.color = '#f50'; }
+                    else if (type === 'snake_boss_ice') { this.color = '#afe'; }
+                }
                 else { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; }
 
+                // CASTLE DAMAGE
+                this.damageToCastle = 1;
+                if (type === 'boss') this.damageToCastle = 3;
+                else if (type.startsWith('snake_boss')) this.damageToCastle = 10;
+
                 // Properties
-                this.iceResistant = (type === 'ice_resistant' || type === 'ice_bird');
-                this.fireResistant = (type === 'fire_resistant' || type === 'fire_bird');
-                this.waterResistant = (type === 'water_resistant' || type === 'water_bird');
-                this.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird');
+                this.iceResistant = (type === 'ice_resistant' || type === 'ice_bird' || type === 'snake_boss_ice');
+                this.fireResistant = (type === 'fire_resistant' || type === 'fire_bird' || type === 'snake_boss_fire');
+                this.waterResistant = (type === 'water_resistant' || type === 'water_bird' || type === 'snake_boss_water');
+                this.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird' || type === 'snake_boss_poison');
                 this.sandResistant = (type === 'sand_bird' || type === 'flying');
 
                 this.isFlying = (type === 'ice_bird' || type === 'water_bird' || type === 'fire_bird' || type === 'poison_bird' || type === 'sand_bird');
                 this.visualization = (this.isFlying) ? 'triangle' : 'circle';
+
+                // SNAKE PROPERTIES
+                this.isSnake = (type === 'snake' || type.startsWith('snake_boss'));
+                if (this.isSnake) {
+                    this.snakeHistory = [];
+                    // We record every 4th frame, so 80 points * 4 frames = 320 frames of history (~5.3 seconds)
+                    // At speed 1.6, that's ~850 pixels long (screen is ~800 wide). Very long.
+                    this.snakeMaxHistory = (type.startsWith('snake_boss')) ? 120 : 70; // Even Longer for Boss
+                    this.snakeRecordTimer = 0;
+                }
 
                 this.maxHp = this.hp;
                 this.poisoned = 0;
@@ -1550,6 +1577,21 @@
                 if (!this.path) this.path = paths[0]; // Fallback
             }
 
+            checkCollision(x, y, r) {
+                // Head Check
+                if (Math.hypot(this.x - x, this.y - y) <= (this.r + r)) return true;
+
+                // Body Check (Snake)
+                if (this.isSnake && this.snakeHistory.length > 0) {
+                    // History points are now spaced out (every ~6px), so checking every single one is fine.
+                    // 70 points is cheap enough.
+                    for (let p of this.snakeHistory) {
+                        if (Math.hypot(p.x - x, p.y - y) <= (this.r + r)) return true;
+                    }
+                }
+                return false;
+            }
+
             checkDeathBonus() {
                 // Helper to check a specific coordinate
                 const checkTile = (x, y) => {
@@ -1575,6 +1617,49 @@
                 }
 
                 // --- DROP LOGIC ---
+                // SPECIAL SNAKE LOGIC: Drop money on EVERY cell occupied
+                if (this.isSnake) {
+                    let seenCells = new Set();
+                    let points = [{ x: this.x, y: this.y }, ...this.snakeHistory];
+
+                    points.forEach(p => {
+                        let gx = Math.floor(p.x / TILE_SIZE);
+                        let gy = Math.floor(p.y / TILE_SIZE);
+                        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                            seenCells.add(`${gx},${gy}`);
+                        }
+                    });
+
+                    seenCells.forEach(key => {
+                        let [gx, gy] = key.split(',').map(Number);
+                        let cell = grid[gy][gx];
+                        if (cell && !cell.droppedItem) {
+                            // Drop Value: Scale down slightly per-tile since there are many tiles?
+                            // Or keep high for Boss reward. MaxHP 12000 / 20 = 600 per tile.
+                            // If 30 tiles = 18000 gold. A lot, but it IS a boss.
+                            // Let's cap it slightly or use standard.
+                            let value = Math.floor(this.maxHp / 100); // 1% per tile -> 120g per tile * 30 tiles ~ 3600g
+                            // (Standard was /20 = 5%)
+                            // User said "drop money". 1% seems safer than 5% per cell.
+                            if (value < 1) value = 1;
+
+                            let drop = {
+                                type: 'money',
+                                value: value,
+                                gx: gx,
+                                gy: gy,
+                                x: gx * TILE_SIZE + 16,
+                                y: gy * TILE_SIZE + 16,
+                                timer: 60 * 120,
+                                maxTimer: 60 * 10
+                            };
+                            cell.droppedItem = drop;
+                            droppedItems.push(drop);
+                        }
+                    });
+                    return; // Skip standard single drop
+                }
+
                 // 1. Determine Loot Table
                 let table = LOOT_TABLES[this.type] || LOOT_TABLES['default'];
                 // 2. Roll
@@ -1626,6 +1711,20 @@
                 let gy = Math.floor(this.y / TILE_SIZE);
                 let cx = Math.floor(GRID_W / 2) * TILE_SIZE + 16;
                 let cy = Math.floor(GRID_H / 2) * TILE_SIZE + 16;
+
+                // SNAKE HISTORY RECORDING
+                if (this.isSnake) {
+                    // Record every 4 frames (approx 6.4px at speed 1.6)
+                    // This creates "segments" further apart and allows for a very long snake with fewer array items.
+                    this.snakeRecordTimer++;
+                    if (this.snakeRecordTimer >= 4) {
+                        this.snakeRecordTimer = 0;
+                        this.snakeHistory.unshift({ x: this.x, y: this.y });
+                        if (this.snakeHistory.length > this.snakeMaxHistory) {
+                            this.snakeHistory.pop();
+                        }
+                    }
+                }
 
                 if (Math.hypot(this.x - cx, this.y - cy) < 20) { this.reachedGoal = true; return; }
 
@@ -1698,9 +1797,10 @@
                     cell.item = null;
                     createExplosion(gx * 32 + 16, gy * 32 + 16, "#f44", 20); // Big Boom visual
 
-                    // AoE Damage
+                    // AoE Damage based on collision
                     for (let oe of enemies) {
-                        if (Math.hypot(oe.x - this.x, oe.y - this.y) < range) {
+                        // OLD: if (Math.hypot(oe.x - this.x, oe.y - this.y) < range) {
+                        if (oe.checkCollision(this.x, this.y, range)) {
                             oe.hp -= mineDmg;
                             createExplosion(oe.x, oe.y, "#f80", 5);
                             if (oe.hp <= 0 && !oe.dead) {
@@ -1805,6 +1905,50 @@
             }
 
             draw(ctx) {
+                if (this.isSnake) {
+                    ctx.save();
+                    // Draw Body first (below head)
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.lineWidth = this.r * 2;
+                    ctx.strokeStyle = this.color;
+
+                    // Status Colors Override
+                    // Disable for Boss Snake (Keep Identity)
+                    if (!this.type.startsWith('snake_boss')) {
+                        if (this.burning > 0) ctx.strokeStyle = '#f50';
+                        else if (this.poisoned > 0) ctx.strokeStyle = '#2d2';
+                        else if (this.frozen > 0 && this.wet > 0) ctx.strokeStyle = '#fff';
+                        else if (this.frozen > 0) ctx.strokeStyle = '#afe';
+                        else if (this.wet > 0) ctx.strokeStyle = '#4af';
+                    }
+
+                    ctx.beginPath();
+                    // Connect head to history
+                    ctx.moveTo(this.x, this.y);
+                    for (let p of this.snakeHistory) {
+                        ctx.lineTo(p.x, p.y);
+                    }
+                    ctx.stroke();
+
+                    // Optional: Draw Head Distinctly?
+                    ctx.fillStyle = ctx.strokeStyle; // Match status
+                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 2, 0, 6.28); ctx.fill();
+
+                    // Draw eyes
+                    ctx.fillStyle = "black";
+                    ctx.beginPath(); ctx.arc(this.x - 2, this.y - 2, 2, 0, 6.28); ctx.fill();
+                    ctx.beginPath(); ctx.arc(this.x + 2, this.y - 2, 2, 0, 6.28); ctx.fill();
+
+                    ctx.restore();
+
+                    // HP Bar (Draw outside save/restore or manage ctx state manually if needed, but rects usually ignore strokeStyle)
+                    // Actually HP bar uses fillRect, so unrelated to stroke/line width.
+                    ctx.fillStyle = '#400'; ctx.fillRect(this.x - 8, this.y - 12, 16, 4);
+                    ctx.fillStyle = (this.hp / this.maxHp) > 0.5 ? '#0f0' : '#f00'; ctx.fillRect(this.x - 8, this.y - 12, 16 * (this.hp / this.maxHp), 4);
+                    return;
+                }
+
                 if (this.visualization === 'triangle') {
                     // Triangle pointing down
                     ctx.fillStyle = this.color;
@@ -1977,10 +2121,21 @@
 
                             for (let e of enemies) {
                                 let hit = false;
-                                if (isVert) {
-                                    if (Math.abs(e.x - sx) < e.r + 4 && e.y >= min && e.y <= max) hit = true;
-                                } else {
-                                    if (Math.abs(e.y - sy) < e.r + 4 && e.x >= min && e.x <= max) hit = true;
+                                // Helper for checking overlap with laser line (Vertical or Horizontal)
+                                const checkHit = (ex, ey, er) => {
+                                    if (isVert) {
+                                        return Math.abs(ex - sx) < er + 4 && ey >= min && ey <= max;
+                                    } else {
+                                        return Math.abs(ey - sy) < er + 4 && ex >= min && ex <= max;
+                                    }
+                                };
+
+                                if (checkHit(e.x, e.y, e.r)) hit = true;
+                                else if (e.isSnake) {
+                                    // Check body
+                                    for (let p of e.snakeHistory) {
+                                        if (checkHit(p.x, p.y, e.r)) { hit = true; break; }
+                                    }
                                 }
                                 if (hit) {
                                     hitAny = true;
@@ -2007,7 +2162,7 @@
                 let stats = this.currentStats;
                 let rangePx = stats.range * TILE_SIZE;
 
-                let enemiesInRange = enemies.filter(e => Math.hypot(e.x - this.x, e.y - this.y) <= rangePx);
+                let enemiesInRange = enemies.filter(e => e.checkCollision(this.x, this.y, rangePx));
                 if (enemiesInRange.length === 0) return;
 
                 // Priority 1: Vulnerable AND Not Affected (Spread the effect)
@@ -2018,8 +2173,41 @@
                 let closestImmune = null; let minImmune = rangePx;
 
                 for (let e of enemies) {
+                    // Check Collision Distance (If snake, this returns true if any body part is close)
+                    // We need a distance metric for sorting.
+                    // For snakes, use distance to CLOSEST POINT on body if checkCollision passes?
+                    // Simplified: Use distance to head for sorting, but allow targeting if collision check passes.
+                    // OR: Update checkCollision to return DISTANCE or boolean?
+                    // Let's stick to boolean check for InRange.
+                    // For sorting, if it's a snake, we should probably prefer it if it's close?
+                    // Let's keep "d" as head distance for sorting simplicity for now,
+                    // BUT we must allow targeting even if d > rangePx provided collision is true.
+
+                    // Logic:
+                    // 1. Check if ANY part is in range (checkCollision)
+                    if (!e.checkCollision(this.x, this.y, rangePx)) continue;
+
+                    // 2. Calculate effective distance for sorting.
+                    // If snake, ideally we find closest segment distance.
+                    // For now, let's just use dist to head for priority sorting,
+                    // effectively treating the snake as "present" but maybe "far" priority-wise if head is far.
+                    // Wait, if head is OUT of range but body is IN range, we must target it.
+                    // If we sort by head distance (say 500px), it might lose to a goblin at 400px.
+                    // This is acceptable? Or should we sort by "closest point"?
+                    // Let's try to get a better distance if snake.
+
                     let d = Math.hypot(e.x - this.x, e.y - this.y);
-                    if (d > rangePx) continue;
+                    if (e.isSnake) {
+                        // Find closest point
+                        d = d - e.r; // Head surface
+                        for (let p of e.snakeHistory) {
+                            let sd = Math.hypot(p.x - this.x, p.y - this.y) - e.r;
+                            if (sd < d) d = sd;
+                        }
+                        if (d < 0) d = 0;
+                    }
+
+                    if (d > rangePx) continue; // Should be covered by checkCollision check above really.
                     // Skip if dead or reached goal (handled by filter above? enemies struct might have them)
                     if (e.dead || e.reachedGoal) continue;
 
@@ -2429,7 +2617,7 @@
                 this.x += this.vx; this.y += this.vy; this.life--;
                 if (this.life <= 0) return false;
                 for (let e of enemies) {
-                    if (Math.hypot(e.x - this.x, e.y - this.y) < e.r + 8) { this.hit(e); return false; }
+                    if (e.checkCollision(this.x, this.y, 8)) { this.hit(e); return false; }
                 }
                 return true;
             }
@@ -2454,7 +2642,7 @@
                     let radius = 12 + (this.level * 4);
                     createExplosion(this.x, this.y, "orange", radius);
                     for (let e of enemies) {
-                        if (Math.hypot(e.x - this.x, e.y - this.y) < 64) {
+                        if (e.checkCollision(this.x, this.y, 64)) {
                             e.lastSource = { x: this.sx, y: this.sy };
 
                             // Always Burn Splash
@@ -3000,7 +3188,7 @@
                 let rangePx = (data.range || 4) * TILE_SIZE;
                 let damage = (data.damage || 100) * marketCard.level;
                 for (let e of enemies) {
-                    if (Math.hypot(e.x - tx, e.y - ty) <= rangePx) {
+                    if (e.checkCollision(tx, ty, rangePx)) {
                         e.hp -= damage;
 
                         // Apply Poison to survivors
@@ -3113,6 +3301,7 @@
                 } else {
                     gameState.money -= actualPrice;
                 }
+                marketCard.locked = false; // Unlock on use
                 marketCard.bought = true;
                 selectedMarketIndex = -1;
                 updateUI();
@@ -3132,6 +3321,21 @@
 
             updateUI(); // Updates button text
 
+            // BOSS WAVE CHECK (Every 12 waves)
+            if (gameState.wave % 12 === 0) {
+                // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(0/4) ...
+                let cycle = (gameState.wave / 12) % 4;
+                // 1=Poison, 2=Water, 3=Fire, 0=Ice
+                // For clarity:
+                let bossType = 'snake_boss_ice'; // Default 0
+                if (cycle === 1) bossType = 'snake_boss_poison';
+                else if (cycle === 2) bossType = 'snake_boss_water';
+                else if (cycle === 3) bossType = 'snake_boss_fire';
+
+                gameState.spawnQueue.push({ type: bossType, waveIndex: gameState.wave });
+                return; // EXCLUSIVE SPAWN
+            }
+
             let count = 6 + Math.floor(gameState.wave * 1.8);
             if (gameState.wave % 3 === 0) { gameState.spawnQueue.push({ type: 'boss', waveIndex: gameState.wave }); count += 4; }
 
@@ -3150,6 +3354,7 @@
                 else if (gameState.wave >= 28 && r > 0.20) type = 'fire_bird';
                 else if (gameState.wave >= 30 && r > 0.18) type = 'poison_bird';
                 else if (gameState.wave >= 40 && r > 0.16) type = 'sand_bird';
+                // else if (gameState.wave >= 2 && r > 0.12) type = 'snake'; // Removed random snake
 
                 gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
             }
