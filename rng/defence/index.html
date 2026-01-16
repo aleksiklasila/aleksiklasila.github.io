@@ -896,6 +896,7 @@
             gameState.spawnTimer = 0;
             gameState.generating = false;
             gameState.maxHpAchieved = 20;
+            gameState.fullyClearedWave = 0;
 
             selectedEntity = null;
             updateStatsPanel();
@@ -906,6 +907,8 @@
             selectedMarketIndex = -1;
             marketCards = [];
             generateMarket();
+
+            gameState.reshufflePriceMultiplier = 1;
 
             // Recalc flow field and routes for the FINAL map
             calcFlowField();
@@ -1071,8 +1074,7 @@
                     let targetSize = 5 + Math.floor(Math.random() * 8);
                     let r = Math.random()
                     if (r > 0.90) targetSize = 1 + Math.floor(Math.random() * 15);
-                    else if (r > 0.80) targetSize = 2;
-                    else if (r > 0.70) targetSize = 1;
+                    else if (r > 0.70) targetSize = 2;
                     // if (Math.random() < 0.1) targetSize = 2
 
                     let currentArea = {
@@ -1128,14 +1130,22 @@
         function update() {
             if (gameState.gameOver) return;
 
+            let uiDirty = false;
+
             if (gameState.active && gameState.spawnQueue.length > 0) {
                 gameState.spawnTimer++;
                 if (gameState.spawnTimer > 30) {
                     spawnEnemy(gameState.spawnQueue.pop());
                     gameState.spawnTimer = 0;
+                    uiDirty = true;
                 }
             } else if (gameState.active && gameState.spawnQueue.length === 0 && enemies.length === 0) {
+                // Wave Fully Cleared
+                if (gameState.active) {
+                    gameState.fullyClearedWave = gameState.wave;
+                }
                 endWave();
+                uiDirty = true;
             }
 
             towers.forEach(t => t.update());
@@ -1148,14 +1158,16 @@
                     enemies.splice(i, 1);
                     gameState.killedEnemies++;
                     if (gameState.waveStats[e.waveIndex]) gameState.waveStats[e.waveIndex].killed++;
+                    uiDirty = true;
                 } else if (e.reachedGoal) {
                     gameState.hp -= e.damageToCastle;
                     enemies.splice(i, 1);
                     createExplosion(e.x, e.y, "#f44", 15);
-                    updateUI();
+                    uiDirty = true;
                     if (gameState.hp <= 0) gameOver();
                 }
             }
+            if (uiDirty) updateTopBar();
             for (let i = particles.length - 1; i >= 0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
 
             // Update Spawners
@@ -1242,9 +1254,13 @@
                         } else if (cell.item.type === 'lava') {
                             drawLavaIcon(ctx, px + 16, py + 16, cell.item.hp / cell.item.maxHp, cell.item.stacks);
                         } else if (cell.item.type === 'farm') {
-                            drawFarmIcon(ctx, px + 16, py + 16, '#da0', cell.item.stacks);
+                            drawFarmIcon(ctx, px + 16, py + 16, '#da0', cell.item.stacks, cell.item.hp / cell.item.maxHp);
                         } else if (cell.item.type === 'mine') {
                             drawMineIcon(ctx, px + 16, py + 16, cell.item.stacks);
+                        }
+
+                        if (cell.item.textCanvas) {
+                            ctx.drawImage(cell.item.textCanvas, px + 16 - 16, py + 16 - 24);
                         }
 
                         if (cell.item.markedForSalvage) {
@@ -1387,6 +1403,7 @@
         // --- RENDER HELPERS ---
         function drawTowerIcon(ctx, x, y, color, angle, level = 0, type = '', active = false) {
             if (type === 'laser') {
+                ctx.lineWidth = 1; ctx.shadowBlur = 0; // Reset potential leaks
                 ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.28); ctx.fill();
                 ctx.strokeStyle = '#000'; ctx.stroke(); // Outline
                 ctx.fillStyle = active ? '#f00' : '#400';
@@ -1427,12 +1444,7 @@
             ctx.fillStyle = `rgba(0,0,0,${1 - hpPct})`;
             ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
 
-            if (stacks > 1) {
-                ctx.fillStyle = "white";
-                ctx.font = "8px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText(stacks, x, y + 4);
-            }
+
         }
 
         function drawLavaIcon(ctx, x, y, hpPct, stacks) {
@@ -1447,15 +1459,10 @@
             ctx.beginPath(); ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x - 4, y + 4); ctx.stroke();
 
-            if (stacks > 1) {
-                ctx.fillStyle = "white";
-                ctx.font = "8px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText(stacks, x, y + 4);
-            }
+
         }
 
-        function drawFarmIcon(ctx, x, y, color, stacks = 1) {
+        function drawFarmIcon(ctx, x, y, color, stacks = 1, hpPct = 1) {
             ctx.fillStyle = color; // #da0
             ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = "rgba(0,0,0,0.2)";
@@ -1466,12 +1473,12 @@
             ctx.fillStyle = "#fff";
             ctx.fillText("🌾", x, y);
 
-            if (stacks > 1) {
-                ctx.fillStyle = "white";
-                ctx.font = "10px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText(stacks, x, y + 5);
+            if (hpPct < 1) {
+                ctx.fillStyle = `rgba(0,0,0,${1 - hpPct})`;
+                ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
             }
+
+
         }
 
         function drawMineIcon(ctx, x, y, stacks) {
@@ -1489,14 +1496,49 @@
             ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6);
             ctx.stroke();
 
-            if (stacks > 1) {
-                ctx.fillStyle = "white";
-                ctx.font = "8px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText(stacks, x, y - 8);
+
+        }
+
+        function drawCollectorIcon(ctx, x, y, hpPct = 1) {
+            // Factory Rect
+            // x,y are center. TILE_SIZE=32 -> half=16
+            ctx.fillStyle = '#432'; ctx.fillRect(x - 14, y - 14, 28, 28);
+            ctx.strokeStyle = '#210'; ctx.lineWidth = 2; ctx.strokeRect(x - 12, y - 12, 24, 24);
+
+            // Unit Icon: Star (Collector)
+            ctx.fillStyle = '#aaa'; ctx.beginPath();
+            for (let i = 0; i < 5; i++) {
+                let angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+                let r = 8; ctx.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+            }
+            ctx.closePath(); ctx.fill();
+
+            // HP Bar
+            if (hpPct < 1) {
+                ctx.fillStyle = '#f00'; ctx.fillRect(x - 10, y + 6, 20, 3);
+                ctx.fillStyle = '#0f0'; ctx.fillRect(x - 10, y + 6, 20 * hpPct, 3);
             }
         }
 
+        function drawSalvagerIcon(ctx, x, y, hpPct = 1) {
+            // Factory Rect (Different Color)
+            ctx.fillStyle = '#543'; ctx.fillRect(x - 14, y - 14, 28, 28);
+            ctx.strokeStyle = '#321'; ctx.lineWidth = 2; ctx.strokeRect(x - 12, y - 12, 24, 24);
+
+            // Unit Icon: Triangle
+            ctx.fillStyle = '#8d8'; ctx.beginPath();
+            for (let i = 0; i < 3; i++) {
+                let angle = (i * 2 * Math.PI) / 3 - Math.PI / 2;
+                let r = 8; ctx.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+            }
+            ctx.closePath(); ctx.fill();
+
+            // HP Bar
+            if (hpPct < 1) {
+                ctx.fillStyle = '#f00'; ctx.fillRect(x - 10, y + 6, 20, 3);
+                ctx.fillStyle = '#0f0'; ctx.fillRect(x - 10, y + 6, 20 * hpPct, 3);
+            }
+        }
 
 
         function loop(timestamp) {
@@ -1546,7 +1588,7 @@
         /**
          * MARKET & ECONOMY
          */
-        function generateMarket() {
+        function generateMarket(canYieldMoney = true, allowReroll = true) {
             let newCards = new Array(MARKET_SIZE).fill(null);
 
             // Keep locked cards in their exact positions
@@ -1556,10 +1598,13 @@
                 }
             }
 
-            // Boss Shop Up Guarantee
+            // Boss Shop Up Guarantee (Wave 3, 6, 9...) OR Wave 35+ Guarantee (Always)
             let hasShopUp = newCards.some(c => c && c.type === 'shop_up');
             // Wave N is ending, generating for N+1. Bosses are at 3, 6, 9.
-            if ((gameState.wave + 1) % 3 === 0 && !hasShopUp) {
+            let isBossWave = (gameState.wave + 1) % 3 === 0;
+            let isLateGame = (gameState.wave + 1) >= 35;
+
+            if ((isBossWave || isLateGame) && !hasShopUp) {
                 let emptyIndices = [];
                 for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
 
@@ -1567,8 +1612,11 @@
                     let idx = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
                     let basePrice = CARD_TYPES['shop_up'].price;
                     let price = Math.floor(basePrice * gameState.shopLevel);
+                    // Apply Multiplier
+                    price *= (gameState.reshufflePriceMultiplier || 1);
+
                     let level = gameState.shopLevel + 1;
-                    newCards[idx] = { type: 'shop_up', bought: false, locked: false, level: level, price: price };
+                    newCards[idx] = { type: 'shop_up', bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
                 }
             }
 
@@ -1585,7 +1633,8 @@
                     // Base level 1 for boss farms usually
                     let level = 1;
                     let price = Math.floor(basePrice * (1 + (level - 1) * 0.5));
-                    newCards[idx] = { type: 'farm', bought: false, locked: false, level: level, price: price };
+                    price *= (gameState.reshufflePriceMultiplier || 1);
+                    newCards[idx] = { type: 'farm', bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
                 }
             }
 
@@ -1606,7 +1655,8 @@
                             let basePrice = CARD_TYPES[gType].price;
                             let level = 1; // Base level
                             let price = basePrice; // Level 1 price
-                            newCards[idx] = { type: gType, bought: false, locked: false, level: level, price: price };
+                            price *= (gameState.reshufflePriceMultiplier || 1);
+                            newCards[idx] = { type: gType, bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
                         }
                     }
                 }
@@ -1616,6 +1666,7 @@
 
             // Exclude cards not unlocked yet
             let keys = Object.keys(CARD_TYPES).filter(k => {
+                if (!allowReroll && k === 'reroll') return false;
                 let unlocked = CARD_TYPES[k].unlock_wave !== undefined ? (gameState.wave >= CARD_TYPES[k].unlock_wave) : true;
                 return unlocked;
             });
@@ -1671,14 +1722,14 @@
                         if (CARD_TYPES[selectedType].hpCost) {
                             // HP Cost doesn't scale for now or linear?
                             // Let's scale it linear
-                            // price is 0 for sacrifice, but hpCost is defined.
-                            // We deal with price storage here.
                         } else {
                             price = Math.floor(price * (1 + (level - 1) * 0.5));
+                            // Apply Reshuffle Multiplier
+                            price *= (gameState.reshufflePriceMultiplier || 1);
                         }
                     }
 
-                    newCards[i] = { type: selectedType, bought: false, locked: false, level: level, price: price };
+                    newCards[i] = { type: selectedType, bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
                 }
             }
             marketCards = newCards;
@@ -1881,9 +1932,11 @@
                 let farmCell = checkTile(this.x, this.y);
 
                 if (farmCell) {
-                    let bonus = getFullyClearedWaveCount();
-                    // Scale with stacks
-                    bonus *= (farmCell.item.effectiveStacks || farmCell.item.stacks || 1);
+                    // New Formula: Base 10 * 1.5^(Level - 1)
+                    // Decoupled from Wave. Depends ONLY on Farm Level.
+                    let stacks = farmCell.item.stacks || 1;
+                    let level = Math.floor(Math.log2(stacks)) + 1;
+                    let bonus = Math.floor(10 * Math.pow(1.5, level - 1));
 
                     if (bonus > 0) {
                         gameState.money += bonus;
@@ -2029,9 +2082,10 @@
                     // Let's add slight damage based on stacks for Sand (abrasion)
                     // limit slow to max 90%
                     let stacks = (cell.item.effectiveStacks || cell.item.stacks || 1);
-                    if (stacks > 1) {
-                        // Apply abrasion damage
-                        this.hp -= 0.05 * stacks;
+                    if (stacks > 1 || (cell.item.damage && cell.item.damage > 0)) {
+                        // Apply abrasion damage (Scaled by Level)
+                        let dmg = cell.item.damage || (0.05 * stacks);
+                        this.hp -= dmg;
                         // Note: Speed modification is handled above by 'sandy' flag check
                         // We could scale the slow multiplier in the check above?
                     }
@@ -2049,7 +2103,7 @@
 
                     // Apply Burning (Always)
                     this.burning = 120; // 2s duration
-                    this.burnTickDamage = 0.1 * (cell.item.effectiveStacks || cell.item.stacks || 1);
+                    this.burnTickDamage = cell.item.damage || 0.1;
 
                     // Direct Damage from Lava (Check Resistance)
                     if (!this.fireResistant && Math.random() < 0.05) {
@@ -2063,9 +2117,19 @@
                     cell.item.hp -= 2; // Damage it?
                     if (Math.random() < 0.1) createExplosion(this.x, this.y, '#643', 1);
                 }
+                else if (cell && cell.item && cell.item.type === 'farm' && this.type !== 'flying') {
+                    // Destroy Farm - constant damage
+                    cell.item.hp -= 2;
+                    if (Math.random() < 0.1) createExplosion(this.x, this.y, '#da0', 1);
+                    if (cell.item.hp <= 0) {
+                        cell.item = null;
+                        createExplosion(gx * 32 + 16, gy * 32 + 16, "#da0", 12);
+                        recalculateAdjacency(); // Adjacency might change if farms buff neighbors? (Currently farms don't buff but good practice)
+                    }
+                }
                 else if (cell && cell.item && cell.item.type === 'mine' && this.type !== 'flying') {
                     // MINE TRIGGER
-                    let mineDmg = (CARD_TYPES['mine'].damage || 135) * (cell.item.effectiveStacks || cell.item.stacks || 1);
+                    let mineDmg = cell.item.damage || 135;
                     let range = (CARD_TYPES['mine'].range || 3.5) * TILE_SIZE;
 
                     // Consume Mine
@@ -2371,9 +2435,10 @@
                 let baseLevel = Math.floor(Math.log2(this.stacks)) + 1;
                 let effLevel = this.effectiveLevel || baseLevel;
 
-                // Visual Level Update
-                if (this.level !== effLevel) {
-                    this.level = effLevel;
+                // Visual Level Update - ALWAYS BASE
+                let properVisualLevel = Math.floor(Math.log2(this.stacks)) + 1;
+                if (this.level !== properVisualLevel) {
+                    this.level = properVisualLevel;
                     this.updateTextCache();
                 }
 
@@ -2656,21 +2721,23 @@
                 this.collector = new CollectorAI(this);
                 collectors.push(this.collector);
                 this.markedForSalvage = false;
+
+                // Init Text
+                updateItemTextCache(this);
             }
             draw(ctx) {
-                let x = this.gx * TILE_SIZE; let y = this.gy * TILE_SIZE;
-                ctx.fillStyle = '#432'; ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
-                ctx.strokeStyle = '#210'; ctx.lineWidth = 2; ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+                drawCollectorIcon(ctx, this.x, this.y, this.hp / this.maxHp);
+
                 if (this.storedMoney > 0) { ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill(); }
-                if (this.hp < this.maxHp) {
-                    ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
-                    ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6, 20 * (this.hp / this.maxHp), 3);
-                }
+
                 if (this.markedForSalvage) {
                     ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
                     ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
                     ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke();
                 }
+
+                // Draw Text Overlay
+                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -2685,21 +2752,23 @@
                 this.collector = new SalvagerAI(this);
                 collectors.push(this.collector);
                 this.markedForSalvage = false;
+
+                // Init Text
+                updateItemTextCache(this);
             }
             draw(ctx) {
-                let x = this.gx * TILE_SIZE; let y = this.gy * TILE_SIZE;
-                ctx.fillStyle = '#543'; ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
-                ctx.strokeStyle = '#321'; ctx.lineWidth = 2; ctx.strokeRect(x + 4, y + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+                drawSalvagerIcon(ctx, this.x, this.y, this.hp / this.maxHp);
+
                 if (this.storedMoney > 0) { ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(this.x, this.y - 8, 4, 0, Math.PI * 2); ctx.fill(); }
-                if (this.hp < this.maxHp) {
-                    ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
-                    ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6, 20 * (this.hp / this.maxHp), 3);
-                }
+
                 if (this.markedForSalvage) {
                     ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
                     ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
                     ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke();
                 }
+
+                // Draw Text Overlay
+                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -2823,7 +2892,9 @@
                     if (bestItem) {
                         this.targetItem = bestItem; this.targetItem.lockedBy = this;
                         // Path to NEIGHBOR
-                        let dest = findNearestWalkableNeighbor(bestItem.gx, bestItem.gy);
+                        let tx = (bestItem.gx !== undefined) ? bestItem.gx : Math.floor(bestItem.x / TILE_SIZE);
+                        let ty = (bestItem.gy !== undefined) ? bestItem.gy : Math.floor(bestItem.y / TILE_SIZE);
+                        let dest = findNearestWalkableNeighbor(tx, ty);
                         this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), dest.x, dest.y);
                         if (this.path) { this.state = 'MOVING_TO'; this.pathIndex = 0; }
                         else { this.targetItem.lockedBy = null; this.targetItem = null; }
@@ -3202,6 +3273,54 @@
             return paths;
         }
 
+        function updateItemTextCache(item) {
+            if (!item.textCanvas) {
+                item.textCanvas = document.createElement('canvas');
+                item.textCanvas.width = 32;
+                item.textCanvas.height = 48;
+                item.textCtx = item.textCanvas.getContext('2d');
+            }
+            let ctx = item.textCtx;
+            ctx.clearRect(0, 0, 32, 48);
+
+            let stacks = item.stacks || 1;
+            let level = Math.floor(Math.log2(stacks)) + 1;
+            let req = Math.pow(2, level);
+
+            ctx.fillStyle = "white";
+            ctx.font = "bold 9px Arial";
+            ctx.textAlign = "center";
+            ctx.shadowColor = "black"; ctx.shadowBlur = 3;
+            ctx.fillText(`L${level}`, 16, 12);
+
+            ctx.font = "8px Arial";
+            ctx.fillStyle = "#aaa";
+            ctx.fillText(`${stacks}/${req}`, 16, 40);
+            ctx.shadowBlur = 0;
+        }
+
+        function calculateItemStats(type, level) {
+            // Level 1 = Base. Level 2 = Base * 1.5, Level 3 = Base * 2.25...
+            let mult = Math.pow(1.5, level - 1);
+            let stats = { maxHp: 0, damage: 0 };
+
+            if (type === 'farm') {
+                stats.maxHp = Math.floor(30000 * mult);
+            } else if (type === 'sand') {
+                stats.maxHp = Math.floor(30 * mult);
+                stats.damage = 0.05 * mult; // Abrasion
+            } else if (type === 'spawner' || type === 'salvager') {
+                stats.maxHp = Math.floor(60 * mult);
+            } else if (type === 'lava') {
+                stats.maxHp = Math.floor(30 * mult); // Lava has HP too
+                stats.damage = 0.1 * mult; // Burn Damage Per Tick (Base 0.1 -> 3 DPS)
+            } else if (type === 'mine') {
+                stats.maxHp = Math.floor(30 * mult); // Mine has HP?
+                stats.damage = Math.floor(135 * mult);
+            }
+            return stats;
+        }
+
         function recalculateAdjacency() {
             // 0. Reset Areas
             areas.forEach(a => a.active = false);
@@ -3211,7 +3330,13 @@
             towers.forEach(t => {
                 t.effectiveStacks = t.stacks;
                 t.effectiveLevel = Math.floor(Math.log2(t.stacks)) + 1;
-                t.level = t.effectiveLevel; // Visual level (Base)
+                // REVERTED: Do NOT sync t.level (Base) with effectiveLevel.
+                // t.level remains base visual level.
+                // Ensure text cache matches base level (should already match unless mutated elsewhere)
+                if (t.level !== (Math.floor(Math.log2(t.stacks)) + 1)) {
+                    t.level = Math.floor(Math.log2(t.stacks)) + 1;
+                    t.updateTextCache();
+                }
             });
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
@@ -3335,8 +3460,8 @@
 
                     // Apply Bonus
                     let groupSize = group.length;
-                    // Always apply areaMult if > 1, even if group=1 (unlikely to fill area of >1 with 1 item unless area size 1)
-                    if (groupSize > 1 || areaMult > 1) {
+                    // Process ALL groups (single items can scale from stacks too)
+                    if (true) {
                         group.forEach(obj => {
                             obj.effectiveStacks = (obj.stacks || 1) * groupSize * areaMult;
                             if (obj.updateStats) { // Wrapper for Tower
@@ -3347,6 +3472,26 @@
                             } else {
                                 obj.effectiveGroupSize = groupSize;
                                 obj.effectiveAreaMult = areaMult;
+
+                                // Update Visual Text Cache
+                                updateItemTextCache(obj);
+
+                                // Update MaxHP/Damage based on Level (1.5x scaling)
+                                let level = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
+                                let stats = calculateItemStats(obj.type, level);
+
+                                // Handle Ratio (for Passive Grouping) or Full Heal (if hp set to Infinity)
+                                let ratio = (obj.maxHp > 0) ? (obj.hp / obj.maxHp) : 1;
+
+                                obj.maxHp = stats.maxHp;
+                                if (stats.damage) obj.damage = stats.damage;
+
+                                // Maintain Ratio OR Full Heal
+                                // If obj.hp was Infinity (Upgrade), it remains Infinity here
+                                obj.hp = obj.maxHp * ratio;
+
+                                // Clamp
+                                if (obj.hp > obj.maxHp) obj.hp = obj.maxHp;
                             }
                         });
                     }
@@ -3458,6 +3603,8 @@
             let cell = grid[gy][gx];
             if (cell && cell.item) {
                 // Ensure x/y are set for visuals
+                cell.item.gx = gx;
+                cell.item.gy = gy;
                 cell.item.x = gx * TILE_SIZE + 16;
                 cell.item.y = gy * TILE_SIZE + 16;
                 return cell.item;
@@ -3523,7 +3670,16 @@
                     createExplosion(x, y, "#4f4", 10);
                     actionTaken = true;
                 } else if (cardKey === 'reroll') {
-                    generateMarket();
+                    generateMarket(false);
+                    gameState.reshufflePriceMultiplier = 1; // Reset on manual reroll? Or keep duplicatiing?
+                    // User said "if cards duplicated due to using all of them".
+                    // Reroll card is manual. Should it increase price? 
+                    // Usually reroll card just gives fresh shop. Let's keep it at current multiplier or reset?
+                    // Implicitly, if you reroll, you are paying for it.
+                    // Let's NOT increase the multiplier for manual reroll, but keep existing multiplier?
+                    // OR reset it? If I pay to reroll, maybe I deserve base prices?
+                    // Let's keep it simple: manual reroll does NOT increase multiplier.
+
                     // Don't set actionTaken=true immediately because we don't want standard 'bought' logic
                     // We just consume the money and the card slot is now fresh.
                     // Actually, generateMarket resets everything.
@@ -3587,24 +3743,36 @@
                 if (tile.type === TYPE_FLOOR && tile.type !== TYPE_CASTLE) {
                     if (!tile.item) {
                         // New Item
-                        let hp = 30 * marketCard.level;
-                        if (cardKey === 'farm') { hp = 10; }
+                        let level = Math.floor(Math.log2(marketCard.level)) + 1;
+                        let stats = calculateItemStats(cardKey, level);
 
                         if (cardKey === 'spawner') {
                             let spawner = new CollectorSpawner(gx, gy, marketCard.level);
-                            // Apply level scaling to HP?
-                            spawner.hp = 60 + (marketCard.level - 1) * 20;
-                            spawner.maxHp = spawner.hp;
+                            spawner.hp = stats.maxHp;
+                            spawner.maxHp = stats.maxHp;
                             tile.item = spawner;
                             collectorSpawners.push(spawner);
                         } else if (cardKey === 'salvager') {
                             let spawner = new SalvagerSpawner(gx, gy, marketCard.level);
-                            spawner.hp = 60 + (marketCard.level - 1) * 20;
-                            spawner.maxHp = spawner.hp;
+                            spawner.hp = stats.maxHp;
+                            spawner.maxHp = stats.maxHp;
                             tile.item = spawner;
                             collectorSpawners.push(spawner);
                         } else {
-                            tile.item = { type: cardKey, hp: hp, maxHp: hp, stacks: marketCard.level, markedForSalvage: false };
+                            tile.item = {
+                                type: cardKey,
+                                hp: stats.maxHp,
+                                maxHp: stats.maxHp,
+                                stacks: marketCard.level, // Initialize with stacks from card
+                                markedForSalvage: false,
+                                gx: gx, gy: gy,
+                                x: gx * TILE_SIZE + 16,
+                                y: gy * TILE_SIZE + 16
+                            };
+                            if (stats.damage) tile.item.damage = stats.damage;
+
+                            // Init Text Cache for new item
+                            updateItemTextCache(tile.item);
                         }
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, data.color, 8);
                         recalculateAdjacency();
@@ -3612,10 +3780,16 @@
                     } else if (tile.item.type === cardKey) {
                         // Upgrade
                         tile.item.stacks += marketCard.level;
-                        tile.item.maxHp += (30 * marketCard.level); // Add Max HP per stack
-                        tile.item.hp = tile.item.maxHp; // Heal to full
+
+                        // Signal Full Heal for recalculateAdjacency
+                        tile.item.hp = Infinity;
+
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#ffd", 10);
                         recalculateAdjacency();
+
+                        // Safety: Ensure Infinity doesn't persist to UI
+                        if (tile.item.hp === Infinity) tile.item.hp = tile.item.maxHp;
+
                         actionTaken = true;
                     }
                 }
@@ -3638,7 +3812,6 @@
                     } else if (existingTower.type === cardKey) {
                         // Upgrade Existing
                         existingTower.stacks += marketCard.level;
-                        existingTower.level = Math.floor(Math.log2(existingTower.stacks)) + 1;
 
                         if (existingTower.type === 'laser') recalculateLaserConnections(); // Level change affects range
                         recalculateAdjacency(); // NEW: Update groups FIRST so effectiveLevel is correct
@@ -3661,6 +3834,14 @@
                 }
                 marketCard.locked = false; // Unlock on use
                 marketCard.bought = true;
+
+                // Check if all cards are sold (bought)
+                if (marketCards.every(c => c.bought)) {
+                    // Auto-Reshuffle
+                    gameState.reshufflePriceMultiplier = (gameState.reshufflePriceMultiplier || 1) * 2;
+                    generateMarket(false, false); // No Yield, No Reroll
+                }
+
                 selectedMarketIndex = -1;
                 updateUI();
             }
@@ -3721,7 +3902,8 @@
         function resolveMarket() {
             let investmentReturn = 0;
             marketCards.forEach(card => {
-                if (!card.bought && !card.locked) {
+                let canYield = (card.canYield !== undefined) ? card.canYield : true;
+                if (!card.bought && !card.locked && canYield) {
                     let actualPrice = card.price !== undefined ? card.price : CARD_TYPES[card.type].price;
                     let val = Math.floor(actualPrice * 0.5);
                     investmentReturn += val;
@@ -3733,7 +3915,8 @@
                 // Optional: Show floating text for interest?
             }
 
-            generateMarket();
+            gameState.reshufflePriceMultiplier = 1; // Reset multiplier for new wave
+            generateMarket(true);
             selectedMarketIndex = -1;
             updateUI();
         }
@@ -3776,21 +3959,6 @@
             }
         }
 
-        function getFullyClearedWaveCount() {
-            let minWave = gameState.wave;
-
-            // Check spawn queue (oldest items are at index 0 if acting as stack/queue mix)
-            if (gameState.spawnQueue.length > 0) {
-                let qWave = gameState.spawnQueue[0].waveIndex;
-                if (qWave < minWave) minWave = qWave;
-            }
-
-            for (let e of enemies) {
-                if (e.waveIndex < minWave) minWave = e.waveIndex;
-            }
-            return Math.max(0, minWave - 1);
-        }
-
         function gameOver() {
             gameState.gameOver = true;
             document.getElementById('game-over').style.display = 'block';
@@ -3799,24 +3967,28 @@
             document.getElementById('go-cleared').innerText = getFullyClearedWaveCount();
         }
 
-        function updateUI() {
+        function updateTopBar() {
             document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
             document.getElementById('money-display').innerText = gameState.money;
-            document.getElementById('wave-display').innerText = gameState.wave;
-            document.getElementById('cleared-display').innerText = getFullyClearedWaveCount();
+
+            // Update Top Bar: Wave | Enemies (Active / Total Remaining)
+            let active = enemies.length;
+            let queue = gameState.spawnQueue ? gameState.spawnQueue.length : 0;
+            let total = active + queue;
+            let html = `WAVE <span style="color:#fff">${gameState.wave}</span> <span style="color:#555">|</span> ENEMIES <span style="color:#f44">${active} / ${total}</span>`;
+            document.getElementById('wave-val').innerHTML = html;
 
             // Button Logic
             let btn = document.getElementById('castle-btn');
-
-            // Color Logic: HP % of MaxAchieved
             if (gameState.hp > gameState.maxHpAchieved) gameState.maxHpAchieved = gameState.hp;
             let hpPct = Math.max(0, Math.min(1, gameState.hp / gameState.maxHpAchieved));
-            // Hue: 120 (Green) -> 0 (Red)
             let hue = Math.floor(120 * hpPct);
             btn.style.background = `hsl(${hue}, 80%, 40%)`;
-
-            // Always visible, user can click mid-round to early start
             btn.style.display = gameState.generating ? 'none' : 'flex';
+        }
+
+        function updateUI() {
+            updateTopBar();
 
             let marketEl = document.getElementById('market-strip');
 
@@ -3906,6 +4078,12 @@
                 drawLavaIcon(ctx, cx, cy, 1.0, 1);
             } else if (card.type === 'mine') {
                 drawMineIcon(ctx, cx, cy, 1);
+            } else if (card.type === 'farm') {
+                drawFarmIcon(ctx, cx, cy, '#da0', 1);
+            } else if (card.type === 'spawner') {
+                drawCollectorIcon(ctx, cx, cy, 1);
+            } else if (card.type === 'salvager') {
+                drawSalvagerIcon(ctx, cx, cy, 1);
             } else {
                 ctx.font = "24px Arial";
                 ctx.textAlign = "center";
@@ -4154,16 +4332,26 @@
             else if (selectedEntity.type) {
                 let item = selectedEntity;
                 updateDualStat('stat-stacks', item.stacks, item.effectiveStacks);
-                if (item.hp !== undefined) updateDualStat('stat-hp', item.hp, item.hp);
+                if (item.hp !== undefined) {
+                    let hpStr = Math.ceil(item.hp) + "/" + item.maxHp;
+                    updateDualStat('stat-hp', hpStr);
+                    // Color code based on health %
+                    let pct = item.hp / item.maxHp;
+                    let el = document.getElementById('stat-hp-base'); // Base is what's shown when eff is undefined
+                    if (el) el.style.color = pct < 0.3 ? '#f44' : (pct < 1.0 ? '#fd0' : '#4f4');
+                }
 
                 if (item.type === 'mine') {
-                    let baseDmg = (CARD_TYPES['mine'].damage || 135) * item.stacks;
-                    let effDmg = (CARD_TYPES['mine'].damage || 135) * (item.effectiveStacks || item.stacks);
-                    updateDualStat('stat-dmg', baseDmg, effDmg);
+                    // Use stored level-based damage
+                    let d = item.damage || 135;
+                    updateDualStat('stat-dmg', d);
                 } else if (item.type === 'lava') {
-                    let baseDmg = 0.1 * item.stacks * 30; // DPS approx
-                    let effDmg = 0.1 * (item.effectiveStacks || item.stacks) * 30;
-                    updateDualStat('stat-dmg', baseDmg.toFixed(1), effDmg.toFixed(1));
+                    // Stored damage is per tick (0.1 base)
+                    // Display DPS (x30 ticks/sec or whatever convention)
+                    // Previous logic used 30 multiplier.
+                    let dPerTick = item.damage || 0.1;
+                    let dps = (dPerTick * 30).toFixed(1);
+                    updateDualStat('stat-dmg', dps);
                 }
 
                 // Value Calculation
@@ -4189,6 +4377,10 @@
                 <span id="${id}-base" class="stat-val" style="color:#fd0; flex:1; text-align:center;">...</span>
                 <span id="${id}-eff" class="stat-val" style="color:#4f4; display:none; flex:1; text-align:center;">...</span>
             </div>`;
+        }
+
+        function getFullyClearedWaveCount() {
+            return gameState.fullyClearedWave || 0;
         }
     </script>
 </body>
