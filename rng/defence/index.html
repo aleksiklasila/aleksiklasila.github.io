@@ -528,7 +528,7 @@
                     value as CASH at the end of the wave.</li>
                 <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
                     of the wave.</li>
-                <li><strong>SALVAGE:</strong> Double-click a tower or item to mark it for salvager pickup.</li>
+                <li><strong>SALVAGE:</strong> Long click a tower or item to mark it for salvager pickup.</li>
                 <li><strong>GROUPS</strong> Connect similar turrets / items together to multiply their effective levels.
                 </li>
             </ul>
@@ -611,9 +611,10 @@
             maxHpAchieved: 20
         };
 
-        let clickTimer = null;
         let pendingClickEntity = null;
-        let clickStartTime = 0;
+        let longPressTimer = null;
+        let longPressStartTime = 0;
+        let isLongPressActionTaken = false;
 
         const CARD_TYPES = {
             water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
@@ -658,11 +659,19 @@
             resize();
             window.addEventListener('resize', resize);
 
-            canvas.addEventListener('mousedown', (e) => handleInput(e.clientX, e.clientY));
+            canvas.addEventListener('mousedown', (e) => handlePressStart(e.clientX, e.clientY));
+            canvas.addEventListener('mousemove', (e) => handlePressMove(e.clientX, e.clientY));
+            window.addEventListener('mouseup', () => handlePressEnd());
+
             canvas.addEventListener('touchstart', (e) => {
                 e.preventDefault();
-                handleInput(e.touches[0].clientX, e.touches[0].clientY);
+                handlePressStart(e.touches[0].clientX, e.touches[0].clientY);
             }, { passive: false });
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                handlePressMove(e.touches[0].clientX, e.touches[0].clientY);
+            }, { passive: false });
+            window.addEventListener('touchend', () => handlePressEnd());
 
             document.getElementById('castle-btn').addEventListener('click', () => {
                 startWave();
@@ -1081,23 +1090,22 @@
             projectiles.forEach(p => p.draw(ctx));
             particles.forEach(p => p.draw(ctx));
 
-            // DRAW CLICK WAIT ANIMATION
-            if (clickTimer && pendingClickEntity) {
-                let gx = pendingClickEntity.gx !== undefined ? pendingClickEntity.gx : (pendingClickEntity.x / TILE_SIZE);
-                let gy = pendingClickEntity.gy !== undefined ? pendingClickEntity.gy : (pendingClickEntity.y / TILE_SIZE);
-                // Use precise coordinates if available (Enemy), else Grid
-                let cx = pendingClickEntity.x;
-                let cy = pendingClickEntity.y;
+            // DRAW CLICK WAIT ANIMATION (LONG PRESS)
+            if (pendingClickEntity && !isLongPressActionTaken) {
+                ctx.save();
+                let entity = pendingClickEntity;
+                let cx = entity.x; // Entities have .x .y updated in findEntity logic or native
+                let cy = entity.y;
 
-                let progress = (Date.now() - clickStartTime) / 200;
+                let progress = (Date.now() - longPressStartTime) / 500;
                 if (progress > 1) progress = 1;
 
-                ctx.strokeStyle = `rgba(0, 255, 0, 1)`;
-                ctx.lineWidth = 3;
+                ctx.strokeStyle = `rgba(255, 0, 0, 0.8)`; // Color indicating destructive action? Or just filling.
+                ctx.lineWidth = 4;
                 ctx.beginPath();
-                // Draw arc from -PI/2 (top) to progress
-                ctx.arc(cx, cy, 12, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress));
+                ctx.arc(cx, cy, 20, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress));
                 ctx.stroke();
+                ctx.restore();
             }
         }
 
@@ -2804,118 +2812,137 @@
         /**
          * INPUT & LOGIC
          */
-        function handleInput(cx, cy) {
+        // --- INPUT HANDLING REFACTOR ---
+
+        function handlePressStart(cx, cy) {
             if (gameState.gameOver) return;
 
+            // Map Trigger
             let rect = canvas.getBoundingClientRect();
             let x = (cx - rect.left) * (canvas.width / rect.width);
             let y = (cy - rect.top) * (canvas.height / rect.height);
-            let gx = Math.floor(x / TILE_SIZE); let gy = Math.floor(y / TILE_SIZE);
+            let gx = Math.floor(x / TILE_SIZE);
+            let gy = Math.floor(y / TILE_SIZE);
 
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-                // Clicked outside grid? Deselect
+                // Out of bounds
                 selectedEntity = null;
                 updateStatsPanel();
                 return;
             }
 
-            // --- CHECK FOR DROPPED ITEM PICKUP ---
-            let clickedCellIn = grid[gy][gx];
-            // REMOVED CLICK ITEM PICKUP
-
-            // CHECK FOR SPAWNER CLICK (COLLECT)
-            if (clickedCellIn && clickedCellIn.item && clickedCellIn.item.type === 'spawner') {
-                let spawner = clickedCellIn.item;
-                if (spawner.storedMoney > 0) {
-                    gameState.money += spawner.storedMoney;
-                    createExplosion(spawner.x, spawner.y, '#fd0', 10);
-                    spawner.storedMoney = 0;
-                    updateUI();
-                    return; // Don't select if we just collected money
-                }
-                // Don't Select? Or Select to see stats?
-                // Let's allow selecting it too
+            // 1. Placing an Item? (Immediate Action on Press)
+            if (selectedMarketIndex !== -1) {
+                handlePlacement(gx, gy, x, y);
+                return;
             }
 
-            if (selectedMarketIndex === -1) {
-                // SELECTION LOGIC
-                let clickedEntity = null;
-
-                // 1. Check for Tower
-                let tower = towers.find(t => t.gx === gx && t.gy === gy);
-                if (tower) clickedEntity = tower;
-
-                // 2. Check for Item (Sand, Spawner, etc)
-                if (!clickedEntity) {
-                    let cell = grid[gy][gx];
-                    if (cell && cell.item) {
-                        // Add coords for visuals if missing
-                        let clickedItem = cell.item;
-                        clickedItem.x = gx * TILE_SIZE + 16;
-                        clickedItem.y = gy * TILE_SIZE + 16;
-                        clickedEntity = clickedItem;
-                    }
-                }
-
-                // 3. Check for Enemy (Distance based)
-                if (!clickedEntity) {
-                    let minDist = 30; // hit radius
-                    for (let e of enemies) {
-                        let d = Math.hypot(e.x - x, e.y - y);
-                        if (d < minDist) {
-                            minDist = d;
-                            clickedEntity = e;
-                        }
-                    }
-                }
-
-                if (clickedEntity) {
-                    // Check for Double Click
-                    if (clickTimer && pendingClickEntity === clickedEntity) {
-                        // --- DOUBLE CLICK CONFIRMED ---
-                        clearTimeout(clickTimer);
-                        clickTimer = null;
-                        pendingClickEntity = null;
-
-                        // Toggle Salvage
-                        if (clickedEntity.markedForSalvage !== undefined) {
-                            clickedEntity.markedForSalvage = !clickedEntity.markedForSalvage;
-                            try {
-                                if (clickedEntity.markedForSalvage) createExplosion(clickedEntity.x, clickedEntity.y, "#f00", 5);
-                                else createExplosion(clickedEntity.x, clickedEntity.y, "#0f0", 5);
-                            } catch (e) { }
-                            updateStatsPanel();
-                        }
-                        return; // Prevent Single Click
-                    }
-
-                    // --- START SINGLE CLICK TIMER ---
-                    if (clickTimer) clearTimeout(clickTimer); // Cancel pending on other entity
-                    pendingClickEntity = clickedEntity;
-                    clickStartTime = Date.now();
-
-                    clickTimer = setTimeout(() => {
-                        clickTimer = null;
-                        pendingClickEntity = null;
-
-                        // Single Click Action: Toggle Selection
-                        if (selectedEntity === clickedEntity) {
-                            selectedEntity = null; // Close
-                        } else {
-                            selectedEntity = clickedEntity; // Open
-                        }
-                        updateStatsPanel();
-                    }, 200);
-
+            // 2. Clicked Spawner for Money? (Immediate Action on Press)
+            let cell = grid[gy][gx];
+            if (cell && cell.item && cell.item.type === 'spawner') {
+                if (cell.item.storedMoney > 0) {
+                    collectSpawner(cell.item);
                     return;
                 }
+            }
 
-                // Nothing found -> Deselect Immediately (and cancel any pending)
-                if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; pendingClickEntity = null; }
+            // 3. Entity Selection / Long Press Logic
+            let entity = findEntityAt(gx, gy, x, y);
+            if (entity) {
+                pendingClickEntity = entity;
+                longPressStartTime = Date.now();
+                isLongPressActionTaken = false;
+                longPressTimer = setTimeout(handleLongPressTrigger, 500);
+            } else {
+                // Clicked Empty Space -> Deselect
                 selectedEntity = null;
                 updateStatsPanel();
-                return;
             }
+        }
+
+        function handlePressMove(cx, cy) {
+            // Optional: Cancel long press if moved too far
+            // For now, simple logic: if mouse leaves canvas or moves significantly? 
+            // Let's keep it simple for touch devices. 
+            // Ideally we check distance from start pos.
+        }
+
+        function handlePressEnd() {
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+
+            if (pendingClickEntity) {
+                if (!isLongPressActionTaken) {
+                    // Short Click -> Select
+                    if (selectedEntity === pendingClickEntity) {
+                        selectedEntity = null;
+                    } else {
+                        selectedEntity = pendingClickEntity;
+                    }
+                    updateStatsPanel();
+                }
+                pendingClickEntity = null;
+            }
+        }
+
+        function handleLongPressTrigger() {
+            if (!pendingClickEntity) return;
+            longPressTimer = null;
+            isLongPressActionTaken = true;
+
+            // Trigger Salvage Mark
+            // Toggle Salvage
+            if (pendingClickEntity.markedForSalvage !== undefined) {
+                pendingClickEntity.markedForSalvage = !pendingClickEntity.markedForSalvage;
+                try {
+                    if (pendingClickEntity.markedForSalvage) createExplosion(pendingClickEntity.x, pendingClickEntity.y, "#f00", 8);
+                    else createExplosion(pendingClickEntity.x, pendingClickEntity.y, "#0f0", 5);
+                } catch (e) { }
+                updateStatsPanel();
+            }
+        }
+
+        function findEntityAt(gx, gy, x, y) {
+            // 1. Tower
+            let tower = towers.find(t => t.gx === gx && t.gy === gy);
+            if (tower) return tower;
+
+            // 2. Item
+            let cell = grid[gy][gx];
+            if (cell && cell.item) {
+                // Ensure x/y are set for visuals
+                cell.item.x = gx * TILE_SIZE + 16;
+                cell.item.y = gy * TILE_SIZE + 16;
+                return cell.item;
+            }
+
+            // 3. Enemy
+            let minDist = 30;
+            let closest = null;
+            for (let e of enemies) {
+                let d = Math.hypot(e.x - x, e.y - y);
+                if (d < minDist) {
+                    minDist = d;
+                    closest = e;
+                }
+            }
+            return closest;
+        }
+
+        function collectSpawner(spawner) {
+            gameState.money += spawner.storedMoney;
+            createExplosion(spawner.x, spawner.y, '#fd0', 10);
+            spawner.storedMoney = 0;
+            updateUI();
+        }
+
+        // Renamed from handleInput - primarily handles Placement now
+        function handlePlacement(gx, gy, x, y) {
+            if (gameState.gameOver) return;
+
+
 
             let marketCard = marketCards[selectedMarketIndex];
             if (marketCard.bought) return;
@@ -2939,16 +2966,16 @@
             if (data.target === 'global') {
                 if (cardKey === 'heart') {
                     gameState.hp += Math.floor(5 * (1 + (marketCard.level - 1) * 0.5));
-                    createExplosion(cx, cy, "#f00", 10);
+                    createExplosion(x, y, "#f00", 10);
                     actionTaken = true;
                 } else if (cardKey === 'sacrifice') {
                     gameState.hp -= 5;
                     gameState.money += Math.floor(80 * (1 + (marketCard.level - 1) * 0.5));
-                    createExplosion(cx, cy, "#800", 15);
+                    createExplosion(x, y, "#800", 15);
                     actionTaken = true;
                 } else if (cardKey === 'shop_up') {
                     gameState.shopLevel++;
-                    createExplosion(cx, cy, "#4f4", 10);
+                    createExplosion(x, y, "#4f4", 10);
                     actionTaken = true;
                 } else if (cardKey === 'reroll') {
                     generateMarket();
@@ -2957,7 +2984,7 @@
                     // Actually, generateMarket resets everything.
                     // We just need to pay for it.
                     gameState.money -= actualPrice;
-                    createExplosion(cx, cy, "#f8f", 10);
+                    createExplosion(x, y, "#f8f", 10);
                     return; // Early exit because market is rebuilt
                 }
             }
