@@ -611,6 +611,8 @@
             maxHpAchieved: 20
         };
 
+        let areas = []; // Array of { id, type, cells: [], active: false }
+
         let pendingClickEntity = null;
         let longPressTimer = null;
         let longPressStartTime = 0;
@@ -803,6 +805,7 @@
             calcFlowField();
             calcFlowFieldFlying();
             precalculateRoutes();
+            generateAreas(); // NEW: Generate Flood Fill Areas
             recalculateAdjacency(); // NEW: Init adjacency
         }
 
@@ -933,6 +936,81 @@
         }
 
         /**
+         * AREA GENERATION (Flood Fill)
+         */
+        function generateAreas() {
+            areas = [];
+            // Reset grid area info
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    grid[y][x].areaId = -1;
+                }
+            }
+
+            let nextAreaId = 0;
+            let visited = new Set();
+            const getKey = (x, y) => `${x},${y}`;
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (visited.has(getKey(x, y))) continue;
+
+                    let startType = grid[y][x].type;
+                    // Treat CASTLE as FLOOR
+                    let effectiveType = (startType === 2) ? 0 : startType; // 2=CASTLE, 0=FLOOR
+
+                    // Random target size 1-15 (prefer 5-12)
+                    let targetSize = 5 + Math.floor(Math.random() * 8);
+                    if (Math.random() < 0.2) targetSize = 1 + Math.floor(Math.random() * 15);
+
+                    let currentArea = {
+                        id: nextAreaId++,
+                        type: effectiveType,
+                        cells: [],
+                        active: false
+                    };
+
+                    let queue = [{ x, y }];
+                    visited.add(getKey(x, y));
+                    currentArea.cells.push({ x, y });
+                    grid[y][x].areaId = currentArea.id;
+
+                    // BFS with randomization to fill area
+                    while (queue.length > 0 && currentArea.cells.length < targetSize) {
+                        let curIndex = Math.floor(Math.random() * queue.length);
+                        let cur = queue.splice(curIndex, 1)[0];
+
+                        let neighbors = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+                        neighbors.sort(() => Math.random() - 0.5);
+
+                        for (let d of neighbors) {
+                            let nx = cur.x + d[0];
+                            let ny = cur.y + d[1];
+                            if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                                let key = getKey(nx, ny);
+                                if (!visited.has(key)) {
+                                    let nType = grid[ny][nx].type;
+                                    if (nType === 2) nType = 0; // Castle -> Floor
+
+                                    if (nType === effectiveType) {
+                                        if (currentArea.cells.length < targetSize) {
+                                            visited.add(key);
+                                            grid[ny][nx].areaId = currentArea.id;
+                                            currentArea.cells.push({ x: nx, y: ny });
+                                            queue.push({ x: nx, y: ny });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    areas.push(currentArea);
+                }
+            }
+            console.log(`Generated ${areas.length} areas.`);
+        }
+
+        /**
          * GAME LOOP
          */
         function update() {
@@ -1026,6 +1104,8 @@
                 return;
             }
 
+
+
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let px = x * TILE_SIZE;
@@ -1035,9 +1115,21 @@
                     if (cell.type === TYPE_WALL) {
                         ctx.fillStyle = '#222'; ctx.fillRect(px, py + 4, TILE_SIZE, TILE_SIZE - 4);
                         ctx.fillStyle = C_WALL; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE - 4);
+                        // ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE - 4); // Remove old grid lines? Keep partial?
+                        // Let's keep distinct wall look but maybe thinner or less obtrusive if outlines are there
                         ctx.strokeStyle = '#444'; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE - 4);
                     } else {
                         ctx.fillStyle = C_FLOOR; ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                    }
+
+                    // Highlight active area cells?
+                    // Maybe faint tint
+                    if (cell.areaId !== -1) {
+                        let area = areas.find(a => a.id === cell.areaId);
+                        if (area && area.active) {
+                            ctx.fillStyle = "rgba(0, 255, 0, 0.1)";
+                            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                        }
                     }
 
                     if (cell.item) {
@@ -1067,6 +1159,8 @@
                     }
                 }
             }
+
+            drawAreaOutlines(ctx); // NEW: Draw Area Outlines - Moved after grid
 
             // DRAW DROPPED ITEMS (After grid, before others)
             droppedItems.forEach(drop => {
@@ -1107,6 +1201,78 @@
                 ctx.stroke();
                 ctx.restore();
             }
+        }
+
+        function drawAreaOutlines(ctx) {
+            let lw = 2;
+            ctx.lineWidth = lw;
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    let aid = cell.areaId;
+                    if (aid === -1) continue;
+
+                    let area = areas.find(a => a.id === aid);
+                    if (!area) continue;
+
+                    let color;
+                    if (area.active) {
+                        color = 'rgba(0, 255, 0, 1)'; // Green for active
+                    } else {
+                        // Inactive: Red for Walls, Gray for Floors
+                        if (cell.type === TYPE_WALL) {
+                            color = 'rgba(255, 0, 0, 1)';
+                        } else {
+                            color = 'rgba(128, 128, 128, 0.2)';
+                        }
+                    }
+
+                    ctx.strokeStyle = color;
+                    let px = x * TILE_SIZE;
+                    let py = y * TILE_SIZE;
+
+                    // Draw Inset Borders (Inside the cell)
+                    // Offset by lw/2 ensures the line is fully inside (assuming centered stroke) if we step in by lw/2 from edge?
+                    // Actually, to be "inside", with lw=2:
+                    // Edge at 0. Line centered at 1 covers 0..2. This is inside.
+                    // Edge at 32. Line centered at 31 covers 30..32. This is inside.
+                    let offset = lw / 2;
+
+                    // Right Neighbor
+                    if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) {
+                        ctx.beginPath();
+                        ctx.moveTo(px + TILE_SIZE - offset, py);
+                        ctx.lineTo(px + TILE_SIZE - offset, py + TILE_SIZE);
+                        ctx.stroke();
+                    }
+
+                    // Left Neighbor
+                    if (x === 0 || grid[y][x - 1].areaId !== aid) {
+                        ctx.beginPath();
+                        ctx.moveTo(px + offset, py);
+                        ctx.lineTo(px + offset, py + TILE_SIZE);
+                        ctx.stroke();
+                    }
+
+                    // Bottom Neighbor
+                    if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) {
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + TILE_SIZE - offset);
+                        ctx.lineTo(px + TILE_SIZE, py + TILE_SIZE - offset);
+                        ctx.stroke();
+                    }
+
+                    // Top Neighbor
+                    if (y === 0 || grid[y - 1][x].areaId !== aid) {
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + offset);
+                        ctx.lineTo(px + TILE_SIZE, py + offset);
+                        ctx.stroke();
+                    }
+                }
+            }
+            ctx.lineWidth = 1; // Reset
         }
 
         // --- RENDER HELPERS ---
@@ -2896,12 +3062,14 @@
         }
 
         function recalculateAdjacency() {
+            // 0. Reset Areas
+            areas.forEach(a => a.active = false);
+
             // 1. Reset everyone to base
             towers.forEach(t => {
                 t.effectiveStacks = t.stacks;
                 t.effectiveLevel = Math.floor(Math.log2(t.stacks)) + 1;
                 t.level = t.effectiveLevel; // Visual level (Base)
-                // We will overwrite effectiveLevel if boosted
             });
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
@@ -2945,6 +3113,10 @@
                         group.push(startCell.item);
                     }
 
+                    // Track unique area IDs touched by this group
+                    let touchedAreaIds = new Set();
+                    touchedAreaIds.add(startCell.areaId);
+
                     while (queue.length > 0) {
                         let cur = queue.shift();
                         [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
@@ -2973,23 +3145,66 @@
                                         visited.add(key);
                                         queue.push({ x: nx, y: ny });
                                         group.push(nObj);
+                                        touchedAreaIds.add(neighborCell.areaId);
                                     }
                                 }
                             }
                         });
                     }
 
+                    // Apply Area Multiplier
+                    let areaMult = 1;
+                    touchedAreaIds.forEach(aId => {
+                        if (aId === -1) return;
+                        let area = areas.find(a => a.id === aId);
+                        if (area) {
+                            // Check if area is FULLY filled by this group
+                            // i.e. every cell in area must be occupied by an object in 'group'
+                            let filled = true;
+                            for (let cellPos of area.cells) {
+                                // Find object at this pos in group
+                                // Optimization: checking group for inclusion is O(N*M).
+                                // But group has objects with .gx/.gy (towers) or .x/.y (items - need to be careful with coordinate systems).
+                                // Items in grid[y][x].item don't always have .gx/.gy set unless we did it.
+                                // But we know valid cells in area have coords.
+                                // Let's check grid directly?
+                                let c = grid[cellPos.y][cellPos.x];
+                                let occupied = false;
+                                if (isTower) {
+                                    // Tower at this pos?
+                                    if (c.type === TYPE_WALL) {
+                                        let t = towers.find(t => t.gx === cellPos.x && t.gy === cellPos.y);
+                                        if (t && t.type === type) occupied = true;
+                                    }
+                                } else {
+                                    // Item at this pos?
+                                    if (c.item && c.item.type === type) occupied = true;
+                                }
+
+                                if (!occupied) { filled = false; break; }
+                            }
+
+                            if (filled) {
+                                area.active = true;
+                                areaMult *= area.cells.length; // Multiply by Area Size
+                            }
+                        }
+                    });
+
                     // Apply Bonus
                     let groupSize = group.length;
-                    if (groupSize > 1) {
+                    // Always apply areaMult if > 1, even if group=1 (unlikely to fill area of >1 with 1 item unless area size 1)
+                    if (groupSize > 1 || areaMult > 1) {
                         group.forEach(obj => {
-                            obj.effectiveStacks = (obj.stacks || 1) * groupSize;
+                            obj.effectiveStacks = (obj.stacks || 1) * groupSize * areaMult;
                             if (obj.updateStats) { // Wrapper for Tower
                                 obj.effectiveLevel = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
-                                obj.effectiveGroupSize = groupSize; // Store for UI
-                                obj.updateStats(); // Recalc damage etc
+                                obj.effectiveGroupSize = groupSize;
+                                obj.effectiveAreaMult = areaMult; // Store for UI?
+                                obj.updateStats();
                             } else {
                                 obj.effectiveGroupSize = groupSize;
+                                obj.effectiveAreaMult = areaMult;
                             }
                         });
                     }
