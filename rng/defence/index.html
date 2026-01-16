@@ -522,14 +522,23 @@
         <div id="help-modal">
             <h2>HOW TO PLAY</h2>
             <ul>
-                <li><strong>UPGRADE:</strong> Stack duplicates of cards on existing towers or items to upgrade them
-                    (Level up).</li>
-                <li><strong>INTEREST:</strong> Any cards left unbought in the shop give <strong>50%</strong> of their
-                    value as CASH at the end of the wave.</li>
+                <li><strong>STACK:</strong> This determines the tower / item level. Level determines the tower / item
+                    damage, range, cooldown, etc.
+                </li>
+                <li><strong>UPGRADE:</strong> Stack dublicate cards on existing towers / items to increase the stack.
+                </li>
+
+                <li><strong>MONEY:</strong> Unbought cards at the end of the wave give <strong>50%</strong> of their
+                    value as CASH. Waves do not otherwise give money out.
+                </li>
                 <li><strong>LOCK:</strong> Double-click a card to lock it. Locked cards will not give money at the end
                     of the wave.</li>
                 <li><strong>SALVAGE:</strong> Long click a tower or item to mark it for salvager pickup.</li>
-                <li><strong>GROUPS</strong> Connect similar turrets / items together to multiply their effective levels.
+                <li><strong>GROUPS:</strong> Connect similar turrets / items together to multiply their effective
+                    stacks by the size of the group.
+                </li>
+                <li><strong>AREAS:</strong> Filling in outlined areas with a group will multiply the stacks of all the
+                    turrets / items in the group.
                 </li>
             </ul>
             <button id="close-help">CLOSE</button>
@@ -961,7 +970,11 @@
 
                     // Random target size 1-15 (prefer 5-12)
                     let targetSize = 5 + Math.floor(Math.random() * 8);
-                    if (Math.random() < 0.2) targetSize = 1 + Math.floor(Math.random() * 15);
+                    let r = Math.random()
+                    if (r > 0.90) targetSize = 1 + Math.floor(Math.random() * 15);
+                    else if (r > 0.80) targetSize = 2;
+                    else if (r > 0.70) targetSize = 1;
+                    // if (Math.random() < 0.1) targetSize = 2
 
                     let currentArea = {
                         id: nextAreaId++,
@@ -2407,7 +2420,8 @@
                 let target = closestPrimary || closestSecondary || closestImmune;
 
                 if (target) {
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.level));
+                    let rangePx = (this.currentStats.range * TILE_SIZE);
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.level, this, rangePx));
                     this.cd = this.currentStats.cd || this.currentStats.cooldown; // CD Fix
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     if (this.type === 'blaster') createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#acf', 3);
@@ -2767,8 +2781,10 @@
 
 
         class Projectile {
-            constructor(x, y, t, type, dmg, level, sourceTower) {
-                this.x = x; this.y = y; this.type = type; this.speed = 8; this.life = 50;
+            constructor(x, y, t, type, dmg, level, sourceTower, maxRange) {
+                this.x = x; this.y = y; this.type = type; this.speed = 8; this.life = 100; // Increased life to ensure range is the limit
+                this.startX = x; this.startY = y;
+                this.maxRange = maxRange || 9999;
                 let a = Math.atan2(t.y - y, t.x - x); this.vx = Math.cos(a) * 8; this.vy = Math.sin(a) * 8;
                 this.dmg = dmg;
                 this.level = level;
@@ -2780,7 +2796,13 @@
                 }
             }
             update() {
-                this.x += this.vx; this.y += this.vy; this.life--;
+                this.x += this.vx; this.y += this.vy;
+
+                // Range Check
+                let traveled = Math.hypot(this.x - this.startX, this.y - this.startY);
+                if (traveled >= this.maxRange) return false;
+
+                this.life--;
                 if (this.life <= 0) return false;
                 for (let e of enemies) {
                     if (e.checkCollision(this.x, this.y, 8)) { this.hit(e); return false; }
