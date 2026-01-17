@@ -3979,7 +3979,7 @@
             let active = enemies.length;
             let queue = gameState.spawnQueue ? gameState.spawnQueue.length : 0;
             let total = active + queue;
-            let html = `WAVE <span style="color:#fff">${gameState.wave}</span> <span style="color:#555">|</span> ENEMIES <span style="color:#f44">${active} / ${total}</span>`;
+            let html = `W <span style="color:#fff">${gameState.wave}</span> <span style="color:#555">|</span> E <span>${active}/${total}</span>`;
             document.getElementById('wave-val').innerHTML = html;
 
             // Button Logic
