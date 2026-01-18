@@ -591,7 +591,7 @@
             <div class="content">
                 <ul>
                     <li><strong>MONEY:</strong> Unbought cards give <strong>50%</strong> cash at wave end.</li>
-                    <li><strong>LOCK:</strong> Double-click card to lock (prevents auto-sell).</li>
+                    <li><strong>LOCK:</strong> Long press a card for 500ms to lock (prevents auto-sell).</li>
                 </ul>
             </div>
 
@@ -625,6 +625,19 @@
     <canvas id="gameCanvas"></canvas>
 
     <script>
+        /**
+         * UTILS
+         */
+        function formatBigNumber(num, decimals = 0) {
+            if (num === undefined || num === null) return "...";
+            if (typeof num === 'string') return num;
+            if (num < 10000) return num.toFixed(decimals).replace(/\.0+$/, '');
+            let exp = Math.floor(Math.log10(num));
+            const supers = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+            let expStr = exp.toString().split('').map(d => supers[d]).join('');
+            return `10${expStr}`;
+        }
+
         /**
          * CONFIG
          */
@@ -694,6 +707,9 @@
         };
 
         let areas = []; // Array of { id, type, cells: [], active: false }
+
+        // Card Long Press
+        let cardLongPressTimer = null;
 
         let pendingClickEntity = null;
         let longPressTimer = null;
@@ -1753,10 +1769,39 @@
             if (index === lastClickIndex && (now - lastClickTime) < 300) {
                 toggleLock(index);
                 lastClickIndex = -1; // Reset
+                return true;
             } else {
                 selectCard(index);
                 lastClickIndex = index;
                 lastClickTime = now;
+                return false;
+            }
+        }
+
+        function handleCardPressStart(index, e) {
+            if (e && e.cancelable && e.type === 'touchstart') e.preventDefault();
+
+            let wasDoubleClick = handleCardClick(index);
+
+            if (!wasDoubleClick) {
+                if (cardLongPressTimer) clearTimeout(cardLongPressTimer);
+                // Start Long Press Timer
+                cardLongPressTimer = setTimeout(() => {
+                    toggleLock(index);
+                    // Provide feedback (e.g. Explosion)?
+                    // Since toggleLock calls updateUI, the visual lock icon updates.
+                    // We can add a small effect if we want, similar to salvage.
+                    // But card position is DOM based. 
+                    // Let's rely on updateUI lock icon change for now.
+                    cardLongPressTimer = null;
+                }, 500);
+            }
+        }
+
+        function handleCardPressEnd() {
+            if (cardLongPressTimer) {
+                clearTimeout(cardLongPressTimer);
+                cardLongPressTimer = null;
             }
         }
 
@@ -2431,7 +2476,7 @@
 
                 this.textCtx.font = "8px Arial";
                 this.textCtx.fillStyle = "#aaa";
-                this.textCtx.fillText(`${this.stacks}/${reqForNext}`, 16, 24 + 16);
+                this.textCtx.fillText(`${formatBigNumber(this.stacks)}/${formatBigNumber(reqForNext)}`, 16, 24 + 16);
                 this.textCtx.shadowBlur = 0;
             }
 
@@ -2928,7 +2973,6 @@
                     if (this.targetItem instanceof Tower) {
                         val = this.targetItem.baseStats.price * this.targetItem.stacks;
                         towers = towers.filter(t => t !== this.targetItem);
-                        if (this.targetItem instanceof Tower && this.targetItem.type === 'laser') recalculateLaserConnections();
                     } else if (this.targetItem.type === 'spawner' || this.targetItem.type === 'salvager') {
                         val = 150 * this.targetItem.stacks;
                         collectorSpawners = collectorSpawners.filter(s => s !== this.targetItem);
@@ -2942,6 +2986,8 @@
                     this.carryingValue = Math.floor(val * 0.1);
                     createExplosion(this.targetItem.x, this.targetItem.y, '#888', 10);
                     recalculateAdjacency(); // NEW: Item destroyed
+
+                    if (this.targetItem instanceof Tower && this.targetItem.type === 'laser') recalculateLaserConnections();
                     calcFlowFieldFlying();
 
                     this.targetItem = null;
@@ -3299,7 +3345,7 @@
 
             ctx.font = "8px Arial";
             ctx.fillStyle = "#aaa";
-            ctx.fillText(`${stacks}/${req}`, 16, 40);
+            ctx.fillText(`${formatBigNumber(stacks)}/${formatBigNumber(req)}`, 16, 40);
             ctx.shadowBlur = 0;
         }
 
@@ -3722,23 +3768,45 @@
                 }
                 actionTaken = true;
             }
+
             // --- SALVAGE LOGIC ---
             else if (cardKey === 'salvage') {
                 let existingTower = towers.find(t => t.gx === gx && t.gy === gy);
+                let existingItem = tile.item;
+
                 if (existingTower) {
                     // Refund 50% of Value
                     let value = existingTower.baseStats.price * existingTower.stacks;
                     let refund = Math.floor(value * 0.5);
                     gameState.money += refund;
-                    // Visual Text
-                    // (Optional: floating text)
 
                     towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
+                    createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#88f", 15);
+                    recalculateAdjacency(); // NEW: Update groups
+                    recalculateLaserConnections();
+                    calcFlowFieldFlying(); // Recalc flying path
+                    actionTaken = true;
+                } else if (existingItem) {
+                    // Refund 50% of Value
+                    let data = CARD_TYPES[existingItem.type];
+                    let price = data ? data.price : 10;
+                    if (existingItem.type === 'spawner' || existingItem.type === 'salvager') price = 150; // Hardcoded base price for spawners if not in CARD_TYPES correctly or just to be safe
+
+                    let value = price * (existingItem.stacks || 1);
+                    let refund = Math.floor(value * 0.5);
+                    gameState.money += refund;
+
+                    // Remove Spawner from global list if necessary
+                    if (existingItem.type === 'spawner' || existingItem.type === 'salvager') {
+                        // Mark as dead for AI
+                        existingItem.hp = 0;
+                        collectorSpawners = collectorSpawners.filter(s => s !== existingItem);
+                    }
+
                     tile.item = null;
                     createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#88f", 15);
-                    recalculateLaserConnections();
-                    recalculateAdjacency(); // NEW: Update groups
-                    calcFlowFieldFlying(); // Recalc flying path
+                    recalculateAdjacency();
+                    calcFlowFieldFlying();
                     actionTaken = true;
                 }
             }
@@ -3809,16 +3877,16 @@
                         tile.item = { type: cardKey };
                         towers.push(new Tower(gx, gy, cardKey, marketCard.level));
                         createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#fff", 8);
-                        recalculateLaserConnections();
                         recalculateAdjacency(); // NEW: Update groups
+                        recalculateLaserConnections();
                         calcFlowFieldFlying(); // Recalc flying path
                         actionTaken = true;
                     } else if (existingTower.type === cardKey) {
                         // Upgrade Existing
                         existingTower.stacks += marketCard.level;
 
-                        if (existingTower.type === 'laser') recalculateLaserConnections(); // Level change affects range
                         recalculateAdjacency(); // NEW: Update groups FIRST so effectiveLevel is correct
+                        if (existingTower.type === 'laser') recalculateLaserConnections(); // Level change affects range
 
                         existingTower.updateStats(); // Recalculate stats based on new effective stacks
 
@@ -3972,8 +4040,8 @@
         }
 
         function updateTopBar() {
-            document.getElementById('hp-display').innerText = Math.ceil(gameState.hp);
-            document.getElementById('money-display').innerText = gameState.money;
+            document.getElementById('hp-display').innerText = formatBigNumber(Math.ceil(gameState.hp));
+            document.getElementById('money-display').innerText = formatBigNumber(gameState.money);
 
             // Update Top Bar: Wave | Enemies (Active / Total Remaining)
             let active = enemies.length;
@@ -4000,7 +4068,12 @@
             while (marketEl.children.length < marketCards.length) {
                 let d = document.createElement('div');
                 let index = marketEl.children.length;
-                d.onclick = () => handleCardClick(index);
+                d.onmousedown = (e) => handleCardPressStart(index, e);
+                d.onmouseup = () => handleCardPressEnd();
+                d.onmouseleave = () => handleCardPressEnd();
+                d.ontouchstart = (e) => handleCardPressStart(index, e);
+                d.ontouchend = () => handleCardPressEnd();
+                d.oncontextmenu = (e) => { e.preventDefault(); return false; };
 
                 // Create Structure ONCE
                 d.innerHTML = `
@@ -4047,7 +4120,7 @@
                         si.style.cssText = "position:absolute;top:2px;right:2px;font-size:8px;color:#aaa;";
                         d.appendChild(si);
                     }
-                    d.querySelector('.stack-info').innerText = `${card.level}/${nextThreshold}`;
+                    d.querySelector('.stack-info').innerText = `${formatBigNumber(card.level)}/${formatBigNumber(nextThreshold)}`;
                     d.querySelector('.stack-info').style.display = 'block';
 
                 } else {
@@ -4057,7 +4130,7 @@
                 d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
 
                 // Cost
-                let costDisplay = data.hpCost ? `<span style="color:#f44">${data.hpCost} ♥</span>` : `$${actualPrice}`;
+                let costDisplay = data.hpCost ? `<span style="color:#f44">${formatBigNumber(data.hpCost)} ♥</span>` : `$${formatBigNumber(actualPrice)}`;
                 d.querySelector('.m-cost').innerHTML = costDisplay;
 
                 // Canvas Icon
@@ -4263,22 +4336,22 @@
                 let data = t.currentStats;
                 let baseData = t.displayBaseStats || t.currentStats;
 
-                if (data.damage !== undefined) updateDualStat('stat-damage', baseData.damage.toFixed(1), data.damage.toFixed(1));
-                if (data.range !== undefined) updateDualStat('stat-range', baseData.range.toFixed(1), data.range.toFixed(1));
-                if (data.cd !== undefined) updateDualStat('stat-cd', baseData.cd.toFixed(1), data.cd.toFixed(1), 'f');
-                updateDualStat('stat-stacks', t.stacks, t.effectiveStacks);
+                if (data.damage !== undefined) updateDualStat('stat-damage', formatBigNumber(baseData.damage, 1), formatBigNumber(data.damage, 1));
+                if (data.range !== undefined) updateDualStat('stat-range', formatBigNumber(baseData.range, 1), formatBigNumber(data.range, 1));
+                if (data.cd !== undefined) updateDualStat('stat-cd', formatBigNumber(baseData.cd, 1), formatBigNumber(data.cd, 1), 'f');
+                updateDualStat('stat-stacks', formatBigNumber(t.stacks), formatBigNumber(t.effectiveStacks));
 
                 // Value Calculation
                 let basePrice = CARD_TYPES[t.type].price;
                 let origVal = basePrice * t.stacks;
                 let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
-                updateDualStat('stat-value', origVal, marketVal, '$');
+                updateDualStat('stat-value', formatBigNumber(origVal), formatBigNumber(marketVal), '$');
             }
             else if (selectedEntity instanceof Enemy) {
                 let e = selectedEntity;
                 let el;
                 if (el = document.getElementById('stat-hp')) {
-                    el.innerText = `${Math.ceil(e.hp)}/${Math.ceil(e.maxHp)}`;
+                    el.innerText = `${formatBigNumber(Math.ceil(e.hp))}/${formatBigNumber(Math.ceil(e.maxHp))}`;
                     el.style.color = (e.hp / e.maxHp) < 0.3 ? '#f44' : '#fd0';
                 }
                 if (el = document.getElementById('stat-speed')) el.innerText = e.speed.toFixed(2);
@@ -4302,25 +4375,25 @@
                     let html = '';
                     if (e.poisoned > 0) {
                         let dps = Math.round(e.poisonTickDamage * 30);
-                        html += `<div class="stat-row"><span>Poisoned <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#4f4">${Math.ceil(e.poisoned / 30)}s</span></div>`;
+                        html += `<div class="stat-row"><span>Poisoned <span style="color:#fa0;font-size:11px">(${formatBigNumber(dps)} dps)</span></span><span class="stat-val" style="color:#4f4">${formatBigNumber(Math.ceil(e.poisoned / 30))}s</span></div>`;
                     }
                     if (e.burning > 0) {
                         let dps = Math.round(e.burnTickDamage * 30);
-                        html += `<div class="stat-row"><span>Burning <span style="color:#fa0;font-size:11px">(${dps} dps)</span></span><span class="stat-val" style="color:#f50">${Math.ceil(e.burning / 30)}s</span></div>`;
+                        html += `<div class="stat-row"><span>Burning <span style="color:#fa0;font-size:11px">(${formatBigNumber(dps)} dps)</span></span><span class="stat-val" style="color:#f50">${formatBigNumber(Math.ceil(e.burning / 30))}s</span></div>`;
                     }
-                    if (e.wet > 0) html += `<div class="stat-row"><span>Wet</span><span class="stat-val" style="color:#4af">${Math.ceil(e.wet / 30)}s</span></div>`;
+                    if (e.wet > 0) html += `<div class="stat-row"><span>Wet</span><span class="stat-val" style="color:#4af">${formatBigNumber(Math.ceil(e.wet / 30))}s</span></div>`;
                     if (e.frozen > 0) {
-                        let cv = (e.wet > 0) ? ` <span style="color:#fa0;font-size:11px">(${Math.round(e.iceTickDamage * 30)} dps)</span>` : "";
-                        html += `<div class="stat-row"><span>Frozen${cv}</span><span class="stat-val" style="color:#afe">${Math.ceil(e.frozen / 30)}s</span></div>`;
+                        let cv = (e.wet > 0) ? ` <span style="color:#fa0;font-size:11px">(${formatBigNumber(Math.round(e.iceTickDamage * 30))} dps)</span>` : "";
+                        html += `<div class="stat-row"><span>Frozen${cv}</span><span class="stat-val" style="color:#afe">${formatBigNumber(Math.ceil(e.frozen / 30))}s</span></div>`;
                     }
-                    if (e.sandy > 0) html += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${Math.ceil(e.sandy / 30)}s</span></div>`;
+                    if (e.sandy > 0) html += `<div class="stat-row"><span>Sandy</span><span class="stat-val" style="color:#aa8">${formatBigNumber(Math.ceil(e.sandy / 30))}s</span></div>`;
                     statDiv.innerHTML = html;
                 }
             }
             else if (selectedEntity instanceof CollectorSpawner || selectedEntity instanceof SalvagerSpawner) {
                 let s = selectedEntity;
-                updateDualStat('stat-stacks', s.stacks, s.effectiveStacks);
-                updateDualStat('stat-hp', Math.ceil(s.hp), Math.ceil(s.hp));
+                updateDualStat('stat-stacks', formatBigNumber(s.stacks), formatBigNumber(s.effectiveStacks));
+                updateDualStat('stat-hp', formatBigNumber(Math.ceil(s.hp)), formatBigNumber(Math.ceil(s.hp)));
 
                 let baseSpeed = 1.2 + (s.stacks - 1) * 0.05;
                 if (baseSpeed > 4.0) baseSpeed = 4.0;
@@ -4331,13 +4404,13 @@
                 let basePrice = CARD_TYPES[s.type].price;
                 let origVal = basePrice * s.stacks;
                 let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
-                updateDualStat('stat-value', origVal, marketVal, '$');
+                updateDualStat('stat-value', formatBigNumber(origVal), formatBigNumber(marketVal), '$');
             }
             else if (selectedEntity.type) {
                 let item = selectedEntity;
-                updateDualStat('stat-stacks', item.stacks, item.effectiveStacks);
+                updateDualStat('stat-stacks', formatBigNumber(item.stacks), formatBigNumber(item.effectiveStacks));
                 if (item.hp !== undefined) {
-                    let hpStr = Math.ceil(item.hp) + "/" + item.maxHp;
+                    let hpStr = formatBigNumber(Math.ceil(item.hp)) + "/" + formatBigNumber(item.maxHp);
                     updateDualStat('stat-hp', hpStr);
                     // Color code based on health %
                     let pct = item.hp / item.maxHp;
@@ -4348,14 +4421,14 @@
                 if (item.type === 'mine') {
                     // Use stored level-based damage
                     let d = item.damage || 135;
-                    updateDualStat('stat-dmg', d);
+                    updateDualStat('stat-dmg', formatBigNumber(d));
                 } else if (item.type === 'lava') {
                     // Stored damage is per tick (0.1 base)
                     // Display DPS (x30 ticks/sec or whatever convention)
                     // Previous logic used 30 multiplier.
                     let dPerTick = item.damage || 0.1;
                     let dps = (dPerTick * 30).toFixed(1);
-                    updateDualStat('stat-dmg', dps);
+                    updateDualStat('stat-dmg', formatBigNumber(dps, 1));
                 }
 
                 // Value Calculation
@@ -4365,7 +4438,7 @@
                     let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
                     // Check for HP cost items? (e.g. Sacrifice, Heart) - usually not placed items
                     // Placed items (sand, lava, mine, farm) have prices.
-                    updateDualStat('stat-value', origVal, marketVal, '$');
+                    updateDualStat('stat-value', formatBigNumber(origVal), formatBigNumber(marketVal), '$');
                 }
             }
 
