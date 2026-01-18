@@ -3102,8 +3102,8 @@
                 // Projectile.dmg is scaled by 1.3x per level (Tower.calculateStatsForLevel)
                 // We want Effect Tick Damage to scale by 1.5x per level.
                 // Reconstruct Base Damage:
-                let baseDmg = this.dmg / Math.pow(1.3, this.level - 1);
-                let effectMult = Math.pow(1.5, this.level - 1);
+                let baseDmg = this.dmg;
+                let effectMult = 1 // Math.pow(1.5, this.level - 1);
 
                 if (this.type === 'fire') {
                     // Fire: Always Burn
