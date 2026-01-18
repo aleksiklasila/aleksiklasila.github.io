@@ -746,7 +746,21 @@
             elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 },
             spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 },
             laser: { name: "Laser", price: 125, icon: "⚡", color: "#f00", range: 0, damage: 750, target: 'wall', desc: "Connects to other lasers. Beams damage enemies.", weight: 1, unlock_wave: 9 },
-            salvager: { name: "Salvager", price: 150, icon: "♻️", color: "#543", hp: 60, target: 'floor', desc: "Spawns AI to salvage marked buildings (10% return).", weight: 0.15, unlock_wave: 9 }
+            salvager: { name: "Salvager", price: 150, icon: "♻️", color: "#543", hp: 60, target: 'floor', desc: "Spawns AI to salvage marked buildings (10% return).", weight: 0.15, unlock_wave: 9 },
+
+            // CLOUDS (Pairs)
+            // Pair 0 (Red)
+            cloud_0a: { name: "Cloud R1", price: 100, icon: "☁️", color: "#f66", range: 0, target: 'wall', desc: "Links groups with Red Cloud 2.", weight: 1, unlock_wave: 10, limit: 1, pairId: 0, isCloud: true },
+            cloud_0b: { name: "Cloud R2", price: 100, icon: "☁️", color: "#f66", range: 0, target: 'wall', desc: "Links groups with Red Cloud 1.", weight: 1, unlock_wave: 20, limit: 1, pairId: 0, isCloud: true },
+            // Pair 1 (Blue)
+            cloud_1a: { name: "Cloud B1", price: 100, icon: "☁️", color: "#66f", range: 0, target: 'wall', desc: "Links groups with Blue Cloud 2.", weight: 1, unlock_wave: 30, limit: 1, pairId: 1, isCloud: true },
+            cloud_1b: { name: "Cloud B2", price: 100, icon: "☁️", color: "#66f", range: 0, target: 'wall', desc: "Links groups with Blue Cloud 1.", weight: 1, unlock_wave: 40, limit: 1, pairId: 1, isCloud: true },
+            // Pair 2 (Green)
+            cloud_2a: { name: "Cloud G1", price: 100, icon: "☁️", color: "#6f6", range: 0, target: 'wall', desc: "Links groups with Green Cloud 2.", weight: 1, unlock_wave: 50, limit: 1, pairId: 2, isCloud: true },
+            cloud_2b: { name: "Cloud G2", price: 100, icon: "☁️", color: "#6f6", range: 0, target: 'wall', desc: "Links groups with Green Cloud 1.", weight: 1, unlock_wave: 60, limit: 1, pairId: 2, isCloud: true },
+            // Pair 3 (Yellow)
+            cloud_3a: { name: "Cloud Y1", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 2.", weight: 1, unlock_wave: 70, limit: 1, pairId: 3, isCloud: true },
+            cloud_3b: { name: "Cloud Y2", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 1.", weight: 1, unlock_wave: 80, limit: 1, pairId: 3, isCloud: true }
         };
 
         /**
@@ -1449,6 +1463,17 @@
                 ctx.fillStyle = 'black'; ctx.fillRect(-6, 2, 12, 4);
                 ctx.restore();
                 return;
+            } else if (type.startsWith('cloud')) {
+                // Background
+                ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y - 2, 12, 0, 6.28); ctx.fill();
+                // Cloud Shape (3 circles)
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(x - 4, y + 1, 5, 0, Math.PI * 2);
+                ctx.arc(x + 4, y + 1, 5, 0, Math.PI * 2);
+                ctx.arc(x, y - 5, 6, 0, Math.PI * 2);
+                ctx.fill();
+                return;
             }
 
             ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y - 2, 10, 0, 6.28); ctx.fill();
@@ -1686,7 +1711,13 @@
             // Exclude cards not unlocked yet
             let keys = Object.keys(CARD_TYPES).filter(k => {
                 if (!allowReroll && k === 'reroll') return false;
-                let unlocked = CARD_TYPES[k].unlock_wave !== undefined ? (gameState.wave >= CARD_TYPES[k].unlock_wave) : true;
+                let data = CARD_TYPES[k];
+                if (data.limit) {
+                    // Check if we already have this (Active Tower or in Market including Inventory)
+                    if (towers.some(t => t.type === k)) return false;
+                    if (marketCards.some(c => c && c.type === k)) return false;
+                }
+                let unlocked = data.unlock_wave !== undefined ? (gameState.wave >= data.unlock_wave) : true;
                 return unlocked;
             });
 
@@ -1697,6 +1728,8 @@
             // Fill empty slots
             for (let i = 0; i < MARKET_SIZE; i++) {
                 if (newCards[i] === null) {
+                    if (totalWeight <= 0) break; // Safety
+
                     let r = Math.random() * totalWeight;
                     let selectedType = keys[0];
                     let currentW = 0;
@@ -1706,6 +1739,17 @@
                         if (r <= currentW) {
                             selectedType = k;
                             break;
+                        }
+                    }
+
+                    // Limit Check: If limited, remove from keys for next iteration
+                    if (CARD_TYPES[selectedType].limit) {
+                        // Remove from keys (filter in place or splice?)
+                        // Splice is faster if we find index, but keys is small.
+                        let kIdx = keys.indexOf(selectedType);
+                        if (kIdx !== -1) {
+                            keys.splice(kIdx, 1);
+                            totalWeight -= (CARD_TYPES[selectedType].weight || 1);
                         }
                     }
 
@@ -2525,6 +2569,7 @@
             }
 
             update() {
+                if (this.type.startsWith('cloud')) return;
                 if (this.type === 'laser') {
                     // Continuous Firing Logic (No Cooldown)
                     this.laserState = 0; // Reset to "Not Firing" this frame for beam drawing
@@ -3441,29 +3486,66 @@
                             let ny = cur.y + d[1];
                             if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
                                 let key = getId(nx, ny);
-                                if (!visited.has(key)) {
-                                    let neighborCell = grid[ny][nx];
-                                    let nType = null;
-                                    let nObj = null;
 
-                                    if (isTower) { // Only connect to towers
-                                        if (neighborCell.type === TYPE_WALL) {
-                                            let nt = towers.find(t => t.gx === nx && t.gy === ny);
-                                            if (nt) { nType = nt.type; nObj = nt; }
-                                        }
-                                    } else { // Only connect to floor items
-                                        if (neighborCell.item) {
-                                            nType = neighborCell.item.type;
-                                            nObj = neighborCell.item;
-                                        }
+                                let neighborCell = grid[ny][nx];
+                                let nType = null;
+                                let nObj = null;
+
+                                // Identify Neighbor
+                                if (isTower) { // Only connect to towers
+                                    if (neighborCell.type === TYPE_WALL) {
+                                        let nt = towers.find(t => t.gx === nx && t.gy === ny);
+                                        if (nt) { nType = nt.type; nObj = nt; }
                                     }
+                                } else { // Only connect to floor items
+                                    if (neighborCell.item) {
+                                        nType = neighborCell.item.type;
+                                        nObj = neighborCell.item;
+                                    }
+                                }
 
+                                // 1. Standard Adjacency
+                                if (!visited.has(key)) {
                                     if (nType === type) {
                                         visited.add(key);
                                         queue.push({ x: nx, y: ny });
                                         group.push(nObj);
                                         touchedAreaIds.add(neighborCell.areaId);
                                     }
+                                }
+
+                                // 2. Cloud Bridge Logic (Check regardless of visited status)
+                                // Only Towers can be Clouds (target: wall)
+                                if (nObj && nObj.baseStats && nObj.baseStats.isCloud) {
+                                    let localCloud = nObj;
+                                    let partnerCloud = towers.find(pt => pt !== localCloud && pt.baseStats.isCloud && pt.baseStats.pairId === localCloud.baseStats.pairId);
+
+                                    let bridges = [localCloud];
+                                    if (partnerCloud) bridges.push(partnerCloud);
+
+                                    bridges.forEach(bridge => {
+                                        [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d2 => {
+                                            let nx2 = bridge.gx + d2[0];
+                                            let ny2 = bridge.gy + d2[1];
+                                            if (nx2 >= 0 && nx2 < GRID_W && ny2 >= 0 && ny2 < GRID_H) {
+                                                let key2 = getId(nx2, ny2);
+                                                // Check unvisited neighbors of the bridge
+                                                if (!visited.has(key2)) {
+                                                    let cell2 = grid[ny2][nx2];
+                                                    if (cell2.type === TYPE_WALL) {
+                                                        let nt2 = towers.find(t => t.gx === nx2 && t.gy === ny2);
+                                                        // Must match the Original Type (e.g. Fire connecting to Fire)
+                                                        if (nt2 && nt2.type === type) {
+                                                            visited.add(key2);
+                                                            queue.push({ x: nx2, y: ny2 });
+                                                            group.push(nt2);
+                                                            touchedAreaIds.add(cell2.areaId);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    });
                                 }
                             }
                         });
