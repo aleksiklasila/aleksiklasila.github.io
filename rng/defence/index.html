@@ -2709,7 +2709,7 @@
 
                 if (target) {
                     let rangePx = (this.currentStats.range * TILE_SIZE);
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.level, this, rangePx));
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.effectiveLevel || this.level, this, rangePx));
                     this.cd = this.currentStats.cd || this.currentStats.cooldown; // CD Fix
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     if (this.type === 'blaster') createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#acf', 3);
@@ -3098,10 +3098,19 @@
                 // Set source for damage tracking
                 t.lastSource = { x: this.sx, y: this.sy };
 
+                // Calculate Base Damage & Effect Scaling
+                // Projectile.dmg is scaled by 1.3x per level (Tower.calculateStatsForLevel)
+                // We want Effect Tick Damage to scale by 1.5x per level.
+                // Reconstruct Base Damage:
+                let baseDmg = this.dmg / Math.pow(1.3, this.level - 1);
+                let effectMult = Math.pow(1.5, this.level - 1);
+
                 if (this.type === 'fire') {
                     // Fire: Always Burn
                     t.burning = 60 + (this.level * 10);
-                    let burnDmgVal = Math.max(0.1, this.dmg * 0.05);
+
+                    // Burn Damage: Scale with 1.5x
+                    let burnDmgVal = Math.max(0.1, baseDmg * 0.05 * effectMult);
                     if (burnDmgVal > t.burnTickDamage) t.burnTickDamage = burnDmgVal;
 
                     if (!t.fireResistant) {
@@ -3120,7 +3129,9 @@
 
                             // Always Burn Splash
                             e.burning = 60 + (this.level * 10);
-                            let sBurn = Math.max(0.1, this.dmg * 0.05);
+
+                            // Splash Burn Scaling
+                            let sBurn = Math.max(0.1, baseDmg * 0.05 * effectMult);
                             if (sBurn > e.burnTickDamage) e.burnTickDamage = sBurn;
 
                             if (!e.fireResistant) {
@@ -3132,8 +3143,8 @@
                 } else if (this.type === 'ice') {
                     // Ice: Apply Frozen
                     t.frozen = 60 + (this.level * 10);
-                    // Combo Damage Potential (if Wet)
-                    let comboDmg = Math.max(0.5, this.dmg * 0.2);
+                    // Combo Damage Potential (if Wet): Scale with 1.5x
+                    let comboDmg = Math.max(0.5, baseDmg * 0.2 * effectMult);
                     if (comboDmg > t.iceTickDamage) t.iceTickDamage = comboDmg;
 
                     if (!t.iceResistant) {
@@ -3143,23 +3154,22 @@
                     }
 
                 } else if (this.type === 'elements') {
-                    // Apply All Effects (Always)
+                    // Apply All Effects (Always, but tick damage respects resistances?)
+                    // Merged Logic: Apply statuses, then check resistance for massive damage or apply tick damage?
+                    // Original Code had two blocks.
+                    // Block 1: Applied statuses. Block 2: Checked resistance and applied statuses + tick damage.
+                    // Current behavior suggests if resistant to ANY, fail?
+                    // Proposed: Apply statuses unconditionally. Apply Tick Damage if not resistant.
+
                     t.poisoned = 100 + (this.level * 20);
                     t.burning = 100 + (this.level * 20);
                     t.wet = 100 + (this.level * 20);
+                    t.frozen = 100 + (this.level * 20);
                     t.sandy = 60;
 
-                } else if (this.type === 'elements') {
-                    // Apply All Effects (Always)
                     if (!t.poisonResistant && !t.fireResistant && !t.waterResistant && !t.iceResistant) {
-                        t.poisoned = 100 + (this.level * 20);
-                        t.burning = 100 + (this.level * 20);
-                        t.wet = 100 + (this.level * 20);
-                        t.frozen = 100 + (this.level * 20);
-                        t.sandy = 60;
-
                         // Set Tick Damage
-                        let tickDmg = Math.max(0.1, this.dmg * 0.2);
+                        let tickDmg = Math.max(0.1, baseDmg * 0.2 * effectMult);
                         if (tickDmg > t.poisonTickDamage) t.poisonTickDamage = tickDmg;
                         if (tickDmg > t.burnTickDamage) t.burnTickDamage = tickDmg;
                         if (tickDmg > t.iceTickDamage) t.iceTickDamage = tickDmg;
@@ -3168,6 +3178,7 @@
                     } else {
                         createExplosion(t.x, t.y, "#888", 2); // Resisted
                     }
+
                 } else if (this.type === 'water') {
                     // Always Apply Wet
                     t.wet = 120 + (this.level * 20);
@@ -3182,7 +3193,9 @@
                     // Always Apply Poison
                     t.poisoned = 150 + (this.level * 50);
                     t.poisonSource = { x: this.sx, y: this.sy };
-                    let pd = this.dmg * 0.1;
+
+                    // Poison Tick Scaling
+                    let pd = baseDmg * 0.1 * effectMult;
                     if (pd > t.poisonTickDamage) t.poisonTickDamage = pd;
 
                     if (!t.poisonResistant) {
@@ -3196,11 +3209,11 @@
                     t.sandy = 180; // 3 seconds
                     if (!t.sandResistant) {
                         // damage + slow from effect
+                        t.hp -= this.dmg;
+                        createExplosion(this.x, this.y, "#c96", 5);
                     } else {
                         createExplosion(t.x, t.y, "#888", 2);
                     }
-                    t.hp -= this.dmg;
-                    createExplosion(this.x, this.y, "#c96", 5);
                 }
                 else {
                     t.hp -= this.dmg;
