@@ -1397,7 +1397,11 @@
                     // Only drawing the outline, NOT the fill (fill is dynamic in draw loop)
                     let color;
                     if (area.active) {
-                        color = 'rgba(0, 255, 0, 1)'; // Green for active
+                        if (cell.type === TYPE_WALL) {
+                            color = 'rgba(0, 255, 0, 1)';
+                        } else {
+                            color = 'rgba(0, 255, 0, 0.5)';
+                        }
                     } else {
                         if (cell.type === TYPE_WALL) {
                             color = 'rgba(255, 0, 0, 1)';
