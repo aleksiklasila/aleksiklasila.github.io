@@ -2741,6 +2741,7 @@
                 if (!stats.cd) stats.cd = this.baseStats.cd;
                 if (!stats.range) stats.range = this.baseStats.range;
 
+                if (stats.range > 4) stats.range = 4;
                 return stats;
             }
 
