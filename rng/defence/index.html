@@ -610,6 +610,18 @@
                 </ul>
             </div>
 
+            <button class="collapsible">STATUS EFFECTS & SYNERGIES</button>
+            <div class="content">
+                <ul>
+                    <li><strong>ELEMENTS:</strong> <span style="color:#f50">Fire</span>, <span
+                            style="color:#2d2">Poison</span>, <span style="color:#afe">Ice</span>, <span
+                            style="color:#4af">Water</span>.</li>
+                    <li><strong>SYNERGY:</strong> Active effects combine their damage.</li>
+                    <li><strong>WATER:</strong> Deals 0 damage alone. Needs other effects to trigger damage & synergy.
+                    </li>
+                </ul>
+            </div>
+
             <button id="close-help">CLOSE</button>
         </div>
 
@@ -719,7 +731,10 @@
         const CARD_TYPES = {
             water: { name: "Water", price: 50, icon: "💧", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', desc: "Rapidly shoots low damage projectiles.", weight: 1, unlock_wave: 3 },
             sand: { name: "Sand", price: 30, icon: "⏳", color: "#c96", range: 0, target: 'floor', desc: "Slows down enemies walking on this tile.", weight: 0.78, unlock_wave: 5 },
-            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.1, unlock_wave: 5 },
+            lava: { name: "Lava", price: 50, icon: "🌋", color: "#d22", range: 0, target: 'floor', desc: "Burns and slows down enemies.", weight: 0.5, unlock_wave: 5 },
+            poison_puddle: { name: "Poison Puddle", price: 90, icon: "☠️", color: "#2d2", target: 'floor', desc: "Poisons enemies stepping on it.", weight: 0.4, unlock_wave: 8 },
+            ice_patch: { name: "Ice Patch", price: 60, icon: "❄️", color: "#afe", target: 'floor', desc: "Freezes enemies stepping on it.", weight: 0.4, unlock_wave: 7 },
+            water_puddle: { name: "Water Puddle", price: 50, icon: "💧", color: "#4af", target: 'floor', desc: "Wets enemies stepping on it.", weight: 0.4, unlock_wave: 6 },
 
             // Boss Level 1 (Wave 3)
             pistol: { name: "Pistol", price: 35, icon: "⚡", color: "#964B00", range: 1.86, cd: 40, damage: 8, target: 'wall', desc: "Cheap but low firing speed and damage.", weight: 0.25, unlock_wave: 0 },
@@ -740,8 +755,9 @@
             reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2, unlock_wave: 3 },
             farm: { name: "Farm", price: 40, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Earn extra money when enemies die on this tile.", weight: 0.2, unlock_wave: 3 },
             shop_up: { name: "Shop Up", price: 40, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Increases the level of future shop items.", weight: 0.2, unlock_wave: 3 },
+            area_upgrader: { name: "Area Up", price: 40, icon: "✨", color: "#fd0", range: 0, target: 'area', desc: "Upgrades an active area. (Size ^ (Lvl+1)). Resets if area breaks.", weight: 0.2, unlock_wave: 12 },
 
-            mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 135, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
+            mine: { name: "Mine", price: 20, icon: "💣", color: "#666", range: 1.75, damage: 750, target: 'floor', desc: "Explodes heavily on contact. Single use.", weight: 0.5, unlock_wave: 3 },
             ice: { name: "Ice", price: 250, icon: "❄️", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', desc: "Freezes enemies (slow). Ice+Wet deals damage.", weight: 1, unlock_wave: 15 },
             elements: { name: "Elements", price: 50, icon: "🌈", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', desc: "Rapid fire. Burns, Poisons, Wets, Freezes.", weight: 0.15, unlock_wave: 12 },
             spawner: { name: "Collector", price: 150, icon: "🏭", color: "#432", hp: 60, target: 'floor', desc: "Spawns a collector AI to gather money.", weight: 0.5, unlock_wave: 3 },
@@ -1112,7 +1128,8 @@
                         id: nextAreaId++,
                         type: effectiveType,
                         cells: [],
-                        active: false
+                        active: false,
+                        multiplierLevel: 0
                     };
 
                     let queue = [{ x, y }];
@@ -1283,9 +1300,15 @@
                         let px = x * TILE_SIZE;
                         let py = y * TILE_SIZE;
                         if (cell.item.type === 'sand') {
-                            drawSandIcon(ctx, px + 16, py + 16, cell.item.hp / cell.item.maxHp, cell.item.stacks);
+                            drawStandardPuddle(ctx, px + 16, py + 16, '#875', cell.item.hp / cell.item.maxHp);
                         } else if (cell.item.type === 'lava') {
-                            drawLavaIcon(ctx, px + 16, py + 16, cell.item.hp / cell.item.maxHp, cell.item.stacks);
+                            drawStandardPuddle(ctx, px + 16, py + 16, '#d22', cell.item.hp / cell.item.maxHp);
+                        } else if (cell.item.type === 'poison_puddle') {
+                            drawStandardPuddle(ctx, px + 16, py + 16, '#2d2', cell.item.hp / cell.item.maxHp);
+                        } else if (cell.item.type === 'ice_patch') {
+                            drawStandardPuddle(ctx, px + 16, py + 16, '#afe', cell.item.hp / cell.item.maxHp);
+                        } else if (cell.item.type === 'water_puddle') {
+                            drawStandardPuddle(ctx, px + 16, py + 16, '#4af', cell.item.hp / cell.item.maxHp);
                         } else if (cell.item.type === 'farm') {
                             drawFarmIcon(ctx, px + 16, py + 16, '#da0', cell.item.stacks, cell.item.hp / cell.item.maxHp);
                         } else if (cell.item.type === 'mine') {
@@ -1397,11 +1420,28 @@
                     // Only drawing the outline, NOT the fill (fill is dynamic in draw loop)
                     let color;
                     if (area.active) {
-                        if (cell.type === TYPE_WALL) {
-                            color = 'rgba(0, 255, 0, 1)';
-                        } else {
-                            color = 'rgba(0, 255, 0, 0.5)';
+                        // Level-based Coloring
+                        // 0: Green, 1: Blue, 2: Purple, 3: Gold, 4: Orange
+                        let level = area.multiplierLevel || 0;
+                        let colors = ['rgba(0, 255, 0, 1)', 'rgba(70, 170, 255, 1)', 'rgba(200, 0, 255, 1)', 'rgba(255, 220, 0, 1)', 'rgba(255, 80, 0, 1)'];
+                        let baseColor = colors[level] || colors[0];
+
+                        // Override alpha? No, use full opacity for outline
+                        color = baseColor;
+
+                        // If we want wall vs floor distinction for active:
+                        // "if an area is active, show the area outline depeding on the multiplier"
+                        // The user said: "If the area is inactive, just always show the gray outline... However if an area is active, show the area outline depeding on the multiplier."
+                        // Previously: Wall = Green (1.0), Floor = Green (0.5).
+                        // Let's keep slight transparency for Floor outline if we want, but the user didn't specify.
+                        // "show the area outline depeding on the multiplier" -> implies color.
+                        // Let's stick to solid color for clarity or maybe slightly dimmer for floor?
+                        if (cell.type !== TYPE_WALL) {
+                            // Parse rgba and change alpha?
+                            // Simple hack: Replace ', 1)' with ', 0.6)'
+                            color = color.replace(', 1)', ', 0.6)');
                         }
+
                     } else {
                         if (cell.type === TYPE_WALL) {
                             color = 'rgba(255, 0, 0, 1)';
@@ -1486,6 +1526,13 @@
             ctx.fillStyle = 'black'; ctx.fillRect(0, -2, 12, 4); ctx.restore();
         }
 
+        function drawStandardPuddle(ctx, x, y, color, hpPct) {
+            ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = `rgba(0,0,0,${Math.max(0, Math.min(1, 1 - hpPct))})`;
+            ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
+        }
+
         function drawSandIcon(ctx, x, y, hpPct, stacks) {
             ctx.fillStyle = '#875';
             ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
@@ -1566,6 +1613,18 @@
                 ctx.fillStyle = '#f00'; ctx.fillRect(x - 10, y + 6, 20, 3);
                 ctx.fillStyle = '#0f0'; ctx.fillRect(x - 10, y + 6, 20 * hpPct, 3);
             }
+        }
+
+        function drawPuddleIcon(ctx, x, y, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            // Irregular shape roughly circular
+            ctx.ellipse(x, y + 4, 14, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.ellipse(x - 4, y + 2, 4, 2, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
         }
 
         function drawSalvagerIcon(ctx, x, y, hpPct = 1) {
@@ -1686,6 +1745,23 @@
                 }
             }
 
+            // Area Up Guarantee (Wave 12, 17, 22...)
+            let nextWave = gameState.wave + 1;
+            if (nextWave >= 12 && (nextWave - 12) % 5 === 0) {
+                let hasAreaUp = newCards.some(c => c && c.type === 'area_upgrader');
+                if (!hasAreaUp) {
+                    let emptyIndices = [];
+                    for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
+
+                    if (emptyIndices.length > 0) {
+                        let idx = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+                        let basePrice = CARD_TYPES['area_upgrader'].price;
+                        let price = basePrice * (gameState.reshufflePriceMultiplier || 1);
+                        newCards[idx] = { type: 'area_upgrader', bought: false, locked: false, level: 1, price: price, canYield: canYieldMoney };
+                    }
+                }
+            }
+
             // Wave 3 Guarantee: Collector (spawner) and Salvager (salvager)
             if ((gameState.wave + 1) === 3) {
                 const guarantees = ['spawner', 'salvager'];
@@ -1790,7 +1866,19 @@
                             // HP Cost doesn't scale for now or linear?
                             // Let's scale it linear
                         } else {
-                            price = Math.floor(price * (1 + (level - 1) * 0.5));
+                            // Special Scaling for Area Upgrader (like Shop Up)
+                            if (selectedType === 'area_upgrader') {
+                                // Scale based on Shop Level? Or just flat/linear?
+                                // "Price should be around the same as for upgrading the shop." -> Shop Up is base 40, scales (1 + (shopLvl-1)*0.5)
+                                // Let's match Shop Up logic roughly.
+                                // But Shop Up logic in this block calculates price based on selectedType... wait.
+                                // Shop Up has a special block ABOVE this.
+                                // Let's just use the same formula.
+                                price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
+                            } else {
+                                price = Math.floor(price * (1 + (level - 1) * 0.5));
+                            }
+
                             // Apply Reshuffle Multiplier
                             price *= (gameState.reshufflePriceMultiplier || 1);
                         }
@@ -1901,6 +1989,7 @@
                 else if (type === 'fire_resistant') { this.hp = 70 * mult; this.speed = 1.0; this.color = '#f50'; this.r = 10; }
                 else if (type === 'water_resistant') { this.hp = 50 * mult; this.speed = 1.6; this.color = '#4af'; this.r = 8; }
                 else if (type === 'ice_resistant') { this.hp = 65 * mult; this.speed = 1.1; this.color = '#afe'; this.r = 9; }
+                else if (type === 'laser_resistant') { this.hp = 55 * mult; this.speed = 1.15; this.color = '#d0f'; this.r = 9; } // Purple
                 else if (type === 'fly_bird') { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; } // Generic?
                 // NEW BIRDS
                 else if (type === 'ice_bird') { this.hp = 55 * mult; this.speed = 1.4; this.color = '#acf'; this.r = 8; }
@@ -1909,7 +1998,7 @@
                 else if (type === 'poison_bird') { this.hp = 60 * mult; this.speed = 1.4; this.color = '#2d2'; this.r = 18; }
                 else if (type === 'sand_bird') { this.hp = 65 * mult; this.speed = 2; this.color = '#aa8'; this.r = 15; }
                 else if (type === 'flying') { this.hp = 45 * mult; this.speed = 1.5; this.color = '#dd0'; this.r = 7; }
-                else if (type === 'snake') { this.hp = 3000 * mult; this.speed = 1.6; this.color = '#0f0'; this.r = 7; } // Snake: Tanky, Long
+                else if (type === 'snake') { this.hp = 800 * mult; this.speed = 1.6; this.color = '#0f0'; this.r = 7; } // Snake: Tanky, Long
                 else if (type.startsWith('snake_boss')) {
                     // BOSS SNAKE STATS
                     this.hp = 12000 * mult; // Very tanky (Boss)
@@ -1920,6 +2009,11 @@
                     else if (type === 'snake_boss_water') { this.color = '#4af'; }
                     else if (type === 'snake_boss_fire') { this.color = '#f50'; }
                     else if (type === 'snake_boss_ice') { this.color = '#afe'; }
+                    else if (type === 'snake_boss_laser') { this.color = '#d0f'; }
+                }
+                else if (type === 'mole') {
+                    this.hp = 10 * mult; this.speed = 0.8; this.color = '#543'; this.r = 7.5;
+                    this.visualization = 'mole_visual'; // Distinct shape
                 }
                 else { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; }
 
@@ -1934,10 +2028,13 @@
                 this.fireResistant = (type === 'fire_resistant' || type === 'fire_bird' || type === 'snake_boss_fire');
                 this.waterResistant = (type === 'water_resistant' || type === 'water_bird' || type === 'snake_boss_water');
                 this.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird' || type === 'snake_boss_poison');
+                this.laserResistant = (type === 'laser_resistant' || type === 'snake_boss_laser');
                 this.sandResistant = (type === 'sand_bird' || type === 'flying');
 
                 this.isFlying = (type === 'ice_bird' || type === 'water_bird' || type === 'fire_bird' || type === 'poison_bird' || type === 'sand_bird');
-                this.visualization = (this.isFlying) ? 'triangle' : 'circle';
+                this.visualization = (this.isFlying) ? 'triangle' : ((type === 'mole') ? 'mole_visual' : 'circle');
+
+                this.turretImmune = (type === 'mole');
 
                 // SNAKE PROPERTIES
                 this.isSnake = (type === 'snake' || type.startsWith('snake_boss'));
@@ -1945,7 +2042,7 @@
                     this.snakeHistory = [];
                     // We record every 4th frame, so 80 points * 4 frames = 320 frames of history (~5.3 seconds)
                     // At speed 1.6, that's ~850 pixels long (screen is ~800 wide). Very long.
-                    this.snakeMaxHistory = (type.startsWith('snake_boss')) ? 120 : 70; // Even Longer for Boss
+                    this.snakeMaxHistory = (type.startsWith('snake_boss')) ? 120 : 20; // Even Longer for Boss
                     this.snakeRecordTimer = 0;
                 }
 
@@ -1955,8 +2052,8 @@
                 this.burning = 0;
                 this.burnTickDamage = 0;
                 this.vx = 0; this.vy = 0;
-                this.dead = false;
-                this.reachedGoal = false;
+                this.iceTickDamage = 0;
+                this.waterTickDamage = 0; // NEW: Track water damage for combo
 
                 this.sandy = 0; // NEW: Replaces slowed
                 this.wet = 0;
@@ -2171,7 +2268,7 @@
 
                 if (this.frozen > 0) speedMod *= 0.7; // Ice Slow (less than Sand)
 
-                if (cell && cell.item && cell.item.type === 'sand' && this.type !== 'flying') {
+                if (cell && cell.item && cell.item.type === 'sand' && !this.isFlying) {
                     // Apply Sandy Status instead of direct slow
                     this.sandy = 10;
                     // Scale slow effectiveness or damage?
@@ -2195,7 +2292,7 @@
                         if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#c94", 8); }
                     }
                 }
-                else if (cell && cell.item && cell.item.type === 'lava' && this.type !== 'flying') {
+                else if (cell && cell.item && cell.item.type === 'lava' && !this.isFlying) {
                     speedMod = 0.3;
 
                     // Apply Burning (Always)
@@ -2207,6 +2304,38 @@
                         cell.item.hp--;
                         createExplosion(this.x, this.y, '#f50', 1);
                         if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#500", 8); }
+                    }
+                }
+                else if (cell && cell.item && cell.item.type === 'poison_puddle' && !this.isFlying) {
+                    // Apply Poison
+                    this.poisoned = 180;
+                    let pDmg = cell.item.damage || 0.1;
+                    if (pDmg > this.poisonTickDamage) this.poisonTickDamage = pDmg;
+
+                    if (!this.poisonResistant && Math.random() < 0.05) {
+                        cell.item.hp--;
+                        if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#2d2", 8); }
+                    }
+                }
+                else if (cell && cell.item && cell.item.type === 'ice_patch' && !this.isFlying) {
+                    this.frozen = 180;
+                    let iDmg = cell.item.damage || 0.05;
+                    if (iDmg > this.iceTickDamage) this.iceTickDamage = iDmg;
+
+                    // Ice patches are slippery? No extra functionality requested besides effect.
+                    if (!this.iceResistant && Math.random() < 0.05) {
+                        cell.item.hp--;
+                        if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#afe", 8); }
+                    }
+                }
+                else if (cell && cell.item && cell.item.type === 'water_puddle' && !this.isFlying) {
+                    this.wet = 180;
+                    let wDmg = cell.item.damage || 0; // Use 0 default if not set
+                    if (wDmg > this.waterTickDamage) this.waterTickDamage = wDmg;
+
+                    if (!this.waterResistant && Math.random() < 0.05) {
+                        cell.item.hp--;
+                        if (cell.item.hp <= 0) { cell.item = null; createExplosion(gx * 32 + 16, gy * 32 + 16, "#4af", 8); }
                     }
                 }
                 else if (cell && cell.item && (cell.item.type === 'spawner' || cell.item.type === 'salvager') && this.type !== 'flying') {
@@ -2235,6 +2364,7 @@
 
                     // AoE Damage based on collision
                     for (let oe of enemies) {
+                        if (oe.turretImmune) continue;
                         // OLD: if (Math.hypot(oe.x - this.x, oe.y - this.y) < range) {
                         if (oe.checkCollision(this.x, this.y, range)) {
                             oe.hp -= mineDmg;
@@ -2247,38 +2377,56 @@
                     }
                 }
 
-                if (this.poisoned > 0) {
-                    this.poisoned--;
-                    if (!this.poisonResistant) {
-                        this.hp -= this.poisonTickDamage;
-                        if (this.hp <= 0) {
-                            this.dead = true;
-                            this.checkDeathBonus();
-                            return;
-                        }
-                    }
-                }
-
-                if (this.burning > 0) {
-                    this.burning--;
-                    if (!this.fireResistant) {
-                        this.hp -= this.burnTickDamage;
-                        if (this.hp <= 0) {
-                            this.dead = true;
-                            this.checkDeathBonus();
-                            return;
-                        }
-                    }
-                }
-
+                // --- UNIFIED STATUS LOGIC ---
+                // Decrement Timers
+                if (this.poisoned > 0) this.poisoned--;
+                if (this.burning > 0) this.burning--;
                 if (this.wet > 0) this.wet--;
-
                 if (this.frozen > 0) {
                     this.frozen--;
-                    // Combo Check
-                    if (this.wet > 0 && !this.iceResistant && !this.waterResistant) {
-                        this.hp -= this.iceTickDamage; // Apply Combo Damage
-                        if (this.hp <= 0) {
+                    speedMod *= 0.5;
+                }
+
+                // Calculate Combined Damage
+                // Formula: (Sum of Valid Damages) * 2^(Valid Count - 1)
+                let activeEffects = 0;
+                let totalBaseDmg = 0;
+                let hasWater = false;
+
+                // Fire
+                if (this.burning > 0 && !this.fireResistant) {
+                    activeEffects++;
+                    totalBaseDmg += (this.burnTickDamage || 0);
+                }
+                // Poison
+                if (this.poisoned > 0 && !this.poisonResistant) {
+                    activeEffects++;
+                    totalBaseDmg += (this.poisonTickDamage || 0);
+                }
+                // Ice
+                if (this.frozen > 0 && !this.iceResistant) {
+                    activeEffects++;
+                    totalBaseDmg += (this.iceTickDamage || 0);
+                }
+                // Water
+                if (this.wet > 0 && !this.waterResistant) {
+                    activeEffects++;
+                    totalBaseDmg += (this.waterTickDamage || 0);
+                    hasWater = true;
+                }
+
+                // Apply Damage
+                if (activeEffects > 0) {
+                    // Exception: Water alone deals no damage (unless combined with others)
+                    // If activeEffects == 1 AND that effect is water -> No Damage.
+                    if (activeEffects === 1 && hasWater) {
+                        // Do nothing
+                    } else {
+                        let multiplier = Math.pow(1.2, activeEffects - 1);
+                        let finalDmg = totalBaseDmg * multiplier;
+
+                        this.hp -= finalDmg;
+                        if (this.hp <= 0 && !this.dead) {
                             this.dead = true;
                             this.checkDeathBonus();
                             return;
@@ -2400,6 +2548,10 @@
                     ctx.lineTo(this.x + r, this.y - r); // Top Right
                     ctx.closePath();
                     ctx.fill();
+                } else if (this.visualization === 'mole_visual') {
+                    // Skip fill here, handled in stroke block or we do it here?
+                    // The stroke block I added does BOTH fill and stroke.
+                    // safely do nothing here.
                 } else {
                     ctx.fillStyle = this.color;
                     ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
@@ -2424,6 +2576,26 @@
                     ctx.lineTo(this.x - r, this.y - r);
                     ctx.lineTo(this.x + r, this.y - r);
                     ctx.closePath();
+                    ctx.stroke();
+                } else if (this.visualization === 'square') {
+                    ctx.strokeRect(this.x - this.r, this.y - this.r, this.r * 2, this.r * 2);
+                } else if (this.visualization === 'mole_visual') {
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    // Ellipse: (x, y, radiusX, radiusY, rotation, startAngle, endAngle)
+                    // Slightly taller: x radius = r*0.8, y radius = r*1.1
+                    ctx.ellipse(this.x, this.y, this.r * 0.8, this.r * 1.1, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Stroke
+                    ctx.strokeStyle = '#000';
+                    if (this.burning > 0) ctx.strokeStyle = '#f50';
+                    else if (this.poisoned > 0) ctx.strokeStyle = '#2d2';
+                    else if (this.frozen > 0 && this.wet > 0) ctx.strokeStyle = '#fff';
+                    else if (this.frozen > 0) ctx.strokeStyle = '#afe';
+                    else if (this.wet > 0) ctx.strokeStyle = '#4af';
+
+                    ctx.lineWidth = 1;
                     ctx.stroke();
                 } else {
                     ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28);
@@ -2591,6 +2763,7 @@
                             let hitAny = false;
 
                             for (let e of enemies) {
+                                if (e.turretImmune) continue; // Can't hit underground moles
                                 let hit = false;
                                 // Helper for checking overlap with laser line (Vertical or Horizontal)
                                 const checkHit = (ex, ey, er) => {
@@ -2610,9 +2783,14 @@
                                 }
                                 if (hit) {
                                     hitAny = true;
-                                    e.hp -= (dmg / 60);
-                                    if (Math.random() < 0.1) createExplosion(e.x, e.y, "#f00", 1);
-                                    if (e.hp <= 0 && !e.dead) { e.dead = true; e.checkDeathBonus(); }
+
+                                    if (e.laserResistant || e.turretImmune) {
+                                        if (Math.random() < 0.1) createExplosion(e.x, e.y, "#888", 1); // Valid hit but resisted
+                                    } else {
+                                        e.hp -= (dmg / 60);
+                                        if (Math.random() < 0.1) createExplosion(e.x, e.y, "#f00", 1);
+                                        if (e.hp <= 0 && !e.dead) { e.dead = true; e.checkDeathBonus(); }
+                                    }
                                 }
                             }
 
@@ -2656,6 +2834,7 @@
 
                     // Logic:
                     // 1. Check if ANY part is in range (checkCollision)
+                    if (e.turretImmune) continue; // Cannot be targeted
                     if (!e.checkCollision(this.x, this.y, rangePx)) continue;
 
                     // 2. Calculate effective distance for sorting.
@@ -3099,6 +3278,10 @@
                 return true;
             }
             hit(t) {
+                if (t.turretImmune) {
+                    createExplosion(t.x, t.y, "#888", 3);
+                    return;
+                }
                 // Set source for damage tracking
                 t.lastSource = { x: this.sx, y: this.sy };
 
@@ -3128,6 +3311,7 @@
                     let radius = 12 + (this.level * 4);
                     createExplosion(this.x, this.y, "orange", radius);
                     for (let e of enemies) {
+                        if (e.turretImmune) continue;
                         if (e.checkCollision(this.x, this.y, 64)) {
                             e.lastSource = { x: this.sx, y: this.sy };
 
@@ -3424,11 +3608,20 @@
             } else if (type === 'spawner' || type === 'salvager') {
                 stats.maxHp = Math.floor(60 * mult);
             } else if (type === 'lava') {
-                stats.maxHp = Math.floor(30 * mult); // Lava has HP too
-                stats.damage = 0.1 * mult; // Burn Damage Per Tick (Base 0.1 -> 3 DPS)
+                stats.maxHp = Math.floor(700 * mult); // Lava has HP too
+                stats.damage = mult; // Burn Damage Per Tick (Base 0.1 -> 3 DPS)
             } else if (type === 'mine') {
                 stats.maxHp = Math.floor(30 * mult); // Mine has HP?
                 stats.damage = Math.floor(135 * mult);
+            } else if (type === 'poison_puddle') {
+                stats.maxHp = Math.floor(400 * mult);
+                stats.damage = mult;
+            } else if (type === 'ice_patch') {
+                stats.maxHp = Math.floor(700 * mult);
+                stats.damage = mult;
+            } else if (type === 'water_puddle') {
+                stats.maxHp = Math.floor(700 * mult);
+                stats.damage = 0;
             }
             return stats;
         }
@@ -3568,8 +3761,12 @@
                         });
                     }
 
+
                     // Apply Area Multiplier
                     let areaMult = 1;
+                    let totalAreaSize = 0;
+                    let maxAreaLevel = 0;
+
                     touchedAreaIds.forEach(aId => {
                         if (aId === -1) return;
                         let area = areas.find(a => a.id === aId);
@@ -3602,7 +3799,11 @@
 
                             if (filled) {
                                 area.active = true;
-                                areaMult *= area.cells.length; // Multiply by Area Size
+                                let level = area.multiplierLevel || 0;
+                                let power = level + 1;
+                                areaMult *= Math.pow(area.cells.length, power);
+                                totalAreaSize += area.cells.length;
+                                if (level > maxAreaLevel) maxAreaLevel = level;
                             }
                         }
                     });
@@ -3617,10 +3818,40 @@
                                 obj.effectiveLevel = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
                                 obj.effectiveGroupSize = groupSize;
                                 obj.effectiveAreaMult = areaMult; // Store for UI?
+
+                                // LOCAL AREA STATS
+                                let localAreaId = (grid[obj.gy][obj.gx]) ? grid[obj.gy][obj.gx].areaId : -1;
+                                let localArea = areas.find(a => a.id === localAreaId);
+                                if (localArea) {
+                                    obj.effectiveAreaSize = localArea.cells.length;
+                                    obj.effectiveAreaLevel = localArea.multiplierLevel || 0;
+                                } else {
+                                    obj.effectiveAreaSize = 0;
+                                    obj.effectiveAreaLevel = 0;
+                                }
+
                                 obj.updateStats();
                             } else {
                                 obj.effectiveGroupSize = groupSize;
                                 obj.effectiveAreaMult = areaMult;
+
+                                // LOCAL AREA STATS
+                                // Item co-ords: obj.gx/gy might not be set?
+                                // handleInput sets them. generateMarket items?
+                                // Let's check if obj.gx is undefined.
+                                // Actually, handlePlacement logic sets them. But let's be safe.
+                                let gx = obj.gx, gy = obj.gy;
+                                if (gx === undefined) { gx = Math.floor(obj.x / TILE_SIZE); gy = Math.floor(obj.y / TILE_SIZE); }
+
+                                let localAreaId = (grid[gy] && grid[gy][gx]) ? grid[gy][gx].areaId : -1;
+                                let localArea = areas.find(a => a.id === localAreaId);
+                                if (localArea) {
+                                    obj.effectiveAreaSize = localArea.cells.length;
+                                    obj.effectiveAreaLevel = localArea.multiplierLevel || 0;
+                                } else {
+                                    obj.effectiveAreaSize = 0;
+                                    obj.effectiveAreaLevel = 0;
+                                }
 
                                 // Update Visual Text Cache
                                 updateItemTextCache(obj);
@@ -3646,6 +3877,18 @@
                     }
                 }
             }
+
+            // CLEANUP: Reset Inactive Area Multipliers
+            areas.forEach(a => {
+                if (!a.active) {
+                    // Reset to Level 0 (Green) if inactive
+                    // But if it JUST became inactive, we need to ensure the visual updates.
+                    if (a.multiplierLevel > 0) {
+                        a.multiplierLevel = 0;
+                        dirtyAreas = true;
+                    }
+                }
+            });
         }
 
         /**
@@ -3850,6 +4093,7 @@
                 let rangePx = (data.range || 4) * TILE_SIZE;
                 let damage = (data.damage || 100) * marketCard.level;
                 for (let e of enemies) {
+                    if (e.turretImmune) continue;
                     if (e.checkCollision(tx, ty, rangePx)) {
                         e.hp -= damage;
 
@@ -3994,6 +4238,30 @@
                     }
                 }
             }
+            // --- AREA UPGRADER LOGIC ---
+            else if (data.target === 'area') {
+                let aid = tile.areaId;
+                if (aid !== -1) {
+                    let area = areas.find(a => a.id === aid);
+                    // Must be ACTIVE and Level < 4 (0, 1, 2, 3 -> max 4)
+                    let currentLevel = area.multiplierLevel || 0;
+                    if (area && area.active && currentLevel < 4) {
+                        area.multiplierLevel = currentLevel + 1;
+
+                        // Visuals
+                        let colors = ['#0f0', '#4af', '#d0f', '#fd0', '#f50'];
+                        let c = colors[area.multiplierLevel] || '#fff';
+
+                        // Explode whole area? Or just clicked tile?
+                        // Let's explode clicked tile heavily
+                        createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, c, 15);
+
+                        recalculateAdjacency(); // Apply new multiplier
+                        dirtyAreas = true; // Redraw outlines
+                        actionTaken = true;
+                    }
+                }
+            }
 
             if (actionTaken) {
                 if (data.hpCost) {
@@ -4033,14 +4301,14 @@
 
             // BOSS WAVE CHECK (Every 12 waves)
             if (gameState.wave % 12 === 0) {
-                // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(0/4) ...
-                let cycle = (gameState.wave / 12) % 4;
-                // 1=Poison, 2=Water, 3=Fire, 0=Ice
-                // For clarity:
-                let bossType = 'snake_boss_ice'; // Default 0
+                // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(4), 60->Laser(0) ...
+                let cycle = (gameState.wave / 12) % 5;
+                // 1=Poison, 2=Water, 3=Fire, 4=Ice, 0=Laser
+                let bossType = 'snake_boss_laser'; // Default 0
                 if (cycle === 1) bossType = 'snake_boss_poison';
                 else if (cycle === 2) bossType = 'snake_boss_water';
                 else if (cycle === 3) bossType = 'snake_boss_fire';
+                else if (cycle === 4) bossType = 'snake_boss_ice';
 
                 gameState.spawnQueue.push({ type: bossType, waveIndex: gameState.wave });
                 return; // EXCLUSIVE SPAWN
@@ -4059,12 +4327,14 @@
                 else if (gameState.wave > 5 && r > 0.45) type = 'fire_resistant';
                 else if (gameState.wave > 5 && r > 0.35) type = 'water_resistant';
                 else if (gameState.wave > 15 && r > 0.30) type = 'ice_resistant';
-                else if (gameState.wave >= 20 && r > 0.26) type = 'ice_bird';
-                else if (gameState.wave >= 25 && r > 0.23) type = 'water_bird';
-                else if (gameState.wave >= 28 && r > 0.20) type = 'fire_bird';
-                else if (gameState.wave >= 30 && r > 0.18) type = 'poison_bird';
-                else if (gameState.wave >= 40 && r > 0.16) type = 'sand_bird';
-                // else if (gameState.wave >= 2 && r > 0.12) type = 'snake'; // Removed random snake
+                else if (gameState.wave >= 18 && r > 0.26) type = 'laser_resistant';
+                else if (gameState.wave >= 20 && r > 0.23) type = 'ice_bird';
+                else if (gameState.wave >= 25 && r > 0.20) type = 'water_bird';
+                else if (gameState.wave >= 28 && r > 0.18) type = 'fire_bird';
+                else if (gameState.wave >= 30 && r > 0.16) type = 'poison_bird';
+                else if (gameState.wave >= 40 && r > 0.14) type = 'sand_bird';
+                else if (gameState.wave >= 50 && r > 0.13) type = 'snake'; // Removed random snake
+                else if (gameState.wave >= 20 && r > 0.10) type = 'mole';
 
                 gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
             }
@@ -4249,9 +4519,9 @@
             if (data.target === 'wall') {
                 drawTowerIcon(ctx, cx, cy + 2, data.color, -Math.PI / 2, 0, card.type);
             } else if (card.type === 'sand') {
-                drawSandIcon(ctx, cx, cy, 1.0, 1);
+                drawStandardPuddle(ctx, cx, cy, '#875', 1);
             } else if (card.type === 'lava') {
-                drawLavaIcon(ctx, cx, cy, 1.0, 1);
+                drawStandardPuddle(ctx, cx, cy, '#d22', 1);
             } else if (card.type === 'mine') {
                 drawMineIcon(ctx, cx, cy, 1);
             } else if (card.type === 'farm') {
@@ -4260,6 +4530,8 @@
                 drawCollectorIcon(ctx, cx, cy, 1);
             } else if (card.type === 'salvager') {
                 drawSalvagerIcon(ctx, cx, cy, 1);
+            } else if (['poison_puddle', 'ice_patch', 'water_puddle'].includes(card.type)) {
+                drawStandardPuddle(ctx, cx, cy, data.color, 1);
             } else {
                 ctx.font = "24px Arial";
                 ctx.textAlign = "center";
@@ -4330,10 +4602,13 @@
                     let baseLevel = Math.floor(Math.log2(t.stacks)) + 1;
                     let eLvl = t.effectiveLevel || baseLevel;
                     let grp = t.effectiveGroupSize || 1;
+                    let eASize = t.effectiveAreaSize || 0;
+                    let eALvl = t.effectiveAreaLevel || 0;
 
                     let headerHtml = `${t.baseStats.name} TOWER <span style="font-size:12px;color:#aaa">(L${baseLevel}`;
                     if (eLvl > baseLevel) {
                         headerHtml += ` <span style="color:#4f4">L${eLvl}</span> <span style="color:#4af">G${grp}</span>`;
+                        if (eASize > 0) headerHtml += ` <span style="color:#fd0">A${eASize} M${eALvl}</span>`;
                     }
                     headerHtml += `)</span>`;
 
@@ -4368,9 +4643,14 @@
                     let eStk = s.effectiveStacks || s.stacks || 1;
                     let grp = s.effectiveGroupSize || 1;
                     let baseStk = s.stacks || 1;
+                    let eASize = s.effectiveAreaSize || 0;
+                    let eALvl = s.effectiveAreaLevel || 0;
 
                     let headerHtml = `${isSalvager ? 'SALVAGER' : 'COLLECTOR'} <span style="font-size:12px;color:#aaa">(L${baseStk}`;
-                    if (eStk > baseStk) { headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`; }
+                    if (eStk > baseStk) {
+                        headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`;
+                        if (eASize > 0) headerHtml += ` <span style="color:#fd0">A${eASize} M${eALvl}</span>`;
+                    }
                     headerHtml += `)</span>`;
                     nameEl.innerHTML = headerHtml;
                     iconEl.innerText = isSalvager ? "♻️" : "🏭";
@@ -4391,9 +4671,14 @@
                     let eStk = item.effectiveStacks || item.stacks || 1;
                     let grp = item.effectiveGroupSize || 1;
                     let baseStk = item.stacks || 1;
+                    let eASize = item.effectiveAreaSize || 0;
+                    let eALvl = item.effectiveAreaLevel || 0;
 
                     let headerHtml = `${prettyName} <span style="font-size:12px;color:#aaa">(L${baseStk}`;
-                    if (eStk > baseStk) { headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`; }
+                    if (eStk > baseStk) {
+                        headerHtml += ` <span style="color:#4f4">L${eStk}</span> <span style="color:#4af">G${grp}</span>`;
+                        if (eASize > 0) headerHtml += ` <span style="color:#fd0">A${eASize} M${eALvl}</span>`;
+                    }
                     headerHtml += `)</span>`;
                     nameEl.innerHTML = headerHtml;
                     iconEl.innerText = data ? data.icon : "📦";
@@ -4403,6 +4688,9 @@
 
                     if (item.type === 'mine') contentEl.innerHTML += createDualStatRow("Damage", "stat-dmg");
                     if (item.type === 'lava') contentEl.innerHTML += createDualStatRow("Burn DPS", "stat-dmg");
+                    if (item.type === 'poison_puddle') contentEl.innerHTML += createDualStatRow("Poison DPS", "stat-dmg");
+                    if (item.type === 'ice_patch') contentEl.innerHTML += createDualStatRow("Freeze DPS", "stat-dmg");
+                    if (item.type === 'water_puddle') contentEl.innerHTML += createDualStatRow("Damage", "stat-dmg");
                     contentEl.innerHTML += createDualStatRow("Value", "stat-value");
 
                     if (data && data.desc) {
@@ -4462,8 +4750,10 @@
                     if (e.fireResistant) immunities.push("Fire");
                     if (e.waterResistant) immunities.push("Water");
                     if (e.iceResistant) immunities.push("Ice");
+                    if (e.laserResistant) immunities.push("Laser");
                     if (e.sandResistant) immunities.push("Sand");
                     if (e.isFlying) immunities.push("Floor");
+                    if (e.turretImmune) immunities.push("All Towers (Burrowed)");
                     if (immunities.length > 0) {
                         immDiv.innerHTML = `<div class="stat-row" style="margin-top:4px;border-top:1px solid #444;padding-top:2px;"><span>Immune:</span><span class="stat-val" style="color:#f88;font-size:10px;">${immunities.join(", ")}</span></div>`;
                     } else { immDiv.innerHTML = ''; }
