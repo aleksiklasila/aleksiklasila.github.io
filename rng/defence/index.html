@@ -751,7 +751,7 @@
             nuke: { name: "Nuke", price: 120, icon: "☢️", color: "#f44", range: 2, damage: 5000, target: 'any', desc: "Deals massive damage to a large area.", weight: 0.15, unlock_wave: 6 },
             heart: { name: "Heart", price: 80, icon: "♥", color: "#f44", range: 0, target: 'global', desc: "Restores 5 lives to your castle.", weight: 0.15, unlock_wave: 3 },
             sacrifice: { name: "Sacrifice", price: 0, hpCost: 5, icon: "💀", color: "#800", range: 0, target: 'global', desc: "Trades 5 lives for extra money.", weight: 0.15, unlock_wave: 3 },
-            reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2, unlock_wave: 3 },
+            reroll: { name: "Reroll", price: 20, icon: "🎲", color: "#f8f", range: 0, target: 'global', desc: "Refreshes the shop with new items.", weight: 0.2, unlock_wave: 0 },
             farm: { name: "Farm", price: 40, icon: "🌾", color: "#da0", range: 0, target: 'floor', desc: "Earn extra money when enemies die on this tile.", weight: 0.2, unlock_wave: 3 },
             shop_up: { name: "Shop Up", price: 40, icon: "📶", color: "#4f4", range: 0, target: 'global', desc: "Increases the level of future shop items.", weight: 0.2, unlock_wave: 3 },
             area_upgrader: { name: "Area Up", price: 40, icon: "✨", color: "#fd0", range: 0, target: 'area', desc: "Upgrades an active area. (Size ^ (Lvl+1)). Resets if area breaks.", weight: 0.2, unlock_wave: 12 },
@@ -1710,7 +1710,7 @@
             let isBossWave = (gameState.wave + 1) % 3 === 0;
             let isLateGame = (gameState.wave + 1) >= 35;
 
-            if ((isBossWave || isLateGame) && !hasShopUp) {
+            if ((isBossWave || isLateGame) && !hasShopUp && canYieldMoney) {
                 let emptyIndices = [];
                 for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
 
@@ -1728,7 +1728,7 @@
 
             // Boss Farm Guarantee
             let hasFarm = newCards.some(c => c && c.type === 'farm');
-            if ((gameState.wave + 1) % 3 === 0 && !hasFarm) {
+            if ((gameState.wave + 1) % 3 === 0 && !hasFarm && canYieldMoney) {
                 let emptyIndices = [];
                 for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
 
@@ -1746,7 +1746,7 @@
 
             // Area Up Guarantee (Wave 12, 17, 22...)
             let nextWave = gameState.wave + 1;
-            if (nextWave >= 12 && (nextWave - 12) % 5 === 0) {
+            if (nextWave >= 12 && (nextWave - 12) % 5 === 0 && canYieldMoney) {
                 let hasAreaUp = newCards.some(c => c && c.type === 'area_upgrader');
                 if (!hasAreaUp) {
                     let emptyIndices = [];
@@ -1762,7 +1762,7 @@
             }
 
             // Wave 3 Guarantee: Collector (spawner) and Salvager (salvager)
-            if ((gameState.wave + 1) === 3) {
+            if ((gameState.wave + 1) === 3 && canYieldMoney) {
                 const guarantees = ['spawner', 'salvager'];
                 for (let gType of guarantees) {
                     let hasIt = newCards.some(c => c && c.type === gType);
@@ -4070,23 +4070,22 @@
                     createExplosion(x, y, "#4f4", 10);
                     actionTaken = true;
                 } else if (cardKey === 'reroll') {
-                    generateMarket(false);
-                    gameState.reshufflePriceMultiplier = 1; // Reset on manual reroll? Or keep duplicatiing?
-                    // User said "if cards duplicated due to using all of them".
-                    // Reroll card is manual. Should it increase price? 
-                    // Usually reroll card just gives fresh shop. Let's keep it at current multiplier or reset?
-                    // Implicitly, if you reroll, you are paying for it.
-                    // Let's NOT increase the multiplier for manual reroll, but keep existing multiplier?
-                    // OR reset it? If I pay to reroll, maybe I deserve base prices?
-                    // Let's keep it simple: manual reroll does NOT increase multiplier.
+                    // Consuming Reroll Card: Unlock and Mark as Bought so it gets replaced
+                    marketCard.locked = false;
+                    marketCard.bought = true;
 
-                    // Don't set actionTaken=true immediately because we don't want standard 'bought' logic
-                    // We just consume the money and the card slot is now fresh.
-                    // Actually, generateMarket resets everything.
-                    // We just need to pay for it.
+                    // Pay for it
                     gameState.money -= actualPrice;
                     createExplosion(x, y, "#f8f", 10);
-                    return; // Early exit because market is rebuilt
+
+                    // Reset Multiplier
+                    // gameState.reshufflePriceMultiplier = 1;
+
+                    // Reset Selection before generating (so we don't auto-select random new card)
+                    selectedMarketIndex = -1;
+
+                    generateMarket(false);
+                    return; // Early exit
                 }
             }
             else if (data.target === 'any') {
@@ -4286,7 +4285,7 @@
                 if (marketCards.every(c => c.bought)) {
                     // Auto-Reshuffle
                     gameState.reshufflePriceMultiplier = (gameState.reshufflePriceMultiplier || 1) * 2;
-                    generateMarket(false, false); // No Yield, No Reroll
+                    generateMarket(false, true); // No Yield, Allow Reroll
                 }
 
                 selectedMarketIndex = -1;
