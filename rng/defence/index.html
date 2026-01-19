@@ -698,8 +698,7 @@
 
         let marketCards = [];
         let selectedMarketIndex = -1;
-        let lastClickTime = 0;
-        let lastClickIndex = -1;
+
 
         let gameState = {
             hp: 20,
@@ -1900,38 +1899,28 @@
             updateUI();
         }
 
-        function handleCardClick(index) {
-            let now = Date.now();
-            if (index === lastClickIndex && (now - lastClickTime) < 300) {
-                toggleLock(index);
-                lastClickIndex = -1; // Reset
-                return true;
-            } else {
-                selectCard(index);
-                lastClickIndex = index;
-                lastClickTime = now;
-                return false;
-            }
-        }
+        // Global cardLongPressTimer is already defined at top
+        let pressingCardIndex = -1;
+        let isCardLongPress = false;
 
         function handleCardPressStart(index, e) {
             if (e && e.cancelable && e.type === 'touchstart') e.preventDefault();
 
-            let wasDoubleClick = handleCardClick(index);
+            // Stop propagation?
+            // e.stopPropagation(); 
 
-            if (!wasDoubleClick) {
-                if (cardLongPressTimer) clearTimeout(cardLongPressTimer);
-                // Start Long Press Timer
-                cardLongPressTimer = setTimeout(() => {
-                    toggleLock(index);
-                    // Provide feedback (e.g. Explosion)?
-                    // Since toggleLock calls updateUI, the visual lock icon updates.
-                    // We can add a small effect if we want, similar to salvage.
-                    // But card position is DOM based. 
-                    // Let's rely on updateUI lock icon change for now.
-                    cardLongPressTimer = null;
-                }, 500);
-            }
+            // Clear any existing state
+            if (cardLongPressTimer) { clearTimeout(cardLongPressTimer); cardLongPressTimer = null; }
+
+            pressingCardIndex = index;
+            isCardLongPress = false;
+
+            // Start Timer for Lock
+            cardLongPressTimer = setTimeout(() => {
+                toggleLock(index);
+                isCardLongPress = true; // Mark as long press so we don't select on release
+                cardLongPressTimer = null;
+            }, 500);
         }
 
         function handleCardPressEnd() {
@@ -1939,6 +1928,24 @@
                 clearTimeout(cardLongPressTimer);
                 cardLongPressTimer = null;
             }
+
+            // Only select if it wasn't a long press and we have a valid index
+            if (!isCardLongPress && pressingCardIndex !== -1) {
+                selectCard(pressingCardIndex);
+            }
+
+            // Reset
+            pressingCardIndex = -1;
+            isCardLongPress = false;
+        }
+
+        function handleCardPressCancel() {
+            if (cardLongPressTimer) {
+                clearTimeout(cardLongPressTimer);
+                cardLongPressTimer = null;
+            }
+            pressingCardIndex = -1;
+            isCardLongPress = false;
         }
 
         function selectCard(index) {
@@ -4440,7 +4447,7 @@
                 let index = marketEl.children.length;
                 d.onmousedown = (e) => handleCardPressStart(index, e);
                 d.onmouseup = () => handleCardPressEnd();
-                d.onmouseleave = () => handleCardPressEnd();
+                d.onmouseleave = () => handleCardPressCancel();
                 d.ontouchstart = (e) => handleCardPressStart(index, e);
                 d.ontouchend = () => handleCardPressEnd();
                 d.oncontextmenu = (e) => { e.preventDefault(); return false; };
