@@ -538,7 +538,8 @@
         }
     </style>
     <!-- PEERJS -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- PEERJS (Local to avoid Tracking Prevention issues on Edge) -->
+    <script src="./peerjs.min.js"></script>
     <style>
         /* MULTIPLAYER STYLES */
         #mp-checkbox-container {
@@ -5277,7 +5278,13 @@
             vid.id = `vid-${peerId}`;
             vid.autoplay = true;
             vid.playsInline = true; // Important for mobile
+            vid.muted = true; // CRITICAL: Browsers block autoplay with sound. Force mute.
             vid.srcObject = stream;
+
+            // Explicit play attempt
+            vid.onloadedmetadata = () => {
+                vid.play().catch(e => console.error("Remote video play error:", e));
+            };
 
             let nameTag = document.createElement('div');
             nameTag.className = 'name-tag';
@@ -5365,7 +5372,9 @@
                 // START STREAMING
                 try {
                     // Capture immediately so we have it ready for answering
-                    let stream = canvas.captureStream(60);
+                    // Capture immediately so we have it ready for answering
+                    // Lower FPS to 30 to save bandwidth/processing
+                    let stream = canvas.captureStream(30);
 
                     // ANSWERING LOGIC (Listeners must be ready BEFORE Host calls)
                     if (!isHost) {
