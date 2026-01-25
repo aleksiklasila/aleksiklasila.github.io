@@ -49,6 +49,9 @@
             overflow: hidden;
             font-family: 'Courier New', monospace;
             color: white;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
         }
 
         #gameCanvas {
@@ -116,7 +119,11 @@
         }
 
         .market-card {
-            width: 70px;
+            flex: 1;
+            /* Grow/Shrink to fit */
+            width: auto;
+            max-width: 16%;
+            /* 6 cards ~ 16.6% */
             height: 90px;
             background: #222;
             border: 2px solid #555;
@@ -147,9 +154,7 @@
             z-index: 20;
         }
 
-        .market-card.available-soon {
-            /* Optional style for locked by wave? Not implementing yet, just hiding them */
-        }
+
 
         .market-card.bought {
             opacity: 0.3;
@@ -638,106 +643,204 @@
             border-bottom: 1px solid #222;
         }
 
-        /* GAME CONTAINER & SIDEBAR */
-        #game-container-wrapper {
+        /* MOBILE SWIPE LAYOUT REFACTOR */
+        /* Carousel Container */
+        /* CAROUSEL TRACK LAYOUT */
+        #carousel-track {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            flex-grow: 1;
+            /* Fills remaining space */
+            overflow: hidden;
+            background: #0d0d0d;
+            gap: 10px;
+            /* Optional spacing between screens */
+        }
+
+        .carousel-item {
+            position: relative;
+            flex-shrink: 0;
             display: flex;
             justify-content: center;
-            align-items: flex-start;
-            width: 100%;
-            height: 100%;
+            align-items: center;
+            background: #000;
+            border: 1px solid #222;
             overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        /* Local Player Container */
+        #local-player-container {
+            display: flex;
+            flex-direction: column;
+            /* Stack Canvas and Market */
+            align-items: center;
+            border: none;
             position: relative;
+            background: transparent;
+            margin: 0;
+            padding: 0;
+            justify-content: flex-start;
         }
 
         #gameCanvas {
-            /* Override existing margin for flex layout */
-            margin: 52px 0 0 0 !important;
+            margin: 0 !important;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
             flex-shrink: 0;
-        }
-
-        #remote-views {
-            display: none;
-            /* Hidden by default */
-            flex-direction: column;
-            /* Vertically stacked */
-            width: 300px;
-            /* Fixed width sidebar for default */
-            height: calc(100vh - 52px);
-            margin-top: 52px;
-            background: #0a0a0a;
-            border-left: 2px solid #333;
-            overflow-y: auto;
-            padding: 10px;
-            gap: 10px;
-            z-index: 50;
-        }
-
-        #remote-views.active {
-            display: flex;
-        }
-
-        .remote-player {
-            width: 100%;
-            background: #000;
-            border: 1px solid #444;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-        }
-
-        .remote-player video {
-            width: 100%;
             display: block;
         }
 
-        .remote-player .name-tag {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            background: rgba(0, 0, 0, 0.6);
-            color: #fff;
-            font-size: 10px;
-            padding: 2px 5px;
+        #market-strip {
+            /* Reset absolute positioning */
+            position: static !important;
+            width: 100% !important;
+            height: auto !important;
+            min-height: 100px;
+            /* Minimal height */
+            margin: 0 !important;
+            border-top: none;
+            background: rgba(10, 10, 10, 0.95);
+            flex-shrink: 0;
+
+            display: flex;
+            justify-content: center;
+            /* Center cards */
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 4px;
+            /* Reduced gap */
+            padding: 4px;
+            overflow-x: auto;
+            overflow-y: hidden;
         }
 
-        /* MOBILE SWIPE LAYOUT */
-        @media (max-width: 800px) {
-            #game-container-wrapper {
-                /* On mobile, we use a scroller or absolute positioning */
-                display: block;
-                overflow-x: scroll;
-                /* Allow horizontal scroll */
-                scroll-snap-type: x mandatory;
-                white-space: nowrap;
-            }
+        /* Remote Video wrapper (replaces .remote-player but reuses class) */
+        .remote-player {
+            /* Width/Height set by JS resize */
+            background: #000;
+        }
 
-            #gameCanvas {
-                display: inline-block;
-                vertical-align: top;
-                scroll-snap-align: start;
-                /* Ensure it takes full width initially */
-                margin: 52px 0 0 0 !important;
-                /* width is set by JS resize */
-            }
+        /* REMOTE PLAYER CONTAINER (Mirrors Local) */
+        .remote-player-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: none !important;
+            /* Override carousel-item border */
+            background: transparent;
+            margin: 0;
+            padding: 0;
+            justify-content: flex-start;
+            overflow: visible !important;
+            /* Ensure nothing is clipped */
+        }
 
-            #remote-views {
+        .remote-video-box {
+            background: #1a1a1a;
+            position: relative;
+            /* Dimensions set by JS */
+            flex-shrink: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
+        }
+
+        .remote-video-box video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .remote-video-box .name-tag {
+            position: absolute;
+            bottom: 0px;
+            left: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.0);
+            color: #fff;
+            padding: 4px;
+            text-align: center;
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        /* Remote Market Strip (Placeholder) */
+        .remote-market-strip {
+            width: 100%;
+            min-height: 100px;
+            background: rgba(10, 10, 10, 0.95);
+            /* Darker/Empty */
+            border-top: 1px solid #333;
+            flex-shrink: 0;
+            opacity: 0.5;
+            /* Show it's inactive */
+        }
+
+        /* Sizing Classes (Applied by JS) */
+        .item-main {
+            z-index: 10;
+            opacity: 1;
+            /* TRANSFORM SCALE? no, just Set DIMENSIONS via JS */
+        }
+
+        .item-side {
+            z-index: 5;
+            /* No scaling or opacity reduction */
+        }
+
+        #castle-btn {
+            position: absolute;
+            /* Overlays the canvas */
+            /* Top/Left set by JS relative to container */
+            z-index: 20;
+        }
+
+        /* Nav Arrows */
+        .nav-arrow {
+            width: 30px;
+            height: 30px;
+            background: #333;
+            color: #fff;
+            display: none;
+            /* Hidden unless MP */
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #555;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .nav-arrow:hover {
+            background: #444;
+        }
+
+        .nav-arrow:active {
+            transform: scale(0.95);
+        }
+
+        #nav-left {
+            margin-right: 10px;
+        }
+
+        #nav-right {
+            margin-left: 10px;
+        }
+
+
+        /* MOBILE OVERRIDES */
+        @media (max-width: 900px) {
+            .carousel-item.item-side {
                 display: none;
-                vertical-align: top;
-                width: 100vw;
-                /* Take full width on swipe */
-                height: calc(100vh - 52px);
-                /* Full height */
-                overflow-y: scroll;
-                scroll-snap-align: start;
-                white-space: normal;
-                /* Restore normal flow for children */
-                background: #111;
+                /* Hide sides on mobile */
             }
 
-            #remote-views.active {
-                display: inline-flex;
-                /* Use inline-flex for horizontal scroll layout */
+            #carousel-track {
+                gap: 0;
             }
         }
     </style>
@@ -745,138 +848,141 @@
 
 <body>
 
-    <div id="ui-layer">
-        <div id="hud">
-            <button id="help-btn">?</button>
-            <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
-            <div class="stat money-stat">$<span id="money-display">150</span></div>
-            <div id="wave-val">WAVE <span id="cleared-display">0</span> / <span id="wave-display">1</span></div>
-        </div>
-
-        <div id="main-menu">
-            <h1>MAZE DEFENSE</h1>
-            <div>SELECT DIFFICULTY</div>
-            <button class="diff-btn easy" onclick="startGame('easy')">Easy</button>
-            <button class="diff-btn medium" onclick="startGame('medium')">Medium</button>
-            <button class="diff-btn hard" onclick="startGame('hard')">Hard</button>
-
-            <div id="mp-checkbox-container">
-                <input type="checkbox" id="mp-checkbox">
-                <label for="mp-checkbox">Multiplayer</label>
-            </div>
-        </div>
-
-        <div id="lobby-screen">
-            <h2>Lobby</h2>
-
-            <div class="lobby-section">
-                <label>Your Name:</label>
-                <input type="text" id="player-name" class="lobby-input" value="Player">
-            </div>
-
-            <div class="lobby-section">
-                <label>Players:</label>
-                <div id="player-list"></div>
-            </div>
-
-            <div id="invite-section" class="lobby-section" style="display:none;">
-                <button class="lobby-btn" onclick="copyInviteLink()">INVITE FRIEND</button>
-                <div id="invite-msg" style="font-size:12px; color:#4f4; display:none; margin-top:5px;">Link Copied!
-                </div>
-            </div>
-
-            <div class="lobby-section">
-                <label>Players:</label>
-                <div id="player-list"></div>
-            </div>
-
-            <button id="lobby-start-btn" class="lobby-btn start" style="display:none;"
-                onclick="startMultiplayerGame()">START GAME</button>
-        </div>
-
-        <div id="game-over">
-            <h1>Game Over</h1>
-            <div class="go-stat"><span>Wave Reached</span> <b id="go-wave">1</b></div>
-            <div class="go-stat"><span>Enemies Killed</span> <b id="go-killed">0</b></div>
-            <div class="go-stat"><span>Fully Cleared</span> <b id="go-cleared">0</b></div>
-            <div id="go-buttons">
-                <button class="diff-btn easy" onclick="startGame('easy')">EASY</button>
-                <button class="diff-btn medium" onclick="startGame('medium')">MEDIUM</button>
-                <button class="diff-btn hard" onclick="startGame('hard')">HARD</button>
-            </div>
-        </div>
-
-        <div id="help-modal">
-            <h2>HOW TO PLAY</h2>
-
-            <button class="collapsible">GENERAL GAMEPLAY</button>
-            <div class="content">
-                <ul>
-                    <li>Defend the castle at the center with turrets & items.</li>
-                </ul>
-            </div>
-
-            <button class="collapsible">TURRETS / ITEMS</button>
-            <div class="content">
-                <ul>
-                    <li><strong>STACK:</strong> Determines level. Level improves damage, range, cooldown.</li>
-                    <li><strong>UPGRADE:</strong> Stack duplicate cards on existing towers to upgrade.</li>
-                </ul>
-            </div>
-
-            <button class="collapsible">CARDS</button>
-            <div class="content">
-                <ul>
-                    <li><strong>MONEY:</strong> Unbought cards give <strong>50%</strong> cash at wave end.</li>
-                    <li><strong>LOCK:</strong> Long press a card for 500ms to lock (prevents auto-sell).</li>
-                </ul>
-            </div>
-
-            <button class="collapsible">CONTROLS</button>
-            <div class="content">
-                <ul>
-                    <li><strong>SALVAGE:</strong> Long click (>0.5s) a tower/item to mark for salvage.</li>
-                </ul>
-            </div>
-
-            <button class="collapsible">GROUPS / AREAS</button>
-            <div class="content">
-                <ul>
-                    <li><strong>GROUPS:</strong> Connect similar towers to multiply effective stacks by group size.</li>
-                    <li><strong>AREAS:</strong> Fill outlined areas with one group to multiply stacks by area size.</li>
-                </ul>
-            </div>
-
-            <button class="collapsible">STATUS EFFECTS & SYNERGIES</button>
-            <div class="content">
-                <ul>
-                    <li><strong>ELEMENTS:</strong> <span style="color:#f50">Fire</span>, <span
-                            style="color:#2d2">Poison</span>, <span style="color:#afe">Ice</span>, <span
-                            style="color:#4af">Water</span>.</li>
-                    <li><strong>SYNERGY:</strong> Active effects combine their damage.</li>
-                    <li><strong>WATER:</strong> Deals 0 damage alone. Needs other effects to trigger damage & synergy.
-                    </li>
-                </ul>
-            </div>
-
-            <button id="close-help">CLOSE</button>
-        </div>
-
-        <div id="stats-panel">
-            <h3><span id="sp-name">NAME</span> <span id="sp-icon"></span></h3>
-            <div id="sp-content"></div>
-        </div>
-
-        <div id="market-strip"></div>
-        <div id="castle-btn">▶</div>
+    <div id="hud">
+        <button id="help-btn">?</button>
+        <div id="nav-left" class="nav-arrow" onclick="rotateView(-1)">◄</div>
+        <div class="stat" style="color:#f44">❤ <span id="hp-display">20</span></div>
+        <div class="stat money-stat">$<span id="money-display">150</span></div>
+        <div id="wave-val">WAVE <span id="cleared-display">0</span> / <span id="wave-display">1</span></div>
+        <div id="nav-right" class="nav-arrow" onclick="rotateView(1)">►</div>
     </div>
 
-    <div id="game-container-wrapper">
-        <canvas id="gameCanvas"></canvas>
-        <div id="remote-views">
-            <!-- Remote videos will be injected here -->
+    <div id="main-menu">
+        <h1>MAZE DEFENSE</h1>
+        <div>SELECT DIFFICULTY</div>
+        <!-- ... (Diff buttons) ... -->
+        <button class="diff-btn easy" onclick="startGame('easy')">Easy</button>
+        <button class="diff-btn medium" onclick="startGame('medium')">Medium</button>
+        <button class="diff-btn hard" onclick="startGame('hard')">Hard</button>
+
+        <div id="mp-checkbox-container">
+            <input type="checkbox" id="mp-checkbox">
+            <label for="mp-checkbox">Multiplayer</label>
         </div>
     </div>
+
+    <!-- ... (Lobby Screen, kept same) ... -->
+    <div id="lobby-screen">
+        <h2>Lobby</h2>
+
+        <div class="lobby-section">
+            <label>Your Name:</label>
+            <input type="text" id="player-name" class="lobby-input" value="Player">
+        </div>
+
+        <div class="lobby-section">
+            <label>Players:</label>
+            <div id="player-list"></div>
+        </div>
+
+        <div id="invite-section" class="lobby-section" style="display:none;">
+            <button class="lobby-btn" onclick="copyInviteLink()">INVITE FRIEND</button>
+            <div id="invite-msg" style="font-size:12px; color:#4f4; display:none; margin-top:5px;">Link Copied!
+            </div>
+        </div>
+
+        <button id="lobby-start-btn" class="lobby-btn start" style="display:none;"
+            onclick="startMultiplayerGame()">START GAME</button>
+    </div>
+
+    <div id="game-over">
+        <h1>Game Over</h1>
+        <div class="go-stat"><span>Wave Reached</span> <b id="go-wave">1</b></div>
+        <div class="go-stat"><span>Enemies Killed</span> <b id="go-killed">0</b></div>
+        <div class="go-stat"><span>Fully Cleared</span> <b id="go-cleared">0</b></div>
+        <div id="go-buttons">
+            <!-- ... -->
+            <button class="diff-btn easy" onclick="startGame('easy')">EASY</button>
+            <button class="diff-btn medium" onclick="startGame('medium')">MEDIUM</button>
+            <button class="diff-btn hard" onclick="startGame('hard')">HARD</button>
+        </div>
+    </div>
+
+    <!-- ... (Help, Stats) ... -->
+    <div id="help-modal">
+        <h2>HOW TO PLAY</h2>
+
+        <button class="collapsible">GENERAL GAMEPLAY</button>
+        <div class="content">
+            <ul>
+                <li>Defend the castle at the center with turrets & items.</li>
+            </ul>
+        </div>
+
+        <button class="collapsible">TURRETS / ITEMS</button>
+        <div class="content">
+            <ul>
+                <li><strong>STACK:</strong> Determines level. Level improves damage, range, cooldown.</li>
+                <li><strong>UPGRADE:</strong> Stack duplicate cards on existing towers to upgrade.</li>
+            </ul>
+        </div>
+
+        <button class="collapsible">CARDS</button>
+        <div class="content">
+            <ul>
+                <li><strong>MONEY:</strong> Unbought cards give <strong>50%</strong> cash at wave end.</li>
+                <li><strong>LOCK:</strong> Long press a card for 500ms to lock (prevents auto-sell).</li>
+            </ul>
+        </div>
+
+        <button class="collapsible">CONTROLS</button>
+        <div class="content">
+            <ul>
+                <li><strong>SALVAGE:</strong> Long click (>0.5s) a tower/item to mark for salvage.</li>
+            </ul>
+        </div>
+
+        <button class="collapsible">GROUPS / AREAS</button>
+        <div class="content">
+            <ul>
+                <li><strong>GROUPS:</strong> Connect similar towers to multiply effective stacks by group size.</li>
+                <li><strong>AREAS:</strong> Fill outlined areas with one group to multiply stacks by area size.</li>
+            </ul>
+        </div>
+
+        <button class="collapsible">STATUS EFFECTS & SYNERGIES</button>
+        <div class="content">
+            <ul>
+                <li><strong>ELEMENTS:</strong> <span style="color:#f50">Fire</span>, <span
+                        style="color:#2d2">Poison</span>, <span style="color:#afe">Ice</span>, <span
+                        style="color:#4af">Water</span>.</li>
+                <li><strong>SYNERGY:</strong> Active effects combine their damage.</li>
+                <li><strong>WATER:</strong> Deals 0 damage alone. Needs other effects to trigger damage & synergy.
+                </li>
+            </ul>
+        </div>
+
+        <button id="close-help">CLOSE</button>
+    </div>
+
+    <div id="stats-panel">
+        <h3><span id="sp-name">NAME</span> <span id="sp-icon"></span></h3>
+        <div id="sp-content"></div>
+    </div>
+
+    <!-- TRACK-BASED CAROUSEL -->
+    <div id="carousel-track">
+        <!-- Local Player Container (Canvas + UI Overlays) -->
+        <div id="local-player-container" class="carousel-item local-player">
+            <canvas id="gameCanvas"></canvas>
+            <div id="market-strip"></div>
+            <div id="castle-btn">▶</div>
+        </div>
+        <!-- Remote players will be appended here via JS -->
+    </div>
+
+    <!-- Video element pool (hidden, moved via JS) -->
+    <div id="video-pool" style="display:none;"></div>
 
     <script>
         /**
@@ -1017,8 +1123,33 @@
             cloud_2b: { name: "Cloud G2", price: 100, icon: "☁️", color: "#6f6", range: 0, target: 'wall', desc: "Links groups with Green Cloud 1.", weight: 1, unlock_wave: 60, limit: 1, pairId: 2, isCloud: true },
             // Pair 3 (Yellow)
             cloud_3a: { name: "Cloud Y1", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 2.", weight: 1, unlock_wave: 70, limit: 1, pairId: 3, isCloud: true },
-            cloud_3b: { name: "Cloud Y2", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 1.", weight: 1, unlock_wave: 80, limit: 1, pairId: 3, isCloud: true }
+            cloud_3b: { name: "Cloud Y2", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 1.", weight: 1, unlock_wave: 80, limit: 1, pairId: 3, isCloud: true },
+            // MULTIPLAYER CARDS
+            spawn_enemy: { name: "Spawn Enemy", price: 50, icon: "⚔️", color: "#f0f", target: 'remote', desc: "Send enemies to another player.", weight: 1.5, unlock_wave: 2 }
         };
+
+        function get_random_enemy_type(level) {
+            // Simplified logic to pick an enemy type appropriate for the level/wave
+            // Level roughly equates to wave index
+            let r = Math.random();
+            if (level % 12 === 0 && level > 0) return 'boss'; // Boss wave
+            if (level > 2 && r > 0.85) return 'tank';
+            if (level > 1 && r > 0.75) return 'fast';
+            if (level > 3 && r > 0.65) return 'poison_resistant';
+            if (level > 4 && r > 0.55) return 'flying';
+            if (level > 5 && r > 0.45) return 'fire_resistant';
+            if (level > 5 && r > 0.35) return 'water_resistant';
+            if (level > 15 && r > 0.30) return 'ice_resistant';
+            if (level >= 18 && r > 0.26) return 'laser_resistant';
+            if (level >= 20 && r > 0.23) return 'ice_bird';
+            if (level >= 25 && r > 0.20) return 'water_bird';
+            if (level >= 28 && r > 0.18) return 'fire_bird';
+            if (level >= 30 && r > 0.16) return 'poison_bird';
+            if (level >= 40 && r > 0.14) return 'sand_bird';
+            if (level >= 50 && r > 0.13) return 'snake';
+            if (level >= 20 && r > 0.10) return 'mole';
+            return 'norm';
+        }
 
         /**
          * INIT
@@ -1135,49 +1266,83 @@
 
         function resize() {
             let availW = window.innerWidth;
-            let availH = window.innerHeight - 165;
-            let scale = Math.min(availW / (GRID_W * TILE_SIZE), availH / (GRID_H * TILE_SIZE));
-            canvas.width = GRID_W * TILE_SIZE;
-            canvas.height = GRID_H * TILE_SIZE;
+            // Full Height - HUD (~55) - Market (~110) - Padding (~10)
+            let availH = window.innerHeight - 175;
 
-            // Resize Offscreens
-            if (bgCanvas) { bgCanvas.width = canvas.width; bgCanvas.height = canvas.height; dirtyGrid = true; }
-            if (areaCanvas) { areaCanvas.width = canvas.width; areaCanvas.height = canvas.height; dirtyAreas = true; }
-            canvas.style.width = (canvas.width * scale) + "px";
-            canvas.style.height = (canvas.height * scale) + "px";
+            let isMP = (typeof isMultiplayer !== 'undefined') ? isMultiplayer : false;
+            let isMobile = (availW < 900);
 
-            let rect = canvas.getBoundingClientRect();
+            let scale;
+            let wFactor = GRID_W * TILE_SIZE;
+            let hFactor = GRID_H * TILE_SIZE;
 
-            // Resize Market Strip to match Canvas width and position
-            let market = document.getElementById('market-strip');
-            if (market) {
-                market.style.width = canvas.style.width;
-                // Remove flex centering, use absolute alignment
-                market.style.position = 'absolute';
-                market.style.left = rect.left + 'px';
-                market.style.bottom = '0px';
-                market.style.margin = '0';
+            if (isMP && !isMobile) {
+                // Desktop MP: Try to reach 50% width or Max Height
+                let targetW = availW * 0.50;
+                scale = Math.min((targetW / wFactor), (availH / hFactor));
+            } else {
+                // Single Player / Mobile: Maximize width/height in view
+                scale = Math.min((availW / wFactor), (availH / hFactor));
             }
 
-            // Reposition Castle Button
+            if (scale < 0.3) scale = 0.3;
+
+            canvas.width = wFactor;
+            canvas.height = hFactor;
+
+            if (bgCanvas) { bgCanvas.width = wFactor; bgCanvas.height = hFactor; dirtyGrid = true; }
+            if (areaCanvas) { areaCanvas.width = wFactor; areaCanvas.height = hFactor; dirtyAreas = true; }
+
+            let finalW = wFactor * scale;
+            let finalH = hFactor * scale;
+
+            canvas.style.width = finalW + "px";
+            canvas.style.height = finalH + "px";
+
+            // Local Player Container: Width = FinalW, Height = Auto (Canvas + Market)
+            let localC = document.getElementById('local-player-container');
+            if (localC) {
+                localC.style.width = finalW + "px";
+                localC.style.height = "auto"; // Allow growth for market
+
+                // But the Remote Players are just Video. They should match Canvas Height?
+                // Or container height? 
+                // Maybe match finalH?
+            }
+
+            // Remote Players
+            // Remote Players
+            let remotes = document.querySelectorAll('.remote-player-container');
+            remotes.forEach(el => {
+                el.style.width = finalW + "px";
+                el.style.height = "auto"; // Allow growth for market strip
+
+                // Resize internal video box
+                let box = el.querySelector('.remote-video-box');
+                if (box) {
+                    box.style.height = finalH + "px";
+                    box.style.width = finalW + "px"; // Explicit Pixel Width
+                    box.style.boxSizing = "border-box"; // Ensure padding/border doesn't reduce content area
+                }
+            });
+
+            // Market positioning is handled by Flexbox now (static)
+
             let btn = document.getElementById('castle-btn');
-            // Canvas is margin 52px auto 0.
-            // But we need exact screen coordinates of the castle.
-            // Castle is at center grid: 7, 9
-            let cx = 7 * TILE_SIZE + 16;
-            let cy = 9 * TILE_SIZE + 16;
+            if (btn) {
+                // Pos relative to Local Container (top-left of container is top-left of canvas if flex starts there)
+                // Canvas is first child.
+                let cx = 7 * TILE_SIZE + 16;
+                let cy = 9 * TILE_SIZE + 16;
+                let scaledSize = TILE_SIZE * scale;
 
-            // Map canvas coord to screen
-            let screenX = rect.left + (cx * scale);
-            let screenY = rect.top + (cy * scale);
+                btn.style.width = scaledSize + 'px';
+                btn.style.height = scaledSize + 'px';
+                btn.style.fontSize = (scaledSize * 0.5) + 'px';
 
-            let scaledSize = TILE_SIZE * scale;
-            btn.style.width = scaledSize + 'px';
-            btn.style.height = scaledSize + 'px';
-            btn.style.fontSize = (scaledSize * 0.5) + 'px'; // Scale emoji too
-
-            btn.style.left = (screenX - scaledSize / 2) + 'px';
-            btn.style.top = (screenY - scaledSize / 2) + 'px';
+                btn.style.left = (cx * scale - scaledSize / 2) + 'px';
+                btn.style.top = (cy * scale - scaledSize / 2) + 'px';
+            }
         }
 
         function resetGame() {
@@ -2074,6 +2239,8 @@
                     if (marketCards.some(c => c && c.type === k)) return false;
                 }
                 let unlocked = data.unlock_wave !== undefined ? (gameState.wave >= data.unlock_wave) : true;
+                // EXCLUDE REMOTE CARDS FROM MAIN MARKET
+                if (data.target === 'remote') return false;
                 return unlocked;
             });
 
@@ -2116,6 +2283,11 @@
                     if (selectedType === 'shop_up') {
                         price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
                         level = gameState.shopLevel + 1; // Visual mostly
+                    } else if (selectedType === 'spawn_enemy') {
+                        // Always use Current Shop Level
+                        level = gameState.shopLevel;
+                        price = Math.floor(price * (1 + (level - 1) * 0.4)); // Slightly cheaper scaling?
+                        price *= (gameState.reshufflePriceMultiplier || 1);
                     } else {
                         // Weighted Random for Shop Level
                         // Favors current shopLevel
@@ -2161,10 +2333,108 @@
                     }
 
                     newCards[i] = { type: selectedType, bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
+
+                    if (selectedType === 'spawn_enemy') {
+                        // Pick Enemy Type & Count based on Level
+                        newCards[i].enemyType = get_random_enemy_type(level);
+                        // Count:
+                        // Stronger enemies = fewer count.
+                        // Base count scales with ... level? Or just static based on type?
+                        // User said: "enemy type, count, level... all of that should depend on the shop level."
+                        // Let's map enemy types to 'power' and divide a 'budget' by power.
+                        // Budget = 10 + (level * 2)?
+                        let budget = 10 + (level * 2);
+                        let cost = 5; // Default 'norm'
+                        // Rough costs
+                        let type = newCards[i].enemyType;
+                        if (type === 'boss') cost = 100;
+                        else if (type === 'tank') cost = 15;
+                        else if (type === 'fast') cost = 8;
+                        else if (type.includes('snake_boss')) cost = 200;
+                        else if (type === 'snake') cost = 25;
+                        else if (type === 'mole') cost = 5;
+                        else if (type.includes('resistant')) cost = 10;
+                        else if (type.includes('bird')) cost = 12;
+
+                        let count = Math.max(1, Math.floor(budget / cost));
+                        if (count > 10) count = 10; // Cap
+                        newCards[i].count = count;
+                    }
                 }
             }
             marketCards = newCards;
+
+            // Also Generate Remote Markets
+            if (isMultiplayer) generateRemoteMarkets(canYieldMoney, allowReroll);
+
             updateUI();
+        }
+
+        // GLOBAL STATE FOR REMOTE MARKETS
+        let remoteMarkets = {}; // { [peerId]: [Array of Cards] }
+        let selectedRemoteCard = null; // { peerId: string, index: number }
+
+        function generateRemoteMarkets(canYield, allowReroll) {
+            // For each connected player (or just visible ones? better all to persist state)
+            // We need keys for all peers.
+            // connectedPlayers has {id, name}.
+            let peers = connectedPlayers.map(p => p.id);
+
+            peers.forEach(pid => {
+                let cards = new Array(MARKET_SIZE).fill(null);
+                // Preserve locked?
+                let existing = remoteMarkets[pid] || [];
+                for (let i = 0; i < MARKET_SIZE; i++) {
+                    if (existing[i] && existing[i].locked && !existing[i].bought) {
+                        cards[i] = existing[i];
+                    }
+                }
+
+                // Fill
+                for (let i = 0; i < MARKET_SIZE; i++) {
+                    if (cards[i] === null) {
+                        // Only Remote Cards
+                        let selectedType = 'spawn_enemy';
+
+                        // If we had more remote types, we'd pick here.
+                        let level = gameState.shopLevel;
+                        let price = 50; // Base
+
+                        // Logic from before
+                        price = Math.floor(price * (1 + (level - 1) * 0.4));
+                        price *= (gameState.reshufflePriceMultiplier || 1);
+
+                        let newCard = {
+                            type: selectedType,
+                            bought: false,
+                            locked: false,
+                            level: level,
+                            price: price,
+                            enemyType: get_random_enemy_type(level)
+                        };
+
+                        // Count
+                        let budget = 10 + (level * 2);
+                        let cost = 5;
+                        let type = newCard.enemyType;
+                        if (type === 'boss') cost = 100;
+                        else if (type === 'tank') cost = 15;
+                        else if (type === 'fast') cost = 8;
+                        else if (type.includes('snake_boss')) cost = 200;
+                        else if (type === 'snake') cost = 25;
+                        else if (type === 'mole') cost = 5;
+                        else if (type.includes('resistant')) cost = 10;
+                        else if (type.includes('bird')) cost = 12;
+
+                        let count = Math.max(1, Math.floor(budget / cost));
+                        if (count > 10) count = 10;
+                        newCard.count = count;
+
+                        cards[i] = newCard;
+                    }
+                }
+                remoteMarkets[pid] = cards;
+            });
         }
 
         function toggleLock(index) {
@@ -4567,7 +4837,111 @@
 
                 selectedMarketIndex = -1;
                 updateUI();
+            } else if (data.target === 'remote') {
+                // Trying to use Remote Card on Local Map?
+                // Show Hint?
+                // "Click on a player's video to use this card!"
+                // Maybe flash the carousel?
             }
+        }
+
+        function useRemoteCard(peerId, cardData) {
+            let conn = connections.find(c => c.peer === peerId);
+            if (!conn) { console.warn("No connection to peer", peerId); return; }
+
+            let card = cardData;
+            let isLocal = false;
+
+            if (!card) {
+                if (selectedMarketIndex !== -1) {
+                    card = marketCards[selectedMarketIndex];
+                    isLocal = true;
+                } else {
+                    return;
+                }
+            }
+
+            // Construct Payload
+            // Send coordinates just in case (e.g. 50% center)
+            let payload = {
+                type: 'action',
+                action: 'card',
+                name: 'spawn_enemy',
+                enemyType: card.enemyType || 'norm',
+                count: card.count || 1,
+                level: card.level || 1, // Sender's Shop Level (or Card Level)
+                x: 0.5, y: 0.5
+            };
+            conn.send(payload);
+
+            // Deduct Money
+            gameState.money -= card.price;
+
+            // Mark Bought / Unlock
+            card.locked = false;
+            card.bought = true;
+
+            if (isLocal) {
+                // Auto-Reshuffle Check
+                if (marketCards.every(c => c.bought)) {
+                    gameState.reshufflePriceMultiplier = (gameState.reshufflePriceMultiplier || 1) * 2;
+                    generateMarket(false, true);
+                }
+                selectedMarketIndex = -1;
+            } else {
+                if (selectedRemoteCard && selectedRemoteCard.peerId === peerId && remoteMarkets[peerId] && remoteMarkets[peerId][selectedRemoteCard.index] === card) {
+                    selectedRemoteCard = null;
+                }
+            }
+
+            updateUI();
+
+            // Visual Feedback?
+            // "Sent!"
+        }
+
+        function handleIncomingCard(data) {
+            // data: { enemyType, count, level, ... }
+            // Spawn Enemies
+            let count = data.count || 1;
+            let type = data.enemyType || 'norm';
+            let level = data.level || 1;
+
+            for (let i = 0; i < count; i++) {
+                // Spawn using standard logic (random corners)
+                // We pass 'level' as 'waveIndex' to simulate difficulty
+                spawnEnemy({ type: type, waveIndex: level });
+            }
+
+            // Alert User?
+            // "Incoming Attack!"
+            // Maybe a sound or text?
+            let msg = document.createElement('div');
+            msg.innerText = `⚠️ INCOMING: ${type.toUpperCase()} x${count} ⚠️`;
+            msg.style.cssText = "position:absolute; top:20%; left:50%; transform:translate(-50%, -50%); color:#f00; font-size:24px; font-weight:bold; text-shadow:0 0 10px #000; z-index:999; pointer-events:none; transition:opacity 3s;";
+            document.body.appendChild(msg);
+            setTimeout(() => { msg.style.opacity = 0; setTimeout(() => msg.remove(), 3000); }, 2000);
+        }
+
+        function get_random_enemy_type(level) {
+            let r = Math.random();
+            let type = 'norm';
+            if (level > 2 && r > 0.85) type = 'tank';
+            else if (level > 1 && r > 0.75) type = 'fast';
+            else if (level > 3 && r > 0.65) type = 'poison_resistant';
+            else if (level > 4 && r > 0.55) type = 'flying';
+            else if (level > 5 && r > 0.45) type = 'fire_resistant';
+            else if (level > 5 && r > 0.35) type = 'water_resistant';
+            else if (level > 15 && r > 0.30) type = 'ice_resistant';
+            else if (level >= 18 && r > 0.26) type = 'laser_resistant';
+            else if (level >= 20 && r > 0.23) type = 'ice_bird';
+            else if (level >= 25 && r > 0.20) type = 'water_bird';
+            else if (level >= 28 && r > 0.18) type = 'fire_bird';
+            else if (level >= 30 && r > 0.16) type = 'poison_bird';
+            else if (level >= 40 && r > 0.14) type = 'sand_bird';
+            else if (level >= 50 && r > 0.13) type = 'snake'; // Removed random snake
+            else if (level >= 20 && r > 0.10) type = 'mole';
+            return type;
         }
 
         function startWave() {
@@ -4602,23 +4976,7 @@
             if (gameState.wave % 3 === 0) { gameState.spawnQueue.push({ type: 'boss', waveIndex: gameState.wave }); count += 4; }
 
             for (let i = 0; i < count; i++) {
-                let r = Math.random();
-                let type = 'norm';
-                if (gameState.wave > 2 && r > 0.85) type = 'tank';
-                else if (gameState.wave > 1 && r > 0.75) type = 'fast';
-                else if (gameState.wave > 3 && r > 0.65) type = 'poison_resistant';
-                else if (gameState.wave > 4 && r > 0.55) type = 'flying';
-                else if (gameState.wave > 5 && r > 0.45) type = 'fire_resistant';
-                else if (gameState.wave > 5 && r > 0.35) type = 'water_resistant';
-                else if (gameState.wave > 15 && r > 0.30) type = 'ice_resistant';
-                else if (gameState.wave >= 18 && r > 0.26) type = 'laser_resistant';
-                else if (gameState.wave >= 20 && r > 0.23) type = 'ice_bird';
-                else if (gameState.wave >= 25 && r > 0.20) type = 'water_bird';
-                else if (gameState.wave >= 28 && r > 0.18) type = 'fire_bird';
-                else if (gameState.wave >= 30 && r > 0.16) type = 'poison_bird';
-                else if (gameState.wave >= 40 && r > 0.14) type = 'sand_bird';
-                else if (gameState.wave >= 50 && r > 0.13) type = 'snake'; // Removed random snake
-                else if (gameState.wave >= 20 && r > 0.10) type = 'mole';
+                let type = get_random_enemy_type(gameState.wave)
 
                 gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
             }
@@ -4744,6 +5102,11 @@
                 marketEl.removeChild(marketEl.lastChild);
             }
 
+            // RENDERING REMOTE MARKETS
+            if (isMultiplayer) {
+                renderRemoteMarkets();
+            }
+
             // 2. Update Content
             let children = marketEl.children;
             marketCards.forEach((card, i) => {
@@ -4776,6 +5139,12 @@
                     d.querySelector('.stack-info').innerText = `${formatBigNumber(card.level)}/${formatBigNumber(nextThreshold)}`;
                     d.querySelector('.stack-info').style.display = 'block';
 
+                } else if (card.type === 'spawn_enemy') {
+                    // SPAWN ENEMY DISPLAY
+                    nameHtml = `${card.enemyType.toUpperCase()}`; // Replace "SPAWN ENEMY" with "TANK" etc?
+                    // Let's append "xCount"
+                    nameHtml += `<br><span style="font-size:10px;color:#fff">${card.count}x (L${card.level})</span>`;
+                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
                 } else {
                     if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
                 }
@@ -4816,6 +5185,40 @@
                 drawSalvagerIcon(ctx, cx, cy, 1);
             } else if (['poison_puddle', 'ice_patch', 'water_puddle'].includes(card.type)) {
                 drawStandardPuddle(ctx, cx, cy, data.color, 1);
+            } else if (card.type === 'spawn_enemy') {
+                // Draw Enemy Icon
+                // Mimic Enemy Drawing lightly
+                let type = card.enemyType || 'norm';
+                // Colors
+                let color = "#fff";
+                if (type === 'tank') color = '#555';
+                else if (type === 'fast') color = '#eee';
+                else if (type === 'poison_resistant' || type === 'snake_boss_poison' || type === 'poison_bird') color = '#2d2';
+                else if (type === 'fire_resistant' || type === 'snake_boss_fire' || type === 'fire_bird') color = '#f50';
+                else if (type === 'water_resistant' || type === 'snake_boss_water' || type === 'water_bird') color = '#4af';
+                else if (type === 'ice_resistant' || type === 'snake_boss_ice' || type === 'ice_bird') color = '#afe';
+                else if (type === 'laser_resistant' || type === 'snake_boss_laser') color = '#d0f';
+                else if (type === 'boss') color = '#222';
+                else if (type === 'snake') color = '#0f0';
+                else if (type === 'flying') color = '#dd0';
+
+                ctx.fillStyle = color;
+
+                if (type.includes('bird') || type === 'flying') {
+                    // Triangle
+                    let r = 8;
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy + r);
+                    ctx.lineTo(cx - r, cy - r);
+                    ctx.lineTo(cx + r, cy - r);
+                    ctx.fill();
+                } else if (type === 'mole') {
+                    ctx.fillStyle = '#543';
+                    ctx.beginPath(); ctx.ellipse(cx, cy, 8, 11, 0, 0, Math.PI * 2); ctx.fill();
+                } else {
+                    ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 6.28); ctx.fill();
+                }
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
             } else {
                 ctx.font = "24px Arial";
                 ctx.textAlign = "center";
@@ -5134,88 +5537,88 @@
             return gameState.fullyClearedWave || 0;
         }
 
-        /* --- MULTIPLAYER LOGIC --- */
+        /* --- MULTIPLAYER LOGIC (RING TOPOLOGY) --- */
         let peer = null;
         let myPeerId = null;
-        let connections = []; // DataConnections
-        let mediaCalls = []; // MediaConnections
+        let connections = []; // DataConnections (Full Mesh or Host Hub)
+        let mediaCalls = []; // MediaConnections (Active)
         let isHost = false;
         let isMultiplayer = false;
         let selectedLobbyDiff = 'easy';
         let connectedPlayers = []; // { id, name }
 
+        // RING STATE
+        let playerOrder = []; // Array of {id, name} in fixed ring order
+        let myIndex = -1;
+        let viewIndex = -1; // Index of the player currently in "Center" slot
+        let gameActive = false;
+        let localStream = null;
+
         function initPeer(onOpenCallback) {
-            if (peer) return; // Already init
-            peer = new Peer(); // Auto-generates ID
+            if (peer) return;
+            peer = new Peer();
 
             peer.on('open', (id) => {
                 myPeerId = id;
-                // document.getElementById('my-peer-id').value = id; // REMOVED
                 updatePlayerList();
-                if (onOpenCallback && typeof onOpenCallback === 'function') {
-                    onOpenCallback(id);
-                }
+                if (onOpenCallback && typeof onOpenCallback === 'function') onOpenCallback(id);
             });
 
             peer.on('connection', (conn) => {
-                // Incoming Data Connection
                 setupConnection(conn);
             });
 
-            // REMOVED 'call' handler from here. 
-            // We only handle calls in startGameInternal to ensure stream readiness.
+            // AUTOMATIC ANSWERING (With Local Stream)
+            peer.on('call', (call) => {
+                console.log("Receiving call from", call.peer);
+                // We must have local stream ready!
+                if (localStream) {
+                    call.answer(localStream);
+                    handleCallStream(call);
+                } else {
+                    console.warn("Got call but no local stream ready! Answering without stream for now (receive only?)");
+                    call.answer(); // Expect receive only?
+                    handleCallStream(call);
+                }
+            });
 
             peer.on('error', (err) => {
                 console.error(err);
-                if (err.type === 'peer-unavailable') {
-                    alert("Host not found or offline.");
-                } else {
-                    alert("PeerJS Error: " + err.type);
-                }
+                if (err.type === 'peer-unavailable') alert("Host not found or offline.");
             });
         }
 
-
         function copyInviteLink() {
             if (!myPeerId) return;
-            // Construct URL with ?host=ID
             let url = `${window.location.origin}${window.location.pathname}?host=${myPeerId}`;
-
+            if (url.startsWith("null/")) {
+                url = url.replace("null/", "file:///")
+            }
             if (navigator.clipboard) {
                 navigator.clipboard.writeText(url).then(() => {
                     let msg = document.getElementById("invite-msg");
-                    if (msg) {
-                        msg.style.display = "block";
-                        setTimeout(() => msg.style.display = "none", 2000);
-                    }
+                    if (msg) { msg.style.display = "block"; setTimeout(() => msg.style.display = "none", 2000); }
                 });
-            } else {
-                prompt("Copy this URL:", url);
-            }
+            } else { prompt("Copy this URL:", url); }
         }
 
         function setupConnection(conn) {
             connections.push(conn);
-            conn.on('data', (data) => {
-                handleData(conn.peer, data);
-            });
+            conn.on('data', (data) => handleData(conn.peer, data));
             conn.on('open', () => {
-                // Send my name
                 let myName = document.getElementById('player-name').value;
                 conn.send({ type: 'HELLO', name: myName });
-
-                // If I am host, send current player list to new guy?
-                if (isHost) {
-                    // Give it a moment for the new guy to register logic
-                    setTimeout(() => broadcastPlayerList(), 500);
-                }
+                if (isHost) setTimeout(() => broadcastPlayerList(), 500);
+            });
+            conn.on('close', () => {
+                connections = connections.filter(c => c !== conn);
+                // If game active, handle disconnect (remove from ring?)
+                // Allow reconnect? Complex. For now, just keep going.
             });
         }
 
         function handleData(peerId, data) {
-            // console.log("Received data from", peerId, data);
             if (data.type === 'HELLO') {
-                // Add to list
                 let existing = connectedPlayers.find(p => p.id === peerId);
                 if (!existing) {
                     connectedPlayers.push({ id: peerId, name: data.name });
@@ -5223,18 +5626,19 @@
                     if (isHost) broadcastPlayerList();
                 }
             } else if (data.type === 'PLAYER_LIST') {
-                connectedPlayers = data.list.filter(p => p.id !== myPeerId); // Filter self out if present
+                connectedPlayers = data.list.filter(p => p.id !== myPeerId);
                 updatePlayerList();
             } else if (data.type === 'START_GAME') {
-                // Start the game!
+                // START!
                 selectedLobbyDiff = data.difficulty;
-                // Launch
+                playerOrder = data.order;
                 startGameInternal(selectedLobbyDiff, true);
+            } else if (data.type === 'action' && data.action === 'card') {
+                handleIncomingCard(data);
             }
         }
 
         function broadcastPlayerList() {
-            // Send full list of remotes + host (me)
             let myList = [{ id: myPeerId, name: document.getElementById('player-name').value }, ...connectedPlayers];
             connections.forEach(c => c.send({ type: 'PLAYER_LIST', list: myList }));
         }
@@ -5249,15 +5653,11 @@
             let listDiv = document.getElementById('player-list');
             if (listDiv) {
                 listDiv.innerHTML = '';
-
-                // Add self
                 let myName = document.getElementById('player-name').value || "Me";
                 let div = document.createElement('div');
-                let role = isHost ? '[HOST]' : '';
-                div.textContent = `${myName} (You) ${role}`;
+                div.textContent = `${myName} (You) ${isHost ? '[HOST]' : ''}`;
                 div.style.color = '#0f0';
                 listDiv.appendChild(div);
-
                 connectedPlayers.forEach(p => {
                     let d = document.createElement('div');
                     d.textContent = p.name;
@@ -5266,85 +5666,383 @@
             }
         }
 
-        function addRemoteVideo(peerId, stream) {
-            let container = document.getElementById('remote-views');
-            // Check if exists
-            if (document.getElementById(`vid-${peerId}`)) return;
+        // --- CAROUSEL VIEW LOGIC ---
+
+        function rotateView(dir) {
+            if (playerOrder.length === 0) return;
+            viewIndex = (viewIndex + dir + playerOrder.length) % playerOrder.length;
+            updateCarousel();
+            updateVisibleStreams(); // Update connections based on new view!
+        }
+
+        function updateCarousel() {
+            let track = document.getElementById('carousel-track');
+
+            // 1. Move everything back to pool/storage before rebuilding
+            // Local Player
+            let localContainer = document.getElementById('local-player-container');
+            if (localContainer && localContainer.parentNode === track) {
+                // Should we move it to a safe place? No, just detach is fine if we reappend.
+                // But wait, if we clear innerHTML we lose event listeners?
+                // Better to iterate and move known children out.
+            }
+
+            // Move remote players back to pool
+            // Move remote players back to pool
+            // Select any carousel item that is NOT local player
+            let remotes = track.querySelectorAll('.carousel-item:not(.local-player)');
+            remotes.forEach(el => document.getElementById('video-pool').appendChild(el));
+
+            // Detach Local Player Container safely
+            if (localContainer) {
+                // If it's in track, remove it so we can append it in correct order
+                if (localContainer.parentNode === track) track.removeChild(localContainer);
+            }
+
+            // Clear Track content? 
+            // Now track should be empty (since we moved remotes and local)
+            // But let's be safe
+            // track.innerHTML = ''; // NO! This kills the localContainer if we didn't save it ref.
+            // We have localContainer reference. But if we used innerHTML we destroy the object.
+            // So we MUST use detach/append.
+
+            // 2. Determine Order (Left, Center, Right)
+            const getPlayerAt = (idx) => playerOrder[(idx + playerOrder.length) % playerOrder.length];
+
+            let itemsToShow = [];
+
+            // Should we show ALL players? User said "side by side".
+            // Ring logic: 
+            // If < 3 players, easy.
+            // If > 3, we only show Left, Center, Right?
+            // User requested: "Refactor so that ... all of the other videos are as well. All of them side by side... shift left/right"
+            // This implies showing MORE than just 3 if there are more?
+            // "All of them side by side". 
+            // Let's implement showing Center, then neighbors outwards?
+            // Or just the whole list shifted?
+            // Ring: [P1, P2, P3, P4]. 
+            // If View=P1. Order: P4, P1, P2? (Left, Center, Right). 
+            // Let's stick to 3 visible slots for now to keep Zoom/Size manageable as per previous design, but using the Track.
+            // Actually, if we use flex, we can just dump 3 items.
+
+            let centerP = getPlayerAt(viewIndex);
+            let leftP = getPlayerAt(viewIndex - 1);
+            let rightP = getPlayerAt(viewIndex + 1);
+
+            if (playerOrder.length === 1) { leftP = null; rightP = null; }
+            if (playerOrder.length === 2) { rightP = null; } // Left and Center covers it
+
+            let slots = [];
+            if (leftP) slots.push({ p: leftP, type: 'side' });
+            slots.push({ p: centerP, type: 'main' });
+            if (rightP) slots.push({ p: rightP, type: 'side' });
+
+            // 3. Append to Track
+            slots.forEach(slot => {
+                let el;
+                if (slot.p.id === myPeerId) {
+                    el = localContainer;
+                    el.style.display = 'flex'; // Ensure visible
+                } else {
+                    el = getVideoElement(slot.p.id);
+                    // Update Name
+                    let nt = el.querySelector('.name-tag');
+                    if (nt) nt.textContent = slot.p.name;
+                }
+
+                // Apply Classes
+                el.className = 'carousel-item ' + (slot.p.id === myPeerId ? 'local-player ' : 'remote-player-container ') + (slot.type === 'main' ? 'item-main' : 'item-side');
+
+                track.appendChild(el);
+            });
+
+            resize();
+        }
+
+        function getVideoElement(peerId) {
+            let id = `vid-wrapper-${peerId}`;
+            let existing = document.getElementById(id);
+            if (existing) {
+                // DEFENSIVE: Check if market strip exists
+                if (!existing.querySelector('.remote-market-strip')) {
+                    // Add it if missing
+                    let marketPlaceholder = document.createElement('div');
+                    marketPlaceholder.className = 'remote-market-strip';
+                    marketPlaceholder.style.display = 'flex';
+                    marketPlaceholder.style.justifyContent = 'center';
+                    marketPlaceholder.style.gap = '4px';
+                    marketPlaceholder.style.padding = '4px';
+                    marketPlaceholder.style.alignItems = 'center';
+                    marketPlaceholder.style.height = 'auto';
+                    for (let i = 0; i < 6; i++) {
+                        let slot = document.createElement('div');
+                        slot.className = 'market-card';
+                        slot.innerHTML = '<div style="font-size:20px; color:#333; height:100%; display:flex; align-items:center; justify-content:center;">?</div>';
+                        marketPlaceholder.appendChild(slot);
+                    }
+                    existing.appendChild(marketPlaceholder);
+                }
+                return existing;
+            }
 
             let wrapper = document.createElement('div');
-            wrapper.className = 'remote-player';
+            wrapper.id = id;
+            // Use new container class ensuring column layout
+            wrapper.className = 'carousel-item remote-player-container';
 
-            let vid = document.createElement('video');
-            vid.id = `vid-${peerId}`;
-            vid.autoplay = true;
-            vid.playsInline = true; // Important for mobile
-            vid.muted = true; // CRITICAL: Browsers block autoplay with sound. Force mute.
-            vid.srcObject = stream;
+            // Video Box (Replica of Game Canvas Area)
+            let videoContainer = document.createElement('div');
+            videoContainer.className = 'remote-video-box';
 
-            // Explicit play attempt
-            vid.onloadedmetadata = () => {
-                vid.play().catch(e => console.error("Remote video play error:", e));
+            // CLICK LISTENER FOR VIDEO (EXECUTE ATTACK)
+            videoContainer.onclick = function () {
+                // Check if we have a selected card for THIS peer
+                if (selectedRemoteCard && selectedRemoteCard.peerId === peerId) {
+                    let markets = remoteMarkets[peerId];
+                    if (markets) {
+                        let card = markets[selectedRemoteCard.index];
+                        if (card && !card.bought) {
+                            // EXECUTE
+                            useRemoteCard(peerId, card);
+                        }
+                    }
+                }
             };
 
+            let vid = document.createElement('video');
+            vid.autoplay = true;
+            vid.playsInline = true;
+            vid.muted = true;
+            vid.id = `vid-${peerId}`;
+            vid.onloadedmetadata = () => vid.play().catch(e => console.error("Play err", e));
+
+            // Name Tag (Overlay on Video)
             let nameTag = document.createElement('div');
             nameTag.className = 'name-tag';
-            let p = connectedPlayers.find(x => x.id === peerId);
-            nameTag.textContent = p ? p.name : peerId.substring(0, 5);
+            nameTag.textContent = "Player";
 
-            wrapper.appendChild(vid);
-            wrapper.appendChild(nameTag);
-            container.appendChild(wrapper);
+            videoContainer.appendChild(vid);
+            // videoContainer.appendChild(nameTag); // hidden for now
 
-            layoutRemoteViews();
-        }
+            // Market Strip (Replica)
+            let marketPlaceholder = document.createElement('div');
+            marketPlaceholder.className = 'remote-market-strip';
+            marketPlaceholder.id = `remote-market-${peerId}`; // ID for easy access
+            // Mimic Flex layout of real market strip
+            marketPlaceholder.style.display = 'flex';
+            marketPlaceholder.style.justifyContent = 'center';
+            marketPlaceholder.style.gap = '4px';
+            marketPlaceholder.style.padding = '4px';
+            marketPlaceholder.style.alignItems = 'center';
+            marketPlaceholder.style.height = 'auto'; // Ensure height wraps or matches min-height
 
-        function layoutRemoteViews() {
-            let container = document.getElementById('remote-views');
-            let count = container.children.length;
-            if (count > 2) {
-                // Tile?
-                // Just use flex wrap
-                // But container is column by default. 
-                // We want row wrap when many?
-                // Or grid.
-                // Mobile media query handles specific layout.
-                // Desktop:
-                // If many, maybe 2 cols?
-                // For now, stack is fine unless requested.
-                // User said: "If there are more than 2 players, minimize and tile the canvases."
-                // "Tile" implies grid.
-                container.style.flexDirection = 'row';
-                container.style.flexWrap = 'wrap';
-                for (let child of container.children) {
-                    child.style.width = '48%'; // 2 per row
-                    child.style.height = 'auto';
-                }
-            } else {
-                container.style.flexDirection = 'column';
-                for (let child of container.children) {
-                    child.style.width = '100%';
-                }
+            // 6 Cards for Remote
+            for (let i = 0; i < 6; i++) {
+                let slot = document.createElement('div');
+                slot.className = 'market-card';
+                // Click Handler
+                slot.onclick = (e) => handleRemoteCardClick(peerId, i, e);
+
+                // Placeholder visuals
+                slot.innerHTML = '<div style="font-size:20px; color:#333; height:100%; display:flex; align-items:center; justify-content:center;">?</div>';
+                marketPlaceholder.appendChild(slot);
             }
+
+            wrapper.appendChild(videoContainer);
+            wrapper.appendChild(marketPlaceholder);
+
+            document.getElementById('video-pool').appendChild(wrapper);
+            return wrapper;
         }
 
-        // --- HOOKS ---
+        function handleRemoteCardClick(peerId, index, e) {
+            if (e) e.stopPropagation(); // Don't trigger other things
 
-        // Override the global startGame
+            let markets = remoteMarkets[peerId];
+            if (!markets) return;
+
+            let card = markets[index];
+            if (!card || card.bought) return;
+
+            // Check Affordability
+            let data = CARD_TYPES[card.type] || {};
+            let price = card.price;
+            if (gameState.money < price) {
+                // Blink red? (TODO)
+                return;
+            }
+
+            // Select
+            if (selectedRemoteCard && selectedRemoteCard.peerId === peerId && selectedRemoteCard.index === index) {
+                // Deselect if same
+                selectedRemoteCard = null;
+            } else {
+                selectedRemoteCard = { peerId: peerId, index: index };
+            }
+            updateUI();
+        }
+
+        function renderRemoteMarkets() {
+            // Iterate connected/visible players
+            let peers = connectedPlayers.map(p => p.id);
+            // Also need to support players in the carousel even if not in connectedPlayers? 
+            // remoteMarkets logic creates data for existing connections.
+
+            peers.forEach(pid => {
+                let strip = document.getElementById(`remote-market-${pid}`);
+                if (!strip) return;
+
+                let cards = remoteMarkets[pid];
+                if (!cards) return;
+
+                // Sync children
+                while (strip.children.length < cards.length) {
+                    let d = document.createElement('div');
+                    let idx = strip.children.length;
+                    d.className = 'market-card';
+                    d.onclick = (e) => handleRemoteCardClick(pid, idx, e);
+                    // Structure
+                    d.innerHTML = `
+                            <div class="canvas-container" style="width:24px;height:24px;margin-bottom:2px;">
+                                <canvas width="32" height="32"></canvas>
+                            </div>
+                            <div class="m-name" style="font-size:8px;"></div>
+                            <div class="m-cost" style="font-size:10px;"></div>
+                            <div class="sold-badge" style="font-size:8px;top:40%;">SOLD</div>
+                        `;
+                    strip.appendChild(d);
+                }
+
+                // Update Content
+                Array.from(strip.children).forEach((d, i) => {
+                    let card = cards[i];
+                    if (!card) return; // Should not happen
+
+                    let data = CARD_TYPES[card.type] || {}; // spawn_enemy has data
+
+                    let isSelected = (selectedRemoteCard && selectedRemoteCard.peerId === pid && selectedRemoteCard.index === i);
+                    let canAfford = (gameState.money >= card.price);
+
+                    d.className = `market-card ${card.bought ? 'bought' : ''} ${!canAfford && !card.bought ? 'too-expensive' : ''} ${isSelected ? 'selected' : ''}`;
+                    d.style.borderColor = isSelected ? '#0f0' : (card.bought ? '#333' : data.color);
+                    // Smaller styling override
+                    d.style.height = '90px';
+
+                    // Ensure structure exists
+                    if (!d.querySelector('.m-name')) {
+                        d.innerHTML = `
+                            <div class="canvas-container" style="width:24px;height:24px;margin-bottom:2px;">
+                                <canvas width="32" height="32"></canvas>
+                            </div>
+                            <div class="m-name" style="font-size:8px;"></div>
+                            <div class="m-cost" style="font-size:10px;"></div>
+                            <div class="sold-badge" style="font-size:8px;top:40%;">SOLD</div>
+                        `;
+                    }
+
+                    // Name
+                    let nameHtml = "";
+                    if (card.type === 'spawn_enemy') {
+                        nameHtml = `${card.enemyType.toUpperCase()}<br><span style="color:#fff">${card.count}x</span>`;
+                    } else {
+                        nameHtml = data.name;
+                    }
+                    d.querySelector('.m-name').innerHTML = nameHtml;
+                    d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
+
+                    // Cost
+                    d.querySelector('.m-cost').innerHTML = `$${formatBigNumber(card.price)}`;
+
+                    // Icon
+                    let canvas = d.querySelector('canvas');
+                    renderMarketIcon(canvas, card, data);
+                });
+            });
+        }
+
+        // --- DYNAMIC STREAMING ---
+
+        // Called when view changes to ensure we are calling the people we can see
+        function updateVisibleStreams() {
+            if (!gameActive) return;
+
+            let targets = [];
+            // Who is visible? 
+            let indices = [viewIndex];
+            if (playerOrder.length > 1) indices.push((viewIndex - 1 + playerOrder.length) % playerOrder.length);
+            if (playerOrder.length > 2) indices.push((viewIndex + 1 + playerOrder.length) % playerOrder.length);
+
+            indices.forEach(idx => {
+                let p = playerOrder[idx];
+                if (p && p.id !== myPeerId) targets.push(p.id);
+            });
+
+            // 1. Call Missing Targets
+            targets.forEach(targetId => {
+                // Check if we are already getting stream FROM them?
+                // MediaCalls are usually outgoing or incoming. 
+                // We assume bidirectional eventually?
+                // Simplest: If I don't have a video srcObject for this peer, I call them.
+                // Wait, if THEY called ME, I have their stream in handleCallStream.
+
+                let vid = document.getElementById(`vid-${targetId}`);
+                if (vid && !vid.srcObject) {
+                    // No stream? Initiate Call.
+                    initiateCall(targetId);
+                }
+            });
+
+            // 2. Optional: Close distant calls? 
+            // User requirement: "streams at most to 2".
+            // If I rotate away, should I close connection?
+            // If I close, and they were watching ME, I cut their feed.
+            // Bad.
+            // The constraint "player streams at most to 2" implies SENDER limit.
+            // If P1 is viewed by P3, P4, P5... P1 is sending 3 streams.
+            // But in a ring, usually only Neighbors watch.
+            // Spectating is rare.
+            // Let's NOT close connections aggressively for now to avoid complexity/lag.
+            // But we prioritize initiating calls to visible ones.
+        }
+
+        function initiateCall(peerId) {
+            // Check if existing call object?
+            // Note: peer.call returns a MediaConnection.
+            console.log("Initiating call to visible peer:", peerId);
+            let call = peer.call(peerId, localStream);
+            handleCallStream(call);
+        }
+
+        function handleCallStream(call) {
+            call.on('stream', (remoteStream) => {
+                // Find or Create video element and attach
+                let peerId = call.peer;
+                console.log("Received Stream from", peerId);
+
+                // Force Track Enable
+                remoteStream.getVideoTracks().forEach(t => t.enabled = true);
+
+                let wrapper = getVideoElement(peerId); // Ensures existence
+                let vid = wrapper.querySelector('video');
+                vid.srcObject = remoteStream;
+                vid.play().catch(e => console.log(e));
+            });
+            call.on('error', e => console.error("Call error", e));
+        }
+
+
+        // --- HOOKS & START ---
+
         const originalStartGame = window.startGame;
         window.startGame = function (difficulty) {
-            let isMp = document.getElementById('mp-checkbox').checked;
-            if (isMp) {
-                // Show Lobby
+            if (document.getElementById('mp-checkbox').checked) {
                 document.getElementById('main-menu').style.display = 'none';
                 document.getElementById('lobby-screen').style.display = 'flex';
                 selectedLobbyDiff = difficulty;
                 isHost = true;
                 isMultiplayer = true;
-
-                // Show Host Controls
                 document.getElementById('lobby-start-btn').style.display = 'block';
                 document.getElementById('invite-section').style.display = 'block';
-
                 initPeer();
             } else {
                 originalStartGame(difficulty);
@@ -5352,81 +6050,58 @@
         };
 
         function startMultiplayerGame() {
-            // Signal everyone
-            connections.forEach(c => c.send({ type: 'START_GAME', difficulty: selectedLobbyDiff }));
+            // Generate Ring Order
+            // Host + Connected
+            let all = [{ id: myPeerId, name: document.getElementById('player-name').value }, ...connectedPlayers];
+            // Shuffle
+            all.sort(() => Math.random() - 0.5);
+
+            // Broadcast
+            connections.forEach(c => c.send({ type: 'START_GAME', difficulty: selectedLobbyDiff, order: all }));
+
+            // Start Self
+            playerOrder = all;
             startGameInternal(selectedLobbyDiff, true);
         }
 
         function startGameInternal(difficulty, multip) {
-            // Hide Lobby
             document.getElementById('lobby-screen').style.display = 'none';
             document.getElementById('hud').style.display = 'flex';
+            document.getElementById('nav-left').style.display = 'flex';
+            document.getElementById('nav-right').style.display = 'flex';
 
             if (multip) {
                 isMultiplayer = true;
-                // Enable sidebar
-                document.getElementById('remote-views').classList.add('active');
-                layoutRemoteViews(); // Initial
+                gameActive = true;
 
-                // START STREAMING
-                // START STREAMING
+                // Setup Local Stream
                 try {
-                    // Capture immediately so we have it ready for answering
-                    // Capture immediately so we have it ready for answering
-                    // Lower FPS to 30 to save bandwidth/processing
-                    let stream = canvas.captureStream(30);
+                    let fps = 60;
+                    let ua = navigator.userAgent.toLowerCase();
+                    if (ua.indexOf('firefox') > -1 && ua.indexOf('android') > -1) fps = 0;
 
-                    // ANSWERING LOGIC (Listeners must be ready BEFORE Host calls)
-                    if (!isHost) {
-                        // Client: Setup listener immediately
-                        peer.on('call', (call) => {
-                            console.log("Answering call from", call.peer);
-                            call.answer(stream); // Send MY stream back
+                    localStream = canvas.captureStream(fps);
+                    localStream.getVideoTracks().forEach(t => { t.enabled = true; });
 
-                            call.on('stream', (remoteStream) => {
-                                addRemoteVideo(call.peer, remoteStream);
-                            });
-                            call.on('error', (e) => console.error("Answer Error:", e));
-                        });
+                    // Find My Index
+                    myIndex = playerOrder.findIndex(p => p.id === myPeerId);
+                    if (myIndex === -1) {
+                        // Fallback?
+                        myIndex = 0;
                     }
+                    viewIndex = myIndex; // Start viewing self
 
-                    // CALLING LOGIC (Host)
-                    // Wait a bit to ensure Clients have switched scenes and set up listeners
-                    if (isHost) {
-                        setTimeout(() => {
-                            console.log("I am Host. Start calling...");
+                    updateCarousel();
+                    updateVisibleStreams();
 
-                            // Also need to handle incoming calls IF clients were allowed to call (they aren't now)
-                            // But actually peer.on('call') is global. 
-                            // If we define it only for client, Host can't answer?
-                            // Wait, logic says Only Host Calls. So Client never calls Host.
-                            // So Host never receives a 'call' event. Host initiates.
-                            // So Host doesn't need peer.on('call').
+                    // Host doesn't need to "call everyone" anymore.
+                    // Everyone calls their neighbors via updateVisibleStreams logic.
 
-                            connections.forEach(c => {
-                                if (c.open) {
-                                    console.log("Calling peer:", c.peer);
-                                    let call = peer.call(c.peer, stream);
-                                    call.on('stream', (remoteStream) => {
-                                        addRemoteVideo(c.peer, remoteStream);
-                                    });
-                                    call.on('error', (e) => console.error("Call Error:", e));
-                                }
-                            });
-                        }, 1000);
-                    }
-
-                } catch (e) {
-                    console.error("Stream Capture Error:", e);
-                }
+                } catch (e) { console.error("Stream setup failed", e); }
             }
 
-            // Update Game State Difficulty manually as originalStartGame does
-            // Then call resetGame
             gameState.difficulty = difficulty;
             resetGame();
-
-            // Force resize to align button and market with new layout
             setTimeout(resize, 0);
         }
 

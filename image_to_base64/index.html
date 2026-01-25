@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image to Base64 Converter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger-color: #ef4444;
+            --border-color: #475569;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 1.5rem;
+            flex-shrink: 0;
+            overflow-y: auto;
+        }
+
+        .sidebar-header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 2rem;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+        }
+
+        .control-group {
+            margin-bottom: 2rem;
+        }
+
+        .control-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+            display: block;
+            font-weight: 600;
+        }
+
+        /* Import Area */
+        .import-area {
+            border: 2px dashed var(--border-color);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.2s;
+            background: var(--bg-tertiary);
+            cursor: pointer;
+        }
+
+        .import-area:hover,
+        .import-area.drag-over {
+            border-color: var(--accent-color);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .import-area p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        /* Inputs & Buttons */
+        .btn {
+            width: 100%;
+            padding: 0.6rem 1rem;
+            border-radius: 0.5rem;
+            border: none;
+            font-family: inherit;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background-color: #475569;
+        }
+
+        .btn-danger {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--danger-color);
+        }
+
+        .btn-danger:hover {
+            background-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .input-text {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 0.4rem;
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            margin-top: 0.25rem;
+        }
+
+        .setting-item {
+            margin-bottom: 1rem;
+        }
+
+        .setting-item label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent-color);
+        }
+
+        /* Image List */
+        .image-list-container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 200px;
+        }
+
+        .image-list {
+            list-style: none;
+            overflow-y: auto;
+            flex-grow: 1;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            background: var(--bg-primary);
+        }
+
+        .image-list-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: background 0.1s;
+        }
+
+        .image-list-item:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        .image-list-item.active {
+            background-color: rgba(59, 130, 246, 0.15);
+            border-left: 3px solid var(--accent-color);
+        }
+
+        .item-name {
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 180px;
+        }
+
+        .item-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--danger-color);
+        }
+
+        .item-status.ready {
+            background-color: #10b981;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: #000;
+        }
+
+        .view-panel {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        .view-panel:last-child {
+            border-bottom: none;
+        }
+
+        .panel-header {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            z-index: 10;
+            background: var(--glass-bg);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .panel-header h2 {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .panel-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            border-left: 1px solid var(--text-secondary);
+            padding-left: 1rem;
+        }
+
+        .image-viewer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image:
+                linear-gradient(45deg, #1e293b 25%, transparent 25%),
+                linear-gradient(-45deg, #1e293b 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #1e293b 75%),
+                linear-gradient(-45deg, transparent 75%, #1e293b 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            overflow: auto;
+            padding: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-content: center;
+        }
+
+        .image-viewer img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+        }
+
+        .placeholder-text {
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            opacity: 0.5;
+        }
+
+        /* Delete Button */
+        .delete-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 8px;
+            margin-left: 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+            font-size: 1.2rem;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .delete-btn:hover {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: var(--danger-color);
+        }
+
+        .list-item-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .split-checkbox {
+            margin-right: 8px;
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent-color);
+        }
+
+        .rename-input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--accent-color);
+            color: var(--text-primary);
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            width: 150px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Img2Base64</h1>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Import</label>
+                <div class="import-area" id="dropZone">
+                    <p>Drag & Drop Images / JSON</p>
+                    <p>or Paste (Ctrl+V)</p>
+                    <input type="file" id="fileInput" multiple accept="image/*,application/json" hidden>
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Browse
+                        Files</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Settings</label>
+                <div class="setting-item">
+                    <label>Quality: <span id="qualityValue">0.8</span></label>
+                    <input type="range" id="qualityRange" min="0.1" max="1.0" step="0.05" value="0.8">
+                </div>
+                <div class="setting-item">
+                    <label>Max Width (px)</label>
+                    <input type="number" id="maxWidthInput" placeholder="Auto" class="input-text">
+                </div>
+                <div class="setting-item">
+                    <label>Max Height (px)</label>
+                    <input type="number" id="maxHeightInput" placeholder="Auto" class="input-text">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Actions</label>
+                <div class="action-buttons">
+                    <button id="btnExportJson" class="btn btn-secondary">Export JSON</button>
+                    <button id="btnCopyJson" class="btn btn-secondary">Copy JSON</button>
+                    <button id="btnClearAll" class="btn btn-danger">Clear All</button>
+                </div>
+            </div>
+
+            <div class="image-list-container">
+                <label class="control-label">Images (<span id="imageCount">0</span>)</label>
+                <ul id="imageList" class="image-list">
+                    <!-- Image items will be injected here -->
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="view-panel top-panel">
+                <div class="panel-header">
+                    <h2>Original</h2>
+                    <div class="panel-info" id="originalInfo"></div>
+                </div>
+                <div class="image-viewer" id="originalViewer">
+                    <div class="placeholder-text">Select an image to view original</div>
+                </div>
+            </div>
+
+            <div class="view-panel bottom-panel">
+                <div class="panel-header">
+                    <h2>Converted (Base64)</h2>
+                    <div class="panel-info" id="convertedInfo"></div>
+                </div>
+                <div class="image-viewer" id="convertedViewer">
+                    <div class="placeholder-text">Select an image to view converted result</div>
+                </div>
+                <div class="base64-preview">
+                    <!-- Optional: Truncated Base64 string preview or copy button specific to this image -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        /**
+         * Image to Base64 Converter Logic
+         */
+
+        class ImageManager {
+            constructor() {
+                this.images = new Map(); // id -> { id, file, name, originalUrl, compressedUrl, base64, status, isSplit: boolean }
+                this.selectedId = null;
+                this.settings = {
+                    quality: 0.8,
+                    maxWidth: null,
+                    maxHeight: null
+                };
+
+                this.initEventListeners();
+            }
+
+            initEventListeners() {
+                // UI Inputs
+                this.ui = {
+                    fileInput: document.getElementById('fileInput'),
+                    dropZone: document.getElementById('dropZone'),
+                    qualityRange: document.getElementById('qualityRange'),
+                    qualityValue: document.getElementById('qualityValue'),
+                    maxWidthInput: document.getElementById('maxWidthInput'),
+                    maxHeightInput: document.getElementById('maxHeightInput'),
+                    imageList: document.getElementById('imageList'),
+                    originalViewer: document.getElementById('originalViewer'),
+                    convertedViewer: document.getElementById('convertedViewer'),
+                    originalInfo: document.getElementById('originalInfo'),
+                    convertedInfo: document.getElementById('convertedInfo'),
+                    imageCount: document.getElementById('imageCount'),
+                    btnExportJson: document.getElementById('btnExportJson'),
+                    btnCopyJson: document.getElementById('btnCopyJson'),
+                    btnClearAll: document.getElementById('btnClearAll')
+                };
+
+                // Input Change Listeners
+                this.ui.fileInput.addEventListener('change', (e) => this.handleFiles(e.target.files));
+
+                // Drag & Drop
+                this.ui.dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    this.ui.dropZone.classList.add('drag-over');
+                });
+                this.ui.dropZone.addEventListener('dragleave', () => {
+                    this.ui.dropZone.classList.remove('drag-over');
+                });
+                this.ui.dropZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    this.ui.dropZone.classList.remove('drag-over');
+                    this.handleFiles(e.dataTransfer.files);
+                });
+
+                // Paste
+                document.addEventListener('paste', (e) => this.handlePaste(e));
+
+                // Settings
+                this.ui.qualityRange.addEventListener('input', (e) => {
+                    this.settings.quality = parseFloat(e.target.value);
+                    this.ui.qualityValue.textContent = this.settings.quality;
+                    this.recompressAll();
+                });
+                this.ui.maxWidthInput.addEventListener('input', (e) => {
+                    this.settings.maxWidth = parseInt(e.target.value) || null;
+                    this.recompressAll();
+                });
+                this.ui.maxHeightInput.addEventListener('input', (e) => {
+                    this.settings.maxHeight = parseInt(e.target.value) || null;
+                    this.recompressAll();
+                });
+
+                // Actions
+                this.ui.btnExportJson.addEventListener('click', () => this.exportJson());
+                this.ui.btnCopyJson.addEventListener('click', () => this.copyJson());
+                this.ui.btnClearAll.addEventListener('click', () => this.clearAll());
+            }
+
+            async handleFiles(fileList) {
+                if (!fileList || fileList.length === 0) return;
+
+                for (let i = 0; i < fileList.length; i++) {
+                    const file = fileList[i];
+
+                    if (file.type === 'application/json') {
+                        await this.handleJsonImport(file);
+                    } else if (file.type.startsWith('image/')) {
+                        await this.addImage(file);
+                    }
+                }
+            }
+
+            async handlePaste(e) {
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+                let hasHandled = false;
+
+                // check for text (JSON)
+                const textData = e.clipboardData.getData('text');
+                if (textData) {
+                    try {
+                        const json = JSON.parse(textData);
+                        // Check if it looks like our schema
+                        if (typeof json === 'object') {
+                            await this.importResults(json);
+                            hasHandled = true;
+                        }
+                    } catch (err) {
+                        // Not JSON, ignore
+                    }
+                }
+
+                // check for images
+                if (!hasHandled) {
+                    for (let index in items) {
+                        const item = items[index];
+                        if (item.kind === 'file' && item.type.startsWith('image/')) {
+                            const blob = item.getAsFile();
+                            // Generate a name for pasted image
+                            const name = `pasted_image_${Date.now()}.png`;
+                            const file = new File([blob], name, { type: blob.type });
+                            await this.addImage(file);
+                        }
+                    }
+                }
+            }
+
+            async handleJsonImport(file) {
+                const text = await file.text();
+                try {
+                    const json = JSON.parse(text);
+                    await this.importResults(json);
+                } catch (e) {
+                    alert('Invalid JSON file');
+                    console.error(e);
+                }
+            }
+
+            async importResults(json) {
+                for (const [name, base64] of Object.entries(json)) {
+                    // For imported JSON, the base64 IS the 'original' in this context, 
+                    // or we treat it as source. 
+                    // To fit our pipeline, we can convert base64 -> Blob -> File
+                    try {
+                        const res = await fetch(base64);
+                        const blob = await res.blob();
+                        const file = new File([blob], name, { type: blob.type });
+                        await this.addImage(file);
+                    } catch (e) {
+                        console.error(`Failed to load image ${name}`, e);
+                    }
+                }
+            }
+
+            async addImage(file) {
+                const id = 'img_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                const originalUrl = URL.createObjectURL(file);
+
+                const imageItem = {
+                    id,
+                    file,
+                    name: file.name,
+                    originalUrl,
+                    compressedUrl: null,
+                    base64: null,
+                    status: 'pending',
+                    originalSize: file.size,
+                    isSplit: false // Default to false
+                };
+
+                this.images.set(id, imageItem);
+                this.renderImageList();
+
+                // Select this new image
+                this.selectImage(id);
+
+                // Trigger compression
+                await this.processImage(id);
+            }
+
+            async processImage(id) {
+                const item = this.images.get(id);
+                if (!item) return;
+
+                try {
+                    const result = await this.compress(item.originalUrl, item.file.type);
+                    item.base64 = result.base64;
+                    item.compressedUrl = result.base64; // Data URL can be used as src
+                    item.status = 'ready';
+
+                    // Calculate compressed size (rough estimate: length * 0.75 for base64)
+                    // Exact bytes: (length * 3) / 4 - padding
+                    const strLen = item.base64.indexOf(',') > -1 ? item.base64.split(',')[1].length : item.base64.length;
+                    item.compressedSize = (strLen * 3) / 4;
+
+                    this.updateImageStatus(id);
+                    if (this.selectedId === id) {
+                        this.updateMainView();
+                    }
+                } catch (e) {
+                    console.error('Compression failed', e);
+                    item.status = 'error';
+                }
+            }
+
+            compress(src, mimeType) {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+
+                        // Scaling logic
+                        const maxW = this.settings.maxWidth;
+                        const maxH = this.settings.maxHeight;
+
+                        if (maxW && width > maxW) {
+                            height *= maxW / width;
+                            width = maxW;
+                        }
+                        if (maxH && height > maxH) {
+                            width *= maxH / height;
+                            height = maxH;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        const quality = Math.max(0.1, Math.min(1.0, this.settings.quality));
+                        const base64 = canvas.toDataURL(mimeType === 'image/png' ? 'image/png' : 'image/jpeg', quality);
+
+                        resolve({ base64, width, height });
+                    };
+                    img.onerror = reject;
+                    img.src = src;
+                });
+            }
+
+            recompressAll() {
+                this.images.forEach((item, id) => {
+                    this.processImage(id);
+                });
+            }
+
+            selectImage(id) {
+                this.selectedId = id;
+                this.updateListSelection();
+                this.updateMainView();
+            }
+
+            updateListSelection() {
+                const listItems = this.ui.imageList.children;
+                let index = 0;
+                this.images.forEach((item, key) => {
+                    const li = listItems[index];
+                    if (li) {
+                        if (key === this.selectedId) li.classList.add('active');
+                        else li.classList.remove('active');
+                    }
+                    index++;
+                });
+            }
+
+            async updateMainView() {
+                const item = this.images.get(this.selectedId);
+
+                // Reset
+                this.ui.originalViewer.innerHTML = '';
+                this.ui.convertedViewer.innerHTML = '';
+                this.ui.originalInfo.textContent = '';
+                this.ui.convertedInfo.textContent = '';
+
+                if (!item) {
+                    this.ui.originalViewer.innerHTML = '<div class="placeholder-text">Select an image</div>';
+                    this.ui.convertedViewer.innerHTML = '<div class="placeholder-text">Select an image</div>';
+                    return;
+                }
+
+                // Show Original
+                const imgOrig = document.createElement('img');
+                imgOrig.src = item.originalUrl;
+                this.ui.originalViewer.appendChild(imgOrig);
+                this.ui.originalInfo.textContent = `${this.formatBytes(item.originalSize)}`;
+
+                // Show Converted
+                if (item.base64) {
+                    if (item.isSplit) {
+                        this.ui.convertedViewer.innerHTML = '<div class="placeholder-text">Splitting...</div>';
+                        try {
+                            const splits = await this.splitImageAlgorithm(item);
+                            // Check if selection changed while awaiting
+                            if (this.selectedId !== item.id) return;
+
+                            this.ui.convertedViewer.innerHTML = '';
+
+                            const fragment = document.createDocumentFragment();
+                            Object.entries(splits).forEach(([name, dataUrl]) => {
+                                const container = document.createElement('div');
+                                container.style.display = 'flex';
+                                container.style.flexDirection = 'column';
+                                container.style.alignItems = 'center';
+                                container.style.gap = '4px';
+                                container.style.margin = '4px';
+
+                                const img = document.createElement('img');
+                                img.src = dataUrl;
+                                img.title = name;
+                                img.style.border = '1px solid var(--accent-color)';
+                                img.style.backgroundColor = 'var(--bg-secondary)'; // check transparency
+
+                                const label = document.createElement('span');
+                                label.textContent = name;
+                                label.style.fontSize = '0.7rem';
+                                label.style.color = 'var(--text-secondary)';
+                                label.style.maxWidth = '150px';
+                                label.style.overflow = 'hidden';
+                                label.style.textOverflow = 'ellipsis';
+                                label.style.whiteSpace = 'nowrap';
+
+                                container.appendChild(img);
+                                container.appendChild(label);
+                                fragment.appendChild(container);
+                            });
+                            this.ui.convertedViewer.appendChild(fragment);
+
+                            this.ui.convertedInfo.textContent = `${Object.keys(splits).length} parts (Quality: ${this.settings.quality})`;
+                        } catch (e) {
+                            console.error(e);
+                            this.ui.convertedViewer.textContent = 'Error splitting image';
+                        }
+                    } else {
+                        const imgConv = document.createElement('img');
+                        imgConv.src = item.base64;
+                        this.ui.convertedViewer.appendChild(imgConv);
+
+                        let infoText = `${this.formatBytes(item.compressedSize)} (Quality: ${this.settings.quality})`;
+                        this.ui.convertedInfo.textContent = infoText;
+                    }
+                } else {
+                    this.ui.convertedViewer.innerHTML = '<div class="placeholder-text">Processing...</div>';
+                }
+            }
+
+            renderImageList() {
+                this.ui.imageList.innerHTML = '';
+                this.images.forEach((item, id) => {
+                    const li = document.createElement('li');
+                    li.className = `image-list-item ${id === this.selectedId ? 'active' : ''}`;
+                    li.onclick = () => this.selectImage(id);
+
+                    // Checkbox for Splitting
+                    const splitCheckbox = document.createElement('input');
+                    splitCheckbox.type = 'checkbox';
+                    splitCheckbox.className = 'split-checkbox';
+                    splitCheckbox.title = 'Split into islands';
+                    splitCheckbox.checked = item.isSplit || false;
+                    splitCheckbox.onclick = (e) => {
+                        e.stopPropagation();
+                        item.isSplit = splitCheckbox.checked;
+                        if (this.selectedId === id) this.updateMainView();
+                    };
+
+                    const nameContainer = document.createElement('div');
+                    nameContainer.style.display = 'flex';
+                    nameContainer.style.alignItems = 'center';
+                    nameContainer.style.flexGrow = '1';
+                    nameContainer.style.overflow = 'hidden';
+
+                    const nameSpan = document.createElement('span');
+                    nameSpan.className = 'item-name';
+                    nameSpan.textContent = item.name;
+                    nameSpan.title = `${item.name} (Double-click to rename)`;
+                    nameSpan.ondblclick = (e) => {
+                        e.stopPropagation();
+                        this.enableRenaming(id, nameSpan);
+                    };
+
+                    nameContainer.appendChild(splitCheckbox);
+                    nameContainer.appendChild(nameSpan);
+
+                    const rightGroup = document.createElement('div');
+                    rightGroup.className = 'list-item-right';
+
+                    const statusDiv = document.createElement('div');
+                    statusDiv.className = `item-status ${item.status === 'ready' ? 'ready' : ''}`;
+
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-btn';
+                    deleteBtn.innerHTML = '&times;';
+                    deleteBtn.title = 'Delete';
+                    deleteBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        this.deleteImage(id);
+                    };
+
+                    rightGroup.appendChild(statusDiv);
+                    rightGroup.appendChild(deleteBtn);
+
+                    li.appendChild(nameContainer);
+                    li.appendChild(rightGroup);
+                    this.ui.imageList.appendChild(li);
+                });
+                this.ui.imageCount.textContent = this.images.size;
+            }
+
+            enableRenaming(id, element) {
+                const item = this.images.get(id);
+                if (!item) return;
+
+                const input = document.createElement('input');
+                input.className = 'rename-input';
+                input.value = item.name;
+
+                const finishRename = () => {
+                    const newName = input.value.trim();
+                    if (newName && newName !== item.name) {
+                        item.name = newName;
+                    }
+                    this.renderImageList();
+                };
+
+                input.onblur = finishRename;
+                input.onkeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        finishRename();
+                        input.blur();
+                    }
+                    e.stopPropagation();
+                };
+
+                input.onclick = (e) => e.stopPropagation();
+
+                element.replaceWith(input);
+                input.focus();
+            }
+
+            deleteImage(id) {
+                if (this.images.delete(id)) {
+                    if (this.selectedId === id) {
+                        this.selectedId = null;
+                        this.updateMainView();
+                    }
+                    this.renderImageList();
+                }
+            }
+
+            updateImageStatus(id) {
+                this.renderImageList();
+            }
+
+            async exportJson() {
+                const output = {};
+                for (const [id, item] of this.images) {
+                    if (!item.base64) continue;
+
+                    if (item.isSplit) {
+                        // Perform split
+                        const splits = await this.splitImageAlgorithm(item);
+                        Object.assign(output, splits);
+                    } else {
+                        output[item.name] = item.base64;
+                    }
+                }
+
+                const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'images_base64.json';
+                a.click();
+            }
+
+            copyJson() {
+                // Warning: Copying split images might be slow, so we'll do naive copy 
+                // or we could implement the same split logic. 
+                // For now, let's just copy what's there, but user asked for split on export.
+                // It's ambiguous if "Copy JSON" should also split. Assuming yes.
+
+                // Since copy is sync usually, but we need async for splitting... 
+                // Navigate clipboard API is async.
+
+                this.exportJsonForCopy().then(str => {
+                    navigator.clipboard.writeText(str).then(() => {
+                        const originalText = this.ui.btnCopyJson.textContent;
+                        this.ui.btnCopyJson.textContent = 'Copied!';
+                        setTimeout(() => {
+                            this.ui.btnCopyJson.textContent = originalText;
+                        }, 2000);
+                    });
+                });
+            }
+
+            async exportJsonForCopy() {
+                const output = {};
+                for (const [id, item] of this.images) {
+                    if (!item.base64) continue;
+
+                    if (item.isSplit) {
+                        const splits = await this.splitImageAlgorithm(item);
+                        Object.assign(output, splits);
+                    } else {
+                        output[item.name] = item.base64;
+                    }
+                }
+                return JSON.stringify(output, null, 2);
+            }
+
+            splitImageAlgorithm(item) {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.src = item.base64;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        const data = imageData.data;
+                        const width = canvas.width;
+                        const height = canvas.height;
+
+                        const visited = new Uint8Array(width * height);
+                        const islands = [];
+
+                        // BFS to find connected components
+                        for (let y = 0; y < height; y++) {
+                            for (let x = 0; x < width; x++) {
+                                const idx = (y * width + x) * 4;
+                                const alpha = data[idx + 3];
+                                const visitedIdx = y * width + x;
+
+                                if (alpha > 0 && visited[visitedIdx] === 0) {
+                                    // Found new island
+                                    const island = {
+                                        minX: x, minY: y, maxX: x, maxY: y,
+                                        pixels: [] // store [x, y]
+                                    };
+
+                                    const queue = [[x, y]];
+                                    visited[visitedIdx] = 1;
+                                    island.pixels.push([x, y]);
+
+                                    while (queue.length > 0) {
+                                        const [cx, cy] = queue.shift();
+
+                                        // Update bounds
+                                        if (cx < island.minX) island.minX = cx;
+                                        if (cx > island.maxX) island.maxX = cx;
+                                        if (cy < island.minY) island.minY = cy;
+                                        if (cy > island.maxY) island.maxY = cy;
+
+                                        // Check neighbors (4-connectivity)
+                                        const neighbors = [
+                                            [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]
+                                        ];
+
+                                        for (const [nx, ny] of neighbors) {
+                                            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                                const nVisitedIdx = ny * width + nx;
+                                                if (visited[nVisitedIdx] === 0) {
+                                                    const nIdx = (ny * width + nx) * 4;
+                                                    if (data[nIdx + 3] > 0) {
+                                                        visited[nVisitedIdx] = 1;
+                                                        queue.push([nx, ny]);
+                                                        island.pixels.push([nx, ny]);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    islands.push(island);
+                                }
+                            }
+                        }
+
+                        const resultObj = {};
+                        // Only remove extension for numbering
+                        const nameBase = item.name.replace(/\.[^/.]+$/, "");
+                        const nameExt = item.name.split('.').pop();
+
+                        islands.forEach((island, index) => {
+                            const w = island.maxX - island.minX + 1;
+                            const h = island.maxY - island.minY + 1;
+
+                            const iCanvas = document.createElement('canvas');
+                            iCanvas.width = w;
+                            iCanvas.height = h;
+                            const iCtx = iCanvas.getContext('2d');
+                            const iData = iCtx.createImageData(w, h); // transparent by default
+
+                            // Copy pixels
+                            for (const [px, py] of island.pixels) {
+                                const sourceIdx = (py * width + px) * 4;
+                                const targetX = px - island.minX;
+                                const targetY = py - island.minY;
+                                const targetIdx = (targetY * w + targetX) * 4;
+
+                                iData.data[targetIdx] = data[sourceIdx];
+                                iData.data[targetIdx + 1] = data[sourceIdx + 1];
+                                iData.data[targetIdx + 2] = data[sourceIdx + 2];
+                                iData.data[targetIdx + 3] = data[sourceIdx + 3];
+                            }
+
+                            iCtx.putImageData(iData, 0, 0);
+
+                            const newName = `${nameBase}_${index}.${nameExt}`;
+                            resultObj[newName] = iCanvas.toDataURL(item.file.type);
+                        });
+
+                        resolve(resultObj);
+                    };
+                });
+            }
+
+            clearAll() {
+                this.images.clear();
+                this.selectedId = null;
+                this.renderImageList();
+                this.updateMainView();
+                // clear file input
+                this.ui.fileInput.value = '';
+            }
+
+            formatBytes(bytes, decimals = 2) {
+                if (!bytes) return '0 Bytes';
+                const k = 1024;
+                const dm = decimals < 0 ? 0 : decimals;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            window.app = new ImageManager();
+        });
+
+        /* 
+         * ==========================================================================
+         *  REUSABLE LOADER FUNCTION 
+         *  Copy this function into your other projects (WebGL, Canvas, etc.)
+         *  to easily load the JSON exported by this tool.
+         * ==========================================================================
+         */
+
+        /**
+         * Loads images from a standard JSON object {"name": "base64", ...}
+         * @param {Object} jsonContent - The JSON object containing "filename": "base64" pairs
+         * @returns {Promise<Object>} - A promise that resolves to a map of { filename: ImageElement }
+         */
+        async function loadGameAssets(jsonContent) {
+            const images = {};
+            const promises = [];
+
+            for (const [name, base64] of Object.entries(jsonContent)) {
+                const p = new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => resolve({ name, img });
+                    img.onerror = reject;
+                    // Use the base64 string directly as source
+                    img.src = base64;
+                });
+                promises.push(p);
+            }
+
+            const results = await Promise.all(promises);
+            results.forEach(item => images[item.name] = item.img);
+            return images;
+        }
+    </script>
+</body>
+
+</html>
