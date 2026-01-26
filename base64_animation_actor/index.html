@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Actor Creator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header>
+        <div class="header-title">
+            <h1>Actor Creator</h1>
+        </div>
+        <div class="header-controls">
+            <button id="import-btn">Import Animations (JSON)</button>
+            <button id="export-btn" class="primary">Export Actor</button>
+        </div>
+    </header>
+
+    <main>
+        <!-- Left: Animation Library -->
+        <div id="library-panel" class="panel">
+            <h2 class="panel-title">Animations</h2>
+            <div id="anim-list" class="animation-grid">
+                <!-- Items populated by JS -->
+                <div class="empty-msg"
+                    style="grid-column: 1/-1; color: var(--text-muted); font-size: 0.8rem; text-align: center;">
+                    Drag & Drop JSON or use Import
+                </div>
+            </div>
+        </div>
+
+        <!-- Middle: State Machine Editor -->
+        <div id="states-panel" class="panel">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h2 class="panel-title" style="margin: 0;">State Machine</h2>
+                <button id="add-state-btn" class="primary">+</button>
+            </div>
+
+            <div id="state-list-container" class="state-list">
+                <!-- State Cards populated by JS -->
+            </div>
+        </div>
+
+        <!-- Right: Preview -->
+        <div id="preview-panel" class="panel" style="padding: 0;">
+            <div id="preview-canvas-container" tabindex="0">
+                <canvas id="preview-canvas" width="400" height="400"></canvas>
+            </div>
+            <div class="preview-debug">
+                <div class="debug-row">
+                    <span>State:</span>
+                    <span id="debug-state" style="color: var(--secondary)">-</span>
+                </div>
+                <div class="debug-row">
+                    <span>Keys:</span>
+                    <span id="debug-keys">-</span>
+                </div>
+            </div>
+            <div style="padding: 1rem;">
+                <p style="font-size: 0.8rem; color: var(--text-muted);">
+                    <strong>Instructions:</strong><br>
+                    1. Import Base64 Animation JSON.<br>
+                    2. Create States (e.g., Idle, Run).<br>
+                    3. Define Transitions (State A -> Key -> State B).<br>
+                    4. Click Preview to test.
+                </p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Hidden file input -->
+    <input type="file" id="file-input" accept=".json" style="display: none;">
+
+    <!-- Scripts -->
+    <script src="actor_runtime.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>

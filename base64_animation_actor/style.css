@@ -1,0 +1,298 @@
+:root {
+    --bg-dark: #121212;
+    --bg-panel: #1e1e1e;
+    --bg-input: #2d2d2d;
+    --primary: #bb86fc;
+    --primary-variant: #3700b3;
+    --secondary: #03dac6;
+    --text-main: #e0e0e0;
+    --text-muted: #a0a0a0;
+    --border: #333;
+    --danger: #cf6679;
+}
+
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    background-color: var(--bg-panel);
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+h1 {
+    margin: 0;
+    font-size: 1.2rem;
+    color: var(--primary);
+}
+
+.header-controls {
+    display: flex;
+    gap: 1rem;
+}
+
+button {
+    background-color: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+button:hover {
+    background-color: var(--border);
+}
+
+button.primary {
+    background-color: var(--primary-variant);
+    border-color: var(--primary-variant);
+}
+
+button.primary:hover {
+    background-color: var(--primary);
+}
+
+input[type="text"],
+input[type="number"] {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 0.4rem;
+    border-radius: 4px;
+}
+
+/* Main Layout */
+main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Panels */
+.panel {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    overflow-y: auto;
+}
+
+.panel-title {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Left: Library */
+#library-panel {
+    width: 250px;
+    background-color: var(--bg-panel);
+    border-right: 1px solid var(--border);
+}
+
+.animation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 0.5rem;
+}
+
+.anim-item {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem;
+    cursor: grab;
+    text-align: center;
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.anim-item img {
+    max-width: 100%;
+    height: 60px;
+    object-fit: contain;
+    margin-bottom: 0.25rem;
+    pointer-events: none;
+    /* Let the div be the drag target */
+}
+
+/* Middle: States */
+#states-panel {
+    flex: 1;
+    padding: 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.state-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.state-card {
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.state-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.state-name {
+    font-weight: bold;
+    font-size: 1.1rem;
+    flex: 1;
+}
+
+.state-anim-preview {
+    width: 40px;
+    height: 40px;
+    background-color: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.state-anim-preview img {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.transitions-list {
+    padding-left: 1rem;
+    border-left: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.transition-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-input);
+    padding: 0.5rem;
+    border-radius: 4px;
+}
+
+.key-binding {
+    background: #444;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-family: monospace;
+    cursor: pointer;
+    min-width: 30px;
+    text-align: center;
+    user-select: none;
+}
+
+.key-binding.recording {
+    background: var(--danger);
+    color: white;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+/* Arrow */
+.arrow {
+    color: var(--text-muted);
+}
+
+/* Right: Preview */
+#preview-panel {
+    width: 350px;
+    background-color: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+#preview-canvas-container {
+    flex: 1;
+    background-color: #000;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid var(--border);
+    outline: none;
+}
+
+#preview-canvas-container:focus {
+    border-color: var(--primary);
+}
+
+#preview-canvas-container:focus::after {
+    content: none;
+}
+
+#preview-canvas-container::after {
+    content: "Click to Focus & Control";
+    position: absolute;
+    color: white;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+canvas {
+    image-rendering: pixelated;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.preview-debug {
+    padding: 1rem;
+    font-family: monospace;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.debug-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.hidden {
+    display: none !important;
+}
