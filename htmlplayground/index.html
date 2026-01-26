@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dark HTML Playground</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --bar-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #007acc;
+            --play-color: #4caf50;
+            --import-color: #ff9800;
+            --bar-height: 44px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* --- Top Bar Styling --- */
+        #top-bar {
+            height: var(--bar-height);
+            background-color: var(--bar-bg);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-left: 40px;
+            padding-right: 10px;
+            border-bottom: 1px solid #3e3e3e;
+            transition: transform 0.3s ease;
+            position: relative;
+            z-index: 10;
+        }
+
+        #top-bar.collapsed {
+            transform: translateY(-100%);
+        }
+
+        /* Group buttons to keep layout clean */
+        .left-group,
+        .right-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .nav-btn {
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 5px 8px;
+            text-transform: uppercase;
+        }
+
+        .nav-btn.active {
+            color: var(--text-color);
+            border-bottom: 2px solid var(--accent-color);
+        }
+
+        /* Action Buttons */
+        .action-btn {
+            background-color: transparent;
+            border-radius: 4px;
+            padding: 4px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+        }
+
+        #import-btn {
+            color: var(--import-color);
+            border: 1px solid var(--import-color);
+        }
+
+        #play-btn {
+            color: var(--play-color);
+            border: 1px solid var(--play-color);
+        }
+
+        /* Toggle Arrow */
+        #toggle-bar-btn {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 40px;
+            height: var(--bar-height);
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 12px;
+            cursor: pointer;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: top 0.3s ease;
+        }
+
+        body.bar-is-hidden #toggle-bar-btn {
+            background: rgba(0, 0, 0, 0.5);
+            height: 30px;
+            width: 30px;
+            border-bottom-right-radius: 8px;
+        }
+
+        /* --- Content Areas --- */
+        #main-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .view-section {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+        }
+
+        .view-section.active {
+            display: block;
+        }
+
+        textarea#code-editor {
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: #dcdcdc;
+            border: none;
+            resize: none;
+            padding: 15px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            outline: none;
+        }
+
+        iframe#result-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background-color: #fff;
+        }
+
+        /* --- Import Widget Modal --- */
+        #modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #modal-box {
+            background: var(--bar-bg);
+            padding: 20px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 400px;
+            border: 1px solid #444;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        }
+
+        #modal-box h3 {
+            margin-bottom: 15px;
+            font-size: 16px;
+            color: var(--text-color);
+        }
+
+        #url-input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #111;
+            border: 1px solid #444;
+            color: #fff;
+            border-radius: 4px;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .btn-cancel {
+            background: #444;
+            color: #fff;
+        }
+
+        .btn-load {
+            background: var(--accent-color);
+            color: #fff;
+        }
+
+        /* Loader */
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <button id="toggle-bar-btn" title="Toggle Menu">▲</button>
+
+    <div id="top-bar">
+        <div class="left-group">
+            <button class="nav-btn active" id="tab-html" onclick="switchTab('html')">HTML</button>
+            <button class="nav-btn" id="tab-viewer" onclick="switchTab('viewer')">Viewer</button>
+        </div>
+
+        <div class="right-group">
+            <button class="action-btn" id="import-btn" onclick="openImportModal()">Import</button>
+            <button class="action-btn" id="play-btn" onclick="runCode()">▶ Play</button>
+        </div>
+    </div>
+
+    <div id="main-container">
+        <div id="view-html" class="view-section active">
+            <textarea id="code-editor" spellcheck="false" placeholder="Loading..."></textarea>
+        </div>
+
+        <div id="view-viewer" class="view-section">
+            <iframe id="result-frame"></iframe>
+        </div>
+    </div>
+
+    <div id="modal-overlay">
+        <div id="modal-box">
+            <h3>Import Code from URL</h3>
+            <p style="font-size: 12px; color: #888; margin-bottom: 10px;">
+                Note: Ensure the link is a direct "Raw" link (e.g., GitHub Raw) to bypass CORS restrictions.
+            </p>
+            <input type="text" id="url-input" placeholder="https://example.com/file.html">
+            <div class="modal-actions">
+                <button class="modal-btn btn-cancel" onclick="closeImportModal()">Cancel</button>
+                <button class="modal-btn btn-load" onclick="fetchAndLoad()">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM Elements
+        const topBar = document.getElementById('top-bar');
+        const toggleBtn = document.getElementById('toggle-bar-btn');
+        const editor = document.getElementById('code-editor');
+        const iframe = document.getElementById('result-frame');
+        const viewHtml = document.getElementById('view-html');
+        const viewViewer = document.getElementById('view-viewer');
+        const tabHtml = document.getElementById('tab-html');
+        const tabViewer = document.getElementById('tab-viewer');
+        const body = document.body;
+
+        // Modal Elements
+        const modalOverlay = document.getElementById('modal-overlay');
+        const urlInput = document.getElementById('url-input');
+        const modalBox = document.getElementById('modal-box');
+
+        // Defaults
+        const STORAGE_KEY = 'playground_saved_code';
+        const DEFAULT_CODE = ``;
+
+        // --- 1. Init: Load from LocalStorage ---
+        window.onload = function () {
+            const savedCode = localStorage.getItem(STORAGE_KEY);
+            if (savedCode) {
+                editor.value = savedCode;
+            } else {
+                editor.value = DEFAULT_CODE;
+            }
+        };
+
+        // --- 2. Logic: Toggle Top Bar ---
+        let isBarCollapsed = false;
+        toggleBtn.addEventListener('click', () => {
+            isBarCollapsed = !isBarCollapsed;
+            if (isBarCollapsed) {
+                topBar.classList.add('collapsed');
+                body.classList.add('bar-is-hidden');
+                toggleBtn.innerText = '▼';
+                toggleBtn.style.transform = 'rotate(-45deg)';
+            } else {
+                topBar.classList.remove('collapsed');
+                body.classList.remove('bar-is-hidden');
+                toggleBtn.innerText = '▲';
+                toggleBtn.style.transform = 'rotate(0deg)';
+            }
+        });
+
+        // --- 3. Logic: Switch Tabs ---
+        function switchTab(tabName) {
+            if (tabName === 'html') {
+                viewHtml.classList.add('active');
+                viewViewer.classList.remove('active');
+                tabHtml.classList.add('active');
+                tabViewer.classList.remove('active');
+            } else if (tabName === 'viewer') {
+                runCode(false); // Update viewer but don't force switch loop
+                viewHtml.classList.remove('active');
+                viewViewer.classList.add('active');
+                tabHtml.classList.remove('active');
+                tabViewer.classList.add('active');
+            }
+        }
+
+        // --- 4. Logic: Run & Save Code ---
+        function runCode(shouldSwitchToView = true) {
+            const userCode = editor.value;
+
+            // Save to LocalStorage
+            try {
+                localStorage.setItem(STORAGE_KEY, userCode);
+            } catch (e) {
+                console.error("Storage full or disabled");
+            }
+
+            // Update Iframe
+            iframe.srcdoc = userCode;
+
+            if (shouldSwitchToView) {
+                switchTab('viewer');
+            }
+        }
+
+        // --- 5. Logic: Import Widget ---
+        function openImportModal() {
+            modalOverlay.style.display = 'flex';
+            urlInput.focus();
+        }
+
+        function closeImportModal() {
+            modalOverlay.style.display = 'none';
+            urlInput.value = ''; // Reset
+        }
+
+        async function fetchAndLoad() {
+            const url = urlInput.value.trim();
+            if (!url) return;
+
+            // UI Feedback
+            modalBox.classList.add('loading');
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const text = await response.text();
+
+                // Set to editor
+                editor.value = text;
+
+                // Immediately save and close
+                localStorage.setItem(STORAGE_KEY, text);
+                closeImportModal();
+                alert("Import successful!");
+            } catch (err) {
+                alert("Failed to load URL. \n\nReason: " + err.message + "\n\nNote: Many sites (like Google Drive standard links) block direct access via CORS. Try using a 'Raw' link (e.g. raw.githubusercontent.com).");
+            } finally {
+                modalBox.classList.remove('loading');
+            }
+        }
+
+        // Close modal if clicking outside box
+        modalOverlay.addEventListener('click', (e) => {
+            if (e.target === modalOverlay) closeImportModal();
+        });
+    </script>
+</body>
+
+</html>

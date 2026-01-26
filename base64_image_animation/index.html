@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Base64 Animation Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Left Sidebar: Image Tray -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Animation Studio</h1>
+            </div>
+
+            <div class="control-group">
+                <label class="control-label">Import Assets</label>
+                <div class="import-area" id="dropZone">
+                    <p>Drag JSON here</p>
+                    <p>or Paste (Ctrl+V)</p>
+                    <input type="file" id="fileInput" accept="application/json,image/*" multiple hidden>
+                    <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                        Browse Files
+                    </button>
+                </div>
+            </div>
+
+            <div class="image-list-container">
+                <label class="control-label">Asset Library (<span id="assetCount">0</span>)</label>
+                <div id="imageGrid" class="image-grid">
+                    <!-- Image Items injected here -->
+                </div>
+            </div>
+
+            <div class="control-group" style="margin-top: auto; padding-top: 1rem;">
+                <button id="btnClearAll" class="btn btn-danger" style="width: 100%">Clear Everything</button>
+            </div>
+        </aside>
+
+        <!-- Right: Tracks Area -->
+        <main class="main-content">
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <button id="btnAddTrack" class="btn btn-primary">
+                        <span>+</span> Add Track
+                    </button>
+                </div>
+                <div class="toolbar-right">
+                    <button id="btnCopyJson" class="btn btn-secondary">Copy JSON</button>
+                    <button id="btnExportJson" class="btn btn-secondary">Export File</button>
+                </div>
+            </div>
+
+            <div id="tracksContainer" class="tracks-container">
+                <!-- Tracks injected here -->
+                <div class="placeholder-text" style="text-align:center; color: var(--text-secondary); margin-top: 50px;"
+                    id="noTracksMsg">
+                    No tracks created. Click "Add Track" to start animating.
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Preview Overlay -->
+    <div id="previewOverlay" class="preview-overlay hidden">
+        <div class="preview-content">
+            <div class="preview-header">
+                <h2 id="previewTitle">Preview: Walk Cycle</h2>
+                <button id="btnClosePreview" class="btn btn-icon btn-danger">✕</button>
+            </div>
+
+            <img id="previewImage" class="preview-canvas" src="" alt="Preview">
+
+            <div class="preview-controls">
+                <div style="color: var(--text-secondary); margin-top: 10px;">
+                    Frame: <span id="previewFrameIdx">0</span> / <span id="previewTotalFrames">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
