@@ -11,7 +11,6 @@
             --bar-bg: #2d2d2d;
             --text-color: #e0e0e0;
             --accent-color: #007acc;
-            --play-color: #4caf50;
             --import-color: #ff9800;
             --bar-height: 44px;
         }
@@ -51,14 +50,15 @@
             transform: translateY(-100%);
         }
 
-        /* Group buttons to keep layout clean */
+        /* Group buttons */
         .left-group,
         .right-group {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 15px;
         }
 
+        /* Tab Buttons */
         .nav-btn {
             background: none;
             border: none;
@@ -68,34 +68,36 @@
             cursor: pointer;
             padding: 5px 8px;
             text-transform: uppercase;
+            position: relative;
+            height: var(--bar-height);
         }
 
         .nav-btn.active {
             color: var(--text-color);
-            border-bottom: 2px solid var(--accent-color);
+            box-shadow: inset 0 -3px 0 var(--accent-color);
+            /* Bottom border effect */
         }
 
-        /* Action Buttons */
-        .action-btn {
+        .nav-btn:hover {
+            color: #ccc;
+        }
+
+        /* Import Button */
+        #import-btn {
             background-color: transparent;
+            color: var(--import-color);
+            border: 1px solid var(--import-color);
             border-radius: 4px;
             padding: 4px 12px;
             font-size: 12px;
             cursor: pointer;
             font-weight: bold;
             text-transform: uppercase;
-            display: flex;
-            align-items: center;
         }
 
-        #import-btn {
-            color: var(--import-color);
-            border: 1px solid var(--import-color);
-        }
-
-        #play-btn {
-            color: var(--play-color);
-            border: 1px solid var(--play-color);
+        #import-btn:active {
+            background-color: var(--import-color);
+            color: #fff;
         }
 
         /* Toggle Arrow */
@@ -144,6 +146,7 @@
             display: block;
         }
 
+        /* Editor */
         textarea#code-editor {
             width: 100%;
             height: 100%;
@@ -158,6 +161,7 @@
             outline: none;
         }
 
+        /* Viewer */
         iframe#result-frame {
             width: 100%;
             height: 100%;
@@ -229,7 +233,6 @@
             color: #fff;
         }
 
-        /* Loader */
         .loading {
             opacity: 0.5;
             pointer-events: none;
@@ -248,8 +251,7 @@
         </div>
 
         <div class="right-group">
-            <button class="action-btn" id="import-btn" onclick="openImportModal()">Import</button>
-            <button class="action-btn" id="play-btn" onclick="runCode()">▶ Play</button>
+            <button id="import-btn" onclick="openImportModal()">Import</button>
         </div>
     </div>
 
@@ -265,11 +267,11 @@
 
     <div id="modal-overlay">
         <div id="modal-box">
-            <h3>Import Code from URL</h3>
+            <h3>Import Code</h3>
             <p style="font-size: 12px; color: #888; margin-bottom: 10px;">
-                Note: Ensure the link is a direct "Raw" link (e.g., GitHub Raw) to bypass CORS restrictions.
+                Paste a direct URL to a text/html file (CORS enabled).
             </p>
-            <input type="text" id="url-input" placeholder="https://example.com/file.html">
+            <input type="text" id="url-input" placeholder="https://example.com/raw/index.html">
             <div class="modal-actions">
                 <button class="modal-btn btn-cancel" onclick="closeImportModal()">Cancel</button>
                 <button class="modal-btn btn-load" onclick="fetchAndLoad()">Load</button>
@@ -294,21 +296,48 @@
         const urlInput = document.getElementById('url-input');
         const modalBox = document.getElementById('modal-box');
 
-        // Defaults
+        // Constants
         const STORAGE_KEY = 'playground_saved_code';
         const DEFAULT_CODE = ``;
 
         // --- 1. Init: Load from LocalStorage ---
         window.onload = function () {
             const savedCode = localStorage.getItem(STORAGE_KEY);
-            if (savedCode) {
-                editor.value = savedCode;
-            } else {
-                editor.value = DEFAULT_CODE;
-            }
+            editor.value = savedCode ? savedCode : DEFAULT_CODE;
         };
 
-        // --- 2. Logic: Toggle Top Bar ---
+        // --- 2. Logic: Switch Tabs & Execute ---
+        function switchTab(tabName) {
+            if (tabName === 'html') {
+                // UI Updates
+                viewHtml.classList.add('active');
+                viewViewer.classList.remove('active');
+                tabHtml.classList.add('active');
+                tabViewer.classList.remove('active');
+            }
+            else if (tabName === 'viewer') {
+                // 1. Get Code
+                const userCode = editor.value;
+
+                // 2. Save to LocalStorage (as requested)
+                try {
+                    localStorage.setItem(STORAGE_KEY, userCode);
+                } catch (e) {
+                    console.error("Storage Error:", e);
+                }
+
+                // 3. Update Iframe
+                iframe.srcdoc = userCode;
+
+                // 4. UI Updates
+                viewHtml.classList.remove('active');
+                viewViewer.classList.add('active');
+                tabHtml.classList.remove('active');
+                tabViewer.classList.add('active');
+            }
+        }
+
+        // --- 3. Logic: Toggle Top Bar ---
         let isBarCollapsed = false;
         toggleBtn.addEventListener('click', () => {
             isBarCollapsed = !isBarCollapsed;
@@ -325,42 +354,7 @@
             }
         });
 
-        // --- 3. Logic: Switch Tabs ---
-        function switchTab(tabName) {
-            if (tabName === 'html') {
-                viewHtml.classList.add('active');
-                viewViewer.classList.remove('active');
-                tabHtml.classList.add('active');
-                tabViewer.classList.remove('active');
-            } else if (tabName === 'viewer') {
-                runCode(false); // Update viewer but don't force switch loop
-                viewHtml.classList.remove('active');
-                viewViewer.classList.add('active');
-                tabHtml.classList.remove('active');
-                tabViewer.classList.add('active');
-            }
-        }
-
-        // --- 4. Logic: Run & Save Code ---
-        function runCode(shouldSwitchToView = true) {
-            const userCode = editor.value;
-
-            // Save to LocalStorage
-            try {
-                localStorage.setItem(STORAGE_KEY, userCode);
-            } catch (e) {
-                console.error("Storage full or disabled");
-            }
-
-            // Update Iframe
-            iframe.srcdoc = userCode;
-
-            if (shouldSwitchToView) {
-                switchTab('viewer');
-            }
-        }
-
-        // --- 5. Logic: Import Widget ---
+        // --- 4. Logic: Import Widget ---
         function openImportModal() {
             modalOverlay.style.display = 'flex';
             urlInput.focus();
@@ -368,14 +362,13 @@
 
         function closeImportModal() {
             modalOverlay.style.display = 'none';
-            urlInput.value = ''; // Reset
+            urlInput.value = '';
         }
 
         async function fetchAndLoad() {
             const url = urlInput.value.trim();
             if (!url) return;
 
-            // UI Feedback
             modalBox.classList.add('loading');
 
             try {
@@ -384,21 +377,21 @@
 
                 const text = await response.text();
 
-                // Set to editor
+                // Update editor
                 editor.value = text;
 
-                // Immediately save and close
+                // Save immediately
                 localStorage.setItem(STORAGE_KEY, text);
+
                 closeImportModal();
-                alert("Import successful!");
+                alert("Code imported successfully! Click 'Viewer' to see it.");
             } catch (err) {
-                alert("Failed to load URL. \n\nReason: " + err.message + "\n\nNote: Many sites (like Google Drive standard links) block direct access via CORS. Try using a 'Raw' link (e.g. raw.githubusercontent.com).");
+                alert("Import failed: " + err.message + "\nEnsure the link supports CORS (e.g. GitHub Raw).");
             } finally {
                 modalBox.classList.remove('loading');
             }
         }
 
-        // Close modal if clicking outside box
         modalOverlay.addEventListener('click', (e) => {
             if (e.target === modalOverlay) closeImportModal();
         });
