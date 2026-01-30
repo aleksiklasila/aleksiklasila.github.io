@@ -41,13 +41,25 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
     const resultWidth = Math.floor(width / skip);
     const resultHeight = Math.floor(height / skip);
 
-    // Use the native helper which handles format/endianness/normalization correctly
-    // Note: getDepthInMeters expects (x, y) in range (0..1) usually? 
-    // No, WebXR spec says getDepthInMeters(x, y) takes column/row indices (0..width, 0..height).
-    // Let's verify usage. The CPU API usually is getDepthInMeters(x, y).
+    // DEBUG: Read raw buffer to see what's happening
+    // getDepthInMeters might be failing or returning constant if normalization is wrong.
+    const rawData = new Uint16Array(depthInfo.data);
+    const isFloat = depthInfo.dataFormat === 'float32';
+    const data = isFloat ? new Float32Array(depthInfo.data) : rawData;
+    const toMeters = depthInfo.rawValueToMeters || 1.0;
+
+    // Log first few values
+    let logStr = "Raw Data Sample: ";
+    for (let i = 0; i < 10; i++) logStr += data[i] + ", ";
+    console.log(logStr);
+    console.log(`Format: ${depthInfo.dataFormat}, toMeters: ${toMeters}`);
 
     const getDepth = (x, y) => {
-        return depthInfo.getDepthInMeters(x, y);
+        // Fallback to manual read if getDepthInMeters is suspect
+        // return depthInfo.getDepthInMeters(x, y);
+        const index = y * width + x;
+        if (isFloat) return data[index];
+        return data[index] * toMeters;
     };
 
     // Debug bounds / Sample center

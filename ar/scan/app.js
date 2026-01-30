@@ -147,9 +147,14 @@ function render(timestamp, frame) {
             const depthInfo = frame.getDepthInformation(pose.views[0]);
             if (depthInfo) {
                 window.latestDepthPack = { depthInfo, view: pose.views[0] };
-                statusText.innerText = `Depth Active: ${depthInfo.width}x${depthInfo.height}`;
+                // Only show "Depth Active" if NOT scanning
+                if (!isScanning) {
+                    statusText.innerText = `Depth Active: ${depthInfo.width}x${depthInfo.height}`;
+                }
             } else {
-                statusText.innerText = `Depth unavailable`;
+                if (!isScanning) {
+                    statusText.innerText = `Depth unavailable`;
+                }
                 window.latestDepthPack = null;
             }
         }
