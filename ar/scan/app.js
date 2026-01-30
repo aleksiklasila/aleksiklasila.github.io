@@ -290,8 +290,15 @@ function saveArrayBuffer(buffer, filename) {
 }
 
 function onViewDebug() {
+    // Force stop scanning to prevent conflicts
+    if (isScanning) {
+        onScanToggle(); // This toggles it off
+    }
+
     isViewing = true;
     if (!scannedMeshes.length && !lastGlbBlob) return;
+
+    // ... exports ...
 
     // If we haven't exported yet, quick export to memory
     if (!lastGlbBlob) {
