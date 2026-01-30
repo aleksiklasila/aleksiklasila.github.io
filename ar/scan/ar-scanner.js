@@ -65,12 +65,8 @@ export class ARScanner {
         if (!this.isScanning) return;
 
         // Use getDepthInMeters to ensure correct format/scaling
-        // Iterating the Depth Buffer coordinates directly ensures we hit valid data points.
-
         const width = depthInfo.width;
         const height = depthInfo.height;
-
-        // Stride: Process fewer points for performance
         const skip = 4;
 
         const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
@@ -81,32 +77,26 @@ export class ARScanner {
 
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
-                // 1. Get Depth (Meters) - High Level API (Handles Float32/UInt16/Scale)
-                // Note: x, y are column, row in the *Depth Buffer*
-                const d = depthInfo.getDepthInMeters(x, y);
+                // Safety Check for RangeError
+                if (x >= width || y >= height) continue;
+
+                // 1. Get Depth (Meters)
+                let d;
+                try {
+                    d = depthInfo.getDepthInMeters(x, y);
+                } catch (e) {
+                    continue; // Skip invalid
+                }
 
                 // Valid Depth Filter
                 if (d <= 0.1 || d > 5.0 || !isFinite(d)) continue;
 
                 // 2. Unproject
-                // Map Depth Buffer (x,y) -> Normalized View Coords (0..1)
-                // NOTE: WebXR depth buffer might be subset of view, or scaled.
-                // normTextureCoordinate is usually for GPU. For CPU 'getDepthInMeters', 
-                // (x,y) corresponds to the grid. We assume the grid covers the view 1:1?
-                // Standard WebXR: The depth buffer covers the `view` frustum.
-
                 const xNorm = (x + 0.5) / width;
-                const yNorm = (y + 0.5) / height; // 0=Top or Bottom? 
-                // Usually GL convention: 0,0 is bottom-left? Or Image convention (top-left)?
-                // depthInfo access is usually (col, row). Row 0 is usually top?
-                // WebXR Normalized Coords: (0,0) is usually Bottom-Left for GL.
-                // But getDepthInMeters(col, row) follows image data (Row 0 = Top).
+                const yNorm = (y + 0.5) / height;
 
-                // Let's assume standard Image Space for x,y iteration -> Y is Down.
-                // NDC Y is Up.
-                const xNDC = xNorm * 2 - 1;       // 0..1 -> -1..1
-                const yNDC = (1 - yNorm) * 2 - 1; // 0..1(Top->Bot) -> 1..-1?
-                // Wait: if y=0 (Top) -> yNorm=0 -> yNDC = 1. (Top in GL is +1). Correct.
+                const xNDC = xNorm * 2 - 1;
+                const yNDC = (1 - yNorm) * 2 - 1;
 
                 vPoint.set(xNDC, yNDC, 0.5);
                 vPoint.applyMatrix4(invProj);
@@ -144,8 +134,6 @@ export class ARScanner {
                 y: worldPt.y,
                 z: worldPt.z,
                 count: 1,
-                // Bounding box of camera positions that saw this voxel
-                // Bounding box of camera positions
                 minCx: camPos.x, maxCx: camPos.x,
                 minCy: camPos.y, maxCy: camPos.y,
                 minCz: camPos.z, maxCz: camPos.z,
@@ -179,22 +167,42 @@ export class ARScanner {
         let accepted = 0;
         let rejected = 0;
 
-        for (const v of this.voxels.values()) {
-            // --- Confidence Filters ---
+        // Helper to check neighbor existence
+        const checkNeighbor = (ix, iy, iz) => {
+            const key = `${ix},${iy},${iz}`;
+            const v = this.voxels.get(key);
+            // Neighbor must also be relatively stable (>1 hit)
+            return (v && v.count >= 2) ? 1 : 0;
+        };
 
-            // 1. Persistence
+        for (const v of this.voxels.values()) {
+            // 1. Persistence Filter
             if (v.count < this.minCount) {
                 rejected++;
                 continue;
             }
 
-            // 2. Baseline Check (Parallax)
-            const dx = v.maxCx - v.minCx;
-            const dy = v.maxCy - v.minCy;
-            const dz = v.maxCz - v.minCz;
-            const baselineSq = dx * dx + dy * dy + dz * dz;
+            // 2. Radius Outlier Removal (ROR)
+            let neighborCount = 0;
+            const ix = v.ix;
+            const iy = v.iy;
+            const iz = v.iz;
 
-            if (baselineSq < this.minBaseline * this.minBaseline) {
+            // Check 26 neighbors
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        if (dx === 0 && dy === 0 && dz === 0) continue;
+                        if (checkNeighbor(ix + dx, iy + dy, iz + dz)) {
+                            neighborCount++;
+                        }
+                    }
+                }
+                if (neighborCount >= 3) break;
+            }
+
+            // Require neighbors
+            if (neighborCount < 2) {
                 rejected++;
                 continue;
             }
@@ -202,22 +210,21 @@ export class ARScanner {
             // Accepted
             vertices.push(v.x, v.y, v.z);
 
-            // Color by confidence? Or just fixed cyan?
-            // Let's do cyan, slightly brighter for high count
-            const intensity = Math.min(1.0, 0.5 + v.count * 0.05);
-            colors.push(0, intensity, intensity);
+            // Heatmap
+            const intensity = Math.min(1.0, 0.3 + (neighborCount / 26.0) * 0.7 + (v.count / 50) * 0.2);
+            colors.push(0, intensity, intensity * 0.5 + 0.5);
 
             accepted++;
         }
 
-        console.log(`Rebuild: ${accepted} voxels (rej: ${rejected}). Total Map: ${this.voxels.size}`);
+        console.log(`Rebuild ROR: ${accepted} voxels (rej: ${rejected}). Total Map: ${this.voxels.size}`);
 
         if (accepted === 0) return;
 
         if (!this.pointCloud) {
             this.geometry = new THREE.BufferGeometry();
             this.pointCloud = new THREE.Points(this.geometry, this.material);
-            this.pointCloud.isARMesh = true; // Tag for export
+            this.pointCloud.isARMesh = true;
             this.scene.add(this.pointCloud);
         }
 
@@ -227,7 +234,6 @@ export class ARScanner {
         this.geometry.setAttribute('position', posAttr);
         this.geometry.setAttribute('color', colAttr);
 
-        // Bounds for frustum culling
         this.geometry.computeBoundingSphere();
     }
 }
