@@ -21,8 +21,12 @@ export class ARScanner {
         this.cellSize = 0.03; // 3cm voxels
 
         // Confidence Config
-        this.minCount = 5;
-        this.minBaseline = 0.10; // 10cm distance between views
+        // Confidence Config (Relaxed)
+        this.minCount = 3; // Was 10
+        this.minBaseline = 0.05; // 5cm (was 0.20)
+
+        // Debug
+        this.totalPointsFused = 0;
 
         // Visualization
         this.pointCloud = null;
@@ -75,6 +79,8 @@ export class ARScanner {
         const vPoint = new THREE.Vector3();
         const vDir = new THREE.Vector3();
 
+        let pointsFused = 0;
+
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
                 // Safety Check for RangeError
@@ -110,7 +116,14 @@ export class ARScanner {
                 vPoint.applyMatrix4(camera.matrixWorld);
 
                 this.fusePoint(vPoint, camPos);
+                pointsFused++;
             }
+        }
+
+        // Debug Log (throttled)
+        this.totalPointsFused += pointsFused;
+        if (this.framesSinceRebuild === 0) {
+            console.log(`Frame Fusion: ${pointsFused} pts. Total Fused: ${this.totalPointsFused}. Map Size: ${this.voxels.size}`);
         }
 
         this.framesSinceRebuild++;
