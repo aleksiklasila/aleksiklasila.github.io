@@ -112,6 +112,10 @@
         <model-viewer id="debug-viewer" style="width:100%; flex-grow:1;" camera-controls></model-viewer>
     </div>
 
+    <!-- Depth Heatmap Canvas -->
+    <canvas id="depth-debug"
+        style="position:fixed; top:60px; right:10px; width:100px; height:auto; border:1px solid lime; z-index:9990; pointer-events:none; display:none;"></canvas>
+
     <!-- Main Logic -->
     <script type="module" src="app.js"></script>
 </body>
