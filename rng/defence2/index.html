@@ -1246,8 +1246,6 @@
                 document.getElementById('castle-btn').style.display = 'none';
             }
 
-            // Initial render (black or whatever) behind menu
-            // We need a dummy grid for start
             generateMazeMap();
             calcFlowField(); // Just to be safe if draw depends on it (it doesn't heavily)
 
@@ -1304,14 +1302,8 @@
             if (localC) {
                 localC.style.width = finalW + "px";
                 localC.style.height = "auto"; // Allow growth for market
-
-                // But the Remote Players are just Video. They should match Canvas Height?
-                // Or container height? 
-                // Maybe match finalH?
             }
 
-            // Remote Players
-            // Remote Players
             let remotes = document.querySelectorAll('.remote-player-container');
             remotes.forEach(el => {
                 el.style.width = finalW + "px";
@@ -1415,8 +1407,6 @@
                 for (let i = 0; i < batchSize; i++) {
                     generateMazeMap();
 
-                    // Apply Castle Geometry BEFORE Checking Constraints
-                    // This ensures any shortcuts created by opening the castle area are accounted for.
                     let cx = Math.floor(GRID_W / 2);
                     let cy = Math.floor(GRID_H / 2);
                     grid[cy][cx].type = TYPE_CASTLE;
@@ -1429,8 +1419,6 @@
                         return; // Done
                     }
                 }
-                // If not done, schedule next batch
-                // Draw "Generating..." text in the loop
                 requestAnimationFrame(runBatch);
             }
             runBatch();
@@ -1459,19 +1447,10 @@
 
             // Easy: shortest >= 27, others >= 38
             if (gameState.difficulty === 'easy') {
-                // Shortest is dists[0]
-                // Others are dists[1], dists[2], dists[3]
                 let valid = (dists[0] >= 50 && dists[1] >= 65);
                 if (valid) console.log(`Easy match: ${dists.join(',')}`);
                 return valid;
-            }
-            // Medium: shortest >= 27, others <= 30 => All in [27, 30]?
-            // "medium = the distance to any corner is at least 27, and to other corners it is no more than 30".
-            // This phrasing is tricky. "to any corner... at least 27" -> min >= 27.
-            // "to other corners... no more than 30".
-            // If min is, say, 28. Are the "others" <= 30?
-            // Yes, implies Range [27, 30] for ALL corners.
-            else if (gameState.difficulty === 'medium') {
+            } else if (gameState.difficulty === 'medium') {
                 return (dists[0] < 27 && dists[1] < 27 && dists[2] >= 40);
             }
             // Hard: all <= 20
@@ -1671,13 +1650,8 @@
                 }
             }
 
-            // Update Collectors
-            // Iterate safe copy or reverse?
             for (let i = collectors.length - 1; i >= 0; i--) {
                 let c = collectors[i];
-                // If spawner dead, logic is inside update to return/stop...
-                // Actually if spawner is dead, collector should vanish or die?
-                // User: "if spaner is salvaged / destroyed... the collector ai will not be destroyable, unless the spaner itself gets destroyed."
                 if (!c.spawner || c.spawner.hp <= 0) {
                     if (c.targetItem) c.targetItem.lockedBy = null; // Unmark
                     collectors.splice(i, 1);
@@ -1720,20 +1694,15 @@
             if (dirtyGrid) renderStaticGrid();
             ctx.drawImage(bgCanvas, 0, 0);
 
-            // 2. Draw Dynamic Grid Overlays (Area Active Highlights & Spawners/Items)
-            // We still need to iterate for Items, but we can skip Wall/Floor drawing
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let cell = grid[y][x];
 
-                    // Highlight active area cells (Dynamic Check)
                     if (cell.areaId !== -1) {
                         let area = areas.find(a => a.id === cell.areaId);
                         if (area && area.active) {
                             let px = x * TILE_SIZE;
                             let py = y * TILE_SIZE;
-                            // ctx.fillStyle = "rgba(0, 255, 0, 0.1)";
-                            // ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
                         }
                     }
 
@@ -1858,28 +1827,15 @@
                     let area = areas.find(a => a.id === aid);
                     if (!area) continue;
 
-                    // Only drawing the outline, NOT the fill (fill is dynamic in draw loop)
                     let color;
                     if (area.active) {
-                        // Level-based Coloring
-                        // 0: Green, 1: Blue, 2: Purple, 3: Gold, 4: Orange
                         let level = area.multiplierLevel || 0;
                         let colors = ['rgba(0, 255, 0, 1)', 'rgba(70, 170, 255, 1)', 'rgba(200, 0, 255, 1)', 'rgba(255, 220, 0, 1)', 'rgba(255, 80, 0, 1)'];
                         let baseColor = colors[level] || colors[0];
 
-                        // Override alpha? No, use full opacity for outline
                         color = baseColor;
 
-                        // If we want wall vs floor distinction for active:
-                        // "if an area is active, show the area outline depeding on the multiplier"
-                        // The user said: "If the area is inactive, just always show the gray outline... However if an area is active, show the area outline depeding on the multiplier."
-                        // Previously: Wall = Green (1.0), Floor = Green (0.5).
-                        // Let's keep slight transparency for Floor outline if we want, but the user didn't specify.
-                        // "show the area outline depeding on the multiplier" -> implies color.
-                        // Let's stick to solid color for clarity or maybe slightly dimmer for floor?
                         if (cell.type !== TYPE_WALL) {
-                            // Parse rgba and change alpha?
-                            // Simple hack: Replace ', 1)' with ', 0.6)'
                             color = color.replace(', 1)', ', 0.6)');
                         }
 
@@ -2036,8 +1992,6 @@
         }
 
         function drawCollectorIcon(ctx, x, y, hpPct = 1) {
-            // Factory Rect
-            // x,y are center. TILE_SIZE=32 -> half=16
             ctx.fillStyle = '#432'; ctx.fillRect(x - 14, y - 14, 28, 28);
             ctx.strokeStyle = '#210'; ctx.lineWidth = 2; ctx.strokeRect(x - 12, y - 12, 24, 24);
 
@@ -2102,8 +2056,6 @@
             if (selectedEntity) {
                 let sx = selectedEntity.x;
                 let sy = selectedEntity.y;
-                // Items (Sand) are centered on tile, Towers are centered on tile
-                // x,y are center coordinates in both classes
 
                 ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
                 ctx.lineWidth = 2;
@@ -2212,9 +2164,6 @@
                         let emptyIndices = [];
                         for (let i = 0; i < MARKET_SIZE; i++) if (!newCards[i]) emptyIndices.push(i);
 
-                        // If no empty spots, overwrite a non-locked card? Or random?
-                        // Ideally replace empty. If locked cards fill board, we can't do much.
-                        // But generating into newCards which has nulls for non-locked.
                         if (emptyIndices.length > 0) {
                             let idx = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
                             let basePrice = CARD_TYPES[gType].price;
@@ -2267,8 +2216,6 @@
 
                     // Limit Check: If limited, remove from keys for next iteration
                     if (CARD_TYPES[selectedType].limit) {
-                        // Remove from keys (filter in place or splice?)
-                        // Splice is faster if we find index, but keys is small.
                         let kIdx = keys.indexOf(selectedType);
                         if (kIdx !== -1) {
                             keys.splice(kIdx, 1);
@@ -2289,13 +2236,8 @@
                         price = Math.floor(price * (1 + (level - 1) * 0.4)); // Slightly cheaper scaling?
                         price *= (gameState.reshufflePriceMultiplier || 1);
                     } else {
-                        // Weighted Random for Shop Level
-                        // Favors current shopLevel
                         let pool = [];
                         for (let l = 1; l <= gameState.shopLevel; l++) {
-                            // Weight = 1 / 2^(shopLevel - l)
-                            // l=shopLevel => 1/1 = 1
-                            // l=shopLevel-1 => 1/2 = 0.5
                             let weight = 1 / Math.pow(2, gameState.shopLevel - l);
                             pool.push({ l: l, w: weight });
                         }
@@ -2311,17 +2253,9 @@
                         }
                         // Scale Price
                         if (CARD_TYPES[selectedType].hpCost) {
-                            // HP Cost doesn't scale for now or linear?
-                            // Let's scale it linear
                         } else {
                             // Special Scaling for Area Upgrader (like Shop Up)
                             if (selectedType === 'area_upgrader') {
-                                // Scale based on Shop Level? Or just flat/linear?
-                                // "Price should be around the same as for upgrading the shop." -> Shop Up is base 40, scales (1 + (shopLvl-1)*0.5)
-                                // Let's match Shop Up logic roughly.
-                                // But Shop Up logic in this block calculates price based on selectedType... wait.
-                                // Shop Up has a special block ABOVE this.
-                                // Let's just use the same formula.
                                 price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
                             } else {
                                 price = Math.floor(price * (1 + (level - 1) * 0.5));
@@ -2337,12 +2271,6 @@
                     if (selectedType === 'spawn_enemy') {
                         // Pick Enemy Type & Count based on Level
                         newCards[i].enemyType = get_random_enemy_type(level);
-                        // Count:
-                        // Stronger enemies = fewer count.
-                        // Base count scales with ... level? Or just static based on type?
-                        // User said: "enemy type, count, level... all of that should depend on the shop level."
-                        // Let's map enemy types to 'power' and divide a 'budget' by power.
-                        // Budget = 10 + (level * 2)?
                         let budget = 10 + (level * 2);
                         let cost = 5; // Default 'norm'
                         // Rough costs
@@ -2375,9 +2303,6 @@
         let selectedRemoteCard = null; // { peerId: string, index: number }
 
         function generateRemoteMarkets(canYield, allowReroll) {
-            // For each connected player (or just visible ones? better all to persist state)
-            // We need keys for all peers.
-            // connectedPlayers has {id, name}.
             let peers = connectedPlayers.map(p => p.id);
 
             peers.forEach(pid => {
@@ -2594,8 +2519,6 @@
                 this.isSnake = (type === 'snake' || type.startsWith('snake_boss'));
                 if (this.isSnake) {
                     this.snakeHistory = [];
-                    // We record every 4th frame, so 80 points * 4 frames = 320 frames of history (~5.3 seconds)
-                    // At speed 1.6, that's ~850 pixels long (screen is ~800 wide). Very long.
                     this.snakeMaxHistory = (type.startsWith('snake_boss')) ? 120 : 20; // Even Longer for Boss
                     this.snakeRecordTimer = 0;
                 }
@@ -2657,8 +2580,6 @@
 
                 // Body Check (Snake)
                 if (this.isSnake && this.snakeHistory.length > 0) {
-                    // History points are now spaced out (every ~6px), so checking every single one is fine.
-                    // 70 points is cheap enough.
                     for (let p of this.snakeHistory) {
                         if (Math.hypot(p.x - x, p.y - y) <= (this.r + r)) return true;
                     }
@@ -2710,13 +2631,7 @@
                         let [gx, gy] = key.split(',').map(Number);
                         let cell = grid[gy][gx];
                         if (cell && !cell.droppedItem) {
-                            // Drop Value: Scale down slightly per-tile since there are many tiles?
-                            // Or keep high for Boss reward. MaxHP 12000 / 20 = 600 per tile.
-                            // If 30 tiles = 18000 gold. A lot, but it IS a boss.
-                            // Let's cap it slightly or use standard.
                             let value = Math.floor(this.maxHp / 100); // 1% per tile -> 120g per tile * 30 tiles ~ 3600g
-                            // (Standard was /20 = 5%)
-                            // User said "drop money". 1% seems safer than 5% per cell.
                             if (value < 1) value = 1;
 
                             let drop = {
@@ -2790,8 +2705,6 @@
 
                 // SNAKE HISTORY RECORDING
                 if (this.isSnake) {
-                    // Record every 4 frames (approx 6.4px at speed 1.6)
-                    // This creates "segments" further apart and allows for a very long snake with fewer array items.
                     this.snakeRecordTimer++;
                     if (this.snakeRecordTimer >= 4) {
                         this.snakeRecordTimer = 0;
@@ -2810,11 +2723,6 @@
                 // Sandy Effect (previously slowed)
                 if (this.sandy > 0) {
                     if (!this.sandResistant) {
-                        // Base 0.4 multiplier (60% slow)
-                        // If we want scaling, we need to know source strength.
-                        // Difficult since 'sandy' is just int duration.
-                        // We'll stick to fixed slow but add damage in the tile logic below.
-                        // OR: store sandyStrength? Too complex to add prop now?
                         speedMod *= 0.4;
                     }
                     this.sandy--;
@@ -2825,17 +2733,11 @@
                 if (cell && cell.item && cell.item.type === 'sand' && !this.isFlying) {
                     // Apply Sandy Status instead of direct slow
                     this.sandy = 10;
-                    // Scale slow effectiveness or damage?
-                    // User requested group sizes affect them.
-                    // Let's add slight damage based on stacks for Sand (abrasion)
-                    // limit slow to max 90%
                     let stacks = (cell.item.effectiveStacks || cell.item.stacks || 1);
                     if (stacks > 1 || (cell.item.damage && cell.item.damage > 0)) {
                         // Apply abrasion damage (Scaled by Level)
                         let dmg = cell.item.damage || (0.05 * stacks);
                         this.hp -= dmg;
-                        // Note: Speed modification is handled above by 'sandy' flag check
-                        // We could scale the slow multiplier in the check above?
                     }
 
 
@@ -2931,8 +2833,6 @@
                     }
                 }
 
-                // --- UNIFIED STATUS LOGIC ---
-                // Decrement Timers
                 if (this.poisoned > 0) this.poisoned--;
                 if (this.burning > 0) this.burning--;
                 if (this.wet > 0) this.wet--;
@@ -2941,8 +2841,6 @@
                     speedMod *= 0.5;
                 }
 
-                // Calculate Combined Damage
-                // Formula: (Sum of Valid Damages) * 2^(Valid Count - 1)
                 let activeEffects = 0;
                 let totalBaseDmg = 0;
                 let hasWater = false;
@@ -2971,8 +2869,6 @@
 
                 // Apply Damage
                 if (activeEffects > 0) {
-                    // Exception: Water alone deals no damage (unless combined with others)
-                    // If activeEffects == 1 AND that effect is water -> No Damage.
                     if (activeEffects === 1 && hasWater) {
                         // Do nothing
                     } else {
@@ -3014,9 +2910,6 @@
                     let best = 9999;
                     let field = this.isFlying ? flowFieldFlying : flowField;
 
-                    // If flying and no field generated yet (shouldn't happen), fallback to ground?
-                    // Or if field is empty at current pos (unreachable?), stay put or random.
-
                     if (field && field[gy] && field[gy][gx] !== null) { // Check if we are in valid field
                         // Standard Flow follow
                     }
@@ -3024,8 +2917,6 @@
                     [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
                         let nx = gx + d[0], ny = gy + d[1];
                         if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            // For flying, we can go over walls if flowFieldFlying says so.
-                            // The flowFieldFlying generation logic handles accessibility.
                             let dist = (field && field[ny]) ? field[ny][nx] : null;
 
                             if (dist !== null && dist < best) { best = dist; tx = nx * TILE_SIZE + 16; ty = ny * TILE_SIZE + 16; }
@@ -3051,8 +2942,6 @@
                     ctx.lineWidth = this.r * 2;
                     ctx.strokeStyle = this.color;
 
-                    // Status Colors Override
-                    // Disable for Boss Snake (Keep Identity)
                     if (!this.type.startsWith('snake_boss')) {
                         if (this.burning > 0) ctx.strokeStyle = '#f50';
                         else if (this.poisoned > 0) ctx.strokeStyle = '#2d2';
@@ -3080,8 +2969,6 @@
 
                     ctx.restore();
 
-                    // HP Bar (Draw outside save/restore or manage ctx state manually if needed, but rects usually ignore strokeStyle)
-                    // Actually HP bar uses fillRect, so unrelated to stroke/line width.
                     ctx.fillStyle = '#400'; ctx.fillRect(this.x - 8, this.y - 12, 16, 4);
                     ctx.fillStyle = (this.hp / this.maxHp) > 0.5 ? '#0f0' : '#f00'; ctx.fillRect(this.x - 8, this.y - 12, 16 * (this.hp / this.maxHp), 4);
                     return;
@@ -3136,8 +3023,6 @@
                 } else if (this.visualization === 'mole_visual') {
                     ctx.fillStyle = this.color;
                     ctx.beginPath();
-                    // Ellipse: (x, y, radiusX, radiusY, rotation, startAngle, endAngle)
-                    // Slightly taller: x radius = r*0.8, y radius = r*1.1
                     ctx.ellipse(this.x, this.y, this.r * 0.8, this.r * 1.1, 0, 0, Math.PI * 2);
                     ctx.fill();
 
@@ -3377,29 +3262,8 @@
                 let closestImmune = null; let minImmune = rangePx;
 
                 for (let e of enemies) {
-                    // Check Collision Distance (If snake, this returns true if any body part is close)
-                    // We need a distance metric for sorting.
-                    // For snakes, use distance to CLOSEST POINT on body if checkCollision passes?
-                    // Simplified: Use distance to head for sorting, but allow targeting if collision check passes.
-                    // OR: Update checkCollision to return DISTANCE or boolean?
-                    // Let's stick to boolean check for InRange.
-                    // For sorting, if it's a snake, we should probably prefer it if it's close?
-                    // Let's keep "d" as head distance for sorting simplicity for now,
-                    // BUT we must allow targeting even if d > rangePx provided collision is true.
-
-                    // Logic:
-                    // 1. Check if ANY part is in range (checkCollision)
                     if (e.turretImmune) continue; // Cannot be targeted
                     if (!e.checkCollision(this.x, this.y, rangePx)) continue;
-
-                    // 2. Calculate effective distance for sorting.
-                    // If snake, ideally we find closest segment distance.
-                    // For now, let's just use dist to head for priority sorting,
-                    // effectively treating the snake as "present" but maybe "far" priority-wise if head is far.
-                    // Wait, if head is OUT of range but body is IN range, we must target it.
-                    // If we sort by head distance (say 500px), it might lose to a goblin at 400px.
-                    // This is acceptable? Or should we sort by "closest point"?
-                    // Let's try to get a better distance if snake.
 
                     let d = Math.hypot(e.x - this.x, e.y - this.y);
                     if (e.isSnake) {
@@ -3463,16 +3327,7 @@
                         ctx.lineWidth = 4;
                         ctx.shadowColor = '#f00'; ctx.shadowBlur = 10;
                         for (let other of this.connectedLasers) {
-                            // Draw only if we own the line to avoid double draw?
-                            // Drawing line twice is fine, actually makes it brighter.
-                            // But let's stick to unique draw to be clean?
-                            // Nah, if "other" is IDLE, we still want to show the beam if I am FIRING?
-                            // The prompt says "keep both lasers lit".
-                            // Let's draw beam to all connected.
-                            // Optimization: Only draw if gx < other.gx ...
                             if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
-                                // Check if OTHER is also firing? Or just me?
-                                // If I am firing, beam is active.
                                 ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(other.x, other.y); ctx.stroke();
                             }
                         }
@@ -3485,8 +3340,6 @@
                     drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level, this.type);
                 }
 
-                // Draw Level Info
-                // Draw Level Info (Cached)
                 ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
 
                 if (this.markedForSalvage) {
@@ -3840,10 +3693,6 @@
                 // Set source for damage tracking
                 t.lastSource = { x: this.sx, y: this.sy };
 
-                // Calculate Base Damage & Effect Scaling
-                // Projectile.dmg is scaled by 1.3x per level (Tower.calculateStatsForLevel)
-                // We want Effect Tick Damage to scale by 1.5x per level.
-                // Reconstruct Base Damage:
                 let baseDmg = this.dmg;
                 let effectMult = 1 // Math.pow(1.5, this.level - 1);
 
@@ -3897,13 +3746,6 @@
                     }
 
                 } else if (this.type === 'elements') {
-                    // Apply All Effects (Always, but tick damage respects resistances?)
-                    // Merged Logic: Apply statuses, then check resistance for massive damage or apply tick damage?
-                    // Original Code had two blocks.
-                    // Block 1: Applied statuses. Block 2: Checked resistance and applied statuses + tick damage.
-                    // Current behavior suggests if resistant to ANY, fail?
-                    // Proposed: Apply statuses unconditionally. Apply Tick Damage if not resistant.
-
                     t.poisoned = 100 + (this.level * 20);
                     t.burning = 100 + (this.level * 20);
                     t.wet = 100 + (this.level * 20);
@@ -4390,11 +4232,6 @@
                                 obj.effectiveGroupSize = groupSize;
                                 obj.effectiveAreaMult = areaMult;
 
-                                // LOCAL AREA STATS
-                                // Item co-ords: obj.gx/gy might not be set?
-                                // handleInput sets them. generateMarket items?
-                                // Let's check if obj.gx is undefined.
-                                // Actually, handlePlacement logic sets them. But let's be safe.
                                 let gx = obj.gx, gy = obj.gy;
                                 if (gx === undefined) { gx = Math.floor(obj.x / TILE_SIZE); gy = Math.floor(obj.y / TILE_SIZE); }
 
@@ -4838,10 +4675,7 @@
                 selectedMarketIndex = -1;
                 updateUI();
             } else if (data.target === 'remote') {
-                // Trying to use Remote Card on Local Map?
-                // Show Hint?
-                // "Click on a player's video to use this card!"
-                // Maybe flash the carousel?
+
             }
         }
 
@@ -4861,8 +4695,6 @@
                 }
             }
 
-            // Construct Payload
-            // Send coordinates just in case (e.g. 50% center)
             let payload = {
                 type: 'action',
                 action: 'card',
@@ -5229,12 +5061,6 @@
             ctx.restore();
         }
 
-
-
-        // Start
-        // init() called at bottom of script
-
-
         function updateStatsPanel() {
             let panel = document.getElementById('stats-panel');
             let nameEl = document.getElementById('sp-name');
@@ -5272,12 +5098,8 @@
                     return;
                 }
             }
-            // For items, we'd need to check grid, but good enough for now to check if null
-            // (The item object itself might still exist in memory)
 
             panel.style.display = 'flex';
-            // Checkbox for Salvage - Persistent Management
-            // Managed as a child of panel (footer), not inside contentEl which is wiped
             let existingRow = panel.querySelector('.salvage-row');
 
             if (selectedEntity !== renderedEntity) {
@@ -5389,16 +5211,12 @@
                 // Checkbox Removed
             }
 
-            // UPDATE PHASE
-            // Helper defined at top of update phase for scope access
             const updateDualStat = (id, baseVal, effVal, suffix = "") => {
                 let baseEl = document.getElementById(`${id}-base`);
                 let effEl = document.getElementById(`${id}-eff`);
                 if (baseEl) baseEl.innerText = baseVal + suffix;
 
                 if (effEl) {
-                    // Always show effective value (Green) as requested, even if same as Base
-                    // Default to baseVal if effVal is strictly undefined (e.g. initial state?)
                     let valToShow = (effVal !== undefined) ? effVal : baseVal;
 
                     effEl.innerText = valToShow + suffix;
@@ -5500,9 +5318,6 @@
                     let d = item.damage || 135;
                     updateDualStat('stat-dmg', formatBigNumber(d));
                 } else if (item.type === 'lava') {
-                    // Stored damage is per tick (0.1 base)
-                    // Display DPS (x30 ticks/sec or whatever convention)
-                    // Previous logic used 30 multiplier.
                     let dPerTick = item.damage || 0.1;
                     let dps = (dPerTick * 30).toFixed(1);
                     updateDualStat('stat-dmg', formatBigNumber(dps, 1));
@@ -5513,14 +5328,9 @@
                     let basePrice = CARD_TYPES[item.type].price;
                     let origVal = basePrice * item.stacks;
                     let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
-                    // Check for HP cost items? (e.g. Sacrifice, Heart) - usually not placed items
-                    // Placed items (sand, lava, mine, farm) have prices.
                     updateDualStat('stat-value', formatBigNumber(origVal), formatBigNumber(marketVal), '$');
                 }
             }
-
-            // Sync checkbox state if it exists (for external changes or re-selection)
-            // Removed persistent checkbox sync
         }
 
 
@@ -5678,52 +5488,20 @@
         function updateCarousel() {
             let track = document.getElementById('carousel-track');
 
-            // 1. Move everything back to pool/storage before rebuilding
-            // Local Player
             let localContainer = document.getElementById('local-player-container');
             if (localContainer && localContainer.parentNode === track) {
-                // Should we move it to a safe place? No, just detach is fine if we reappend.
-                // But wait, if we clear innerHTML we lose event listeners?
-                // Better to iterate and move known children out.
             }
 
-            // Move remote players back to pool
-            // Move remote players back to pool
-            // Select any carousel item that is NOT local player
             let remotes = track.querySelectorAll('.carousel-item:not(.local-player)');
             remotes.forEach(el => document.getElementById('video-pool').appendChild(el));
 
-            // Detach Local Player Container safely
             if (localContainer) {
-                // If it's in track, remove it so we can append it in correct order
                 if (localContainer.parentNode === track) track.removeChild(localContainer);
             }
 
-            // Clear Track content? 
-            // Now track should be empty (since we moved remotes and local)
-            // But let's be safe
-            // track.innerHTML = ''; // NO! This kills the localContainer if we didn't save it ref.
-            // We have localContainer reference. But if we used innerHTML we destroy the object.
-            // So we MUST use detach/append.
-
-            // 2. Determine Order (Left, Center, Right)
             const getPlayerAt = (idx) => playerOrder[(idx + playerOrder.length) % playerOrder.length];
 
             let itemsToShow = [];
-
-            // Should we show ALL players? User said "side by side".
-            // Ring logic: 
-            // If < 3 players, easy.
-            // If > 3, we only show Left, Center, Right?
-            // User requested: "Refactor so that ... all of the other videos are as well. All of them side by side... shift left/right"
-            // This implies showing MORE than just 3 if there are more?
-            // "All of them side by side". 
-            // Let's implement showing Center, then neighbors outwards?
-            // Or just the whole list shifted?
-            // Ring: [P1, P2, P3, P4]. 
-            // If View=P1. Order: P4, P1, P2? (Left, Center, Right). 
-            // Let's stick to 3 visible slots for now to keep Zoom/Size manageable as per previous design, but using the Track.
-            // Actually, if we use flex, we can just dump 3 items.
 
             let centerP = getPlayerAt(viewIndex);
             let leftP = getPlayerAt(viewIndex - 1);
@@ -5883,11 +5661,7 @@
         }
 
         function renderRemoteMarkets() {
-            // Iterate connected/visible players
             let peers = connectedPlayers.map(p => p.id);
-            // Also need to support players in the carousel even if not in connectedPlayers? 
-            // remoteMarkets logic creates data for existing connections.
-
             peers.forEach(pid => {
                 let strip = document.getElementById(`remote-market-${pid}`);
                 if (!strip) return;
@@ -5961,8 +5735,6 @@
         }
 
         // --- DYNAMIC STREAMING ---
-
-        // Called when view changes to ensure we are calling the people we can see
         function updateVisibleStreams() {
             if (!gameActive) return;
 
@@ -5979,35 +5751,15 @@
 
             // 1. Call Missing Targets
             targets.forEach(targetId => {
-                // Check if we are already getting stream FROM them?
-                // MediaCalls are usually outgoing or incoming. 
-                // We assume bidirectional eventually?
-                // Simplest: If I don't have a video srcObject for this peer, I call them.
-                // Wait, if THEY called ME, I have their stream in handleCallStream.
-
                 let vid = document.getElementById(`vid-${targetId}`);
                 if (vid && !vid.srcObject) {
                     // No stream? Initiate Call.
                     initiateCall(targetId);
                 }
             });
-
-            // 2. Optional: Close distant calls? 
-            // User requirement: "streams at most to 2".
-            // If I rotate away, should I close connection?
-            // If I close, and they were watching ME, I cut their feed.
-            // Bad.
-            // The constraint "player streams at most to 2" implies SENDER limit.
-            // If P1 is viewed by P3, P4, P5... P1 is sending 3 streams.
-            // But in a ring, usually only Neighbors watch.
-            // Spectating is rare.
-            // Let's NOT close connections aggressively for now to avoid complexity/lag.
-            // But we prioritize initiating calls to visible ones.
         }
 
         function initiateCall(peerId) {
-            // Check if existing call object?
-            // Note: peer.call returns a MediaConnection.
             console.log("Initiating call to visible peer:", peerId);
             let call = peer.call(peerId, localStream);
             handleCallStream(call);
@@ -6050,8 +5802,6 @@
         };
 
         function startMultiplayerGame() {
-            // Generate Ring Order
-            // Host + Connected
             let all = [{ id: myPeerId, name: document.getElementById('player-name').value }, ...connectedPlayers];
             // Shuffle
             all.sort(() => Math.random() - 0.5);
@@ -6093,10 +5843,6 @@
 
                     updateCarousel();
                     updateVisibleStreams();
-
-                    // Host doesn't need to "call everyone" anymore.
-                    // Everyone calls their neighbors via updateVisibleStreams logic.
-
                 } catch (e) { console.error("Stream setup failed", e); }
             }
 
