@@ -82,10 +82,13 @@ function setupThreeJS() {
 
 // --- WebXR Session ---
 async function onEnterAR() {
+    const overlayElement = document.getElementById('overlay');
+
     if (!currentSession) {
         const sessionInit = {
-            requiredFeatures: ['hit-test', 'depth-sensing', 'dom-overlay'],
-            domOverlay: { root: document.body },
+            requiredFeatures: ['hit-test', 'depth-sensing'],
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: overlayElement },
             depthSensing: {
                 usagePreference: ["cpu-optimized", "gpu-optimized"],
                 dataFormatPreference: ["luminance-alpha", "float32"]
@@ -96,6 +99,7 @@ async function onEnterAR() {
             onSessionStarted(session);
         } catch (e) {
             console.error("Failed to start AR session", e);
+            alert("Error starting AR: " + e.message); // Visible alert on device
             statusText.innerText = "Error starting AR: " + e.message;
         }
     }
@@ -107,6 +111,12 @@ function onSessionStarted(session) {
 
     renderer.xr.setReferenceSpaceType('local');
     renderer.xr.setSession(session);
+
+    // Verify overlay
+    if (!session.domOverlayState) {
+        // Warn if overlay is not active
+        // alert("Warning: DOM Overlay not supported/active"); 
+    }
 
     startScreen.classList.add('hidden');
     controlsPanel.classList.remove('hidden');
