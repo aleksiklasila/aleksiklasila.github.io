@@ -12,6 +12,7 @@ let isScanning = false;
 let qualityMode = 'fast'; // 'fast' | 'detailed'
 let scannedMeshes = []; // Array of accummulated meshes
 let lastScanTime = 0;
+let isViewing = false; // Flag to pause UI status updates during viewing
 
 // HTML Elements
 const btnEnterAR = document.getElementById('btn-enter-ar');
@@ -142,7 +143,7 @@ function render(timestamp, frame) {
 
         // 0. Update Pose & Depth State
         const pose = frame.getViewerPose(referenceSpace);
-        if (pose) {
+        if (pose && !isViewing) {
             const depthInfo = frame.getDepthInformation(pose.views[0]);
             if (depthInfo) {
                 window.latestDepthPack = { depthInfo, view: pose.views[0] };
@@ -258,6 +259,8 @@ function clearScannedMeshes() {
     scannedMeshes = [];
     btnView.style.display = 'none';
     lastGlbBlob = null;
+    isViewing = false;
+    viewerOverlay.classList.add('hidden');
 }
 
 // --- Export Logic ---
@@ -287,6 +290,7 @@ function saveArrayBuffer(buffer, filename) {
 }
 
 function onViewDebug() {
+    isViewing = true;
     if (!scannedMeshes.length && !lastGlbBlob) return;
 
     // If we haven't exported yet, quick export to memory
@@ -299,7 +303,10 @@ function onViewDebug() {
                 lastGlbBlob = new Blob([gltf], { type: 'application/octet-stream' });
                 openViewer(lastGlbBlob);
             },
-            function (error) { alert("Export error: " + error); },
+            function (error) {
+                alert("Export error: " + error);
+                isViewing = false;
+            },
             { binary: true }
         );
     } else {
@@ -308,7 +315,15 @@ function onViewDebug() {
 }
 
 function openViewer(blob) {
+    statusText.innerText = "Opening Viewer...";
     const url = URL.createObjectURL(blob);
     debugViewer.src = url;
     viewerOverlay.classList.remove('hidden');
+    // Ensure overlay is on top by forcing display style if needed (class handler should be enough)
 }
+
+// Add close handler to global scope or attach in init if preferred
+window.closeViewer = () => {
+    isViewing = false;
+    viewerOverlay.classList.add('hidden');
+};
