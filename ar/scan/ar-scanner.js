@@ -61,198 +61,173 @@ export class ARScanner {
     /**
      * Process a depth frame and fuse into voxel grid
      */
-    processFrame(depthInfo, view, camera) {
-        if (!this.isScanning) return;
+    // processFrame(depthInfo, view, camera)
+    if(!this.isScanning) return;
 
-        const data = new Uint16Array(depthInfo.data); // Or Float32 if supported
-        const isFloat = depthInfo.dataFormat === 'float32';
-        const floatData = isFloat ? new Float32Array(depthInfo.data) : null;
-        const toMeters = depthInfo.rawValueToMeters || 1.0;
-        const width = depthInfo.width;
-        const height = depthInfo.height;
+    // Use getDepthInMeters to ensure correct format/scaling
+    // Iterating the Depth Buffer coordinates directly ensures we hit valid data points.
 
-        // Stride for performance (don't process every pixel every frame)
-        // We rely on temporal accumulation to fill holes
-        const skip = 4; // Process 1/16th of pixels per frame, but different ones? 
-        // For now simple fixed stride.
+    const width = depthInfo.width;
+    const height = depthInfo.height;
 
-        const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
+    // Stride: Process fewer points for performance
+    const skip = 4;
 
-        // Camera Position (World)
-        const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
+    const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
 
-        const vPoint = new THREE.Vector3();
-        const vDir = new THREE.Vector3();
-        const voxelKeyPt = new THREE.Vector3();
+    const vPoint = new THREE.Vector3();
+    const vDir = new THREE.Vector3();
 
-        for (let y = 0; y < height; y += skip) {
-            for (let x = 0; x < width; x += skip) {
-                // Get Depth
-                let d = 0;
-                if (isFloat) d = floatData[y * width + x];
-                else d = data[y * width + x] * toMeters;
+    for(let y = 0; y <height; y += skip) {
+        for (let x = 0; x < width; x += skip) {
+            // 1. Get Depth (Meters) - High Level API (Handles Float32/UInt16/Scale)
+            // Note: x, y are column, row in the *Depth Buffer*
+            const d = depthInfo.getDepthInMeters(x, y);
 
-                // --- Valid Depth Filter ---
-                if (d <= 0.1 || d > 5.0 || !isFinite(d)) continue;
+            // Valid Depth Filter
+            if (d <= 0.1 || d > 5.0 || !isFinite(d)) continue;
 
-                // --- Edge Detection (Flying Pixel Filter) ---
-                // Check neighbors (right and down) to see if depth jumps wildly
-                // We need to be careful with range checks since we skip pixels
-                if (x + skip < width) {
-                    let dRight;
-                    if (isFloat) dRight = floatData[y * width + (x + skip)];
-                    else dRight = data[y * width + (x + skip)] * toMeters;
-                    if (Math.abs(d - dRight) > 0.1) continue; // > 10cm jump = edge
-                }
-                if (y + skip < height) {
-                    let dDown;
-                    if (isFloat) dDown = floatData[(y + skip) * width + x];
-                    else dDown = data[(y + skip) * width + x] * toMeters;
-                    if (Math.abs(d - dDown) > 0.1) continue;
-                }
+            // 2. Unproject
+            // Map Depth Buffer (x,y) -> Normalized View Coords (0..1)
+            // NOTE: WebXR depth buffer might be subset of view, or scaled.
+            // normTextureCoordinate is usually for GPU. For CPU 'getDepthInMeters', 
+            // (x,y) corresponds to the grid. We assume the grid covers the view 1:1?
+            // Standard WebXR: The depth buffer covers the `view` frustum.
 
-                // --- Unproject (Ray Cast Method) ---
-                const xNorm = (x + 0.5) / width;
-                const yNorm = (y + 0.5) / height;
-                const xNDC = xNorm * 2 - 1;
-                const yNDC = (1 - yNorm) * 2 - 1;
+            const xNorm = (x + 0.5) / width;
+            const yNorm = (y + 0.5) / height; // 0=Top or Bottom? 
+            // Usually GL convention: 0,0 is bottom-left? Or Image convention (top-left)?
+            // depthInfo access is usually (col, row). Row 0 is usually top?
+            // WebXR Normalized Coords: (0,0) is usually Bottom-Left for GL.
+            // But getDepthInMeters(col, row) follows image data (Row 0 = Top).
 
-                // Unproject NDC(x,y,0.5) to View Space Ray
-                vPoint.set(xNDC, yNDC, 0.5);
-                vPoint.applyMatrix4(invProj);
-                if (vPoint.w === 0) continue; // Math safety
+            // Let's assume standard Image Space for x,y iteration -> Y is Down.
+            // NDC Y is Up.
+            const xNDC = xNorm * 2 - 1;       // 0..1 -> -1..1
+            const yNDC = (1 - yNorm) * 2 - 1; // 0..1(Top->Bot) -> 1..-1?
+            // Wait: if y=0 (Top) -> yNorm=0 -> yNDC = 1. (Top in GL is +1). Correct.
 
-                // Homogeneous divide not needed if just direction, but let's be safe:
-                // View Space Direction:
-                // vDir.copy(vPoint).normalize(); // Wrong if w!=1?
-                // Perspective projection: w is usually -z.
-                // Let's use standard Threejs unproject logic simplified for View Space (camera at 0,0,0)
-                // Actually: vPoint after apply invProj is a point on the near plane (or somewhere).
-                // Ray direction is simply vPoint - Origin(0,0,0).
+            vPoint.set(xNDC, yNDC, 0.5);
+            vPoint.applyMatrix4(invProj);
+            if (vPoint.w === 0) continue;
 
-                vDir.set(vPoint.x, vPoint.y, vPoint.z).normalize();
+            vDir.set(vPoint.x, vPoint.y, vPoint.z).normalize();
+            if (vDir.z >= 0) continue;
 
-                // Scale Ray to Depth 'd'
-                // Convention: WebXR depth is -Z in view space.
-                if (vDir.z >= 0) continue; // Pointing behind camera?
-                const scale = -d / vDir.z;
+            const scale = -d / vDir.z;
+            vPoint.copy(vDir).multiplyScalar(scale);
+            vPoint.applyMatrix4(camera.matrixWorld);
 
-                // View Space Point
-                vPoint.copy(vDir).multiplyScalar(scale);
-
-                // World Space Point
-                vPoint.applyMatrix4(camera.matrixWorld);
-
-                // --- Fusion ---
-                this.fusePoint(vPoint, camPos);
-            }
+            this.fusePoint(vPoint, camPos);
         }
-
+    }
+        
         this.framesSinceRebuild++;
-        if (this.framesSinceRebuild > this.rebuildInterval) {
-            this.rebuildPointCloud();
-            this.framesSinceRebuild = 0;
-        }
+if (this.framesSinceRebuild > this.rebuildInterval) {
+    this.rebuildPointCloud();
+    this.framesSinceRebuild = 0;
+}
     }
 
-    fusePoint(worldPt, camPos) {
-        // Quantize
-        const ix = Math.floor(worldPt.x / this.cellSize);
-        const iy = Math.floor(worldPt.y / this.cellSize);
-        const iz = Math.floor(worldPt.z / this.cellSize);
-        const key = `${ix},${iy},${iz}`;
+fusePoint(worldPt, camPos) {
+    // Quantize
+    const ix = Math.floor(worldPt.x / this.cellSize);
+    const iy = Math.floor(worldPt.y / this.cellSize);
+    const iz = Math.floor(worldPt.z / this.cellSize);
+    const key = `${ix},${iy},${iz}`;
 
-        let voxel = this.voxels.get(key);
-        if (!voxel) {
-            voxel = {
-                x: worldPt.x,
-                y: worldPt.y,
-                z: worldPt.z,
-                count: 1,
-                // Bounding box of camera positions that saw this voxel
-                // Bounding box of camera positions
-                minCx: camPos.x, maxCx: camPos.x,
-                minCy: camPos.y, maxCy: camPos.y,
-                minCz: camPos.z, maxCz: camPos.z,
-                // Logic Coords for ROR
-                ix: ix, iy: iy, iz: iz
-            };
-            this.voxels.set(key, voxel);
-        } else {
-            // Running Average
-            const c = voxel.count;
-            const nc = c + 1;
-            voxel.x = (voxel.x * c + worldPt.x) / nc;
-            voxel.y = (voxel.y * c + worldPt.y) / nc;
-            voxel.z = (voxel.z * c + worldPt.z) / nc;
-            voxel.count = nc;
+    let voxel = this.voxels.get(key);
+    if (!voxel) {
+        voxel = {
+            x: worldPt.x,
+            y: worldPt.y,
+            z: worldPt.z,
+            count: 1,
+            // Bounding box of camera positions that saw this voxel
+            // Bounding box of camera positions
+            minCx: camPos.x, maxCx: camPos.x,
+            minCy: camPos.y, maxCy: camPos.y,
+            minCz: camPos.z, maxCz: camPos.z,
+            // Logic Coords for ROR
+            ix: ix, iy: iy, iz: iz
+        };
+        this.voxels.set(key, voxel);
+    } else {
+        // Running Average
+        const c = voxel.count;
+        const nc = c + 1;
+        voxel.x = (voxel.x * c + worldPt.x) / nc;
+        voxel.y = (voxel.y * c + worldPt.y) / nc;
+        voxel.z = (voxel.z * c + worldPt.z) / nc;
+        voxel.count = nc;
 
-            // Expand Baseline
-            if (camPos.x < voxel.minCx) voxel.minCx = camPos.x;
-            if (camPos.x > voxel.maxCx) voxel.maxCx = camPos.x;
-            if (camPos.y < voxel.minCy) voxel.minCy = camPos.y;
-            if (camPos.y > voxel.maxCy) voxel.maxCy = camPos.y;
-            if (camPos.z < voxel.minCz) voxel.minCz = camPos.z;
-            if (camPos.z > voxel.maxCz) voxel.maxCz = camPos.z;
+        // Expand Baseline
+        if (camPos.x < voxel.minCx) voxel.minCx = camPos.x;
+        if (camPos.x > voxel.maxCx) voxel.maxCx = camPos.x;
+        if (camPos.y < voxel.minCy) voxel.minCy = camPos.y;
+        if (camPos.y > voxel.maxCy) voxel.maxCy = camPos.y;
+        if (camPos.z < voxel.minCz) voxel.minCz = camPos.z;
+        if (camPos.z > voxel.maxCz) voxel.maxCz = camPos.z;
+    }
+}
+
+rebuildPointCloud() {
+    const vertices = [];
+    const colors = [];
+
+    let accepted = 0;
+    let rejected = 0;
+
+    for (const v of this.voxels.values()) {
+        // --- Confidence Filters ---
+
+        // 1. Persistence
+        if (v.count < this.minCount) {
+            rejected++;
+            continue;
         }
+
+        // 2. Baseline Check (Parallax)
+        const dx = v.maxCx - v.minCx;
+        const dy = v.maxCy - v.minCy;
+        const dz = v.maxCz - v.minCz;
+        const baselineSq = dx * dx + dy * dy + dz * dz;
+
+        if (baselineSq < this.minBaseline * this.minBaseline) {
+            rejected++;
+            continue;
+        }
+
+        // Accepted
+        vertices.push(v.x, v.y, v.z);
+
+        // Color by confidence? Or just fixed cyan?
+        // Let's do cyan, slightly brighter for high count
+        const intensity = Math.min(1.0, 0.5 + v.count * 0.05);
+        colors.push(0, intensity, intensity);
+
+        accepted++;
     }
 
-    rebuildPointCloud() {
-        const vertices = [];
-        const colors = [];
+    console.log(`Rebuild: ${accepted} voxels (rej: ${rejected}). Total Map: ${this.voxels.size}`);
 
-        let accepted = 0;
-        let rejected = 0;
+    if (accepted === 0) return;
 
-        for (const v of this.voxels.values()) {
-            // --- Confidence Filters ---
-
-            // 1. Persistence
-            if (v.count < this.minCount) {
-                rejected++;
-                continue;
-            }
-
-            // 2. Baseline Check (Parallax)
-            const dx = v.maxCx - v.minCx;
-            const dy = v.maxCy - v.minCy;
-            const dz = v.maxCz - v.minCz;
-            const baselineSq = dx * dx + dy * dy + dz * dz;
-
-            if (baselineSq < this.minBaseline * this.minBaseline) {
-                rejected++;
-                continue;
-            }
-
-            // Accepted
-            vertices.push(v.x, v.y, v.z);
-
-            // Color by confidence? Or just fixed cyan?
-            // Let's do cyan, slightly brighter for high count
-            const intensity = Math.min(1.0, 0.5 + v.count * 0.05);
-            colors.push(0, intensity, intensity);
-
-            accepted++;
-        }
-
-        console.log(`Rebuild: ${accepted} voxels (rej: ${rejected}). Total Map: ${this.voxels.size}`);
-
-        if (accepted === 0) return;
-
-        if (!this.pointCloud) {
-            this.geometry = new THREE.BufferGeometry();
-            this.pointCloud = new THREE.Points(this.geometry, this.material);
-            this.pointCloud.isARMesh = true; // Tag for export
-            this.scene.add(this.pointCloud);
-        }
-
-        const posAttr = new THREE.Float32BufferAttribute(vertices, 3);
-        const colAttr = new THREE.Float32BufferAttribute(colors, 3);
-
-        this.geometry.setAttribute('position', posAttr);
-        this.geometry.setAttribute('color', colAttr);
-
-        // Bounds for frustum culling
-        this.geometry.computeBoundingSphere();
+    if (!this.pointCloud) {
+        this.geometry = new THREE.BufferGeometry();
+        this.pointCloud = new THREE.Points(this.geometry, this.material);
+        this.pointCloud.isARMesh = true; // Tag for export
+        this.scene.add(this.pointCloud);
     }
+
+    const posAttr = new THREE.Float32BufferAttribute(vertices, 3);
+    const colAttr = new THREE.Float32BufferAttribute(colors, 3);
+
+    this.geometry.setAttribute('position', posAttr);
+    this.geometry.setAttribute('color', colAttr);
+
+    // Bounds for frustum culling
+    this.geometry.computeBoundingSphere();
+}
 }
