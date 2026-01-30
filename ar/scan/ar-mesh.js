@@ -87,22 +87,82 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
             const d = getDepth(srcX, srcY);
 
             // Filter invalid depth (0 is invalid, > 5m is usually far clip)
-            if (d <= 0 || d > 8.0 || !isFinite(d)) continue;
+            // Confidence check: WebXR Depth doesn't always expose per-pixel confidence in the basic array,
+            // but we can filter out "flying pixels" or 0 values more aggressively.
 
-            // NDC: -1..1
-            const xNDC = (srcX / width) * 2 - 1;
-            const yNDC = 1 - (srcY / height) * 2;
+            // getDepthInMeters uses the normalized coordinates to look up the depth.
+            // We should iterate over the *Depth Buffer* dimensions, but map center of those pixels 
+            // to normalized view coordinates.
 
-            // Robust Unprojection
+            // Current approach: iterating result grid (subsampled) -> srcX, srcY -> depth
+
+            if (d <= 0.1 || d > 8.0 || !isFinite(d)) continue;
+
+            // Strict Unprojection
+            // X, Y in NDC space (-1 to 1)
+            // We must use the center of the pixel in the depth map for accuracy
+            const xNorm = (x + 0.5) / resultWidth; // 0..1
+            const yNorm = (y + 0.5) / resultHeight; // 0..1
+
+            const xNDC = xNorm * 2 - 1;
+            const yNDC = (1 - yNorm) * 2 - 1; // Flip Y for NDC? WebXR usually Y up? 
+            // Actually, in Three.js/WebGL:
+            // xNDC: -1 (left) to 1 (right)
+            // yNDC: -1 (bottom) to 1 (top)
+            // Screen Y usually top-down (0 at top).
+            // Let's assume standard GL NDC.
+
             vPoint.set(xNDC, yNDC, 0.5);
             vPoint.applyMatrix4(invProjection);
 
-            if (vPoint.z === 0) continue;
+            // Perspective divide?
+            // "applyMatrix4" with Matrix4 (Project->View inverse) usually puts us in View Space directly 
+            // IF w is handled. Three.js Vector3.applyMatrix4 does divide by w.
+            // But for unprojecting a depth value 'd', we often do a ray cast.
 
-            const scale = -d / vPoint.z;
-            const xView = vPoint.x * scale;
-            const yView = vPoint.y * scale;
-            const zView = -d;
+            // Ray Unprojection Method (More robust for VR/AR):
+            // 1. Unproject a point at Z=-1 (arbitrary) to get direction.
+            // 2. Normalize direction.
+            // 3. Multiply by depth 'd'.
+
+            // Let's try RayCast method:
+            vPoint.set(xNDC, yNDC, 0.5); // Z doesn't matter much for direction, just get a point
+            // Wait, viewOrCamera might be XRView which doesn't have 'unproject' helper.
+            // We have invProjection.
+
+            // Manual Unproject to View Space
+            const xClip = xNDC;
+            const yClip = yNDC;
+            const zClip = 0.5; // arbitrary inside frustum
+
+            // Homogeneous Clip Space
+            const vClip = new THREE.Vector4(xClip, yClip, zClip, 1.0);
+            vClip.applyMatrix4(invProjection);
+
+            // View Space (Homogeneous) -> Cartesian
+            // vView is a point on the ray passing through (x,y).
+            // But we know the *metric depth* 'd' is -Z in View Space (usually).
+
+            // Direction from origin (0,0,0) to vClip
+            // In View Space, camera is at 0,0,0.
+            if (vClip.w === 0) continue;
+            const vDir = new THREE.Vector3(vClip.x / vClip.w, vClip.y / vClip.w, vClip.z / vClip.w);
+            vDir.normalize();
+
+            // If vDir.z is positive (behind camera), skip
+            if (vDir.z >= 0) continue;
+
+            // Determine scale factor to reach depth 'd'
+            // We defined 'd' as distance along -Z axis (planar depth) OR Euclidean distance?
+            // WebXR getDepthInMeters usually returns "distance from the view's origin plane" (-Z).
+            // So Z_view = -d.
+
+            const scale = -d / vDir.z;
+
+            const xView = vDir.x * scale;
+            const yView = vDir.y * scale;
+            const zView = vDir.z * scale; // Should be -d exactly
+
 
             if (!isFinite(xView) || !isFinite(yView) || !isFinite(zView)) continue;
 
