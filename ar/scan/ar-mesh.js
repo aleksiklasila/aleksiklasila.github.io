@@ -137,13 +137,8 @@ export function buildMeshFromDepth(depthInfo, view) {
     geometry.computeVertexNormals();
 
     // Material - Vertex colors based on Z for visual style
-    const material = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.8,
-        metalness: 0.2,
-        side: THREE.DoubleSide,
-        wireframe: false
-    });
+    const material = new THREE.MeshNormalMaterial({ wireframe: false, side: THREE.DoubleSide });
 
+    console.log(`Generated mesh: ${vertices.length / 3} verts, ${indices.length / 3} triangles`);
     return new THREE.Mesh(geometry, material);
 }
