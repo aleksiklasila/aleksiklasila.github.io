@@ -121,18 +121,17 @@ export function buildMeshFromDepth(depthInfo, view) {
     for (let y = 0; y < resultHeight - 1; y++) {
         for (let x = 0; x < resultWidth - 1; x++) {
             // Indices in the vertex array
-            const a = y * widthPts + x;
-            const b = y * widthPts + (x + 1);
-            const c = (y + 1) * widthPts + x;
-            const dStr = (y + 1) * widthPts + (x + 1);
+            const a = y * resultWidth + x;
+            const b = y * resultWidth + (x + 1);
+            const c = (y + 1) * resultWidth + x;
+            const dStr = (y + 1) * resultWidth + (x + 1);
 
-            // Check for validity (not 0,0,0) and triangles that aren't too stretched (depth jumps)
+            // Check for validity using the NaN sentinel
+            if (isNaN(vertices[a * 3]) || isNaN(vertices[b * 3]) || isNaN(vertices[c * 3])) continue;
+
             const vA = new THREE.Vector3(vertices[a * 3], vertices[a * 3 + 1], vertices[a * 3 + 2]);
             const vB = new THREE.Vector3(vertices[b * 3], vertices[b * 3 + 1], vertices[b * 3 + 2]);
             const vC = new THREE.Vector3(vertices[c * 3], vertices[c * 3 + 1], vertices[c * 3 + 2]);
-
-            // Simple validity check
-            if (vA.lengthSq() === 0 || vB.lengthSq() === 0 || vC.lengthSq() === 0) continue;
 
             // Edge length check to remove skyboxes/background noise connections
             const maxEdgeLen = 0.1; // 10cm max jump between pixels
@@ -142,11 +141,26 @@ export function buildMeshFromDepth(depthInfo, view) {
             indices.push(a, c, b);
 
             // Second triangle (b, c, d)
-            const vD = new THREE.Vector3(vertices[dStr * 3], vertices[dStr * 3 + 1], vertices[dStr * 3 + 2]);
-            if (vD.lengthSq() > 0 && vB.distanceTo(vD) < maxEdgeLen && vC.distanceTo(vD) < maxEdgeLen) {
-                indices.push(b, c, dStr);
+            if (!isNaN(vertices[dStr * 3])) {
+                const vD = new THREE.Vector3(vertices[dStr * 3], vertices[dStr * 3 + 1], vertices[dStr * 3 + 2]);
+                if (vB.distanceTo(vD) < maxEdgeLen && vC.distanceTo(vD) < maxEdgeLen) {
+                    indices.push(b, c, dStr);
+                }
             }
         }
+    }
+
+    // Filter out NaN vertices for the final buffer
+    // Actually we can't easily filter them out because indices rely on their position.
+    // But Three.js and GLTF might handle unused vertices okay? 
+    // Wait, GLTF exporter might fail on NaN even if unused.
+    // So we should collapse NaNs to a single 'safe' vertex (e.g. 0,0,0) OR 
+    // better: replace them with 0,0,0 but ensure they are not indexed.
+    // Since we filtered `indices` above, these NaN vertices are NOT indexed.
+    // So we can safely replace all NaNs with 0 in the final attribute to please the exporter.
+
+    for (let i = 0; i < vertices.length; i++) {
+        if (isNaN(vertices[i])) vertices[i] = 0;
     }
 
     const geometry = new THREE.BufferGeometry();
