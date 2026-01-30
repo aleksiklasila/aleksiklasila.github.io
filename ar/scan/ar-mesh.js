@@ -9,17 +9,12 @@ import * as THREE from 'three';
 export function buildMeshFromDepth(depthInfo, viewOrCamera) {
     const width = depthInfo.width;
     const height = depthInfo.height;
-    const rawData = new Uint16Array(depthInfo.data);
-
-    const isFloat = depthInfo.dataFormat === 'float32';
 
     // Safety check for empty buffer
     if (depthInfo.data.byteLength === 0) {
         console.warn("Empty depth data, returning empty points.");
         return null;
     }
-
-    const data = isFloat ? new Float32Array(depthInfo.data) : rawData;
 
     // Point cloud can use higher resolution safely
     const skip = 2;
@@ -45,13 +40,19 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
 
     const resultWidth = Math.floor(width / skip);
     const resultHeight = Math.floor(height / skip);
-    const toMeters = depthInfo.rawValueToMeters || 1.0;
+
+    // Use the native helper which handles format/endianness/normalization correctly
+    // Note: getDepthInMeters expects (x, y) in range (0..1) usually? 
+    // No, WebXR spec says getDepthInMeters(x, y) takes column/row indices (0..width, 0..height).
+    // Let's verify usage. The CPU API usually is getDepthInMeters(x, y).
 
     const getDepth = (x, y) => {
-        const index = y * width + x;
-        if (isFloat) return data[index];
-        return data[index] * toMeters;
+        return depthInfo.getDepthInMeters(x, y);
     };
+
+    // Debug bounds / Sample center
+    const dCenter = getDepth(Math.floor(width / 2), Math.floor(height / 2));
+    console.log(`Center depth: ${dCenter}m.  Res: ${width}x${height}`);
 
     const vPoint = new THREE.Vector3();
 
