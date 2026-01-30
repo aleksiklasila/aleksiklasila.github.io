@@ -33,9 +33,7 @@ header h1 {
     margin: 0;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
     text-align: center;
-    background: var(--glass-bg);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(40, 40, 40, 0.85);
     border: 1px solid var(--glass-border);
     border-radius: 12px;
     padding: 10px;
@@ -46,9 +44,7 @@ header h1 {
 #controls,
 #start-screen {
     pointer-events: auto;
-    background: var(--glass-bg);
-    backdrop-filter: blur(15px);
-    -webkit-backdrop-filter: blur(15px);
+    background: rgba(40, 40, 40, 0.85);
     border: 1px solid var(--glass-border);
     border-radius: 16px;
     padding: 20px;

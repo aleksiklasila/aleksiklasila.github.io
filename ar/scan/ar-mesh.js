@@ -30,12 +30,18 @@ export function buildMeshFromDepth(depthInfo, view) {
     const resultHeight = Math.floor(height / skip);
 
     // Helper to get depth in meters
+    const toMeters = depthInfo.rawValueToMeters || 1.0;
+
+    // Safety check for projection matrix
+    const P00 = projectionMatrix.elements[0] || 1.0;
+    const P11 = projectionMatrix.elements[5] || 1.0;
+
     const getDepth = (x, y) => {
         const index = y * width + x;
         if (isFloat) {
             return data[index];
         } else {
-            return data[index] * depthInfo.rawValueToMeters;
+            return data[index] * toMeters;
         }
     };
 
@@ -91,12 +97,18 @@ export function buildMeshFromDepth(depthInfo, view) {
             // Y = yNDC * (-Z) / P11
             // This is accurate enough for standard AR cameras.
 
-            const P00 = projectionMatrix.elements[0]; // Scale X
-            const P11 = projectionMatrix.elements[5]; // Scale Y
-
             const zView = -d;
+
+            // Avoid division by zero from bad projection matrix
             const xView = (xNDC * zView) / P00;
             const yView = (yNDC * zView) / P11;
+
+            if (isNaN(xView) || isNaN(yView) || isNaN(zView) ||
+                !isFinite(xView) || !isFinite(yView) || !isFinite(zView)) {
+                // Skip invalid points
+                vertices.push(0, 0, 0);
+                continue;
+            }
 
             vertices.push(xView, yView, zView);
         }
