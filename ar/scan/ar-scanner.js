@@ -95,6 +95,22 @@ export class ARScanner {
                 // --- Valid Depth Filter ---
                 if (d <= 0.1 || d > 5.0 || !isFinite(d)) continue;
 
+                // --- Edge Detection (Flying Pixel Filter) ---
+                // Check neighbors (right and down) to see if depth jumps wildly
+                // We need to be careful with range checks since we skip pixels
+                if (x + skip < width) {
+                    let dRight;
+                    if (isFloat) dRight = floatData[y * width + (x + skip)];
+                    else dRight = data[y * width + (x + skip)] * toMeters;
+                    if (Math.abs(d - dRight) > 0.1) continue; // > 10cm jump = edge
+                }
+                if (y + skip < height) {
+                    let dDown;
+                    if (isFloat) dDown = floatData[(y + skip) * width + x];
+                    else dDown = data[(y + skip) * width + x] * toMeters;
+                    if (Math.abs(d - dDown) > 0.1) continue;
+                }
+
                 // --- Unproject (Ray Cast Method) ---
                 const xNorm = (x + 0.5) / width;
                 const yNorm = (y + 0.5) / height;
