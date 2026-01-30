@@ -233,18 +233,28 @@ function generateMeshFromDepth(depthInfo) {
     // We already have 'window.latestDepthPack.view' but strictly we should pass it.
     // However, for Simplicity in this block, let's just use the active camera which matches the view 
     // (Three.js updates camera projection from view).
-    const camera = renderer.xr.getCamera();
+    // Use correct calling convention for new ar-mesh
+    const view = window.latestDepthPack ? window.latestDepthPack.view : renderer.xr.getCamera();
+    // If using latestDepthPack.view, we must still respect the current camera transform?
+    // Actually, AR depth is relative to the *view* at the time of capture.
+    // So usually we need the pose of that view to place it in world.
+    // For simplicity with 'camera', we assume immediate capture.
 
-    // Create Mesh in View Space
-    const mesh = buildMeshFromDepth(depthInfo, camera);
+    // Create Points in View Space
+    const points = buildMeshFromDepth(depthInfo, view);
 
-    if (mesh) {
+    if (points) {
         // Transform to World Space
-        mesh.applyMatrix4(camera.matrixWorld);
-        mesh.isARMesh = true; // Tag for cleanup
+        // Note: If using 'view' from the past, we ideally need that view's transform.
+        // But for "Fast" mode (now), camera.matrixWorld is close enough approximately if instantaneous.
+        // For "Detailed", we might drift if we don't save the pose.
+        // Let's us camera.matrixWorld for now as we are doing real-time.
+        const camera = renderer.xr.getCamera();
+        points.applyMatrix4(camera.matrixWorld);
+        points.isARMesh = true;
 
-        scene.add(mesh);
-        scannedMeshes.push(mesh);
+        scene.add(points);
+        scannedMeshes.push(points);
         // Enable view button since we have data
         btnView.style.display = 'inline-block';
     }

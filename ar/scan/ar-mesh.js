@@ -1,166 +1,108 @@
 import * as THREE from 'three';
 
 /**
- * Generates a Three.js Mesh from XRDepthInformation.
+ * Generates a Three.js Point Cloud from XRDepthInformation.
  * @param {XRCPUDepthInformation} depthInfo - The CPU depth information from WebXR.
- * @param {XRView} view - The XRView associated with the depth info (needed for projection matrix).
- * @returns {THREE.Mesh} - The generated mesh (points or triangles).
+ * @param {XRView | THREE.Camera} viewOrCamera - The XRView or Camera used for projection.
+ * @returns {THREE.Points} - The generated point cloud.
  */
-export function buildMeshFromDepth(depthInfo, view) {
+export function buildMeshFromDepth(depthInfo, viewOrCamera) {
     const width = depthInfo.width;
     const height = depthInfo.height;
-    const rawData = new Uint16Array(depthInfo.data); // Assuming "luminance-alpha" / ushort format usually
+    const rawData = new Uint16Array(depthInfo.data);
 
-    // Support float32 if that's what we get
     const isFloat = depthInfo.dataFormat === 'float32';
 
-    // Check if data is accessible
-    try {
-        if (depthInfo.data.byteLength === 0) throw new Error("Empty depth buffer");
-    } catch (e) {
-        console.error("Depth data access error: " + e.message);
+    // Safety check for empty buffer
+    if (depthInfo.data.byteLength === 0) {
+        console.warn("Empty depth data, returning empty points.");
         return null;
     }
 
     const data = isFloat ? new Float32Array(depthInfo.data) : rawData;
 
-    // Downsample factor to keep performance high (1 = full res, 2 = half res, etc.)
-    const skip = 4; // 160x90 for a 640x360 buffer is plenty for mobile AR mesh
+    // Point cloud can use higher resolution safely
+    const skip = 2;
 
     const vertices = [];
-    const indices = [];
+    const colors = [];
 
-    // Calculate inverse projection matrix to unproject
-    const projectionMatrix = new THREE.Matrix4().fromArray(view.projectionMatrix);
+    // Resolve Projection Matrix (Array)
+    let projElements;
+    if (viewOrCamera.projectionMatrix instanceof THREE.Matrix4) {
+        // It's a Three.js Camera
+        projElements = viewOrCamera.projectionMatrix.elements;
+    } else if (viewOrCamera.projectionMatrix) {
+        // It's an XRView (Float32Array)
+        projElements = viewOrCamera.projectionMatrix;
+    } else {
+        console.error("No projection matrix found on view object");
+        return null;
+    }
+
+    const projectionMatrix = new THREE.Matrix4().fromArray(projElements);
     const invProjection = projectionMatrix.clone().invert();
 
     const resultWidth = Math.floor(width / skip);
     const resultHeight = Math.floor(height / skip);
-
-    // Helper to get depth in meters
     const toMeters = depthInfo.rawValueToMeters || 1.0;
 
     const getDepth = (x, y) => {
         const index = y * width + x;
-        if (isFloat) {
-            return data[index];
-        } else {
-            return data[index] * toMeters;
-        }
+        if (isFloat) return data[index];
+        return data[index] * toMeters;
     };
 
-    // Pre-allocate vector for unprojection to avoid garbage
     const vPoint = new THREE.Vector3();
 
-    // Generate Vertices
     for (let y = 0; y < resultHeight; y++) {
         for (let x = 0; x < resultWidth; x++) {
-            // Map result (x,y) back to source coords
             const srcX = x * skip;
             const srcY = y * skip;
 
-            // Wrap invalid data instead of skipping to keep indexing consistent
             const d = getDepth(srcX, srcY);
 
-            // Ignore invalid depth (0 or too far)
-            if (d === 0 || d > 5.0 || !isFinite(d)) {
-                vertices.push(NaN, NaN, NaN); // Use NaN to signal invalid vertex
-                continue;
-            }
+            // Filter invalid depth (0 is invalid, > 5m is usually far clip)
+            if (d <= 0 || d > 8.0 || !isFinite(d)) continue;
 
-            // NDC coordinates 
+            // NDC: -1..1
             const xNDC = (srcX / width) * 2 - 1;
-            const yNDC = 1 - (srcY / height) * 2; // Flip Y for GL coords
+            const yNDC = 1 - (srcY / height) * 2;
 
-            // Robust Unprojection:
-            // 1. Unproject a point from NDC (z=0.5 for safety) into View properties
+            // Robust Unprojection
             vPoint.set(xNDC, yNDC, 0.5);
             vPoint.applyMatrix4(invProjection);
 
-            // 2. Unproject point logic
-            // The ray originates at (0,0,0) and passes through vPoint.
-            // We want to scale vPoint so that its Z equals -d.
-
-            if (vPoint.z === 0) {
-                vertices.push(NaN, NaN, NaN);
-                continue;
-            }
+            if (vPoint.z === 0) continue;
 
             const scale = -d / vPoint.z;
-
             const xView = vPoint.x * scale;
             const yView = vPoint.y * scale;
-            const zView = -d; // Enforce exact depth
+            const zView = -d;
 
-            if (!isFinite(xView) || !isFinite(yView) || !isFinite(zView)) {
-                // Skip invalid points
-                vertices.push(NaN, NaN, NaN);
-                continue;
-            }
+            if (!isFinite(xView) || !isFinite(yView) || !isFinite(zView)) continue;
 
             vertices.push(xView, yView, zView);
+
+            // Optional: Mock vertex color based on depth
+            // Near = white/blue, Far = dark
+            // const val = 1.0 - (d / 5.0);
+            // colors.push(val, val, val + 0.2); 
         }
-    }
-
-    // Debug bounds
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (let i = 0; i < vertices.length; i += 3) {
-        const vx = vertices[i];
-        const vy = vertices[i + 1];
-        const vz = vertices[i + 2];
-        if (isNaN(vx)) continue;
-        if (vx < minX) minX = vx; if (vx > maxX) maxX = vx;
-        if (vy < minY) minY = vy; if (vy > maxY) maxY = vy;
-        if (vz < minZ) minZ = vz; if (vz > maxZ) maxZ = vz;
-    }
-    console.log(`Bounds: X[${minX.toFixed(2)},${maxX.toFixed(2)}] Y[${minY.toFixed(2)},${maxY.toFixed(2)}] Z[${minZ.toFixed(2)},${maxZ.toFixed(2)}]`);
-
-    // Generate Indices
-    for (let y = 0; y < resultHeight - 1; y++) {
-        for (let x = 0; x < resultWidth - 1; x++) {
-            // Indices in the vertex array
-            const a = y * resultWidth + x;
-            const b = y * resultWidth + (x + 1);
-            const c = (y + 1) * resultWidth + x;
-            const dStr = (y + 1) * resultWidth + (x + 1);
-
-            // Check for validity using the NaN sentinel
-            if (isNaN(vertices[a * 3]) || isNaN(vertices[b * 3]) || isNaN(vertices[c * 3])) continue;
-
-            const vA = new THREE.Vector3(vertices[a * 3], vertices[a * 3 + 1], vertices[a * 3 + 2]);
-            const vB = new THREE.Vector3(vertices[b * 3], vertices[b * 3 + 1], vertices[b * 3 + 2]);
-            const vC = new THREE.Vector3(vertices[c * 3], vertices[c * 3 + 1], vertices[c * 3 + 2]);
-
-            // Edge length check to remove skyboxes/background noise connections
-            const maxEdgeLen = 0.1; // 10cm max jump between pixels
-            if (vA.distanceTo(vB) > maxEdgeLen || vA.distanceTo(vC) > maxEdgeLen) continue;
-
-            // Push first triangle
-            indices.push(a, c, b);
-
-            // Second triangle (b, c, d)
-            if (!isNaN(vertices[dStr * 3])) {
-                const vD = new THREE.Vector3(vertices[dStr * 3], vertices[dStr * 3 + 1], vertices[dStr * 3 + 2]);
-                if (vB.distanceTo(vD) < maxEdgeLen && vC.distanceTo(vD) < maxEdgeLen) {
-                    indices.push(b, c, dStr);
-                }
-            }
-        }
-    }
-
-    // Filter out NaN vertices for the final buffer
-    for (let i = 0; i < vertices.length; i++) {
-        if (isNaN(vertices[i])) vertices[i] = 0;
     }
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
+    // geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-    // Material - Vertex colors based on Z for visual style
-    const material = new THREE.MeshNormalMaterial({ wireframe: false, side: THREE.DoubleSide });
+    // Point Cloud Material
+    const material = new THREE.PointsMaterial({
+        color: 0x00FFFF,
+        size: 0.02, // 2cm dots
+        sizeAttenuation: true,
+        transparent: false
+    });
 
-    console.log(`Generated mesh: ${vertices.length / 3} verts, ${indices.length / 3} triangles`);
-    return new THREE.Mesh(geometry, material);
+    console.log(`Generated PointCloud: ${vertices.length / 3} points.`);
+    return new THREE.Points(geometry, material);
 }
