@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Scanner</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Three.js and GLTFExporter -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="overlay">
+        <header>
+            <h1>AR Scanner</h1>
+        </header>
+
+        <div id="controls" class="hidden">
+            <div class="quality-selector">
+                <label>Quality:</label>
+                <div class="toggle-group">
+                    <button id="btn-fast" class="active" onclick="setQuality('fast')">Fast</button>
+                    <button id="btn-detailed" onclick="setQuality('detailed')">Detailed</button>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button id="btn-scan" class="primary-btn">Scan</button>
+                <button id="btn-export" class="secondary-btn" disabled>Export GLB</button>
+            </div>
+            <p id="status-text">Ready to scan</p>
+        </div>
+
+        <div id="start-screen">
+            <p>Requires device with WebXR and Depth API support (Android + Chrome).</p>
+            <button id="btn-enter-ar" class="primary-btn large-btn">Start AR</button>
+        </div>
+    </div>
+
+    <!-- Main Logic -->
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>

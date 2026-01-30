@@ -1,0 +1,139 @@
+:root {
+    --primary-color: #007bff;
+    --glass-bg: rgba(255, 255, 255, 0.1);
+    --glass-border: rgba(255, 255, 255, 0.2);
+    --text-color: #ffffff;
+}
+
+body {
+    margin: 0;
+    overflow: hidden;
+    background-color: #111;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-color);
+}
+
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    /* Let clicks pass through to canvas when possible */
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+header h1 {
+    font-size: 1.5rem;
+    margin: 0;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 10px;
+    display: inline-block;
+    pointer-events: auto;
+}
+
+#controls,
+#start-screen {
+    pointer-events: auto;
+    background: var(--glass-bg);
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.hidden {
+    display: none !important;
+}
+
+.primary-btn {
+    background: linear-gradient(135deg, #007bff, #00d2ff);
+    border: none;
+    padding: 12px 24px;
+    color: white;
+    font-weight: bold;
+    border-radius: 25px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: transform 0.1s;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.primary-btn:active {
+    transform: scale(0.95);
+}
+
+.primary-btn:disabled {
+    background: #555;
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.large-btn {
+    font-size: 1.2rem;
+    padding: 15px 40px;
+}
+
+.secondary-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    padding: 10px 20px;
+    color: white;
+    border-radius: 20px;
+    cursor: pointer;
+    margin-left: 10px;
+}
+
+.secondary-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.quality-selector {
+    margin-bottom: 15px;
+}
+
+.toggle-group {
+    display: inline-flex;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 20px;
+    padding: 4px;
+    margin-top: 5px;
+}
+
+.toggle-group button {
+    background: transparent;
+    border: none;
+    color: #aaa;
+    padding: 8px 16px;
+    border-radius: 16px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.toggle-group button.active {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    font-weight: bold;
+}
+
+#status-text {
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #ddd;
+}
