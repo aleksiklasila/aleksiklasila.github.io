@@ -20,6 +20,10 @@ const btnExport = document.getElementById('btn-export');
 const startScreen = document.getElementById('start-screen');
 const controlsPanel = document.getElementById('controls');
 const statusText = document.getElementById('status-text');
+const btnView = document.getElementById('btn-view');
+const viewerOverlay = document.getElementById('viewer-overlay');
+const debugViewer = document.getElementById('debug-viewer');
+let lastGlbBlob = null;
 
 // --- Initialization ---
 init();
@@ -35,6 +39,7 @@ function init() {
     btnEnterAR.addEventListener('click', onEnterAR);
     btnScan.addEventListener('click', onScanToggle);
     btnExport.addEventListener('click', onExport);
+    btnView.addEventListener('click', onViewDebug);
 
     setupThreeJS();
 
@@ -239,6 +244,8 @@ function generateMeshFromDepth(depthInfo) {
 
         scene.add(mesh);
         scannedMeshes.push(mesh);
+        // Enable view button since we have data
+        btnView.style.display = 'inline-block';
     }
 }
 
@@ -249,6 +256,8 @@ function clearScannedMeshes() {
         if (mesh.material) mesh.material.dispose();
     }
     scannedMeshes = [];
+    btnView.style.display = 'none';
+    lastGlbBlob = null;
 }
 
 // --- Export Logic ---
@@ -270,8 +279,36 @@ function onExport() {
 
 function saveArrayBuffer(buffer, filename) {
     const blob = new Blob([buffer], { type: 'application/octet-stream' });
+    lastGlbBlob = blob; // Save for viewer
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
+}
+
+function onViewDebug() {
+    if (!scannedMeshes.length && !lastGlbBlob) return;
+
+    // If we haven't exported yet, quick export to memory
+    if (!lastGlbBlob) {
+        statusText.innerText = "Exporting for preview...";
+        const exporter = new GLTFExporter();
+        exporter.parse(
+            scannedMeshes,
+            function (gltf) {
+                lastGlbBlob = new Blob([gltf], { type: 'application/octet-stream' });
+                openViewer(lastGlbBlob);
+            },
+            function (error) { alert("Export error: " + error); },
+            { binary: true }
+        );
+    } else {
+        openViewer(lastGlbBlob);
+    }
+}
+
+function openViewer(blob) {
+    const url = URL.createObjectURL(blob);
+    debugViewer.src = url;
+    viewerOverlay.classList.remove('hidden');
 }
