@@ -170,9 +170,12 @@ export class ARScanner {
                 z: worldPt.z,
                 count: 1,
                 // Bounding box of camera positions that saw this voxel
+                // Bounding box of camera positions
                 minCx: camPos.x, maxCx: camPos.x,
                 minCy: camPos.y, maxCy: camPos.y,
-                minCz: camPos.z, maxCz: camPos.z
+                minCz: camPos.z, maxCz: camPos.z,
+                // Logic Coords for ROR
+                ix: ix, iy: iy, iz: iz
             };
             this.voxels.set(key, voxel);
         } else {
