@@ -23,7 +23,10 @@ const controlsPanel = document.getElementById('controls');
 const statusText = document.getElementById('status-text');
 const btnView = document.getElementById('btn-view');
 const viewerOverlay = document.getElementById('viewer-overlay');
+const viewerOverlay = document.getElementById('viewer-overlay');
 const debugViewer = document.getElementById('debug-viewer');
+const depthCanvas = document.getElementById('depth-debug');
+const depthCtx = depthCanvas.getContext('2d');
 let lastGlbBlob = null;
 
 // --- Initialization ---
@@ -150,10 +153,14 @@ function render(timestamp, frame) {
                 // Only show "Depth Active" if NOT scanning
                 if (!isScanning) {
                     statusText.innerText = `Depth Active: ${depthInfo.width}x${depthInfo.height}`;
+                    // Visual Debug: Render depth to canvas
+                    drawDepthDebug(depthInfo);
+                    depthCanvas.style.display = 'block';
                 }
             } else {
                 if (!isScanning) {
                     statusText.innerText = `Depth unavailable`;
+                    depthCanvas.style.display = 'none';
                 }
                 window.latestDepthPack = null;
             }
@@ -349,3 +356,52 @@ window.closeViewer = () => {
     isViewing = false;
     viewerOverlay.classList.add('hidden');
 };
+
+function drawDepthDebug(depthInfo) {
+    const width = depthInfo.width;
+    const height = depthInfo.height;
+
+    // Resize canvas if needed
+    if (depthCanvas.width !== width || depthCanvas.height !== height) {
+        depthCanvas.width = width;
+        depthCanvas.height = height;
+    }
+
+    const rawData = new Uint16Array(depthInfo.data);
+    const toMeters = depthInfo.rawValueToMeters || 1.0;
+    const imageData = depthCtx.createImageData(width, height);
+    const pixels = imageData.data; // RGBA
+
+    for (let i = 0; i < width * height; i++) {
+        // Raw value
+        const val = rawData[i];
+        // Convert to meters
+        const m = val * toMeters;
+        // Normalize for display (0m to 5m = 0 to 255)
+        // 0 is usually invalid/unknown
+        let intensity = 0;
+        if (m > 0 && m < 5.0) {
+            intensity = Math.floor((m / 5.0) * 255);
+            // Invert so near is bright? Or standard depth map (near=black/white?)
+            // Usually Near = Bright (High value), Far = Dark
+            // Let's do: Near (0m) = 255 (White), Far (5m) = 0 (Black)
+            intensity = 255 - intensity;
+        }
+
+        const px = i * 4;
+        if (m === 0) {
+            // Invalid = Red
+            pixels[px] = 255;
+            pixels[px + 1] = 0;
+            pixels[px + 2] = 0;
+            pixels[px + 3] = 255;
+        } else {
+            // Grayscale
+            pixels[px] = intensity;
+            pixels[px + 1] = intensity;
+            pixels[px + 2] = intensity;
+            pixels[px + 3] = 255;
+        }
+    }
+    depthCtx.putImageData(imageData, 0, 0);
+}
