@@ -86,8 +86,7 @@ async function onEnterAR() {
 
     if (!currentSession) {
         const sessionInit = {
-            requiredFeatures: ['hit-test', 'depth-sensing'],
-            optionalFeatures: ['dom-overlay'],
+            requiredFeatures: ['hit-test', 'depth-sensing', 'dom-overlay'],
             domOverlay: { root: overlayElement },
             depthSensing: {
                 usagePreference: ["cpu-optimized", "gpu-optimized"],
