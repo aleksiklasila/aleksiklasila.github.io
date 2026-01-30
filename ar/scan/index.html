@@ -17,6 +17,16 @@
     </script>
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
 </head>
+<script>
+    window.onerror = function (msg, url, line, col, error) {
+        alert("Error: " + msg + "\nLine: " + line + "\nCol: " + col + "\nStack: " + (error && error.stack));
+        return false;
+    };
+    window.onload = function () {
+        console.log("Window loaded");
+        // alert("Window loaded"); // Optional, verify load
+    };
+</script>
 
 <body>
     <div id="overlay">
