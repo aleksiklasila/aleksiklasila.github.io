@@ -13,6 +13,15 @@ export function buildMeshFromDepth(depthInfo, view) {
 
     // Support float32 if that's what we get
     const isFloat = depthInfo.dataFormat === 'float32';
+
+    // Check if data is accessible
+    try {
+        if (depthInfo.data.byteLength === 0) throw new Error("Empty depth buffer");
+    } catch (e) {
+        console.error("Depth data access error: " + e.message);
+        return null;
+    }
+
     const data = isFloat ? new Float32Array(depthInfo.data) : rawData;
 
     // Downsample factor to keep performance high (1 = full res, 2 = half res, etc.)
@@ -92,6 +101,19 @@ export function buildMeshFromDepth(depthInfo, view) {
             vertices.push(xView, yView, zView);
         }
     }
+
+    // Debug bounds
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < vertices.length; i += 3) {
+        const vx = vertices[i];
+        const vy = vertices[i + 1];
+        const vz = vertices[i + 2];
+        if (isNaN(vx)) continue;
+        if (vx < minX) minX = vx; if (vx > maxX) maxX = vx;
+        if (vy < minY) minY = vy; if (vy > maxY) maxY = vy;
+        if (vz < minZ) minZ = vz; if (vz > maxZ) maxZ = vz;
+    }
+    console.log(`Bounds: X[${minX.toFixed(2)},${maxX.toFixed(2)}] Y[${minY.toFixed(2)},${maxY.toFixed(2)}] Z[${minZ.toFixed(2)},${maxZ.toFixed(2)}]`);
 
     // Generate Indices
     for (let y = 0; y < resultHeight - 1; y++) {
