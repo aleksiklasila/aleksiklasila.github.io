@@ -84,7 +84,8 @@ function setupThreeJS() {
 async function onEnterAR() {
     if (!currentSession) {
         const sessionInit = {
-            requiredFeatures: ['hit-test', 'depth-sensing'],
+            requiredFeatures: ['hit-test', 'depth-sensing', 'dom-overlay'],
+            domOverlay: { root: document.body },
             depthSensing: {
                 usagePreference: ["cpu-optimized", "gpu-optimized"],
                 dataFormatPreference: ["luminance-alpha", "float32"]
