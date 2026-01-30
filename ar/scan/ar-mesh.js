@@ -61,6 +61,9 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
     }
     console.log(`${logStr} | Range: [${dMin}, ${dMax}] | Len: ${data.length}`);
     console.log(`Format: ${depthInfo.dataFormat}, toMeters: ${toMeters}`);
+    // Check Projection
+    const det = projectionMatrix.determinant();
+    console.log(`Proj Det: ${det}. Elements[0]=${projElements[0]}`);
 
     const getDepth = (x, y) => {
         // Fallback to manual read if getDepthInMeters is suspect
@@ -105,21 +108,24 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
 
             vertices.push(xView, yView, zView);
 
-            // Optional: Mock vertex color based on depth
-            // Near = white/blue, Far = dark
-            // const val = 1.0 - (d / 5.0);
-            // colors.push(val, val, val + 0.2); 
+            // Color Mapping: Near (0.2m) = Red, Far (2.0m) = Blue
+            // Simple gradient
+            let norm = (d - 0.2) / 2.0;
+            if (norm < 0) norm = 0; if (norm > 1) norm = 1;
+
+            // Red to Blue
+            colors.push(1.0 - norm, 0.5 * (1 - Math.abs(norm * 2 - 1)), norm);
         }
     }
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    // geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
     // Point Cloud Material
     const material = new THREE.PointsMaterial({
-        color: 0x00FFFF,
-        size: 0.02, // 2cm dots
+        vertexColors: true, // USE VERTEX COLORS
+        size: 0.03,
         sizeAttenuation: true,
         transparent: false
     });
