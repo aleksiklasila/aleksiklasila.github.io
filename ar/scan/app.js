@@ -23,7 +23,6 @@ const controlsPanel = document.getElementById('controls');
 const statusText = document.getElementById('status-text');
 const btnView = document.getElementById('btn-view');
 const viewerOverlay = document.getElementById('viewer-overlay');
-const viewerOverlay = document.getElementById('viewer-overlay');
 const debugViewer = document.getElementById('debug-viewer');
 const depthCanvas = document.getElementById('depth-debug');
 const depthCtx = depthCanvas.getContext('2d');

@@ -49,9 +49,17 @@ export function buildMeshFromDepth(depthInfo, viewOrCamera) {
     const toMeters = depthInfo.rawValueToMeters || 1.0;
 
     // Log first few values
-    let logStr = "Raw Data Sample: ";
-    for (let i = 0; i < 10; i++) logStr += data[i] + ", ";
-    console.log(logStr);
+    let logStr = "Raw Sample: ";
+    for (let i = 0; i < 5; i++) logStr += data[i] + ", ";
+
+    // Calc stats
+    let dMin = Infinity, dMax = -Infinity;
+    for (let i = 0; i < data.length; i += 100) { // sparse sample
+        const v = data[i];
+        if (v < dMin) dMin = v;
+        if (v > dMax) dMax = v;
+    }
+    console.log(`${logStr} | Range: [${dMin}, ${dMax}] | Len: ${data.length}`);
     console.log(`Format: ${depthInfo.dataFormat}, toMeters: ${toMeters}`);
 
     const getDepth = (x, y) => {
