@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { buildMeshFromDepth } from './ar-mesh.js?v=2';
+import { ARScanner } from './ar-scanner.js';
 
 // --- Constants & Globals ---
 let camera, scene, renderer;
@@ -13,6 +14,7 @@ let qualityMode = 'fast'; // 'fast' | 'detailed'
 let scannedMeshes = []; // Array of accummulated meshes
 let lastScanTime = 0;
 let isViewing = false; // Flag to pause UI status updates during viewing
+let arScanner = null; // Fusion scanner instance
 
 // HTML Elements
 const btnEnterAR = document.getElementById('btn-enter-ar');
@@ -36,6 +38,7 @@ function init() {
         qualityMode = mode;
         document.getElementById('btn-fast').classList.toggle('active', mode === 'fast');
         document.getElementById('btn-detailed').classList.toggle('active', mode === 'detailed');
+        statusText.innerText = mode === 'detailed' ? "Detailed: Move slowly to accumulate." : "Fast: Single snapshot.";
         console.log(`Quality set to: ${mode}`);
     };
 
@@ -85,7 +88,11 @@ function setupThreeJS() {
     reticle = new THREE.Mesh(geometry, material);
     reticle.matrixAutoUpdate = false;
     reticle.visible = false;
+    reticle.visible = false;
     scene.add(reticle);
+
+    // Init Scanner
+    arScanner = new ARScanner(scene, renderer);
 }
 
 // --- WebXR Session ---
@@ -174,12 +181,12 @@ function render(timestamp, frame) {
 
         // 2. Detailed Mode Loop
         if (isScanning && qualityMode === 'detailed' && window.latestDepthPack) {
-            const now = performance.now();
-            if (now - lastScanTime > 1000) { // 1 second interval
-                generateMeshFromDepth(window.latestDepthPack.depthInfo);
-                lastScanTime = now;
-                statusText.innerText = `Scanning... Meshes: ${scannedMeshes.length}`;
-            }
+            // New Fusion Logic
+            const { depthInfo, view } = window.latestDepthPack;
+            arScanner.processFrame(depthInfo, view, camera);
+
+            // Only update text occasionally
+            // statusText.innerText = `Scanning... Voxels: ${arScanner.voxels.size}`;
         }
 
         // 3. Update Reticle
@@ -211,18 +218,25 @@ function onScanToggle() {
             btnScan.classList.remove("secondary-btn");
         } else {
             // Detailed mode (continuous)
-            statusText.innerText = "Scanning... Move slowly.";
+            statusText.innerText = "Scanning... Move around object.";
             clearScannedMeshes();
+            arScanner.start();
         }
 
     } else {
         // Stop Scan (Detailed Mode)
         isScanning = false;
+        if (qualityMode === 'detailed') {
+            arScanner.stop();
+            // Add the scanner's pointcloud to scannedMeshes for export
+            if (arScanner.pointCloud) scannedMeshes.push(arScanner.pointCloud);
+        }
+
         btnScan.innerText = "Scan";
         btnScan.classList.add("primary-btn");
         btnScan.classList.remove("secondary-btn");
         btnExport.disabled = false;
-        statusText.innerText = `Scan complete. ${scannedMeshes.length} meshes ready.`;
+        statusText.innerText = `Scan complete.`;
     }
 }
 
@@ -278,6 +292,7 @@ function clearScannedMeshes() {
         if (mesh.material) mesh.material.dispose();
     }
     scannedMeshes = [];
+    if (arScanner) arScanner.clear(); // Clear voxel grid
     btnView.style.display = 'none';
     lastGlbBlob = null;
     isViewing = false;
