@@ -55,6 +55,8 @@ const valConfidence = document.getElementById('val-confidence');
 const valMinDepth = document.getElementById('val-min-depth');
 const valMaxDepth = document.getElementById('val-max-depth');
 const valVoxel = document.getElementById('val-voxel');
+const rangeRotation = document.getElementById('range-rotation');
+const valRotation = document.getElementById('val-rotation');
 let lastGlbBlob = null;
 
 // --- Initialization ---
@@ -102,12 +104,19 @@ function init() {
         valMinDepth.innerText = rangeMinDepth.value + 'm';
         valMaxDepth.innerText = rangeMaxDepth.value + 'm';
         valVoxel.innerText = rangeVoxel.value + 'cm';
+
+        // Rotation
+        if (rangeRotation && valRotation) {
+            depthRotation = parseInt(rangeRotation.value);
+            valRotation.innerText = depthRotation;
+        }
     };
 
     rangeConfidence.addEventListener('input', updateScannerParams);
     rangeMinDepth.addEventListener('input', updateScannerParams);
     rangeMaxDepth.addEventListener('input', updateScannerParams);
     rangeVoxel.addEventListener('input', updateScannerParams);
+    if (rangeRotation) rangeRotation.addEventListener('input', updateScannerParams);
 
     // Initial update
     updateScannerParams();
@@ -471,6 +480,9 @@ window.closeViewer = () => {
 };
 
 // --- View Toggle ---
+// Global rotation setting
+let depthRotation = 90;
+
 function onViewToggle() {
     if (viewMode === 'camera') {
         viewMode = 'depth';
@@ -490,9 +502,15 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
     const srcWidth = depthInfo.width;
     const srcHeight = depthInfo.height;
 
-    // Rotate 90 deg CW (Landscape -> Portrait usually)
-    const width = srcHeight;
-    const height = srcWidth;
+    // Determine output dimensions
+    let width, height;
+    if (depthRotation === 90 || depthRotation === 270) {
+        width = srcHeight;
+        height = srcWidth;
+    } else {
+        width = srcWidth;
+        height = srcHeight;
+    }
 
     // Resize canvas if needed
     if (depthCanvas.width !== width || depthCanvas.height !== height) {
@@ -511,26 +529,35 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
             const srcIdx = y * srcWidth + x;
             const val = rawData[srcIdx];
 
-            // Rotate 90 CW transformation
-            // Dest X = Original Row (inverted if needed? No, 0,0 is top left)
-            // 0,0 -> H-1, 0 (Top Right)
-            // W-1, 0 -> H-1, W-1 (Bottom Right)
-            // x_new = H_src - 1 - y_src
-            // y_new = x_src
-            const destX = srcHeight - 1 - y;
-            const destY = x;
+            // Rotation Logic
+            let destX, destY;
+            if (depthRotation === 90) {
+                // CW 90
+                destX = srcHeight - 1 - y;
+                destY = x;
+            } else if (depthRotation === 180) {
+                // CW 180
+                destX = srcWidth - 1 - x;
+                destY = srcHeight - 1 - y;
+            } else if (depthRotation === 270) {
+                // CW 270 (CCW 90)
+                destX = y;
+                destY = srcWidth - 1 - x;
+            } else {
+                // 0
+                destX = x;
+                destY = y;
+            }
+
             const destIdx = (destY * width + destX) * 4;
 
             // Convert to meters
             const m = val * toMeters;
             // Normalize for display (0m to 5m = 0 to 255)
-            // 0 is usually invalid/unknown
+            // Near = White (255), Far = Black (0)
             let intensity = 0;
             if (m > 0 && m < 5.0) {
                 intensity = Math.floor((m / 5.0) * 255);
-                // Invert so near is bright? Or standard depth map (near=black/white?)
-                // Usually Near = Bright (High value), Far = Dark
-                // Let's do: Near (0m) = 255 (White), Far (5m) = 0 (Black)
                 intensity = 255 - intensity;
             }
 
