@@ -475,8 +475,8 @@ function onViewToggle() {
     if (viewMode === 'camera') {
         viewMode = 'depth';
         btnViewToggle.innerText = '👁️ Depth';
-        // Make depth canvas fullscreen, z-index 5 (below renderer@10, above camera)
-        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0.9; pointer-events:none; z-index:5;";
+        // Make depth canvas fullscreen, z-index 100 (top)
+        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0.9; pointer-events:none; z-index:100;";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
