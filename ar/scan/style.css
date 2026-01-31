@@ -42,7 +42,24 @@ header h1 {
     pointer-events: auto;
 }
 
-#controls,
+#controls {
+    pointer-events: auto;
+    background: rgba(40, 40, 40, 0.85);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 400px;
+    z-index: 100;
+}
+
 #start-screen {
     pointer-events: auto;
     background: rgba(40, 40, 40, 0.85);
@@ -50,7 +67,6 @@ header h1 {
     border-radius: 16px;
     padding: 20px;
     text-align: center;
-    margin-bottom: 20px;
     margin-bottom: 20px;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     position: relative;

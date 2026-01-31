@@ -651,6 +651,10 @@ function updateMeasurement(depthInfo) {
         let dist = 0;
         try {
             dist = depthInfo.getDepthInMeters(depthX, depthY);
+            // Debug Log every ~1 sec (60 frames)
+            if (measureState.samples % 60 === 0) {
+                console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) / Size(${width}x${height}) = ${dist}`);
+            }
         } catch (e) { console.error(e); }
 
         if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
