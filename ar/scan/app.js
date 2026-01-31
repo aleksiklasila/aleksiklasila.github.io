@@ -476,8 +476,8 @@ function onViewToggle() {
         viewMode = 'depth';
         btnViewToggle.innerText = '👁️ Depth';
         // Make depth canvas fullscreen, z-index 100 (top)
-        // Add red border/background for debug if empty
-        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:0.95; pointer-events:none; z-index:99999; background:rgba(0,0,0,0.5); border:2px solid red;";
+        // Solid black background to block camera
+        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:none; z-index:99999; background:black;";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
@@ -487,16 +487,17 @@ function onViewToggle() {
 }
 
 function drawDepthDebug(depthInfo, fullscreen = false) {
-    const width = depthInfo.width;
-    const height = depthInfo.height;
+    const srcWidth = depthInfo.width;
+    const srcHeight = depthInfo.height;
 
-    // console.log(`Drawing Depth Debug: ${width}x${height}`); // Too spammy for loop
+    // Rotate 90 deg CW (Landscape -> Portrait usually)
+    const width = srcHeight;
+    const height = srcWidth;
 
     // Resize canvas if needed
     if (depthCanvas.width !== width || depthCanvas.height !== height) {
         depthCanvas.width = width;
         depthCanvas.height = height;
-        console.log(`Resized Depth Canvas to ${width}x${height}`);
     }
 
     const rawData = new Uint16Array(depthInfo.data);
@@ -504,35 +505,48 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
     const imageData = depthCtx.createImageData(width, height);
     const pixels = imageData.data; // RGBA
 
-    for (let i = 0; i < width * height; i++) {
-        // Raw value
-        const val = rawData[i];
-        // Convert to meters
-        const m = val * toMeters;
-        // Normalize for display (0m to 5m = 0 to 255)
-        // 0 is usually invalid/unknown
-        let intensity = 0;
-        if (m > 0 && m < 5.0) {
-            intensity = Math.floor((m / 5.0) * 255);
-            // Invert so near is bright? Or standard depth map (near=black/white?)
-            // Usually Near = Bright (High value), Far = Dark
-            // Let's do: Near (0m) = 255 (White), Far (5m) = 0 (Black)
-            intensity = 255 - intensity;
-        }
+    for (let y = 0; y < srcHeight; y++) {
+        for (let x = 0; x < srcWidth; x++) {
+            // Source Index
+            const srcIdx = y * srcWidth + x;
+            const val = rawData[srcIdx];
 
-        const px = i * 4;
-        if (m === 0) {
-            // Invalid = Red
-            pixels[px] = 255;
-            pixels[px + 1] = 0;
-            pixels[px + 2] = 0;
-            pixels[px + 3] = 255;
-        } else {
-            // Grayscale
-            pixels[px] = intensity;
-            pixels[px + 1] = intensity;
-            pixels[px + 2] = intensity;
-            pixels[px + 3] = 255;
+            // Rotate 90 CW transformation
+            // Dest X = Original Row (inverted if needed? No, 0,0 is top left)
+            // 0,0 -> H-1, 0 (Top Right)
+            // W-1, 0 -> H-1, W-1 (Bottom Right)
+            // x_new = H_src - 1 - y_src
+            // y_new = x_src
+            const destX = srcHeight - 1 - y;
+            const destY = x;
+            const destIdx = (destY * width + destX) * 4;
+
+            // Convert to meters
+            const m = val * toMeters;
+            // Normalize for display (0m to 5m = 0 to 255)
+            // 0 is usually invalid/unknown
+            let intensity = 0;
+            if (m > 0 && m < 5.0) {
+                intensity = Math.floor((m / 5.0) * 255);
+                // Invert so near is bright? Or standard depth map (near=black/white?)
+                // Usually Near = Bright (High value), Far = Dark
+                // Let's do: Near (0m) = 255 (White), Far (5m) = 0 (Black)
+                intensity = 255 - intensity;
+            }
+
+            if (m === 0) {
+                // Invalid = Red
+                pixels[destIdx] = 255;
+                pixels[destIdx + 1] = 0;
+                pixels[destIdx + 2] = 0;
+                pixels[destIdx + 3] = 255;
+            } else {
+                // Grayscale
+                pixels[destIdx] = intensity;
+                pixels[destIdx + 1] = intensity;
+                pixels[destIdx + 2] = intensity;
+                pixels[destIdx + 3] = 255;
+            }
         }
     }
     depthCtx.putImageData(imageData, 0, 0);
