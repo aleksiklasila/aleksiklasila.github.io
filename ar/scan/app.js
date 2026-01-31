@@ -194,31 +194,36 @@ async function onEnterAR() {
     }
 }
 
-function onSessionStarted(session) {
+    }
+}
+
+async function onSessionStarted(session) {
     currentSession = session;
     session.addEventListener('end', onSessionEnded);
 
     renderer.xr.setReferenceSpaceType('local');
-    renderer.xr.setSession(session);
+    await renderer.xr.setSession(session);
 
     // Verify overlay
     if (!session.domOverlayState) {
         // Warn if overlay is not active
-        // alert("Warning: DOM Overlay not supported/active"); 
     }
 
-    startScreen.classList.add('hidden');
     startScreen.classList.add('hidden');
     controlsPanel.classList.remove('hidden');
 
     // Init GL Binding for Camera Access
     gl = renderer.getContext();
     try {
+        // Ensure context is compatible
+        if (gl.makeXRCompatible) {
+            await gl.makeXRCompatible();
+        }
         glBinding = new XRWebGLBinding(session, gl);
         initColorReadback(gl);
     } catch (e) {
         console.error("XRWebGLBinding failed", e);
-        statusText.innerText = "Camera access failed (colors disabled)";
+        statusText.innerText = "Camera/Color access failed. " + e.message;
     }
 }
 
@@ -389,7 +394,8 @@ function clearScannedMeshes() {
     }
     scannedMeshes = [];
     if (arScanner) arScanner.clear(); // Clear voxel grid
-    btnView.style.display = 'none';
+    // btnView might be null if removed from DOM
+    if (btnView) btnView.style.display = 'none';
     lastGlbBlob = null;
     isViewing = false;
     viewerOverlay.classList.add('hidden');
