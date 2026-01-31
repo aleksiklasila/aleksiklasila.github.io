@@ -91,7 +91,38 @@
                 <button id="btn-scan" class="primary-btn">Scan</button>
                 <button id="btn-export" class="secondary-btn" disabled>Export GLB</button>
                 <button id="btn-view" class="secondary-btn" style="display:none;">Check</button>
+                <button id="btn-settings" class="secondary-btn">⚙️</button>
             </div>
+
+            <!-- Settings Panel -->
+            <div id="settings-panel" class="hidden settings-panel">
+                <h3>Scanner Settings</h3>
+
+                <div class="control-group">
+                    <label>Min Confidence (Frames): <span id="val-confidence">3</span></label>
+                    <input type="range" id="range-confidence" min="1" max="30" step="1" value="3">
+                </div>
+
+                <div class="control-group">
+                    <label>Min Depth (m): <span id="val-min-depth">0.1</span></label>
+                    <input type="range" id="range-min-depth" min="0.0" max="2.0" step="0.1" value="0.1">
+                </div>
+
+                <div class="control-group">
+                    <label>Max Depth (m): <span id="val-max-depth">3.5</span></label>
+                    <input type="range" id="range-max-depth" min="0.5" max="8.0" step="0.5" value="3.5">
+                </div>
+
+                <div class="control-group">
+                    <label>Voxel Size (cm): <span id="val-voxel">3</span></label>
+                    <input type="range" id="range-voxel" min="1" max="10" step="1" value="3">
+                    <small style="display:block; color:#aaa;">(Requires Restart)</small>
+                </div>
+
+                <button id="btn-close-settings" class="secondary-btn"
+                    style="margin-top:10px; width:100%;">Close</button>
+            </div>
+
             <p id="status-text">Ready to scan</p>
         </div>
 

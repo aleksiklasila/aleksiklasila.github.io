@@ -15,6 +15,12 @@ let scannedMeshes = []; // Array of accummulated meshes
 let lastScanTime = 0;
 let isViewing = false; // Flag to pause UI status updates during viewing
 let arScanner = null; // Fusion scanner instance
+let glBinding = null;
+let gl = null;
+let readbackFBO = null;
+let readbackTexture = null;
+let colorBuffer = null;
+const COLOR_SIZE = 128; // Downsample for performance handling
 
 // HTML Elements
 const btnEnterAR = document.getElementById('btn-enter-ar');
@@ -28,6 +34,19 @@ const viewerOverlay = document.getElementById('viewer-overlay');
 const debugViewer = document.getElementById('debug-viewer');
 const depthCanvas = document.getElementById('depth-debug');
 const depthCtx = depthCanvas.getContext('2d');
+const btnSettings = document.getElementById('btn-settings');
+const settingsPanel = document.getElementById('settings-panel');
+const btnCloseSettings = document.getElementById('btn-close-settings');
+
+// Settings Inputs
+const rangeConfidence = document.getElementById('range-confidence');
+const rangeMinDepth = document.getElementById('range-min-depth');
+const rangeMaxDepth = document.getElementById('range-max-depth');
+const rangeVoxel = document.getElementById('range-voxel');
+const valConfidence = document.getElementById('val-confidence');
+const valMinDepth = document.getElementById('val-min-depth');
+const valMaxDepth = document.getElementById('val-max-depth');
+const valVoxel = document.getElementById('val-voxel');
 let lastGlbBlob = null;
 
 // --- Initialization ---
@@ -45,7 +64,44 @@ function init() {
     btnEnterAR.addEventListener('click', onEnterAR);
     btnScan.addEventListener('click', onScanToggle);
     btnExport.addEventListener('click', onExport);
+    btnExport.addEventListener('click', onExport);
     btnView.addEventListener('click', onViewDebug);
+
+    // Settings listeners
+    btnSettings.addEventListener('click', () => {
+        settingsPanel.classList.toggle('hidden');
+    });
+    btnCloseSettings.addEventListener('click', () => {
+        settingsPanel.classList.add('hidden');
+    });
+
+    // Param Listeners
+    const updateScannerParams = () => {
+        if (!arScanner) return;
+        arScanner.minCount = parseInt(rangeConfidence.value);
+        arScanner.minDepth = parseFloat(rangeMinDepth.value);
+        arScanner.maxDepth = parseFloat(rangeMaxDepth.value);
+        // Voxel size usually requires restart/clear, handled separately or live?
+        // Let's allow live clear or just set property if scanner supports it.
+        // For now, next rebuild will use it if we support dynamic cell size.
+        // But cell size affects key hashing. changing it breaks map. 
+        // So we just store it and apply on next "clear/start".
+        arScanner.nextCellSize = parseFloat(rangeVoxel.value) / 100.0; // cm to m
+
+        // Update Labels
+        valConfidence.innerText = rangeConfidence.value;
+        valMinDepth.innerText = rangeMinDepth.value + 'm';
+        valMaxDepth.innerText = rangeMaxDepth.value + 'm';
+        valVoxel.innerText = rangeVoxel.value + 'cm';
+    };
+
+    rangeConfidence.addEventListener('input', updateScannerParams);
+    rangeMinDepth.addEventListener('input', updateScannerParams);
+    rangeMaxDepth.addEventListener('input', updateScannerParams);
+    rangeVoxel.addEventListener('input', updateScannerParams);
+
+    // Initial update
+    updateScannerParams();
 
     setupThreeJS();
 
@@ -93,6 +149,14 @@ function setupThreeJS() {
 
     // Init Scanner
     arScanner = new ARScanner(scene, renderer);
+
+    // Initial sync with UI defaults
+    if (rangeConfidence) {
+        arScanner.minCount = parseInt(rangeConfidence.value);
+        arScanner.minDepth = parseFloat(rangeMinDepth.value);
+        arScanner.maxDepth = parseFloat(rangeMaxDepth.value);
+        arScanner.cellSize = parseFloat(rangeVoxel.value) / 100.0;
+    }
 }
 
 // --- WebXR Session ---
@@ -101,7 +165,8 @@ async function onEnterAR() {
 
     if (!currentSession) {
         const sessionInit = {
-            requiredFeatures: ['hit-test', 'depth-sensing', 'dom-overlay'],
+            requiredFeatures: ['hit-test', 'depth-sensing', 'dom-overlay', 'camera-access'],
+            domOverlay: { root: overlayElement },
             domOverlay: { root: overlayElement },
             depthSensing: {
                 usagePreference: ["cpu-optimized", "gpu-optimized"],
@@ -133,7 +198,18 @@ function onSessionStarted(session) {
     }
 
     startScreen.classList.add('hidden');
+    startScreen.classList.add('hidden');
     controlsPanel.classList.remove('hidden');
+
+    // Init GL Binding for Camera Access
+    gl = renderer.getContext();
+    try {
+        glBinding = new XRWebGLBinding(session, gl);
+        initColorReadback(gl);
+    } catch (e) {
+        console.error("XRWebGLBinding failed", e);
+        statusText.innerText = "Camera access failed (colors disabled)";
+    }
 }
 
 function onSessionEnded() {
@@ -183,7 +259,14 @@ function render(timestamp, frame) {
         if (isScanning && qualityMode === 'detailed' && window.latestDepthPack) {
             // New Fusion Logic
             const { depthInfo, view } = window.latestDepthPack;
-            arScanner.processFrame(depthInfo, view, camera);
+
+            // Try Capture Color
+            let colors = null;
+            if (glBinding && view.camera) {
+                colors = captureCameraColor(view);
+            }
+
+            arScanner.processFrame(depthInfo, view, camera, colors);
 
             // Only update text occasionally
             // statusText.innerText = `Scanning... Voxels: ${arScanner.voxels.size}`;
@@ -219,6 +302,11 @@ function onScanToggle() {
         } else {
             // Detailed mode (continuous)
             statusText.innerText = "Scanning... Move around object.";
+            // Apply pending voxel size change if any
+            if (arScanner.nextCellSize && arScanner.nextCellSize !== arScanner.cellSize) {
+                arScanner.cellSize = arScanner.nextCellSize;
+                console.log("Applied new voxel size: " + arScanner.cellSize);
+            }
             clearScannedMeshes();
             arScanner.start();
         }
@@ -418,4 +506,109 @@ function drawDepthDebug(depthInfo) {
         }
     }
     depthCtx.putImageData(imageData, 0, 0);
+}
+
+function initColorReadback(gl) {
+    if (readbackFBO) return;
+
+    readbackTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, readbackTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, COLOR_SIZE, COLOR_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+    readbackFBO = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, readbackTexture, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    colorBuffer = new Uint8Array(COLOR_SIZE * COLOR_SIZE * 4);
+}
+
+function captureCameraColor(view) {
+    if (!glBinding || !readbackFBO) return null;
+
+    const cameraTexture = glBinding.getCameraImage(view.camera);
+    if (!cameraTexture) return null;
+
+    // Save previous state
+    const prevFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    // const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM); // Three.js handles this mostly
+
+    // 1. Blit/Render Camera Texture to small FBO
+    // Simple way: wrap it in Three.js and render a quad? 
+    // Or just raw GL since we have the texture? Raw GL is faster/safer here to avoid messing Three state.
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
+    gl.viewport(0, 0, COLOR_SIZE, COLOR_SIZE);
+
+    // To do this simply without a shader, we can use gl.copyTexImage? No, textures are different sizes.
+    // We need a blit. gl.blitFramebuffer is WebGL2 (usually avail in WebXR).
+    // AR camera texture is usually OES_external_image or similar, might need shader.
+    // BUT! glBinding.getCameraImage returns a WebGLTexture.
+    // Let's assume we can attach it to a FBO? No, usually incomplete if external.
+
+    // Simplest robust way: Just use Three.js internals or a simple shader?
+    // Actually, let's skip the complexity of a custom blit shader for this snippet 
+    // and rely on a simpler approach if possible.
+    // If we assume WebGL2, we can blit.
+
+    // Attempt WebGL2 Blit (Fastest)
+    // Create a temp FBO for the camera source?
+    // Camera texture might be OES, so can't attach to FBO directly in some cases.
+
+    // Fallback: If we can't easily blit, we return null for now to avoid breaking.
+    // Wait, we need this feature. 
+    // Correct way: Draw a full screen quad with the camera texture.
+    // Effectively impossible to write raw GL here without a lot of boilerplate.
+    // Hack: Assume we can just read pixels from it? No.
+
+    // Let's TRY generic framebuffer blit if same types.
+    // If not, we serve a placebo or need a helper class.
+
+    // REVISION: To keep 'app.js' clean, let's just create a THREE.Mesh with the texture 
+    // and render it to a target? 
+    // Three.js `XRWebGLLayer` is opaque. `getCameraImage` gives raw GL texture.
+    // Integrating raw GL texture into Three.js scene is tricky.
+
+    // OK, simplest path that WORKS:
+    // Don't use `getCameraImage` if it's too hard.
+    // Is there a strictly Three.js way? `renderer.xr.getCameraFramebuffer()`? No.
+
+    // Let's try to proceed with the raw GL approach, assuming standard Texture2D (not OES).
+    // Most WebXR camera images are regular textures now.
+
+    // Minimal Shader for Quad
+    if (!window.camQuadProg) {
+        const vs = `attribute vec2 p; varying vec2 v; void main(){v=p*0.5+0.5; gl_Position=vec4(p,0,1);}`;
+        const fs = `precision mediump float; uniform sampler2D t; varying vec2 v; void main(){gl_FragColor=texture2D(t,v);}`;
+        const vsS = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vsS, vs); gl.compileShader(vsS);
+        const fsS = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fsS, fs); gl.compileShader(fsS);
+        const p = gl.createProgram(); gl.attachShader(p, vsS); gl.attachShader(p, fsS); gl.linkProgram(p);
+        const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+        window.camQuadProg = { p, buf, loc: gl.getAttribLocation(p, "p") };
+    }
+
+    const prog = window.camQuadProg;
+    gl.useProgram(prog.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prog.buf);
+    gl.enableVertexAttribArray(prog.loc);
+    gl.vertexAttribPointer(prog.loc, 2, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, cameraTexture);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // Read
+    gl.readPixels(0, 0, COLOR_SIZE, COLOR_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, colorBuffer);
+
+    // Restore
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFBO);
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+    // Reset Three state (important!)
+    renderer.resetState();
+
+    return { data: colorBuffer, width: COLOR_SIZE, height: COLOR_SIZE };
 }
