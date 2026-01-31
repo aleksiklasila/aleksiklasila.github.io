@@ -674,11 +674,12 @@ function updateMeasurement(depthInfo) {
             measureState.samples++;
         }
 
-        // Update Text
+        // Update Text & Debug on Screen
         if (measureState.samples > 0) {
-            statusText.innerText = "Distance: " + measureState.avgDepth.toFixed(2) + " m";
+            statusText.innerText = `Dist: ${measureState.avgDepth.toFixed(2)}m (Raw: ${dist?.toFixed(2)})`;
         } else {
-            statusText.innerText = "Distance: -- m";
+            // Show failure reason if possible
+            statusText.innerText = `Dist: -- (In: ${sx.toFixed(2)},${sy.toFixed(2)} -> Img: ${depthX},${depthY})`;
         }
     } catch (err) {
         console.error("Error in updateMeasurement:", err);
