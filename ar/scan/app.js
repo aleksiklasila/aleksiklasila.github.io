@@ -62,7 +62,7 @@ let lastGlbBlob = null;
 // Measurement State
 const measureContainer = document.getElementById('measure-container');
 const measureCrosshair = document.getElementById('measure-crosshair');
-const measureText = document.getElementById('measure-text');
+// const measureText = document.getElementById('measure-text'); // Removed
 const measureState = {
     active: false,
     inputX: 0, // 0-1 (Screen/Canvas Normalized)
@@ -100,8 +100,6 @@ function init() {
             console.log("Measure Touch:", measureState.inputX.toFixed(2), measureState.inputY.toFixed(2));
             measureState.active = true;
             measureState.samples = 0; // Reset averaging
-
-            measureContainer.style.display = 'block';
 
             // Move crosshair (Percent)
             measureCrosshair.style.left = (measureState.inputX * 100) + '%';
@@ -523,7 +521,21 @@ function onViewToggle() {
         // Solid black background to block camera
         // Make depth canvas fullscreen, z-index 50 (above camera 10, below UI 100)
         // Solid black background to block camera
+        // Make depth canvas fullscreen, z-index 50 (above camera 10, below UI 100)
+        // Solid black background to block camera
         depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:auto; z-index:50; background:black;";
+
+        // Show cursor immediately at center
+        measureContainer.style.display = 'block';
+        if (!measureState.active) {
+            measureState.inputX = 0.5;
+            measureState.inputY = 0.5;
+            measureState.active = true;
+            measureState.samples = 0;
+            measureCrosshair.style.left = '50%';
+            measureCrosshair.style.top = '50%';
+        }
+        statusText.innerText = "Tap to measure distance";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
@@ -647,9 +659,14 @@ function updateMeasurement(depthInfo) {
 
     // Update Text
     if (measureState.samples > 0) {
-        measureText.innerText = measureState.avgDepth.toFixed(2) + " m";
+        statusText.innerText = "Distance: " + measureState.avgDepth.toFixed(2) + " m";
     } else {
-        measureText.innerText = "-- m";
+        statusText.innerText = "Distance: -- m";
+    }
+
+    // Debug 1/60 frames
+    if (Math.random() < 0.02) {
+        // console.log("Depth Query:", depthX, depthY, dist);
     }
 }
 

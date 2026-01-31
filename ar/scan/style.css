@@ -212,19 +212,3 @@ header h1 {
     width: 2px;
     height: 20px;
 }
-
-#measure-text {
-    position: absolute;
-    bottom: 20%;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.7);
-    color: white;
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 16px;
-    font-weight: bold;
-    pointer-events: none;
-    z-index: 100002;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-}
