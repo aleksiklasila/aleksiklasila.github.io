@@ -97,6 +97,7 @@ function init() {
             // Normalized 0-1
             measureState.inputX = (e.clientX - rect.left) / rect.width;
             measureState.inputY = (e.clientY - rect.top) / rect.height;
+            console.log("Measure Touch:", measureState.inputX.toFixed(2), measureState.inputY.toFixed(2));
             measureState.active = true;
             measureState.samples = 0; // Reset averaging
 
@@ -520,9 +521,9 @@ function onViewToggle() {
         btnViewToggle.innerText = '👁️ Depth';
         // Make depth canvas fullscreen, z-index 100 (top)
         // Solid black background to block camera
-        // Make depth canvas fullscreen, z-index 100 (top)
+        // Make depth canvas fullscreen, z-index 50 (above camera 10, below UI 100)
         // Solid black background to block camera
-        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:auto; z-index:99999; background:black;";
+        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:auto; z-index:50; background:black;";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
