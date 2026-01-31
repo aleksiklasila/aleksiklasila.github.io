@@ -91,21 +91,32 @@ function init() {
     if (btnViewToggle) btnViewToggle.addEventListener('click', onViewToggle);
 
     // Measurement Input
-    depthCanvas.addEventListener('pointerdown', (e) => {
-        if (!isViewing && viewMode === 'depth') {
-            const rect = depthCanvas.getBoundingClientRect();
-            // Normalized 0-1
-            measureState.inputX = (e.clientX - rect.left) / rect.width;
-            measureState.inputY = (e.clientY - rect.top) / rect.height;
-            console.log("Measure Touch:", measureState.inputX.toFixed(2), measureState.inputY.toFixed(2));
-            measureState.active = true;
-            measureState.samples = 0; // Reset averaging
+    if (depthCanvas) {
+        depthCanvas.addEventListener('pointerdown', (e) => {
+            try {
+                if (!isViewing && viewMode === 'depth') {
+                    const rect = depthCanvas.getBoundingClientRect();
+                    if (!rect || rect.width === 0 || rect.height === 0) return;
 
-            // Move crosshair (Percent)
-            measureCrosshair.style.left = (measureState.inputX * 100) + '%';
-            measureCrosshair.style.top = (measureState.inputY * 100) + '%';
-        }
-    });
+                    // Normalized 0-1
+                    measureState.inputX = (e.clientX - rect.left) / rect.width;
+                    measureState.inputY = (e.clientY - rect.top) / rect.height;
+                    console.log("Measure Touch:", measureState.inputX.toFixed(2), measureState.inputY.toFixed(2));
+
+                    measureState.active = true;
+                    measureState.samples = 0; // Reset averaging
+
+                    // Move crosshair (Percent)
+                    if (measureCrosshair) {
+                        measureCrosshair.style.left = (measureState.inputX * 100) + '%';
+                        measureCrosshair.style.top = (measureState.inputY * 100) + '%';
+                    }
+                }
+            } catch (err) {
+                console.error("Error in touch handler:", err);
+            }
+        });
+    }
 
     // Settings listeners
     btnSettings.addEventListener('click', () => {
@@ -548,310 +559,308 @@ function onViewToggle() {
 
 function updateMeasurement(depthInfo) {
     if (!measureState.active) return;
-
-    const width = depthInfo.width;
-    const height = depthInfo.height;
-
-    // 1. Map Screen Coords (inputX, inputY) to Depth Image Coords
-    // We need to reverse the rotation logic in drawDepthDebug
-    // Screen X/Y (0-1) corresponds to the 'dest' coords in draw function.
-
-    let depthX, depthY;
-
-    // In drawDepthDebug:
-    // 90 (CW): destX = H - 1 - y, destY = x
-    // => x = destY, y = H - 1 - destX
-
-    // 180 (CW): destX = W - 1 - x, destY = H - 1 - y
-    // => x = W - 1 - destX, y = H - 1 - destY
-
-    // 270 (CW): destX = y, destY = W - 1 - x
-    // => x = W - 1 - destY, y = destX
-
-    // 0: destX = x, destY = y
-
-    // Normalized coords of screen
-    const sx = measureState.inputX;
-    const sy = measureState.inputY;
-
-    // Dimensions of the rotated image on screen (logical)
-    // If 90/270, screen width maps to depth height, screen height maps to depth width
-
-    if (depthRotation === 90) {
-        // Screen X (0-1) -> Depth Y (x=destY) -> range 0-Width
-        // Screen Y (0-1) -> Depth X (y=H-1-destX) -> range 0-Height
-
-        // Wait, let's look at the mapping again carefully.
-        // destX is the fast index (horizontal on screen)
-        // destY is the slow index (vertical on screen)
-
-        // At 90deg CW:
-        // Top-Left Screen (0,0) => destX=0, destY=0
-        // Formula: destX = H - 1 - y => 0 = H - 1 - y => y = H - 1 (Bottom of depth img)
-        //          destY = x => 0 = x => x = 0 (Left of depth img)
-
-        // So Screen(0,0) -> Depth(0, H-1) ?
-
-        // Let's use proportional mapping:
-        const screenW = height; // Rotated
-        const screenH = width;
-
-        const px = Math.floor(sx * screenW); // destX
-        const py = Math.floor(sy * screenH); // destY
-
-        depthX = py; // x = destY
-        depthY = height - 1 - px; // y = H - 1 - destX
-
-    } else if (depthRotation === 180) {
-        // 180
-        const px = Math.floor(sx * width);
-        const py = Math.floor(sy * height);
-
-        depthX = width - 1 - px;
-        depthY = height - 1 - py;
-
-    } else if (depthRotation === 270) {
-        // 270 (-90)
-        // destX = y, destY = W - 1 - x
-        // Top-Left Screen (0,0) -> destX=0, destY=0
-        // 0 = y => y = 0
-        // 0 = W - 1 - x => x = W - 1
-
-        const screenW = height;
-        const screenH = width;
-
-        const px = Math.floor(sx * screenW);
-        const py = Math.floor(sy * screenH);
-
-        depthX = width - 1 - py; // x = W - 1 - destY
-        depthY = px; // y = destX
-
-    } else {
-        // 0
-        depthX = Math.floor(sx * width);
-        depthY = Math.floor(sy * height);
-    }
-
-    // Clamp
-    if (depthX < 0) depthX = 0; if (depthX >= width) depthX = width - 1;
-    if (depthY < 0) depthY = 0; if (depthY >= height) depthY = height - 1;
-
-    // 2. Sample Depth
-    let dist = 0;
     try {
-        dist = depthInfo.getDepthInMeters(depthX, depthY);
-    } catch (e) { console.error(e); }
+        const width = depthInfo.width;
+        const height = depthInfo.height;
 
-    if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
-        // Invalid or Too Far/Close
-        // Keep previous average or show --
-    } else {
-        // 3. Average
-        // Exponential moving average for smoothness
-        const alpha = 0.15;
-        if (measureState.samples === 0) {
-            measureState.avgDepth = dist;
+        // 1. Map Screen Coords (inputX, inputY) to Depth Image Coords
+        // We need to reverse the rotation logic in drawDepthDebug
+        // Screen X/Y (0-1) corresponds to the 'dest' coords in draw function.
+
+        let depthX, depthY;
+
+        // In drawDepthDebug:
+        // 90 (CW): destX = H - 1 - y, destY = x
+        // => x = destY, y = H - 1 - destX
+
+        // 180 (CW): destX = W - 1 - x, destY = H - 1 - y
+        // => x = W - 1 - destX, y = H - 1 - destY
+
+        // 270 (CW): destX = y, destY = W - 1 - x
+        // => x = W - 1 - destY, y = destX
+
+        // 0: destX = x, destY = y
+
+        // Normalized coords of screen
+        const sx = measureState.inputX;
+        const sy = measureState.inputY;
+
+        // Dimensions of the rotated image on screen (logical)
+        // If 90/270, screen width maps to depth height, screen height maps to depth width
+
+        if (depthRotation === 90) {
+            // Screen X (0-1) -> Depth Y (x=destY) -> range 0-Width
+            // Screen Y (0-1) -> Depth X (y=H-1-destX) -> range 0-Height
+
+            // Wait, let's look at the mapping again carefully.
+            // destX is the fast index (horizontal on screen)
+            // destY is the slow index (vertical on screen)
+
+            // At 90deg CW:
+            // Top-Left Screen (0,0) => destX=0, destY=0
+            // Formula: destX = H - 1 - y => 0 = H - 1 - y => y = H - 1 (Bottom of depth img)
+            //          destY = x => 0 = x => x = 0 (Left of depth img)
+
+            // So Screen(0,0) -> Depth(0, H-1) ?
+
+            // Let's use proportional mapping:
+            const screenW = height; // Rotated
+            const screenH = width;
+
+            const px = Math.floor(sx * screenW); // destX
+            const py = Math.floor(sy * screenH); // destY
+
+            depthX = py; // x = destY
+            depthY = height - 1 - px; // y = H - 1 - destX
+
+        } else if (depthRotation === 180) {
+            // 180
+            const px = Math.floor(sx * width);
+            const py = Math.floor(sy * height);
+
+            depthX = width - 1 - px;
+            depthY = height - 1 - py;
+
+        } else if (depthRotation === 270) {
+            // 270 (-90)
+            // destX = y, destY = W - 1 - x
+            // Top-Left Screen (0,0) -> destX=0, destY=0
+            // 0 = y => y = 0
+            // 0 = W - 1 - x => x = W - 1
+
+            const screenW = height;
+            const screenH = width;
+
+            const px = Math.floor(sx * screenW);
+            const py = Math.floor(sy * screenH);
+
+            depthX = width - 1 - py; // x = W - 1 - destY
+            depthY = px; // y = destX
+
         } else {
-            measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
+            // 0
+            depthX = Math.floor(sx * width);
+            depthY = Math.floor(sy * height);
         }
-        measureState.samples++;
-    }
 
-    // Update Text
-    if (measureState.samples > 0) {
-        statusText.innerText = "Distance: " + measureState.avgDepth.toFixed(2) + " m";
-    } else {
-        statusText.innerText = "Distance: -- m";
-    }
+        // Clamp
+        if (depthX < 0) depthX = 0; if (depthX >= width) depthX = width - 1;
+        if (depthY < 0) depthY = 0; if (depthY >= height) depthY = height - 1;
 
-    // Debug 1/60 frames
-    if (Math.random() < 0.02) {
-        // console.log("Depth Query:", depthX, depthY, dist);
-    }
-}
+        // 2. Sample Depth
+        let dist = 0;
+        try {
+            dist = depthInfo.getDepthInMeters(depthX, depthY);
+        } catch (e) { console.error(e); }
 
-function drawDepthDebug(depthInfo, fullscreen = false) {
-    const srcWidth = depthInfo.width;
-    const srcHeight = depthInfo.height;
-
-    // Determine output dimensions
-    let width, height;
-    if (depthRotation === 90 || depthRotation === 270) {
-        width = srcHeight;
-        height = srcWidth;
-    } else {
-        width = srcWidth;
-        height = srcHeight;
-    }
-
-    // Resize canvas if needed
-    if (depthCanvas.width !== width || depthCanvas.height !== height) {
-        depthCanvas.width = width;
-        depthCanvas.height = height;
-    }
-
-    const rawData = new Uint16Array(depthInfo.data);
-    const toMeters = depthInfo.rawValueToMeters || 1.0;
-    const imageData = depthCtx.createImageData(width, height);
-    const pixels = imageData.data; // RGBA
-
-    for (let y = 0; y < srcHeight; y++) {
-        for (let x = 0; x < srcWidth; x++) {
-            // Source Index
-            const srcIdx = y * srcWidth + x;
-            const val = rawData[srcIdx];
-
-            // Rotation Logic
-            let destX, destY;
-            if (depthRotation === 90) {
-                // CW 90
-                destX = srcHeight - 1 - y;
-                destY = x;
-            } else if (depthRotation === 180) {
-                // CW 180
-                destX = srcWidth - 1 - x;
-                destY = srcHeight - 1 - y;
-            } else if (depthRotation === 270) {
-                // CW 270 (CCW 90)
-                destX = y;
-                destY = srcWidth - 1 - x;
+        if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
+            // Invalid or Too Far/Close
+            // Keep previous average or show --
+        } else {
+            // 3. Average
+            // Exponential moving average for smoothness
+            const alpha = 0.15;
+            if (measureState.samples === 0) {
+                measureState.avgDepth = dist;
             } else {
-                // 0
-                destX = x;
-                destY = y;
+                measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
             }
+            measureState.samples++;
+        }
 
-            const destIdx = (destY * width + destX) * 4;
+        // Update Text
+        if (measureState.samples > 0) {
+            statusText.innerText = "Distance: " + measureState.avgDepth.toFixed(2) + " m";
+        } else {
+            statusText.innerText = "Distance: -- m";
+        }
+    } catch (err) {
+        console.error("Error in updateMeasurement:", err);
+        measureState.active = false;
+    }
 
-            // Convert to meters
-            const m = val * toMeters;
-            // Normalize for display (0m to 5m = 0 to 255)
-            // Near = White (255), Far = Black (0)
-            let intensity = 0;
-            if (m > 0 && m < 5.0) {
-                intensity = Math.floor((m / 5.0) * 255);
-                intensity = 255 - intensity;
-            }
+    function drawDepthDebug(depthInfo, fullscreen = false) {
+        const srcWidth = depthInfo.width;
+        const srcHeight = depthInfo.height;
 
-            if (m === 0) {
-                // Invalid = Red
-                pixels[destIdx] = 255;
-                pixels[destIdx + 1] = 0;
-                pixels[destIdx + 2] = 0;
-                pixels[destIdx + 3] = 255;
-            } else {
-                // Grayscale
-                pixels[destIdx] = intensity;
-                pixels[destIdx + 1] = intensity;
-                pixels[destIdx + 2] = intensity;
-                pixels[destIdx + 3] = 255;
+        // Determine output dimensions
+        let width, height;
+        if (depthRotation === 90 || depthRotation === 270) {
+            width = srcHeight;
+            height = srcWidth;
+        } else {
+            width = srcWidth;
+            height = srcHeight;
+        }
+
+        // Resize canvas if needed
+        if (depthCanvas.width !== width || depthCanvas.height !== height) {
+            depthCanvas.width = width;
+            depthCanvas.height = height;
+        }
+
+        const rawData = new Uint16Array(depthInfo.data);
+        const toMeters = depthInfo.rawValueToMeters || 1.0;
+        const imageData = depthCtx.createImageData(width, height);
+        const pixels = imageData.data; // RGBA
+
+        for (let y = 0; y < srcHeight; y++) {
+            for (let x = 0; x < srcWidth; x++) {
+                // Source Index
+                const srcIdx = y * srcWidth + x;
+                const val = rawData[srcIdx];
+
+                // Rotation Logic
+                let destX, destY;
+                if (depthRotation === 90) {
+                    // CW 90
+                    destX = srcHeight - 1 - y;
+                    destY = x;
+                } else if (depthRotation === 180) {
+                    // CW 180
+                    destX = srcWidth - 1 - x;
+                    destY = srcHeight - 1 - y;
+                } else if (depthRotation === 270) {
+                    // CW 270 (CCW 90)
+                    destX = y;
+                    destY = srcWidth - 1 - x;
+                } else {
+                    // 0
+                    destX = x;
+                    destY = y;
+                }
+
+                const destIdx = (destY * width + destX) * 4;
+
+                // Convert to meters
+                const m = val * toMeters;
+                // Normalize for display (0m to 5m = 0 to 255)
+                // Near = White (255), Far = Black (0)
+                let intensity = 0;
+                if (m > 0 && m < 5.0) {
+                    intensity = Math.floor((m / 5.0) * 255);
+                    intensity = 255 - intensity;
+                }
+
+                if (m === 0) {
+                    // Invalid = Red
+                    pixels[destIdx] = 255;
+                    pixels[destIdx + 1] = 0;
+                    pixels[destIdx + 2] = 0;
+                    pixels[destIdx + 3] = 255;
+                } else {
+                    // Grayscale
+                    pixels[destIdx] = intensity;
+                    pixels[destIdx + 1] = intensity;
+                    pixels[destIdx + 2] = intensity;
+                    pixels[destIdx + 3] = 255;
+                }
             }
         }
-    }
-    depthCtx.putImageData(imageData, 0, 0);
-}
-
-function initColorReadback(gl) {
-    if (readbackFBO) return;
-
-    readbackTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, readbackTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, COLOR_SIZE, COLOR_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-
-    readbackFBO = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, readbackTexture, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-    colorBuffer = new Uint8Array(COLOR_SIZE * COLOR_SIZE * 4);
-}
-
-function captureCameraColor(view) {
-    if (!glBinding || !readbackFBO) return null;
-
-    const cameraTexture = glBinding.getCameraImage(view.camera);
-    if (!cameraTexture) return null;
-
-    // Save previous state
-    const prevFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-    // const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM); // Three.js handles this mostly
-
-    // 1. Blit/Render Camera Texture to small FBO
-    // Simple way: wrap it in Three.js and render a quad? 
-    // Or just raw GL since we have the texture? Raw GL is faster/safer here to avoid messing Three state.
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
-    gl.viewport(0, 0, COLOR_SIZE, COLOR_SIZE);
-
-    // To do this simply without a shader, we can use gl.copyTexImage? No, textures are different sizes.
-    // We need a blit. gl.blitFramebuffer is WebGL2 (usually avail in WebXR).
-    // AR camera texture is usually OES_external_image or similar, might need shader.
-    // BUT! glBinding.getCameraImage returns a WebGLTexture.
-    // Let's assume we can attach it to a FBO? No, usually incomplete if external.
-
-    // Simplest robust way: Just use Three.js internals or a simple shader?
-    // Actually, let's skip the complexity of a custom blit shader for this snippet 
-    // and rely on a simpler approach if possible.
-    // If we assume WebGL2, we can blit.
-
-    // Attempt WebGL2 Blit (Fastest)
-    // Create a temp FBO for the camera source?
-    // Camera texture might be OES, so can't attach to FBO directly in some cases.
-
-    // Fallback: If we can't easily blit, we return null for now to avoid breaking.
-    // Wait, we need this feature. 
-    // Correct way: Draw a full screen quad with the camera texture.
-    // Effectively impossible to write raw GL here without a lot of boilerplate.
-    // Hack: Assume we can just read pixels from it? No.
-
-    // Let's TRY generic framebuffer blit if same types.
-    // If not, we serve a placebo or need a helper class.
-
-    // REVISION: To keep 'app.js' clean, let's just create a THREE.Mesh with the texture 
-    // and render it to a target? 
-    // Three.js `XRWebGLLayer` is opaque. `getCameraImage` gives raw GL texture.
-    // Integrating raw GL texture into Three.js scene is tricky.
-
-    // OK, simplest path that WORKS:
-    // Don't use `getCameraImage` if it's too hard.
-    // Is there a strictly Three.js way? `renderer.xr.getCameraFramebuffer()`? No.
-
-    // Let's try to proceed with the raw GL approach, assuming standard Texture2D (not OES).
-    // Most WebXR camera images are regular textures now.
-
-    // Minimal Shader for Quad
-    if (!window.camQuadProg) {
-        const vs = `attribute vec2 p; varying vec2 v; void main(){v=p*0.5+0.5; gl_Position=vec4(p,0,1);}`;
-        const fs = `precision mediump float; uniform sampler2D t; varying vec2 v; void main(){gl_FragColor=texture2D(t,v);}`;
-        const vsS = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vsS, vs); gl.compileShader(vsS);
-        const fsS = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fsS, fs); gl.compileShader(fsS);
-        const p = gl.createProgram(); gl.attachShader(p, vsS); gl.attachShader(p, fsS); gl.linkProgram(p);
-        const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        window.camQuadProg = { p, buf, loc: gl.getAttribLocation(p, "p") };
+        depthCtx.putImageData(imageData, 0, 0);
     }
 
-    const prog = window.camQuadProg;
-    gl.useProgram(prog.p);
-    gl.bindBuffer(gl.ARRAY_BUFFER, prog.buf);
-    gl.enableVertexAttribArray(prog.loc);
-    gl.vertexAttribPointer(prog.loc, 2, gl.FLOAT, false, 0, 0);
+    function initColorReadback(gl) {
+        if (readbackFBO) return;
 
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, cameraTexture);
+        readbackTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, readbackTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, COLOR_SIZE, COLOR_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        readbackFBO = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, readbackTexture, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    // Read
-    gl.readPixels(0, 0, COLOR_SIZE, COLOR_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, colorBuffer);
+        colorBuffer = new Uint8Array(COLOR_SIZE * COLOR_SIZE * 4);
+    }
 
-    // Restore
-    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFBO);
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    function captureCameraColor(view) {
+        if (!glBinding || !readbackFBO) return null;
 
-    // Reset Three state (important!)
-    renderer.resetState();
+        const cameraTexture = glBinding.getCameraImage(view.camera);
+        if (!cameraTexture) return null;
 
-    return { data: colorBuffer, width: COLOR_SIZE, height: COLOR_SIZE };
-}
+        // Save previous state
+        const prevFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        // const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM); // Three.js handles this mostly
+
+        // 1. Blit/Render Camera Texture to small FBO
+        // Simple way: wrap it in Three.js and render a quad? 
+        // Or just raw GL since we have the texture? Raw GL is faster/safer here to avoid messing Three state.
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, readbackFBO);
+        gl.viewport(0, 0, COLOR_SIZE, COLOR_SIZE);
+
+        // To do this simply without a shader, we can use gl.copyTexImage? No, textures are different sizes.
+        // We need a blit. gl.blitFramebuffer is WebGL2 (usually avail in WebXR).
+        // AR camera texture is usually OES_external_image or similar, might need shader.
+        // BUT! glBinding.getCameraImage returns a WebGLTexture.
+        // Let's assume we can attach it to a FBO? No, usually incomplete if external.
+
+        // Simplest robust way: Just use Three.js internals or a simple shader?
+        // Actually, let's skip the complexity of a custom blit shader for this snippet 
+        // and rely on a simpler approach if possible.
+        // If we assume WebGL2, we can blit.
+
+        // Attempt WebGL2 Blit (Fastest)
+        // Create a temp FBO for the camera source?
+        // Camera texture might be OES, so can't attach to FBO directly in some cases.
+
+        // Fallback: If we can't easily blit, we return null for now to avoid breaking.
+        // Wait, we need this feature. 
+        // Correct way: Draw a full screen quad with the camera texture.
+        // Effectively impossible to write raw GL here without a lot of boilerplate.
+        // Hack: Assume we can just read pixels from it? No.
+
+        // Let's TRY generic framebuffer blit if same types.
+        // If not, we serve a placebo or need a helper class.
+
+        // REVISION: To keep 'app.js' clean, let's just create a THREE.Mesh with the texture 
+        // and render it to a target? 
+        // Three.js `XRWebGLLayer` is opaque. `getCameraImage` gives raw GL texture.
+        // Integrating raw GL texture into Three.js scene is tricky.
+
+        // OK, simplest path that WORKS:
+        // Don't use `getCameraImage` if it's too hard.
+        // Is there a strictly Three.js way? `renderer.xr.getCameraFramebuffer()`? No.
+
+        // Let's try to proceed with the raw GL approach, assuming standard Texture2D (not OES).
+        // Most WebXR camera images are regular textures now.
+
+        // Minimal Shader for Quad
+        if (!window.camQuadProg) {
+            const vs = `attribute vec2 p; varying vec2 v; void main(){v=p*0.5+0.5; gl_Position=vec4(p,0,1);}`;
+            const fs = `precision mediump float; uniform sampler2D t; varying vec2 v; void main(){gl_FragColor=texture2D(t,v);}`;
+            const vsS = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vsS, vs); gl.compileShader(vsS);
+            const fsS = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fsS, fs); gl.compileShader(fsS);
+            const p = gl.createProgram(); gl.attachShader(p, vsS); gl.attachShader(p, fsS); gl.linkProgram(p);
+            const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+            window.camQuadProg = { p, buf, loc: gl.getAttribLocation(p, "p") };
+        }
+
+        const prog = window.camQuadProg;
+        gl.useProgram(prog.p);
+        gl.bindBuffer(gl.ARRAY_BUFFER, prog.buf);
+        gl.enableVertexAttribArray(prog.loc);
+        gl.vertexAttribPointer(prog.loc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cameraTexture);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Read
+        gl.readPixels(0, 0, COLOR_SIZE, COLOR_SIZE, gl.RGBA, gl.UNSIGNED_BYTE, colorBuffer);
+
+        // Restore
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFBO);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+        // Reset Three state (important!)
+        renderer.resetState();
+
+        return { data: colorBuffer, width: COLOR_SIZE, height: COLOR_SIZE };
+    }
