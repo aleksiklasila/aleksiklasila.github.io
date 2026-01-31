@@ -133,3 +133,44 @@ header h1 {
     font-size: 0.9rem;
     color: #ddd;
 }
+
+.settings-panel {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 300px;
+    background: rgba(30, 30, 30, 0.95);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 15px;
+    z-index: 2000;
+    text-align: left;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+}
+
+.settings-panel h3 {
+    margin-top: 0;
+    font-size: 1rem;
+    border-bottom: 1px solid #444;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+.control-group label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-bottom: 4px;
+    color: #ccc;
+}
+
+.control-group input[type=range] {
+    width: 100%;
+    margin: 0;
+}

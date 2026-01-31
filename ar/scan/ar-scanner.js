@@ -21,26 +21,83 @@ export class ARScanner {
         this.cellSize = 0.03; // 3cm voxels
 
         // Confidence Config
-        // Confidence Config (Relaxed)
-        this.minCount = 3; // Was 10
-        this.minBaseline = 0.05; // 5cm (was 0.20)
+        this.minCount = 3;
+        this.cellSize = 0.03;
+        this.nextCellSize = 0.03;
 
-        // Debug
+        // Dynamic Filters
+        this.minDepth = 0.1;
+        this.maxDepth = 5.0;
+
+        // ... existing ...
         this.totalPointsFused = 0;
 
-        // Visualization
-        this.pointCloud = null;
-        this.geometry = null;
-        this.material = new THREE.PointsMaterial({
+        // Visualization - Gaussian Splat Shader
+        const vertexShader = `
+            attribute float size;
+            attribute float intensity;
+            varying float vIntensity;
+            varying vec3 vColor;
+            
+            void main() {
+                vIntensity = intensity;
+                vColor = color;
+                
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                
+                // Scale point size by distance to look like a surface
+                // size attribute is world space radius (approx)
+                // gl_PointSize = (size / -mvPosition.z) * 500.0; // Basic attenuation
+                
+                // Better fit: Size * Projection Scale
+                gl_PointSize = (size * 3000.0) / length(mvPosition.xyz); 
+                
+                // Clamp max size to avoid giant blobs near camera
+                gl_PointSize = clamp(gl_PointSize, 2.0, 100.0);
+                
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const fragmentShader = `
+            varying float vIntensity;
+            varying vec3 vColor;
+            
+            void main() {
+                // Circular gaussian falloff
+                vec2 center = gl_PointCoord - 0.5;
+                float distSq = dot(center, center);
+                float alpha = exp(-distSq * 9.0); // 9.0 makes it fall off near edges (3 sigma)
+                
+                if (alpha < 0.05) discard;
+                
+                // Color + Intensity modulation
+                gl_FragColor = vec4(vColor, alpha * 0.8 * vIntensity); 
+                // 0.8 base opacity
+            }
+        `;
+
+        this.material = new THREE.ShaderMaterial({
+            uniforms: {},
+            vertexShader: vertexShader,
+            fragmentShader: fragmentShader,
+            transparent: true,
             vertexColors: true,
-            size: 0.02,
-            sizeAttenuation: true
+            // Additive blending looks cool but might be too ghost-like for surfaces. 
+            // Normal blending is better for solidity.
+            blending: THREE.NormalBlending,
+            depthWrite: false, // Turn off depth write for smooth transparent sorting? 
+            // Actually, for "Surface" scanning, we want depth test. 
+            // Turning off depth write kills occlusion.
+            // But sorting thousands of points is slow.
+            // Let's try DepthWrite=True (unsorted) -> might have artifacts but faster.
+            // Or DepthWrite=False (unsorted) -> looks like a cloud.
+            depthTest: true,
+            depthWrite: false
         });
 
-        this.isScanning = false;
-        // Optimization: Rebuild throttler
-        this.framesSinceRebuild = 0;
-        this.rebuildInterval = 30; // Update mesh every 30 frames (0.5s at 60fps)
+        this.pointCloud = null;
+        this.geometry = null;
     }
 
     start() {
@@ -62,15 +119,12 @@ export class ARScanner {
         }
     }
 
-    /**
-     * Process a depth frame and fuse into voxel grid
-     */
-    processFrame(depthInfo, view, camera) {
+    processFrame(depthInfo, view, camera, colorData) {
         if (!this.isScanning) return;
 
-        // Use getDepthInMeters to ensure correct format/scaling
         const width = depthInfo.width;
         const height = depthInfo.height;
+        // Adaptive skip based on load? Fixed for now.
         const skip = 4;
 
         const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
@@ -83,21 +137,17 @@ export class ARScanner {
 
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
-                // Safety Check for RangeError
                 if (x >= width || y >= height) continue;
 
-                // 1. Get Depth (Meters)
                 let d;
                 try {
                     d = depthInfo.getDepthInMeters(x, y);
-                } catch (e) {
-                    continue; // Skip invalid
-                }
+                } catch (e) { continue; }
 
-                // Valid Depth Filter
-                if (d <= 0.1 || d > 5.0 || !isFinite(d)) continue;
+                // Dynamic Filter Range
+                if (d < this.minDepth || d > this.maxDepth || !isFinite(d)) continue;
 
-                // 2. Unproject
+                // Unproject
                 const xNorm = (x + 0.5) / width;
                 const yNorm = (y + 0.5) / height;
 
@@ -115,17 +165,29 @@ export class ARScanner {
                 vPoint.copy(vDir).multiplyScalar(scale);
                 vPoint.applyMatrix4(camera.matrixWorld);
 
-                this.fusePoint(vPoint, camPos);
+                // Sample Color if available
+                let r = 255, g = 255, b = 255;
+                if (colorData) {
+                    // Map xNorm/yNorm (Screen Space) to Color Image Space
+                    // Depth and Camera Image usually align in Viewport space for AR
+                    const cx = Math.floor(xNorm * colorData.width);
+                    const cy = Math.floor((1.0 - yNorm) * colorData.height); // Flip Y? Usually WebGL textures are flipped relative to depth buffer logic sometimes.
+                    // Let's assume 1-yNorm for standard UV. 
+
+                    const idx = (cy * colorData.width + cx) * 4;
+                    if (idx >= 0 && idx < colorData.data.length) {
+                        r = colorData.data[idx];
+                        g = colorData.data[idx + 1];
+                        b = colorData.data[idx + 2];
+                    }
+                }
+
+                this.fusePoint(vPoint, camPos, r, g, b);
                 pointsFused++;
             }
         }
 
-        // Debug Log (throttled)
-        this.totalPointsFused += pointsFused;
-        if (this.framesSinceRebuild === 0) {
-            console.log(`Frame Fusion: ${pointsFused} pts. Total Fused: ${this.totalPointsFused}. Map Size: ${this.voxels.size}`);
-        }
-
+        // Throttle updates
         this.framesSinceRebuild++;
         if (this.framesSinceRebuild > this.rebuildInterval) {
             this.rebuildPointCloud();
@@ -133,11 +195,12 @@ export class ARScanner {
         }
     }
 
-    fusePoint(worldPt, camPos) {
-        // Quantize
-        const ix = Math.floor(worldPt.x / this.cellSize);
-        const iy = Math.floor(worldPt.y / this.cellSize);
-        const iz = Math.floor(worldPt.z / this.cellSize);
+    fusePoint(worldPt, camPos, r, g, b) {
+        // Use CURRENT cellSize (allows dynamic change if cleared)
+        const cell = this.cellSize;
+        const ix = Math.floor(worldPt.x / cell);
+        const iy = Math.floor(worldPt.y / cell);
+        const iz = Math.floor(worldPt.z / cell);
         const key = `${ix},${iy},${iz}`;
 
         let voxel = this.voxels.get(key);
@@ -147,90 +210,57 @@ export class ARScanner {
                 y: worldPt.y,
                 z: worldPt.z,
                 count: 1,
-                minCx: camPos.x, maxCx: camPos.x,
-                minCy: camPos.y, maxCy: camPos.y,
-                minCz: camPos.z, maxCz: camPos.z,
-                // Logic Coords for ROR
+                r: r, g: g, b: b,
                 ix: ix, iy: iy, iz: iz
             };
             this.voxels.set(key, voxel);
         } else {
-            // Running Average
             const c = voxel.count;
             const nc = c + 1;
+            // Simple running average
             voxel.x = (voxel.x * c + worldPt.x) / nc;
             voxel.y = (voxel.y * c + worldPt.y) / nc;
             voxel.z = (voxel.z * c + worldPt.z) / nc;
-            voxel.count = nc;
 
-            // Expand Baseline
-            if (camPos.x < voxel.minCx) voxel.minCx = camPos.x;
-            if (camPos.x > voxel.maxCx) voxel.maxCx = camPos.x;
-            if (camPos.y < voxel.minCy) voxel.minCy = camPos.y;
-            if (camPos.y > voxel.maxCy) voxel.maxCy = camPos.y;
-            if (camPos.z < voxel.minCz) voxel.minCz = camPos.z;
-            if (camPos.z > voxel.maxCz) voxel.maxCz = camPos.z;
+            // Average Color
+            voxel.r = (voxel.r * c + r) / nc;
+            voxel.g = (voxel.g * c + g) / nc;
+            voxel.b = (voxel.b * c + b) / nc;
+
+            voxel.count = nc;
         }
     }
 
     rebuildPointCloud() {
         const vertices = [];
         const colors = [];
+        const sizes = [];
+        const intensities = [];
 
         let accepted = 0;
-        let rejected = 0;
 
-        // Helper to check neighbor existence
-        const checkNeighbor = (ix, iy, iz) => {
-            const key = `${ix},${iy},${iz}`;
-            const v = this.voxels.get(key);
-            // Neighbor must also be relatively stable (>1 hit)
-            return (v && v.count >= 2) ? 1 : 0;
-        };
+        const minC = this.minCount; // Dynamic param
 
         for (const v of this.voxels.values()) {
-            // 1. Persistence Filter
-            if (v.count < this.minCount) {
-                rejected++;
-                continue;
-            }
+            if (v.count < minC) continue;
 
-            // 2. Radius Outlier Removal (ROR)
-            let neighborCount = 0;
-            const ix = v.ix;
-            const iy = v.iy;
-            const iz = v.iz;
+            // Optional ROR check removed for speed/simplicity with splats
+            // Splats handle sparse noise better visually (faint blobs)
 
-            // Check 26 neighbors
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                    for (let dz = -1; dz <= 1; dz++) {
-                        if (dx === 0 && dy === 0 && dz === 0) continue;
-                        if (checkNeighbor(ix + dx, iy + dy, iz + dz)) {
-                            neighborCount++;
-                        }
-                    }
-                }
-                if (neighborCount >= 3) break;
-            }
-
-            // Require neighbors
-            if (neighborCount < 2) {
-                rejected++;
-                continue;
-            }
-
-            // Accepted
             vertices.push(v.x, v.y, v.z);
 
-            // Heatmap
-            const intensity = Math.min(1.0, 0.3 + (neighborCount / 26.0) * 0.7 + (v.count / 50) * 0.2);
-            colors.push(0, intensity, intensity * 0.5 + 0.5);
+            // Use accumulated color
+            colors.push(v.r / 255.0, v.g / 255.0, v.b / 255.0);
+
+            // Size: 2 * cellSize (overlap)
+            sizes.push(this.cellSize * 1.5);
+
+            // Intensity: Based on confidence
+            const conf = Math.min(1.0, v.count / 20.0); // 20 frames = full opacity
+            intensities.push(0.5 + 0.5 * conf);
 
             accepted++;
         }
-
-        console.log(`Rebuild ROR: ${accepted} voxels (rej: ${rejected}). Total Map: ${this.voxels.size}`);
 
         if (accepted === 0) return;
 
@@ -243,10 +273,16 @@ export class ARScanner {
 
         const posAttr = new THREE.Float32BufferAttribute(vertices, 3);
         const colAttr = new THREE.Float32BufferAttribute(colors, 3);
+        const sizeAttr = new THREE.Float32BufferAttribute(sizes, 1);
+        const intAttr = new THREE.Float32BufferAttribute(intensities, 1);
 
         this.geometry.setAttribute('position', posAttr);
         this.geometry.setAttribute('color', colAttr);
+        this.geometry.setAttribute('size', sizeAttr);
+        this.geometry.setAttribute('intensity', intAttr);
 
         this.geometry.computeBoundingSphere();
+        // Since we are writing directly, we might need to toggle needsUpdate if re-using buffers
+        // But here we recreate attributes which sets needsUpdate automatically.
     }
 }
