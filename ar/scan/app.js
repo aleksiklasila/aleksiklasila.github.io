@@ -194,9 +194,6 @@ async function onEnterAR() {
     }
 }
 
-    }
-}
-
 async function onSessionStarted(session) {
     currentSession = session;
     session.addEventListener('end', onSessionEnded);
@@ -382,7 +379,7 @@ function generateMeshFromDepth(depthInfo) {
         scene.add(points);
         scannedMeshes.push(points);
         // Enable view button since we have data
-        btnView.style.display = 'inline-block';
+        if (btnView) btnView.style.display = 'inline-block';
     }
 }
 
