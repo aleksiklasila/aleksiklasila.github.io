@@ -21,8 +21,9 @@ export class ARScanner {
         this.cellSize = 0.03; // 3cm voxels
 
         // Confidence Config
+        // Confidence Config
         this.minCount = 3;
-        this.cellSize = 0.03;
+        // this.cellSize set above
         this.nextCellSize = 0.03;
 
         // Dynamic Filters
@@ -33,70 +34,28 @@ export class ARScanner {
         this.totalPointsFused = 0;
 
         // Visualization - Gaussian Splat Shader
-        const vertexShader = `
-            attribute float size;
-            attribute float intensity;
-            varying float vIntensity;
-            varying vec3 vColor;
-            
-            void main() {
-                vIntensity = intensity;
-                vColor = color;
-                
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                
-                // Scale point size by distance to look like a surface
-                // size attribute is world space radius (approx)
-                // gl_PointSize = (size / -mvPosition.z) * 500.0; // Basic attenuation
-                
-                // Better fit: Size * Projection Scale * Multiplier
-                // Increased multiplier from 3000 to 8000 for visibility
-                gl_PointSize = (size * 8000.0) / length(mvPosition.xyz); 
-                
-                // Clamp max size to avoid giant blobs near camera
-                gl_PointSize = clamp(gl_PointSize, 5.0, 300.0);
-                
-                gl_Position = projectionMatrix * mvPosition;
-            }
-        `;
-
-        const fragmentShader = `
-            varying float vIntensity;
-            varying vec3 vColor;
-            
-            void main() {
-                // Circular gaussian falloff
-                vec2 center = gl_PointCoord - 0.5;
-                float distSq = dot(center, center);
-                float alpha = exp(-distSq * 9.0); // 9.0 makes it fall off near edges (3 sigma)
-                
-                if (alpha < 0.05) discard;
-                
-                // Color + Intensity modulation
-                // Increased opacity from 0.8 to 1.0
-                // vIntensity now scales from 0.5 to 1.0 based on count
-                gl_FragColor = vec4(vColor, alpha * 1.0 * vIntensity); 
-            }
-        `;
-
-        this.material = new THREE.ShaderMaterial({
-            uniforms: {},
-            vertexShader: vertexShader,
-            fragmentShader: fragmentShader,
-            transparent: true,
+        // Visualization - Standard Point Cloud
+        // User requested "Point Clouds" instead of Splats
+        this.material = new THREE.PointsMaterial({
             vertexColors: true,
-            // Additive blending looks cool but might be too ghost-like for surfaces. 
-            // Normal blending is better for solidity.
-            blending: THREE.NormalBlending,
-            depthWrite: false, // Turn off depth write for smooth transparent sorting? 
-            // Actually, for "Surface" scanning, we want depth test. 
-            // Turning off depth write kills occlusion.
-            // But sorting thousands of points is slow.
-            // Let's try DepthWrite=True (unsorted) -> might have artifacts but faster.
-            // Or DepthWrite=False (unsorted) -> looks like a cloud.
+            size: 0.015, // 1.5cm points
+            sizeAttenuation: true, // Scale with distance
+            map: null, // Hard squares (fastest) or use a disc texture if needed
+            transparent: false, // Opaque points for solid feel
             depthTest: true,
-            depthWrite: false
+            depthWrite: true
         });
+
+        // Use a simple circle texture for nicer points if desired, but user said "Point Clouds"
+        // Standard squares are the most "Point Cloud" look.
+        // If we want circles:
+        /*
+        const loader = new THREE.TextureLoader();
+        const disk = loader.load('https://threejs.org/examples/textures/sprites/disc.png');
+        this.material.map = disk;
+        this.material.alphaTest = 0.5;
+        this.material.transparent = true;
+        */
 
         this.pointCloud = null;
         this.geometry = null;
@@ -298,8 +257,9 @@ export class ARScanner {
 
         this.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         this.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        this.geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
-        this.geometry.setAttribute('intensity', new THREE.Float32BufferAttribute(intensities, 1));
+        // Standard PointsMaterial doesn't use 'size' or 'intensity' attributes by default
+
+        this.geometry.computeBoundingSphere();
 
         this.geometry.computeBoundingSphere();
     }
