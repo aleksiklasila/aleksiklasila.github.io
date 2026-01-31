@@ -92,7 +92,7 @@ function init() {
 
     // Measurement Input
     if (depthCanvas) {
-        depthCanvas.addEventListener('pointerdown', (e) => {
+        const handlePointer = (e) => {
             try {
                 if (!isViewing && viewMode === 'depth') {
                     const rect = depthCanvas.getBoundingClientRect();
@@ -101,10 +101,9 @@ function init() {
                     // Normalized 0-1
                     measureState.inputX = (e.clientX - rect.left) / rect.width;
                     measureState.inputY = (e.clientY - rect.top) / rect.height;
-                    console.log("Measure Touch:", measureState.inputX.toFixed(2), measureState.inputY.toFixed(2));
 
                     measureState.active = true;
-                    measureState.samples = 0; // Reset averaging
+                    measureState.samples = 0; // Reset averaging on move
 
                     // Move crosshair (Percent)
                     if (measureCrosshair) {
@@ -114,6 +113,14 @@ function init() {
                 }
             } catch (err) {
                 console.error("Error in touch handler:", err);
+            }
+        };
+
+        depthCanvas.addEventListener('pointerdown', handlePointer);
+        depthCanvas.addEventListener('pointermove', (e) => {
+            // Only update if pressing/touching
+            if (e.buttons > 0 || e.pressure > 0) {
+                handlePointer(e);
             }
         });
     }
@@ -564,107 +571,66 @@ function updateMeasurement(depthInfo) {
         const height = depthInfo.height;
 
         // 1. Map Screen Coords (inputX, inputY) to Depth Image Coords
-        // We need to reverse the rotation logic in drawDepthDebug
-        // Screen X/Y (0-1) corresponds to the 'dest' coords in draw function.
-
         let depthX, depthY;
-
-        // In drawDepthDebug:
-        // 90 (CW): destX = H - 1 - y, destY = x
-        // => x = destY, y = H - 1 - destX
-
-        // 180 (CW): destX = W - 1 - x, destY = H - 1 - y
-        // => x = W - 1 - destX, y = H - 1 - destY
-
-        // 270 (CW): destX = y, destY = W - 1 - x
-        // => x = W - 1 - destY, y = destX
-
-        // 0: destX = x, destY = y
-
-        // Normalized coords of screen
         const sx = measureState.inputX;
         const sy = measureState.inputY;
 
-        // Dimensions of the rotated image on screen (logical)
-        // If 90/270, screen width maps to depth height, screen height maps to depth width
-
         if (depthRotation === 90) {
-            // Screen X (0-1) -> Depth Y (x=destY) -> range 0-Width
-            // Screen Y (0-1) -> Depth X (y=H-1-destX) -> range 0-Height
-
-            // Wait, let's look at the mapping again carefully.
-            // destX is the fast index (horizontal on screen)
-            // destY is the slow index (vertical on screen)
-
-            // At 90deg CW:
-            // Top-Left Screen (0,0) => destX=0, destY=0
-            // Formula: destX = H - 1 - y => 0 = H - 1 - y => y = H - 1 (Bottom of depth img)
-            //          destY = x => 0 = x => x = 0 (Left of depth img)
-
-            // So Screen(0,0) -> Depth(0, H-1) ?
-
-            // Let's use proportional mapping:
-            const screenW = height; // Rotated
-            const screenH = width;
-
-            const px = Math.floor(sx * screenW); // destX
-            const py = Math.floor(sy * screenH); // destY
-
-            depthX = py; // x = destY
-            depthY = height - 1 - px; // y = H - 1 - destX
-
+            // Screen W = Depth H, Screen H = Depth W
+            const px = Math.floor(sx * height); // destX (on rotated screen)
+            const py = Math.floor(sy * width);  // destY
+            depthX = py;
+            depthY = height - 1 - px;
         } else if (depthRotation === 180) {
-            // 180
             const px = Math.floor(sx * width);
             const py = Math.floor(sy * height);
-
             depthX = width - 1 - px;
             depthY = height - 1 - py;
-
         } else if (depthRotation === 270) {
-            // 270 (-90)
-            // destX = y, destY = W - 1 - x
-            // Top-Left Screen (0,0) -> destX=0, destY=0
-            // 0 = y => y = 0
-            // 0 = W - 1 - x => x = W - 1
-
-            const screenW = height;
-            const screenH = width;
-
-            const px = Math.floor(sx * screenW);
-            const py = Math.floor(sy * screenH);
-
-            depthX = width - 1 - py; // x = W - 1 - destY
-            depthY = px; // y = destX
-
+            const px = Math.floor(sx * height);
+            const py = Math.floor(sy * width);
+            depthX = width - 1 - py;
+            depthY = px;
         } else {
-            // 0
             depthX = Math.floor(sx * width);
             depthY = Math.floor(sy * height);
         }
 
-        // Clamp Strictly (Ensure integer)
+        // Clamp Strictly
         depthX = Math.max(0, Math.min(width - 1, Math.floor(depthX)));
         depthY = Math.max(0, Math.min(height - 1, Math.floor(depthY)));
 
-        // 2. Sample Depth
+        // 2. Sample Depth (Manual Access)
         let dist = 0;
-        try {
-            // Debug Log every ~1 sec (60 frames)
-            if (measureState.samples % 60 === 0) {
-                console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) / Size(${width}x${height})`);
-            }
-            dist = depthInfo.getDepthInMeters(depthX, depthY);
-        } catch (e) {
-            console.error(`Depth Error: ${e.message} @ ${depthX},${depthY} in ${width}x${height}`);
+
+        // Check format
+        const isFloat = depthInfo.dataFormat === 'float32';
+        const rawData = isFloat ? new Float32Array(depthInfo.data) : new Uint16Array(depthInfo.data);
+        const toMeters = depthInfo.rawValueToMeters || 1.0;
+
+        const index = depthY * width + depthX;
+
+        // Safety check for buffer size
+        if (index >= rawData.length) {
+            console.error(`Buffer Overflow: Idx ${index} > Len ${rawData.length} @ ${depthX},${depthY} (${width}x${height})`);
+            return;
+        }
+
+        if (isFloat) {
+            dist = rawData[index];
+        } else {
+            dist = rawData[index] * toMeters;
+        }
+
+        // Debug Log
+        if (measureState.samples % 60 === 0) {
+            console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) Val=${dist?.toFixed(2)}`);
         }
 
         if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
-            // Invalid or Too Far/Close
-            // Keep previous average or show --
+            // Invalid
         } else {
             // 3. Average
-            // Exponential moving average for smoothness
             const alpha = 0.15;
             if (measureState.samples === 0) {
                 measureState.avgDepth = dist;
@@ -674,12 +640,10 @@ function updateMeasurement(depthInfo) {
             measureState.samples++;
         }
 
-        // Update Text & Debug on Screen
         if (measureState.samples > 0) {
-            statusText.innerText = `Dist: ${measureState.avgDepth.toFixed(2)}m (Raw: ${dist?.toFixed(2)})`;
+            statusText.innerText = `Distance: ${measureState.avgDepth.toFixed(2)}m`;
         } else {
-            // Show failure reason if possible
-            statusText.innerText = `Dist: -- (In: ${sx.toFixed(2)},${sy.toFixed(2)} -> Img: ${depthX},${depthY})`;
+            statusText.innerText = `Distance: --`;
         }
     } catch (err) {
         console.error("Error in updateMeasurement:", err);
@@ -707,8 +671,10 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
         depthCanvas.height = height;
     }
 
-    const rawData = new Uint16Array(depthInfo.data);
+    const isFloat = depthInfo.dataFormat === 'float32';
+    const rawData = isFloat ? new Float32Array(depthInfo.data) : new Uint16Array(depthInfo.data);
     const toMeters = depthInfo.rawValueToMeters || 1.0;
+
     const imageData = depthCtx.createImageData(width, height);
     const pixels = imageData.data; // RGBA
 
@@ -716,24 +682,24 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
         for (let x = 0; x < srcWidth; x++) {
             // Source Index
             const srcIdx = y * srcWidth + x;
+
+            // Safety
+            if (srcIdx >= rawData.length) continue;
+
             const val = rawData[srcIdx];
 
             // Rotation Logic
             let destX, destY;
             if (depthRotation === 90) {
-                // CW 90
                 destX = srcHeight - 1 - y;
                 destY = x;
             } else if (depthRotation === 180) {
-                // CW 180
                 destX = srcWidth - 1 - x;
                 destY = srcHeight - 1 - y;
             } else if (depthRotation === 270) {
-                // CW 270 (CCW 90)
                 destX = y;
                 destY = srcWidth - 1 - x;
             } else {
-                // 0
                 destX = x;
                 destY = y;
             }
@@ -741,7 +707,8 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
             const destIdx = (destY * width + destX) * 4;
 
             // Convert to meters
-            const m = val * toMeters;
+            const m = isFloat ? val : (val * toMeters);
+
             // Normalize for display (0m to 5m = 0 to 255)
             // Near = White (255), Far = Black (0)
             let intensity = 0;
@@ -750,7 +717,7 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
                 intensity = 255 - intensity;
             }
 
-            if (m === 0) {
+            if (m <= 0 || isNaN(m)) {
                 // Invalid = Red
                 pixels[destIdx] = 255;
                 pixels[destIdx + 1] = 0;
