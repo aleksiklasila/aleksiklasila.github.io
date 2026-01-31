@@ -587,6 +587,7 @@ function onViewToggle() {
 
 function updateMeasurement(depthInfo) {
     if (!measureState.active) return;
+    const alpha = 0.3;
     try {
         const width = depthInfo.width;
         const height = depthInfo.height;
@@ -654,29 +655,29 @@ function updateMeasurement(depthInfo) {
             measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
         }
         measureState.samples++;
-    }
+
 
         if (measureState.samples > 0) {
-        statusText.innerText = `Distance: ${measureState.avgDepth.toFixed(2)}m`;
-        // Always show container if valid data exists
-        if (measureContainer.style.display === 'none') {
-            measureContainer.style.display = 'block';
-            measureCrosshair.style.opacity = '1.0';
-            if (measureState.inputX === 0 && measureState.inputY === 0) {
-                // Default to center if not set
-                measureState.inputX = 0.5;
-                measureState.inputY = 0.5;
-                measureCrosshair.style.left = '50%';
-                measureCrosshair.style.top = '50%';
+            statusText.innerText = `Distance: ${measureState.avgDepth.toFixed(2)}m`;
+            // Always show container if valid data exists
+            if (measureContainer.style.display === 'none') {
+                measureContainer.style.display = 'block';
+                measureCrosshair.style.opacity = '1.0';
+                if (measureState.inputX === 0 && measureState.inputY === 0) {
+                    // Default to center if not set
+                    measureState.inputX = 0.5;
+                    measureState.inputY = 0.5;
+                    measureCrosshair.style.left = '50%';
+                    measureCrosshair.style.top = '50%';
+                }
             }
+        } else {
+            statusText.innerText = `Distance: --`;
         }
-    } else {
-        statusText.innerText = `Distance: --`;
+    } catch (err) {
+        console.error("Error in updateMeasurement:", err);
+        measureState.active = false;
     }
-} catch (err) {
-    console.error("Error in updateMeasurement:", err);
-    measureState.active = false;
-}
 }
 
 function drawDepthDebug(depthInfo, fullscreen = false) {
