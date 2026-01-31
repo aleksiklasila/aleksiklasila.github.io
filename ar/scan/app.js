@@ -10,7 +10,9 @@ let reticle;
 let xrRefSpace = null;
 let currentSession = null;
 let isScanning = false;
-let qualityMode = 'fast'; // 'fast' | 'detailed'
+// variable removed
+let qualityMode = 'detailed'; // Default to detailed logic
+let viewMode = 'camera'; // 'camera' | 'depth'
 let scannedMeshes = []; // Array of accummulated meshes
 let lastScanTime = 0;
 let isViewing = false; // Flag to pause UI status updates during viewing
@@ -29,14 +31,20 @@ const btnExport = document.getElementById('btn-export');
 const startScreen = document.getElementById('start-screen');
 const controlsPanel = document.getElementById('controls');
 const statusText = document.getElementById('status-text');
-const btnView = document.getElementById('btn-view');
 const viewerOverlay = document.getElementById('viewer-overlay');
 const debugViewer = document.getElementById('debug-viewer');
 const depthCanvas = document.getElementById('depth-debug');
 const depthCtx = depthCanvas.getContext('2d');
+const btnViewToggle = document.getElementById('btn-view-toggle');
 const btnSettings = document.getElementById('btn-settings');
 const settingsPanel = document.getElementById('settings-panel');
 const btnCloseSettings = document.getElementById('btn-close-settings');
+const btnView = document.getElementById('btn-view'); // Kept for reference or removal? 
+// Actually btnView is used in logic for "Check" button, though hidden.
+// Let's keep it defined to avoid null errors if code refs it, but it might be commented out in HTML.
+// HTML has it commented out but ID exists if uncommented? 
+// No, I commented it out in HTML. So getElementById might return null.
+// Let's ensure we check for null before adding listeners.
 
 // Settings Inputs
 const rangeConfidence = document.getElementById('range-confidence');
@@ -64,8 +72,9 @@ function init() {
     btnEnterAR.addEventListener('click', onEnterAR);
     btnScan.addEventListener('click', onScanToggle);
     btnExport.addEventListener('click', onExport);
-    btnExport.addEventListener('click', onExport);
-    btnView.addEventListener('click', onViewDebug);
+
+    if (btnView) btnView.addEventListener('click', onViewDebug);
+    if (btnViewToggle) btnViewToggle.addEventListener('click', onViewToggle);
 
     // Settings listeners
     btnSettings.addEventListener('click', () => {
@@ -136,6 +145,7 @@ function setupThreeJS() {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
+    renderer.domElement.style.cssText = "position:absolute; top:0; left:0; z-index:10; pointer-events:none;"; // Allow clicks to pass if needed, but we have UI
     document.body.appendChild(renderer.domElement);
 
     // Reticle (cursor)
@@ -232,18 +242,16 @@ function render(timestamp, frame) {
             const depthInfo = frame.getDepthInformation(pose.views[0]);
             if (depthInfo) {
                 window.latestDepthPack = { depthInfo, view: pose.views[0] };
-                // Only show "Depth Active" if NOT scanning
-                if (!isScanning) {
-                    statusText.innerText = `Depth Active: ${depthInfo.width}x${depthInfo.height}`;
-                    // Visual Debug: Render depth to canvas
-                    drawDepthDebug(depthInfo);
+
+                // Always render depth if View Mode is 'depth'
+                if (viewMode === 'depth') {
+                    drawDepthDebug(depthInfo, true);
                     depthCanvas.style.display = 'block';
-                }
-            } else {
-                if (!isScanning) {
-                    statusText.innerText = `Depth unavailable`;
+                } else {
                     depthCanvas.style.display = 'none';
                 }
+            } else {
+                depthCanvas.style.display = 'none';
                 window.latestDepthPack = null;
             }
         }
@@ -459,7 +467,22 @@ window.closeViewer = () => {
     viewerOverlay.classList.add('hidden');
 };
 
-function drawDepthDebug(depthInfo) {
+// --- View Toggle ---
+function onViewToggle() {
+    if (viewMode === 'camera') {
+        viewMode = 'depth';
+        btnViewToggle.innerText = '👁️ Depth';
+        // Make depth canvas fullscreen, z-index 5 (below renderer@10, above camera)
+        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0.9; pointer-events:none; z-index:5;";
+    } else {
+        viewMode = 'camera';
+        btnViewToggle.innerText = '👁️ Cam';
+        // Hide/Standard depth canvas
+        depthCanvas.style.display = 'none';
+    }
+}
+
+function drawDepthDebug(depthInfo, fullscreen = false) {
     const width = depthInfo.width;
     const height = depthInfo.height;
 

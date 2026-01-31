@@ -49,11 +49,12 @@ export class ARScanner {
                 // size attribute is world space radius (approx)
                 // gl_PointSize = (size / -mvPosition.z) * 500.0; // Basic attenuation
                 
-                // Better fit: Size * Projection Scale
-                gl_PointSize = (size * 3000.0) / length(mvPosition.xyz); 
+                // Better fit: Size * Projection Scale * Multiplier
+                // Increased multiplier from 3000 to 8000 for visibility
+                gl_PointSize = (size * 8000.0) / length(mvPosition.xyz); 
                 
                 // Clamp max size to avoid giant blobs near camera
-                gl_PointSize = clamp(gl_PointSize, 2.0, 100.0);
+                gl_PointSize = clamp(gl_PointSize, 5.0, 300.0);
                 
                 gl_Position = projectionMatrix * mvPosition;
             }
@@ -72,8 +73,9 @@ export class ARScanner {
                 if (alpha < 0.05) discard;
                 
                 // Color + Intensity modulation
-                gl_FragColor = vec4(vColor, alpha * 0.8 * vIntensity); 
-                // 0.8 base opacity
+                // Increased opacity from 0.8 to 1.0
+                // vIntensity now scales from 0.5 to 1.0 based on count
+                gl_FragColor = vec4(vColor, alpha * 1.0 * vIntensity); 
             }
         `;
 
@@ -124,8 +126,8 @@ export class ARScanner {
 
         const width = depthInfo.width;
         const height = depthInfo.height;
-        // Adaptive skip based on load? Fixed for now.
-        const skip = 4;
+        // Reduce skip for higher density (was 4)
+        const skip = 2; // 4x more points than skip=4
 
         const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
         const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
@@ -252,12 +254,12 @@ export class ARScanner {
             // Use accumulated color
             colors.push(v.r / 255.0, v.g / 255.0, v.b / 255.0);
 
-            // Size: 2 * cellSize (overlap)
-            sizes.push(this.cellSize * 1.5);
+            // Increased base size multiplier
+            sizes.push(this.cellSize * 4.0);
 
-            // Intensity: Based on confidence
-            const conf = Math.min(1.0, v.count / 20.0); // 20 frames = full opacity
-            intensities.push(0.5 + 0.5 * conf);
+            // More aggressive intensity curve for visibility
+            const conf = Math.min(1.0, v.count / 10.0); // 10 frames = full opacity (was 20)
+            intensities.push(0.7 + 0.3 * conf); // Min 0.7 opacity
 
             accepted++;
         }
