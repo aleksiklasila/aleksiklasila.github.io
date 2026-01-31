@@ -59,6 +59,18 @@ const rangeRotation = document.getElementById('range-rotation');
 const valRotation = document.getElementById('val-rotation');
 let lastGlbBlob = null;
 
+// Measurement State
+const measureContainer = document.getElementById('measure-container');
+const measureCrosshair = document.getElementById('measure-crosshair');
+const measureText = document.getElementById('measure-text');
+const measureState = {
+    active: false,
+    inputX: 0, // 0-1 (Screen/Canvas Normalized)
+    inputY: 0, // 0-1
+    avgDepth: 0,
+    samples: 0
+};
+
 // --- Initialization ---
 init();
 
@@ -77,6 +89,24 @@ function init() {
 
     if (btnView) btnView.addEventListener('click', onViewDebug);
     if (btnViewToggle) btnViewToggle.addEventListener('click', onViewToggle);
+
+    // Measurement Input
+    depthCanvas.addEventListener('pointerdown', (e) => {
+        if (!isViewing && viewMode === 'depth') {
+            const rect = depthCanvas.getBoundingClientRect();
+            // Normalized 0-1
+            measureState.inputX = (e.clientX - rect.left) / rect.width;
+            measureState.inputY = (e.clientY - rect.top) / rect.height;
+            measureState.active = true;
+            measureState.samples = 0; // Reset averaging
+
+            measureContainer.style.display = 'block';
+
+            // Move crosshair (Percent)
+            measureCrosshair.style.left = (measureState.inputX * 100) + '%';
+            measureCrosshair.style.top = (measureState.inputY * 100) + '%';
+        }
+    });
 
     // Settings listeners
     btnSettings.addEventListener('click', () => {
@@ -258,6 +288,7 @@ function render(timestamp, frame) {
                 if (viewMode === 'depth') {
                     drawDepthDebug(depthInfo, true);
                     depthCanvas.style.display = 'block';
+                    updateMeasurement(depthInfo);
                 } else {
                     depthCanvas.style.display = 'none';
                 }
@@ -489,12 +520,135 @@ function onViewToggle() {
         btnViewToggle.innerText = '👁️ Depth';
         // Make depth canvas fullscreen, z-index 100 (top)
         // Solid black background to block camera
-        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:none; z-index:99999; background:black;";
+        // Make depth canvas fullscreen, z-index 100 (top)
+        // Solid black background to block camera
+        depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:auto; z-index:99999; background:black;";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
         // Hide/Standard depth canvas
         depthCanvas.style.display = 'none';
+        measureContainer.style.display = 'none';
+        measureState.active = false;
+    }
+}
+
+function updateMeasurement(depthInfo) {
+    if (!measureState.active) return;
+
+    const width = depthInfo.width;
+    const height = depthInfo.height;
+
+    // 1. Map Screen Coords (inputX, inputY) to Depth Image Coords
+    // We need to reverse the rotation logic in drawDepthDebug
+    // Screen X/Y (0-1) corresponds to the 'dest' coords in draw function.
+
+    let depthX, depthY;
+
+    // In drawDepthDebug:
+    // 90 (CW): destX = H - 1 - y, destY = x
+    // => x = destY, y = H - 1 - destX
+
+    // 180 (CW): destX = W - 1 - x, destY = H - 1 - y
+    // => x = W - 1 - destX, y = H - 1 - destY
+
+    // 270 (CW): destX = y, destY = W - 1 - x
+    // => x = W - 1 - destY, y = destX
+
+    // 0: destX = x, destY = y
+
+    // Normalized coords of screen
+    const sx = measureState.inputX;
+    const sy = measureState.inputY;
+
+    // Dimensions of the rotated image on screen (logical)
+    // If 90/270, screen width maps to depth height, screen height maps to depth width
+
+    if (depthRotation === 90) {
+        // Screen X (0-1) -> Depth Y (x=destY) -> range 0-Width
+        // Screen Y (0-1) -> Depth X (y=H-1-destX) -> range 0-Height
+
+        // Wait, let's look at the mapping again carefully.
+        // destX is the fast index (horizontal on screen)
+        // destY is the slow index (vertical on screen)
+
+        // At 90deg CW:
+        // Top-Left Screen (0,0) => destX=0, destY=0
+        // Formula: destX = H - 1 - y => 0 = H - 1 - y => y = H - 1 (Bottom of depth img)
+        //          destY = x => 0 = x => x = 0 (Left of depth img)
+
+        // So Screen(0,0) -> Depth(0, H-1) ?
+
+        // Let's use proportional mapping:
+        const screenW = height; // Rotated
+        const screenH = width;
+
+        const px = Math.floor(sx * screenW); // destX
+        const py = Math.floor(sy * screenH); // destY
+
+        depthX = py; // x = destY
+        depthY = height - 1 - px; // y = H - 1 - destX
+
+    } else if (depthRotation === 180) {
+        // 180
+        const px = Math.floor(sx * width);
+        const py = Math.floor(sy * height);
+
+        depthX = width - 1 - px;
+        depthY = height - 1 - py;
+
+    } else if (depthRotation === 270) {
+        // 270 (-90)
+        // destX = y, destY = W - 1 - x
+        // Top-Left Screen (0,0) -> destX=0, destY=0
+        // 0 = y => y = 0
+        // 0 = W - 1 - x => x = W - 1
+
+        const screenW = height;
+        const screenH = width;
+
+        const px = Math.floor(sx * screenW);
+        const py = Math.floor(sy * screenH);
+
+        depthX = width - 1 - py; // x = W - 1 - destY
+        depthY = px; // y = destX
+
+    } else {
+        // 0
+        depthX = Math.floor(sx * width);
+        depthY = Math.floor(sy * height);
+    }
+
+    // Clamp
+    if (depthX < 0) depthX = 0; if (depthX >= width) depthX = width - 1;
+    if (depthY < 0) depthY = 0; if (depthY >= height) depthY = height - 1;
+
+    // 2. Sample Depth
+    let dist = 0;
+    try {
+        dist = depthInfo.getDepthInMeters(depthX, depthY);
+    } catch (e) { console.error(e); }
+
+    if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
+        // Invalid or Too Far/Close
+        // Keep previous average or show --
+    } else {
+        // 3. Average
+        // Exponential moving average for smoothness
+        const alpha = 0.15;
+        if (measureState.samples === 0) {
+            measureState.avgDepth = dist;
+        } else {
+            measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
+        }
+        measureState.samples++;
+    }
+
+    // Update Text
+    if (measureState.samples > 0) {
+        measureText.innerText = measureState.avgDepth.toFixed(2) + " m";
+    } else {
+        measureText.innerText = "-- m";
     }
 }
 
