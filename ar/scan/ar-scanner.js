@@ -100,16 +100,25 @@ export class ARScanner {
 
         let pointsFused = 0;
 
+        // Pre-resolve data buffer
+        const isFloat = depthInfo.dataFormat === 'float32';
+        const rawData = isFloat ? new Float32Array(depthInfo.data) : new Uint16Array(depthInfo.data);
+        const toMeters = depthInfo.rawValueToMeters || 1.0;
+
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
                 // Bounds check
                 if (x >= width || y >= height) continue;
 
-                // 1. Get Depth
+                // 1. Get Depth (Manual Access)
+                const idx = y * width + x;
                 let d;
-                try {
-                    d = depthInfo.getDepthInMeters(x, y);
-                } catch (e) { continue; }
+
+                if (isFloat) {
+                    d = rawData[idx];
+                } else {
+                    d = rawData[idx] * toMeters;
+                }
 
                 // 2. Filter Validity
                 if (d < this.minDepth || d > this.maxDepth || !isFinite(d)) continue;
