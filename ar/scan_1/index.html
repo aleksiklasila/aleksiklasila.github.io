@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Scanner</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Three.js and GLTFExporter -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+</head>
+<script>
+    // Create console overlay immediately
+    const consoleDiv = document.createElement('div');
+    consoleDiv.id = 'mobile-console';
+    // Fix scrolling with touch-action and overflow scrolling
+    consoleDiv.style.cssText = 'position:fixed; bottom:0; left:0; width:100%; height:30%; background:rgba(0,0,0,0.8); color:#0f0; overflow-y:scroll; -webkit-overflow-scrolling:touch; touch-action:pan-y; z-index:9999; font-family:monospace; font-size:10px; pointer-events:auto; padding:5px; box-sizing:border-box; display:none;';
+    // Default hidden
+    document.documentElement.appendChild(consoleDiv);
+
+    function logToScreen(msg, color) {
+        const line = document.createElement('div');
+        line.style.color = color || '#fff';
+        line.style.marginBottom = '2px';
+        line.textContent = '>' + msg;
+        consoleDiv.appendChild(line);
+        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    }
+
+    // Override console
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    console.log = function (...args) {
+        originalLog.apply(console, args);
+        logToScreen(args.join(' '), '#fff');
+    };
+    console.error = function (...args) {
+        originalError.apply(console, args);
+        logToScreen(args.join(' '), '#f55');
+        consoleDiv.style.display = 'block'; // Auto-show on error
+    };
+    console.warn = function (...args) {
+        originalWarn.apply(console, args);
+        logToScreen(args.join(' '), '#fa0');
+    };
+
+    window.onerror = function (msg, url, line, col, error) {
+        const str = "Global Error: " + msg + "\nL:" + line + " C:" + col;
+        console.error(str);
+        return false;
+    };
+
+    // Toggle button
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = 'Toggle Log';
+    toggleBtn.style.cssText = 'position:fixed; bottom:10px; right:10px; z-index:10000; padding:5px; opacity:0.7;';
+    toggleBtn.onclick = () => {
+        consoleDiv.style.display = consoleDiv.style.display === 'none' ? 'block' : 'none';
+    };
+    document.documentElement.appendChild(toggleBtn);
+
+    console.log("Mobile Console Initialized.");
+</script>
+
+<body>
+    <div id="overlay">
+        <header>
+            <h1>AR Scanner</h1>
+        </header>
+
+        <div id="controls" class="hidden">
+            <div class="quality-selector">
+                <label>Quality:</label>
+                <div class="toggle-group">
+                    <button id="btn-fast" class="active" onclick="setQuality('fast')">Fast</button>
+                    <button id="btn-detailed" onclick="setQuality('detailed')">Detailed</button>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button id="btn-scan" class="primary-btn">Scan</button>
+                <button id="btn-export" class="secondary-btn" disabled>Export GLB</button>
+                <button id="btn-view-toggle" class="secondary-btn">👁️ Cam</button>
+                <!-- <button id="btn-view" class="secondary-btn" style="display:none;">Check</button> -->
+                <button id="btn-settings" class="secondary-btn">⚙️</button>
+            </div>
+
+            <!-- Settings Panel -->
+            <div id="settings-panel" class="hidden settings-panel">
+                <h3>Scanner Settings</h3>
+
+                <div class="control-group">
+                    <label>Min Confidence (Frames): <span id="val-confidence">3</span></label>
+                    <input type="range" id="range-confidence" min="1" max="30" step="1" value="3">
+                </div>
+
+                <div class="control-group">
+                    <label>Min Depth (m): <span id="val-min-depth">0.1</span></label>
+                    <input type="range" id="range-min-depth" min="0.0" max="2.0" step="0.1" value="0.1">
+                </div>
+
+                <div class="control-group">
+                    <label>Max Depth (m): <span id="val-max-depth">3.5</span></label>
+                    <input type="range" id="range-max-depth" min="0.5" max="8.0" step="0.5" value="3.5">
+                </div>
+
+                <div class="control-group">
+                    <label>Voxel Size (cm): <span id="val-voxel">3</span></label>
+                    <input type="range" id="range-voxel" min="1" max="10" step="1" value="3">
+                    <small style="display:block; color:#aaa;">(Requires Restart)</small>
+                </div>
+
+                <div class="control-group">
+                    <label>Depth Rotation: <span id="val-rotation">90</span>°</label>
+                    <input type="range" id="range-rotation" min="0" max="270" step="90" value="90">
+                </div>
+
+                <button id="btn-close-settings" class="secondary-btn"
+                    style="margin-top:10px; width:100%;">Close</button>
+            </div>
+
+            <p id="status-text">Ready to scan</p>
+        </div>
+
+        <div id="start-screen">
+            <p>Requires device with WebXR and Depth API support (Android + Chrome).</p>
+            <button id="btn-enter-ar" class="primary-btn large-btn">Start AR</button>
+        </div>
+        <!-- Depth Heatmap Canvas -->
+        <canvas id="depth-debug"
+            style="position:fixed; top:60px; right:10px; width:100px; height:auto; border:1px solid lime; z-index:9990; pointer-events:none; display:none;"></canvas>
+
+        <!-- Measure UI (Hidden by default) -->
+        <div id="measure-container" style="display:none;">
+            <div id="measure-crosshair"></div>
+        </div>
+    </div>
+
+    <!-- Viewer Debug Overlay -->
+    <div id="viewer-overlay" class="hidden"
+        style="position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:999; display:flex; flex-direction:column;">
+        <div style="padding:10px; display:flex; justify-content:space-between;">
+            <h2 style="color:white; margin:0;">Preview</h2>
+            <button onclick="document.getElementById('viewer-overlay').classList.add('hidden')"
+                style="padding:5px 15px;">Close</button>
+        </div>
+        <model-viewer id="debug-viewer" style="width:100%; flex-grow:1;" camera-controls></model-viewer>
+    </div>
+
+    <!-- Depth Heatmap Canvas - Moved to #overlay -->
+
+    <!-- Main Logic -->
+    <script type="module" src="app.js?v=113"></script>
+</body>
+
+</html>

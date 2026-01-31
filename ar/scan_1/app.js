@@ -91,57 +91,39 @@ function init() {
     if (btnViewToggle) btnViewToggle.addEventListener('click', onViewToggle);
 
     // Measurement Input
-    const handlePointer = (e) => {
-        try {
-            let rect;
-            if (e.target === depthCanvas && viewMode === 'depth') {
-                rect = depthCanvas.getBoundingClientRect();
-            } else {
-                rect = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-            }
-
-            if (!rect || rect.width === 0 || rect.height === 0) return;
-
-            measureState.inputX = (e.clientX - rect.left) / rect.width;
-            measureState.inputY = (e.clientY - rect.top) / rect.height;
-
-            measureState.active = true;
-            measureState.samples = 0;
-            measureContainer.style.display = 'block';
-
-            if (measureCrosshair) {
-                measureCrosshair.style.left = (measureState.inputX * 100) + '%';
-                measureCrosshair.style.top = (measureState.inputY * 100) + '%';
-            }
-        } catch (err) {
-            console.error("Error in touch handler:", err);
-        }
-    };
-
     if (depthCanvas) {
-        // Also attach to global window? Or overlay?
-        // Attach to window to catch everything
-        window.addEventListener('pointerdown', (e) => {
-            // Ignore button clicks
-            if (e.target.tagName !== 'BUTTON' && e.target.tagName !== 'INPUT') {
+        const handlePointer = (e) => {
+            try {
+                if (!isViewing && viewMode === 'depth') {
+                    const rect = depthCanvas.getBoundingClientRect();
+                    if (!rect || rect.width === 0 || rect.height === 0) return;
+
+                    // Normalized 0-1
+                    measureState.inputX = (e.clientX - rect.left) / rect.width;
+                    measureState.inputY = (e.clientY - rect.top) / rect.height;
+
+                    measureState.active = true;
+                    measureState.samples = 0; // Reset averaging on move
+
+                    // Move crosshair (Percent)
+                    if (measureCrosshair) {
+                        measureCrosshair.style.left = (measureState.inputX * 100) + '%';
+                        measureCrosshair.style.top = (measureState.inputY * 100) + '%';
+                    }
+                }
+            } catch (err) {
+                console.error("Error in touch handler:", err);
+            }
+        };
+
+        depthCanvas.addEventListener('pointerdown', handlePointer);
+        depthCanvas.addEventListener('pointermove', (e) => {
+            // Only update if pressing/touching
+            if (e.buttons > 0 || e.pressure > 0) {
                 handlePointer(e);
             }
         });
-        window.addEventListener('pointermove', (e) => {
-            if (e.buttons > 0 || e.pressure > 0) {
-                if (e.target.tagName !== 'BUTTON') handlePointer(e);
-            }
-        });
     }
-
-    // Force Init Enable
-    measureState.active = true;
-    measureState.inputX = 0.5;
-    measureState.inputY = 0.5;
-    measureContainer.style.display = 'block';
-    measureCrosshair.style.left = '50%';
-    measureCrosshair.style.top = '50%';
-
 
     // Settings listeners
     btnSettings.addEventListener('click', () => {
@@ -254,8 +236,7 @@ async function onEnterAR() {
             domOverlay: { root: overlayElement },
             depthSensing: {
                 usagePreference: ["cpu-optimized", "gpu-optimized"],
-                dataFormatPreference: ["luminance-alpha", "float32"],
-                depthType: ["smooth", "raw"] // Prefer smooth
+                dataFormatPreference: ["luminance-alpha", "float32"]
             }
         };
         try {
@@ -562,26 +543,24 @@ function onViewToggle() {
         // Solid black background to block camera
         depthCanvas.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; object-fit:contain; opacity:1.0; pointer-events:auto; z-index:50; background:black;";
 
-        statusText.innerText = "Depth Mode";
+        // Show cursor immediately at center
+        measureContainer.style.display = 'block';
+        if (!measureState.active) {
+            measureState.inputX = 0.5;
+            measureState.inputY = 0.5;
+            measureState.active = true;
+            measureState.samples = 0;
+            measureCrosshair.style.left = '50%';
+            measureCrosshair.style.top = '50%';
+        }
+        statusText.innerText = "Tap to measure distance";
     } else {
         viewMode = 'camera';
         btnViewToggle.innerText = '👁️ Cam';
         // Hide/Standard depth canvas
         depthCanvas.style.display = 'none';
-
-        // KEEP measureContainer active.
-        // If it was active, it stays active.
-    }
-
-    // Always ensure measure state is initialized if null
-    if (!measureState.active) {
-        measureState.inputX = 0.5;
-        measureState.inputY = 0.5;
-        measureState.active = true;
-        measureState.samples = 0;
-        measureCrosshair.style.left = '50%';
-        measureCrosshair.style.top = '50%';
-        measureContainer.style.display = 'block';
+        measureContainer.style.display = 'none';
+        measureState.active = false;
     }
 }
 
@@ -648,35 +627,28 @@ function updateMeasurement(depthInfo) {
             console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) Val=${dist?.toFixed(2)}`);
         }
 
-        if (measureState.samples === 0) {
-            measureState.avgDepth = dist;
+        if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
+            // Invalid
         } else {
-            measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
+            // 3. Average
+            const alpha = 0.15;
+            if (measureState.samples === 0) {
+                measureState.avgDepth = dist;
+            } else {
+                measureState.avgDepth = measureState.avgDepth * (1 - alpha) + dist * alpha;
+            }
+            measureState.samples++;
         }
-        measureState.samples++;
-    }
 
         if (measureState.samples > 0) {
-        statusText.innerText = `Distance: ${measureState.avgDepth.toFixed(2)}m`;
-        // Always show container if valid data exists
-        if (measureContainer.style.display === 'none') {
-            measureContainer.style.display = 'block';
-            measureCrosshair.style.opacity = '1.0';
-            if (measureState.inputX === 0 && measureState.inputY === 0) {
-                // Default to center if not set
-                measureState.inputX = 0.5;
-                measureState.inputY = 0.5;
-                measureCrosshair.style.left = '50%';
-                measureCrosshair.style.top = '50%';
-            }
+            statusText.innerText = `Distance: ${measureState.avgDepth.toFixed(2)}m`;
+        } else {
+            statusText.innerText = `Distance: --`;
         }
-    } else {
-        statusText.innerText = `Distance: --`;
+    } catch (err) {
+        console.error("Error in updateMeasurement:", err);
+        measureState.active = false;
     }
-} catch (err) {
-    console.error("Error in updateMeasurement:", err);
-    measureState.active = false;
-}
 }
 
 function drawDepthDebug(depthInfo, fullscreen = false) {
