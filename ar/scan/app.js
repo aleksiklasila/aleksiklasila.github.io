@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { buildMeshFromDepth } from './ar-mesh.js?v=2';
-import { ARScanner } from './ar-scanner.js?v=5';
+import { buildMeshFromDepth } from './ar-mesh.js?v=3';
+import { ARScanner } from './ar-scanner.js?v=6';
 
 // --- Constants & Globals ---
 let camera, scene, renderer;
