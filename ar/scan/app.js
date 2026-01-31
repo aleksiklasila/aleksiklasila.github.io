@@ -643,19 +643,21 @@ function updateMeasurement(depthInfo) {
             depthY = Math.floor(sy * height);
         }
 
-        // Clamp
-        if (depthX < 0) depthX = 0; if (depthX >= width) depthX = width - 1;
-        if (depthY < 0) depthY = 0; if (depthY >= height) depthY = height - 1;
+        // Clamp Strictly (Ensure integer)
+        depthX = Math.max(0, Math.min(width - 1, Math.floor(depthX)));
+        depthY = Math.max(0, Math.min(height - 1, Math.floor(depthY)));
 
         // 2. Sample Depth
         let dist = 0;
         try {
-            dist = depthInfo.getDepthInMeters(depthX, depthY);
             // Debug Log every ~1 sec (60 frames)
             if (measureState.samples % 60 === 0) {
-                console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) / Size(${width}x${height}) = ${dist}`);
+                console.log(`DepthQuery: Rot=${depthRotation} Input(${sx.toFixed(2)},${sy.toFixed(2)}) -> Img(${depthX},${depthY}) / Size(${width}x${height})`);
             }
-        } catch (e) { console.error(e); }
+            dist = depthInfo.getDepthInMeters(depthX, depthY);
+        } catch (e) {
+            console.error(`Depth Error: ${e.message} @ ${depthX},${depthY} in ${width}x${height}`);
+        }
 
         if (typeof dist !== 'number' || isNaN(dist) || dist === 0) {
             // Invalid or Too Far/Close
