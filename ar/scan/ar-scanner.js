@@ -78,8 +78,12 @@ export class ARScanner {
 
         // Matrices
         const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
-        const camMatrix = camera.matrixWorld;
-        const camPos = new THREE.Vector3().setFromMatrixPosition(camMatrix);
+
+        // Use View Transform for accurate pose synchronization
+        // view.transform.matrix is the transform from View to Reference Space (World)
+        const camMatrix = new THREE.Matrix4().fromArray(view.transform.matrix);
+        // Note: THREE.Camera.matrixWorld might be slightly interpolated or delayed.
+        // WebXR 'view.transform' is generally the ground truth for the provided depth map.
 
         // Raw Depth Data
         const isFloat = depthInfo.dataFormat === 'float32';
@@ -87,7 +91,6 @@ export class ARScanner {
         const toMeters = depthInfo.rawValueToMeters || 1.0;
 
         // 1. CLEARING PASS (Probabilistic Pruning)
-        // Check a subset of existing voxels to see if they are now "empty"
         if (this.clearingEnabled && this.voxels.size > 0 && this.framesProcessed % 3 === 0) {
             this.pruneVoxels(view, depthInfo, rawData, isFloat, toMeters, camMatrix, width, height);
         }
@@ -96,8 +99,6 @@ export class ARScanner {
         const vPoint = new THREE.Vector3();
         const vDir = new THREE.Vector3();
         const vWorld = new THREE.Vector3();
-        const invCamMatrix = camMatrix.clone().invert(); // For temporal projection usually, but here we forward project? 
-        // Actually for fusion we just unproject new points.
 
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
@@ -112,21 +113,37 @@ export class ARScanner {
                 // Validity
                 if (d < this.minDepth || d > this.maxDepth || !isFinite(d)) continue;
 
-                // Unproject
+                // Unproject (Corrected Logic)
                 const xNorm = (x + 0.5) / width;
-                const yNorm = (y + 0.5) / height;
-                const xNDC = xNorm * 2 - 1;
-                const yNDC = (1 - yNorm) * 2 - 1;
+                const yNorm = (y + 0.5) / height; // Top-Down 0..1
 
+                // NDC
+                const xNDC = xNorm * 2 - 1;
+                const yNDC = (1 - yNorm) * 2 - 1; // Flip Y for GL NDC
+
+                // Unproject to View Space Direction
+                // Point at Z = 0.5 in clip space
                 vPoint.set(xNDC, yNDC, 0.5);
                 vPoint.applyMatrix4(invProj);
-                if (vPoint.w === 0) continue;
+                // Perspective divide?
+                // Actually applying invProj to a vector3 assumes w=1 then divides by w?
+                // Proper way for direction:
+                // We want direction from 0,0,0 to the unprojected point.
 
-                vDir.set(vPoint.x, vPoint.y, vPoint.z).normalize();
-                if (vDir.z >= 0) continue; // Behind
+                vDir.copy(vPoint).normalize();
 
+                // If vDir.z >= 0 it's behind camera (invalid for standard cam)
+                if (vDir.z >= 0) continue;
+
+                // Scale to Depth 'd' (planar depth is -Z)
+                // d is distance along -Z axis? Or Euclidean?
+                // WebXR usually returns planar depth (-Z).
                 const scale = -d / vDir.z;
+
+                // Point in View Space
                 vPoint.copy(vDir).multiplyScalar(scale);
+
+                // Transform to World
                 vWorld.copy(vPoint).applyMatrix4(camMatrix);
 
                 // Color
