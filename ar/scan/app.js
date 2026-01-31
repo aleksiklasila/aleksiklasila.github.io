@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { buildMeshFromDepth } from './ar-mesh.js?v=113';
-import { ARScanner } from './ar-scanner.js?v=113';
+import { buildMeshFromDepth } from './ar-mesh.js?v=1134';
+import { ARScanner } from './ar-scanner.js?v=1134';
 
 // --- Constants & Globals ---
 let camera, scene, renderer;
@@ -324,10 +324,11 @@ function render(timestamp, frame) {
                 if (viewMode === 'depth') {
                     drawDepthDebug(depthInfo, true);
                     depthCanvas.style.display = 'block';
-                    updateMeasurement(depthInfo);
                 } else {
                     depthCanvas.style.display = 'none';
                 }
+                // Always update measurement if we have data
+                updateMeasurement(depthInfo);
             } else {
                 depthCanvas.style.display = 'none';
                 window.latestDepthPack = null;
