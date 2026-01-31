@@ -126,56 +126,62 @@ export class ARScanner {
 
         const width = depthInfo.width;
         const height = depthInfo.height;
-        // Reduce skip for higher density (was 4)
-        const skip = 2; // 4x more points than skip=4
+        // High density scan
+        const skip = 2;
 
+        // Camera Data
         const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
-        const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+        const camMatrix = camera.matrixWorld;
+        const camPos = new THREE.Vector3().setFromMatrixPosition(camMatrix);
 
+        // Reusable vectors
         const vPoint = new THREE.Vector3();
         const vDir = new THREE.Vector3();
+        const vWorld = new THREE.Vector3();
 
         let pointsFused = 0;
 
         for (let y = 0; y < height; y += skip) {
             for (let x = 0; x < width; x += skip) {
+                // Bounds check
                 if (x >= width || y >= height) continue;
 
+                // 1. Get Depth
                 let d;
                 try {
                     d = depthInfo.getDepthInMeters(x, y);
                 } catch (e) { continue; }
 
-                // Dynamic Filter Range
+                // 2. Filter Validity
                 if (d < this.minDepth || d > this.maxDepth || !isFinite(d)) continue;
 
-                // Unproject
+                // 3. Unproject
                 const xNorm = (x + 0.5) / width;
                 const yNorm = (y + 0.5) / height;
 
+                // Screen to NDC
                 const xNDC = xNorm * 2 - 1;
                 const yNDC = (1 - yNorm) * 2 - 1;
 
                 vPoint.set(xNDC, yNDC, 0.5);
                 vPoint.applyMatrix4(invProj);
-                if (vPoint.w === 0) continue;
+                if (vPoint.w === 0) continue; // Invalid projection
 
                 vDir.set(vPoint.x, vPoint.y, vPoint.z).normalize();
-                if (vDir.z >= 0) continue;
+                if (vDir.z >= 0) continue; // Must be looking forward
 
+                // Scale to Depth
                 const scale = -d / vDir.z;
                 vPoint.copy(vDir).multiplyScalar(scale);
-                vPoint.applyMatrix4(camera.matrixWorld);
 
-                // Sample Color if available
-                let r = 255, g = 255, b = 255;
+                // Camera Space -> World Space
+                vWorld.copy(vPoint).applyMatrix4(camMatrix);
+
+                // 4. Color Sample
+                let r = 200, g = 200, b = 200;
                 if (colorData) {
-                    // Map xNorm/yNorm (Screen Space) to Color Image Space
-                    // Depth and Camera Image usually align in Viewport space for AR
                     const cx = Math.floor(xNorm * colorData.width);
-                    const cy = Math.floor((1.0 - yNorm) * colorData.height); // Flip Y? Usually WebGL textures are flipped relative to depth buffer logic sometimes.
-                    // Let's assume 1-yNorm for standard UV. 
-
+                    const cy = Math.floor((1.0 - yNorm) * colorData.height);
                     const idx = (cy * colorData.width + cx) * 4;
                     if (idx >= 0 && idx < colorData.data.length) {
                         r = colorData.data[idx];
@@ -184,12 +190,12 @@ export class ARScanner {
                     }
                 }
 
-                this.fusePoint(vPoint, camPos, r, g, b);
+                // 5. Fuse
+                this.fuseSurfel(vWorld, camPos, r, g, b, d);
                 pointsFused++;
             }
         }
 
-        // Throttle updates
         this.framesSinceRebuild++;
         if (this.framesSinceRebuild > this.rebuildInterval) {
             this.rebuildPointCloud();
@@ -197,39 +203,61 @@ export class ARScanner {
         }
     }
 
-    fusePoint(worldPt, camPos, r, g, b) {
-        // Use CURRENT cellSize (allows dynamic change if cleared)
+    fuseSurfel(worldPt, camPos, r, g, b, depth) {
+        // Quantize position for spatial hashing
+        // This is still a voxel map, but we store specific surfel data inside
         const cell = this.cellSize;
         const ix = Math.floor(worldPt.x / cell);
         const iy = Math.floor(worldPt.y / cell);
         const iz = Math.floor(worldPt.z / cell);
         const key = `${ix},${iy},${iz}`;
 
-        let voxel = this.voxels.get(key);
-        if (!voxel) {
-            voxel = {
-                x: worldPt.x,
-                y: worldPt.y,
-                z: worldPt.z,
-                count: 1,
-                r: r, g: g, b: b,
-                ix: ix, iy: iy, iz: iz
+        let surfel = this.voxels.get(key);
+
+        // Confidence Weighting:
+        // Points closer to camera are usually more accurate in simple estimation? 
+        // Actually, for ToF/Lidar, accuracy is decent.
+        // Let's use a simple weight of 1 for now.
+        const weight = 1.0;
+
+        if (!surfel) {
+            // New Surfel
+            surfel = {
+                x: worldPt.x, y: worldPt.y, z: worldPt.z,      // Position
+                nx: 0, ny: 1, nz: 0,                           // Normal (Default up)
+                r: r, g: g, b: b,                              // Color
+                radius: this.cellSize * 0.8,                   // Radius
+                weight: weight,                                // Accumulated Weight
+                confidence: 0,                                // 0-1 Confidence score
+                lastSeen: Date.now()
             };
-            this.voxels.set(key, voxel);
+            this.voxels.set(key, surfel);
         } else {
-            const c = voxel.count;
-            const nc = c + 1;
-            // Simple running average
-            voxel.x = (voxel.x * c + worldPt.x) / nc;
-            voxel.y = (voxel.y * c + worldPt.y) / nc;
-            voxel.z = (voxel.z * c + worldPt.z) / nc;
+            // Merge into existing Surfel (Moving Average)
+            const w = surfel.weight;
+            const nw = w + weight;
+            const alpha = weight / nw; // Blend factor
 
-            // Average Color
-            voxel.r = (voxel.r * c + r) / nc;
-            voxel.g = (voxel.g * c + g) / nc;
-            voxel.b = (voxel.b * c + b) / nc;
+            // 1. Positional Average
+            surfel.x += (worldPt.x - surfel.x) * alpha;
+            surfel.y += (worldPt.y - surfel.y) * alpha;
+            surfel.z += (worldPt.z - surfel.z) * alpha;
 
-            voxel.count = nc;
+            // 2. Color Average
+            surfel.r += (r - surfel.r) * alpha;
+            surfel.g += (g - surfel.g) * alpha;
+            surfel.b += (b - surfel.b) * alpha;
+
+            // 3. Update Weight & Confidence
+            surfel.weight = nw;
+            // Cap weight to prevent infinite accumulation dragging
+            if (surfel.weight > 50) surfel.weight = 50;
+
+            // Confidence grows with observations
+            surfel.confidence += 0.1;
+            if (surfel.confidence > 1.0) surfel.confidence = 1.0;
+
+            surfel.lastSeen = Date.now();
         }
     }
 
@@ -240,26 +268,21 @@ export class ARScanner {
         const intensities = [];
 
         let accepted = 0;
+        const minConf = 0.2; // Require at least 2-3 frames of confirmation
 
-        const minC = this.minCount; // Dynamic param
+        for (const s of this.voxels.values()) {
+            // Filter noise
+            if (s.confidence < minConf) continue;
 
-        for (const v of this.voxels.values()) {
-            if (v.count < minC) continue;
+            vertices.push(s.x, s.y, s.z);
+            colors.push(s.r / 255.0, s.g / 255.0, s.b / 255.0);
 
-            // Optional ROR check removed for speed/simplicity with splats
-            // Splats handle sparse noise better visually (faint blobs)
-
-            vertices.push(v.x, v.y, v.z);
-
-            // Use accumulated color
-            colors.push(v.r / 255.0, v.g / 255.0, v.b / 255.0);
-
-            // Increased base size multiplier
+            // Size based on grid size but could be adaptive
             sizes.push(this.cellSize * 4.0);
 
-            // More aggressive intensity curve for visibility
-            const conf = Math.min(1.0, v.count / 10.0); // 10 frames = full opacity (was 20)
-            intensities.push(0.7 + 0.3 * conf); // Min 0.7 opacity
+            // Opacity reflects confidence
+            // 0.4 base + 0.6 * confidence
+            intensities.push(0.4 + 0.6 * s.confidence);
 
             accepted++;
         }
@@ -273,18 +296,11 @@ export class ARScanner {
             this.scene.add(this.pointCloud);
         }
 
-        const posAttr = new THREE.Float32BufferAttribute(vertices, 3);
-        const colAttr = new THREE.Float32BufferAttribute(colors, 3);
-        const sizeAttr = new THREE.Float32BufferAttribute(sizes, 1);
-        const intAttr = new THREE.Float32BufferAttribute(intensities, 1);
-
-        this.geometry.setAttribute('position', posAttr);
-        this.geometry.setAttribute('color', colAttr);
-        this.geometry.setAttribute('size', sizeAttr);
-        this.geometry.setAttribute('intensity', intAttr);
+        this.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+        this.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        this.geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+        this.geometry.setAttribute('intensity', new THREE.Float32BufferAttribute(intensities, 1));
 
         this.geometry.computeBoundingSphere();
-        // Since we are writing directly, we might need to toggle needsUpdate if re-using buffers
-        // But here we recreate attributes which sets needsUpdate automatically.
     }
 }
