@@ -490,10 +490,13 @@ function drawDepthDebug(depthInfo, fullscreen = false) {
     const width = depthInfo.width;
     const height = depthInfo.height;
 
+    // console.log(`Drawing Depth Debug: ${width}x${height}`); // Too spammy for loop
+
     // Resize canvas if needed
     if (depthCanvas.width !== width || depthCanvas.height !== height) {
         depthCanvas.width = width;
         depthCanvas.height = height;
+        console.log(`Resized Depth Canvas to ${width}x${height}`);
     }
 
     const rawData = new Uint16Array(depthInfo.data);

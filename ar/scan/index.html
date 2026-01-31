@@ -131,6 +131,9 @@
             <p>Requires device with WebXR and Depth API support (Android + Chrome).</p>
             <button id="btn-enter-ar" class="primary-btn large-btn">Start AR</button>
         </div>
+        <!-- Depth Heatmap Canvas -->
+        <canvas id="depth-debug"
+            style="position:fixed; top:60px; right:10px; width:100px; height:auto; border:1px solid lime; z-index:9990; pointer-events:none; display:none;"></canvas>
     </div>
 
     <!-- Viewer Debug Overlay -->
@@ -144,9 +147,7 @@
         <model-viewer id="debug-viewer" style="width:100%; flex-grow:1;" camera-controls></model-viewer>
     </div>
 
-    <!-- Depth Heatmap Canvas -->
-    <canvas id="depth-debug"
-        style="position:fixed; top:60px; right:10px; width:100px; height:auto; border:1px solid lime; z-index:9990; pointer-events:none; display:none;"></canvas>
+    <!-- Depth Heatmap Canvas - Moved to #overlay -->
 
     <!-- Main Logic -->
     <script type="module" src="app.js?v=6"></script>
