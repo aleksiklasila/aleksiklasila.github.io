@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Neon Chaos PvP [Safe Mode]</title>
+    <title>Neon Chaos PvP [Fixed]</title>
     <style>
         :root { --bg: #050505; --ui: #1a1a1a; --accent: #00ffcc; --p1: #ff4444; --p2: #4444ff; }
         
@@ -12,13 +12,8 @@
             user-select: none; touch-action: none;
         }
 
-        /* CANVAS - ABSOLUTE POSITIONING (Safer) */
-        canvas { 
-            position: absolute; top: 0; left: 0; 
-            display: block; z-index: 1;
-        }
+        canvas { position: absolute; top: 0; left: 0; display: block; z-index: 1; }
         
-        /* HUD - TOP LAYER */
         .hud { 
             position: absolute; top: 0; left: 0; right: 0; height: 80px;
             display: flex; justify-content: space-between; padding: 10px 20px;
@@ -39,7 +34,6 @@
             opacity: 0; transition: opacity 0.3s;
         }
 
-        /* TOOLBAR - BOTTOM LAYER */
         #toolbar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 50px;
             background: var(--ui); border-top: 1px solid #444;
@@ -59,7 +53,6 @@
             font-size: 11px; font-weight: bold; cursor: pointer;
         }
 
-        /* ERROR LOG ON SCREEN */
         #debug-log {
             position: absolute; bottom: 60px; left: 10px; 
             color: #ff5555; font-size: 12px; font-family: monospace;
@@ -93,18 +86,15 @@
     <div id="debug-log"></div>
 
 <script>
-// --- ERROR HANDLING ---
 window.onerror = function(msg, url, line) {
-    document.getElementById('debug-log').innerHTML += `Error: ${msg} (Line ${line})<br>`;
+    document.getElementById('debug-log').innerHTML = `Error: ${msg} (Line ${line})`;
 };
 
-// --- CONSTANTS ---
 const cvs = document.getElementById('cvs');
 const ctx = cvs.getContext('2d');
 const TILE = 32;
 const MAX_SPEED = 12;
 
-// --- ASSETS ---
 const TILES = [
     { n:'Air', c:null, s:0 },
     { n:'Wall', c:'#444', s:1 },
@@ -159,7 +149,6 @@ const EFFECTS = [
     { n:"DISCO MODE", t:600, on:()=>{Phys.disco=1}, off:()=>{Phys.disco=0} }
 ];
 
-// --- STATE ---
 let Phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
 let map=[], cols=0, rows=0, w=100, h=100;
 let parts=[], bullets=[], boxes=[];
@@ -168,7 +157,6 @@ let editTile=1, mouse={x:0,y:0,down:0,btn:0};
 let activeEff=null, effTimer=0;
 const keys={};
 
-// --- SOUND ---
 const Audio = (function() {
     let ax = null, en = false;
     function init() { if(!ax){ax=new(window.AudioContext||window.webkitAudioContext)(); en=true;} if(ax.state=='suspended')ax.resume(); }
@@ -181,16 +169,14 @@ const Audio = (function() {
         if(t=='boom'){o.type='sawtooth';o.freq(100,n,10,n+0.3);g.gainVal(0.1,n,0,n+0.3);o.start(n);o.stop(n+0.3);}
         if(t=='pick'){o.type='triangle';o.freq(600,n,1200,n+0.1);g.gainVal(0.05,n,0,n+0.2);o.start(n);o.stop(n+0.2);}
     }
-    // Helpers for minification
     AudioParam.prototype.freq = function(v1,t1,v2,t2){this.setValueAtTime(v1,t1);this.linearRampToValueAtTime(v2,t2);}
     AudioParam.prototype.gainVal = function(v1,t1,v2,t2){this.setValueAtTime(v1,t1);this.linearRampToValueAtTime(v2,t2);}
     return {init, play};
 })();
 
-// --- CLASSES ---
 class Player {
-    constructor(id, col, ctrls) {
-        this.id=id; this.col=col; this.ctrls=ctrls;
+    constructor(id, color, ctrls) {
+        this.id=id; this.color=color; this.ctrls=ctrls; // RENAMED property to color
         this.w=20; this.h=24; this.vx=0; this.vy=0;
         this.hp=100; this.gun=0; this.cd=0; this.score=0; this.face=1; this.ground=false;
         this.respawn();
@@ -202,11 +188,9 @@ class Player {
     }
     update() {
         if(this.hp<=0) return;
-        // Input
         let l = keys[this.ctrls.l], r = keys[this.ctrls.r], u = keys[this.ctrls.u], d = keys[this.ctrls.d], s = keys[this.ctrls.s];
-
-        // Physics
         let mSpd = 1.0 * Phys.spd, fric = 0.82, grav = Phys.g;
+
         if(l) { this.vx -= mSpd; this.face = -1; }
         if(r) { this.vx += mSpd; this.face = 1; }
 
@@ -244,10 +228,10 @@ class Player {
     }
     move() {
         this.ground=false;
-        this.x+=this.vx*Phys.ts; this.col(true);
-        this.y+=this.vy*Phys.ts; this.col(false);
+        this.x+=this.vx*Phys.ts; this.collide(true);
+        this.y+=this.vy*Phys.ts; this.collide(false);
     }
-    col(isX) {
+    collide(isX) { // RENAMED METHOD
         let tx1=Math.floor(this.x/TILE), tx2=Math.floor((this.x+this.w)/TILE);
         let ty1=Math.floor(this.y/TILE), ty2=Math.floor((this.y+this.h)/TILE);
         for(let y=ty1;y<=ty2;y++) for(let x=tx1;x<=tx2;x++) {
@@ -301,7 +285,7 @@ class Box {
     constructor(eff) { this.eff=eff; this.w=20; this.h=20; this.respawn(); }
     respawn() {
         this.life=600; this.gun=Math.floor(Math.random()*GUNS.length); this.ei=Math.floor(Math.random()*EFFECTS.length);
-        let s = findSpawn(-1); // -1 = random
+        let s = findSpawn(-1);
         this.x=s.x; this.y=s.y;
     }
     update() {
@@ -319,7 +303,6 @@ class Box {
     }
 }
 
-// --- CORE ---
 function init() {
     window.addEventListener('keydown', e => {
         let k = e.key.toLowerCase();
@@ -343,27 +326,22 @@ function init() {
 
 function resize() {
     w = window.innerWidth;
-    h = window.innerHeight - 50; // Toolbar space
+    h = window.innerHeight - 50; 
     if(h < 100) h = 100;
     cvs.width = w; cvs.height = h;
-    
     let old = map;
     cols = Math.ceil(w/TILE); rows = Math.ceil(h/TILE);
-    
-    // Create new Map
     map = [];
     for(let y=0; y<rows; y++) {
         let r = [];
         for(let x=0; x<cols; x++) {
             if(x==0 || x==cols-1 || y==0 || y==rows-1) r.push(1);
-            else if(y==rows-2 && x%6==0) r.push(2); // Jump
-            else if(y==rows-5 && x>5 && x<cols-5) r.push(11); // Plat
+            else if(y==rows-2 && x%6==0) r.push(2); 
+            else if(y==rows-5 && x>5 && x<cols-5) r.push(11); 
             else r.push(0);
         }
         map.push(r);
     }
-    
-    // Copy old map if exists
     if(old.length > 0) {
         for(let y=0; y<Math.min(rows,old.length); y++)
             for(let x=0; x<Math.min(cols,old[0].length); x++)
@@ -372,87 +350,68 @@ function resize() {
 }
 
 function findSpawn(id) {
-    // Try to find a safe spot (Air with Wall/Platform below)
-    let best = {x:w/2, y:100};
-    let found = false;
-    let startX = (id === 2) ? cols - 5 : 5; // Preference sides
-    if(id === -1) startX = Math.floor(Math.random()*(cols-4))+2;
-    
-    // Simple scan
-    for(let i=0; i<1000; i++) {
+    let safe = {x:w/2, y:100};
+    for(let i=0; i<500; i++) {
         let x = Math.floor(Math.random()*(cols-4))+2;
         let y = Math.floor(Math.random()*(rows-5))+2;
-        
         let t = getTileAtPx(x*TILE, y*TILE);
-        let below = getTileAtPx(x*TILE, (y+1)*TILE);
-        
-        if (t && !t.s && below && below.s) {
-            return {x: x*TILE + 6, y: y*TILE - 24};
-        }
+        let b = getTileAtPx(x*TILE, (y+1)*TILE);
+        if(t && !t.s && b && b.s) return {x:x*TILE+6, y:y*TILE-24};
     }
-    return {x: 100, y: 100}; // Fallback
+    return safe;
 }
 
 function resetGame() {
-    // Clean state
     activeEff=null; Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0};
     document.getElementById('effect-banner').style.opacity=0;
     
-    // Ensure P1 uses WASD
+    // Safety check map exists
+    if(cols===0) resize();
+
     p1 = new Player(1, '#ff4444', {l:'a',r:'d',u:'w',d:'s',s:'e'});
-    // Ensure P2 uses Arrows
     p2 = new Player(2, '#4444ff', {l:'arrowleft',r:'arrowright',u:'arrowup',d:'arrowdown',s:'enter'});
     
     bullets=[]; parts=[]; boxes=[];
     for(let i=0;i<3;i++) boxes.push(new Box(false));
     for(let i=0;i<2;i++) boxes.push(new Box(true));
-    
     updateHud();
 }
 
 function loop() {
     requestAnimationFrame(loop);
-    try {
-        if(keys['l']) keys['enter']=true; 
+    if(keys['l']) keys['enter']=true; 
+    if(effTimer>0){effTimer-=Phys.ts; if(effTimer<=0){EFFECTS[activeEff].off(); Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0}; document.getElementById('effect-banner').style.opacity=0;}}
+    if(Phys.disco) shake=2;
 
-        // Effects
-        if(effTimer>0){effTimer-=Phys.ts; if(effTimer<=0){EFFECTS[activeEff].off(); Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0}; document.getElementById('effect-banner').style.opacity=0;}}
-        if(Phys.disco) shake=2;
-
+    if(p1 && p2) {
         [p1,p2].forEach(p=>p.update());
         boxes.forEach(b=>b.update());
-        
-        // Bullets
-        for(let i=bullets.length-1; i>=0; i--) {
-            let b=bullets[i];
-            if(b.s.grav && !Phys.top) b.vy += b.s.grav*(Phys.g<0?-1:1);
-            if(b.s.seek) { let t=b.o==1?p2:p1, ang=Math.atan2((t.y+t.h/2)-b.y, (t.x+t.w/2)-b.x); b.vx+=Math.cos(ang)*0.5; b.vy+=Math.sin(ang)*0.5; }
-            b.x+=b.vx*Phys.ts; b.y+=b.vy*Phys.ts; b.l-=Phys.ts;
-            let hit=false, t=getTileAtPx(b.x,b.y);
-            if(t && t.s) {
-                if(b.s.bnc) { let tx=Math.floor(b.x/TILE)*TILE; if(b.x<tx+4||b.x>tx+28) b.vx*=-1; else b.vy*=-1; }
-                else { hit=true; if(t.brk) { map[Math.floor(b.y/TILE)][Math.floor(b.x/TILE)]=0; Audio.play('boom'); } }
-            }
-            let tgt=b.o==1?p2:p1;
-            if(b.x>tgt.x && b.x<tgt.x+tgt.w && b.y>tgt.y && b.y<tgt.y+tgt.h) {
-                tgt.hp-=b.dmg; if(Phys.vamp){let a=b.o==1?p1:p2; a.hp=Math.min(100,a.hp+10);}
-                hit=true; part(b.x,b.y,6,'#f00'); if(tgt.hp<=0) tgt.die();
-            }
-            if(hit || b.l<=0) { if(b.s.exp){Audio.play('boom'); explode(b.x,b.y,b.s.rad||60);} bullets.splice(i,1); part(b.x,b.y,3,b.s.col); }
-        }
-
-        draw(); 
-        frame++;
-    } catch(e) {
-        console.error(e);
-        document.getElementById('debug-log').innerHTML = "CRASH: " + e.message;
     }
+    
+    for(let i=bullets.length-1; i>=0; i--) {
+        let b=bullets[i];
+        if(b.s.grav && !Phys.top) b.vy += b.s.grav*(Phys.g<0?-1:1);
+        if(b.s.seek) { let t=b.o==1?p2:p1, ang=Math.atan2((t.y+t.h/2)-b.y, (t.x+t.w/2)-b.x); b.vx+=Math.cos(ang)*0.5; b.vy+=Math.sin(ang)*0.5; }
+        b.x+=b.vx*Phys.ts; b.y+=b.vy*Phys.ts; b.l-=Phys.ts;
+        let hit=false, t=getTileAtPx(b.x,b.y);
+        if(t && t.s) {
+            if(b.s.bnc) { let tx=Math.floor(b.x/TILE)*TILE; if(b.x<tx+4||b.x>tx+28) b.vx*=-1; else b.vy*=-1; }
+            else { hit=true; if(t.brk) { map[Math.floor(b.y/TILE)][Math.floor(b.x/TILE)]=0; Audio.play('boom'); } }
+        }
+        let tgt=b.o==1?p2:p1;
+        if(b.x>tgt.x && b.x<tgt.x+tgt.w && b.y>tgt.y && b.y<tgt.y+tgt.h) {
+            tgt.hp-=b.dmg; if(Phys.vamp){let a=b.o==1?p1:p2; a.hp=Math.min(100,a.hp+10);}
+            hit=true; part(b.x,b.y,6,'#f00'); if(tgt.hp<=0) tgt.die();
+        }
+        if(hit || b.l<=0) { if(b.s.exp){Audio.play('boom'); explode(b.x,b.y,b.s.rad||60);} bullets.splice(i,1); part(b.x,b.y,3,b.s.col); }
+    }
+
+    draw(); frame++;
 }
 
 function draw() {
     ctx.fillStyle = Phys.disco ? `hsl(${frame%360},60%,10%)` : '#050505';
     ctx.fillRect(0,0,w,h);
-
     ctx.save();
     if(shake>0) { ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake); shake*=0.9; }
     if(Phys.g<0) { ctx.translate(0, h); ctx.scale(1, -1); }
@@ -471,15 +430,13 @@ function draw() {
 
     bullets.forEach(b=>{ctx.fillStyle=b.s.col; ctx.beginPath(); ctx.arc(b.x,b.y,3,0,7); ctx.fill();});
     
-    // Draw P1
     if(!Phys.vamp) {
-        ctx.fillStyle=p1.col; ctx.fillRect(p1.x,p1.y,p1.w,p1.h);
+        ctx.fillStyle=p1.color; ctx.fillRect(p1.x,p1.y,p1.w,p1.h);
         ctx.fillStyle='#f00'; ctx.fillRect(p1.x, p1.y-8, p1.w, 3);
         ctx.fillStyle='#0f0'; ctx.fillRect(p1.x, p1.y-8, p1.w*(p1.hp/100), 3);
     }
-    // Draw P2
-    if(!Phys.vamp || p2.id===2) { // Logic fix for vamp invis
-        ctx.fillStyle=p2.col; ctx.fillRect(p2.x,p2.y,p2.w,p2.h);
+    if(!Phys.vamp || p2.id===2) {
+        ctx.fillStyle=p2.color; ctx.fillRect(p2.x,p2.y,p2.w,p2.h);
         ctx.fillStyle='#f00'; ctx.fillRect(p2.x, p2.y-8, p2.w, 3);
         ctx.fillStyle='#0f0'; ctx.fillRect(p2.x, p2.y-8, p2.w*(p2.hp/100), 3);
     }
@@ -497,7 +454,6 @@ function draw() {
     }
 }
 
-// Helpers
 function trigEff(i) {
     if(activeEff!==null && EFFECTS[activeEff].off) EFFECTS[activeEff].off();
     Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0};
@@ -519,8 +475,8 @@ function buildPalette(){
         p.appendChild(b);
     });
 }
-function saveMap(){localStorage.setItem('chaos_safe',JSON.stringify(map)); alert('Saved!');}
-function loadMap(){let d=localStorage.getItem('chaos_safe'); if(d){map=JSON.parse(d); alert('Loaded!');}}
+function saveMap(){localStorage.setItem('chaos_v4',JSON.stringify(map)); alert('Saved!');}
+function loadMap(){let d=localStorage.getItem('chaos_v4'); if(d){map=JSON.parse(d); alert('Loaded!');}}
 function clearMap(){map=map.map(r=>r.fill(0));}
 
 init();
