@@ -2,53 +2,36 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Neon Chaos PvP [Fixed Layout]</title>
+    <title>Neon Chaos PvP [Safe Mode]</title>
     <style>
         :root { --bg: #050505; --ui: #1a1a1a; --accent: #00ffcc; --p1: #ff4444; --p2: #4444ff; }
         
         body { 
-            margin: 0; padding: 0; 
-            height: 100vh; width: 100vw;
-            overflow: hidden; 
-            background: var(--bg); 
-            font-family: 'Segoe UI', monospace; 
-            color: white; 
-            user-select: none;
-            
-            /* FLEX LAYOUT TO SEPARATE GAME AND MENU */
-            display: flex;
-            flex-direction: column;
+            margin: 0; overflow: hidden; background: var(--bg); 
+            font-family: 'Segoe UI', monospace; color: white; 
+            user-select: none; touch-action: none;
         }
 
-        /* GAME CONTAINER (Takes remaining space) */
-        #game-container {
-            flex: 1;
-            position: relative;
-            overflow: hidden;
-            background: #000;
-        }
-
+        /* CANVAS - ABSOLUTE POSITIONING (Safer) */
         canvas { 
-            display: block; 
-            width: 100%; 
-            height: 100%; 
+            position: absolute; top: 0; left: 0; 
+            display: block; z-index: 1;
         }
         
-        /* HUD (Overlays the game, but at top) */
+        /* HUD - TOP LAYER */
         .hud { 
-            position: absolute; top: 0; left: 0; right: 0;
+            position: absolute; top: 0; left: 0; right: 0; height: 80px;
             display: flex; justify-content: space-between; padding: 10px 20px;
             background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
-            pointer-events: none;
-            z-index: 10;
+            pointer-events: none; z-index: 10;
         }
         .score-box { display: flex; flex-direction: column; text-shadow: 0 2px 0 #000; font-weight: 900; }
         .score-val { font-size: 32px; line-height: 1; }
         .gun-name { font-size: 12px; opacity: 0.8; letter-spacing: 1px; }
 
         #center-msg {
-            position: absolute; top: 60px; left: 0; right: 0;
-            text-align: center; pointer-events: none;
+            position: absolute; top: 50px; left: 0; right: 0;
+            text-align: center; pointer-events: none; z-index: 10;
         }
         #effect-banner {
             font-size: 24px; color: #fff; font-weight: bold;
@@ -56,97 +39,72 @@
             opacity: 0; transition: opacity 0.3s;
         }
 
-        /* TOOLBAR (Dedicated space at bottom, no overlap) */
+        /* TOOLBAR - BOTTOM LAYER */
         #toolbar {
-            height: 60px;
-            background: var(--ui);
-            border-top: 1px solid #444;
-            display: flex; align-items: center; gap: 10px;
-            padding: 0 10px;
-            overflow-x: auto;
-            flex-shrink: 0; /* Prevent shrinking */
+            position: absolute; bottom: 0; left: 0; right: 0; height: 50px;
+            background: var(--ui); border-top: 1px solid #444;
+            display: flex; align-items: center; gap: 8px; padding: 0 10px;
             z-index: 20;
         }
         
-        #toolbar::-webkit-scrollbar { height: 4px; }
-        #toolbar::-webkit-scrollbar-thumb { background: #555; }
-
-        .sep { width: 1px; height: 30px; background: #444; margin: 0 5px; }
-
         .tile-btn {
-            width: 34px; height: 34px; border: 1px solid #444; border-radius: 4px;
-            cursor: pointer; position: relative; flex-shrink: 0; 
-            display: flex; align-items: center; justify-content: center; font-size: 10px;
-            transition: 0.1s;
+            width: 32px; height: 32px; border: 1px solid #444; border-radius: 4px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 10px; flex-shrink: 0;
         }
-        .tile-btn:hover { border-color: #fff; transform: translateY(-2px); }
-        .tile-btn.active { border: 2px solid var(--accent); box-shadow: 0 0 8px var(--accent); transform: scale(1.1); }
-        
+        .tile-btn.active { border: 2px solid var(--accent); transform: scale(1.1); }
         .action-btn {
             background: #333; color: #ccc; border: 1px solid #444;
-            padding: 0 12px; height: 34px; border-radius: 4px;
+            padding: 0 10px; height: 32px; border-radius: 4px;
             font-size: 11px; font-weight: bold; cursor: pointer;
-            white-space: nowrap;
         }
-        .action-btn:hover { background: #555; color: #fff; }
+
+        /* ERROR LOG ON SCREEN */
+        #debug-log {
+            position: absolute; bottom: 60px; left: 10px; 
+            color: #ff5555; font-size: 12px; font-family: monospace;
+            z-index: 30; pointer-events: none; text-shadow: 1px 1px 0 #000;
+        }
     </style>
 </head>
 <body>
 
-<div id="game-container">
     <canvas id="cvs"></canvas>
     
     <div class="hud">
-        <div class="score-box" style="color:var(--p1); text-align:left;">
-            <div class="score-val" id="s1">0</div>
-            <div class="gun-name" id="g1">PISTOL</div>
-        </div>
-        
-        <div id="center-msg">
-            <div id="effect-banner">CHAOS MODE</div>
-            <div style="font-size:11px; color:#666; margin-top:5px;">P1: WASD+E | P2: ARROWS+ENT</div>
-        </div>
-
-        <div class="score-box" style="color:var(--p2); text-align:right;">
-            <div class="score-val" id="s2">0</div>
-            <div class="gun-name" id="g2">PISTOL</div>
-        </div>
+        <div class="score-box" style="color:var(--p1)"><div class="score-val" id="s1">0</div><div class="gun-name" id="g1">PISTOL</div></div>
+        <div class="score-box" style="color:var(--p2);text-align:right"><div class="score-val" id="s2">0</div><div class="gun-name" id="g2">PISTOL</div></div>
     </div>
-</div>
 
-<div id="toolbar">
-    <div id="palette" style="display:flex; gap:4px;"></div>
-    <div class="sep"></div>
-    <button class="action-btn" onclick="saveMap()">SAVE</button>
-    <button class="action-btn" onclick="loadMap()">LOAD</button>
-    <button class="action-btn" onclick="clearMap()">CLEAR</button>
-    <button class="action-btn" style="color:#f66; border-color:#633;" onclick="resetGame()">RESET</button>
-</div>
+    <div id="center-msg">
+        <div id="effect-banner">CHAOS MODE</div>
+        <div style="font-size:11px; color:#aaa; margin-top:5px;">P1: WASD+E | P2: ARROWS+ENT</div>
+    </div>
+
+    <div id="toolbar">
+        <div id="palette" style="display:flex; gap:4px; overflow-x:auto; width:100%;"></div>
+        <div style="width:1px; height:20px; background:#444; flex-shrink:0;"></div>
+        <button class="action-btn" onclick="saveMap()">SV</button>
+        <button class="action-btn" onclick="loadMap()">LD</button>
+        <button class="action-btn" onclick="clearMap()">CL</button>
+        <button class="action-btn" style="color:#f66" onclick="resetGame()">R</button>
+    </div>
+
+    <div id="debug-log"></div>
 
 <script>
-/** ENGINE */
+// --- ERROR HANDLING ---
+window.onerror = function(msg, url, line) {
+    document.getElementById('debug-log').innerHTML += `Error: ${msg} (Line ${line})<br>`;
+};
+
+// --- CONSTANTS ---
 const cvs = document.getElementById('cvs');
 const ctx = cvs.getContext('2d');
 const TILE = 32;
 const MAX_SPEED = 12;
 
-/** SOUND (Simple Synth) */
-const Audio = (function() {
-    let ctx = null; let enabled = false;
-    function init() { if(!ctx){ ctx=new(window.AudioContext||window.webkitAudioContext)(); enabled=true; } if(ctx.state==='suspended')ctx.resume(); }
-    function play(type) {
-        if(!enabled) return;
-        const o=ctx.createOscillator(), g=ctx.createGain(), n=ctx.currentTime;
-        o.connect(g); g.connect(ctx.destination);
-        if(type=='shoot') { o.type='square'; o.frequency.setValueAtTime(300,n); o.frequency.linearRampToValueAtTime(50,n+0.1); g.gain.setValueAtTime(0.05,n); g.gain.linearRampToValueAtTime(0,n+0.1); o.start(n); o.stop(n+0.1); }
-        if(type=='jump') { o.type='sine'; o.frequency.setValueAtTime(150,n); o.frequency.linearRampToValueAtTime(300,n+0.1); g.gain.setValueAtTime(0.1,n); g.gain.linearRampToValueAtTime(0,n+0.15); o.start(n); o.stop(n+0.15); }
-        if(type=='boom') { o.type='sawtooth'; o.frequency.setValueAtTime(100,n); o.frequency.exponentialRampToValueAtTime(10,n+0.3); g.gain.setValueAtTime(0.1,n); g.gain.linearRampToValueAtTime(0,n+0.3); o.start(n); o.stop(n+0.3); }
-        if(type=='pick') { o.type='triangle'; o.frequency.setValueAtTime(600,n); o.frequency.setValueAtTime(1200,n+0.1); g.gain.setValueAtTime(0.05,n); g.gain.linearRampToValueAtTime(0,n+0.2); o.start(n); o.stop(n+0.2); }
-    }
-    return {init, play};
-})();
-
-/** ASSETS */
+// --- ASSETS ---
 const TILES = [
     { n:'Air', c:null, s:0 },
     { n:'Wall', c:'#444', s:1 },
@@ -201,152 +159,150 @@ const EFFECTS = [
     { n:"DISCO MODE", t:600, on:()=>{Phys.disco=1}, off:()=>{Phys.disco=0} }
 ];
 
-/** STATE */
+// --- STATE ---
 let Phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-let map=[], cols, rows, w, h;
+let map=[], cols=0, rows=0, w=100, h=100;
 let parts=[], bullets=[], boxes=[];
 let p1, p2, frame=0, shake=0;
 let editTile=1, mouse={x:0,y:0,down:0,btn:0};
 let activeEff=null, effTimer=0;
 const keys={};
 
+// --- SOUND ---
+const Audio = (function() {
+    let ax = null, en = false;
+    function init() { if(!ax){ax=new(window.AudioContext||window.webkitAudioContext)(); en=true;} if(ax.state=='suspended')ax.resume(); }
+    function play(t) {
+        if(!en)return;
+        const o=ax.createOscillator(), g=ax.createGain(), n=ax.currentTime;
+        o.connect(g); g.connect(ax.destination);
+        if(t=='shoot'){o.type='square';o.freq(300,n,50,n+0.1);g.gainVal(0.05,n,0,n+0.1);o.start(n);o.stop(n+0.1);}
+        if(t=='jump'){o.type='sine';o.freq(150,n,300,n+0.1);g.gainVal(0.1,n,0,n+0.15);o.start(n);o.stop(n+0.15);}
+        if(t=='boom'){o.type='sawtooth';o.freq(100,n,10,n+0.3);g.gainVal(0.1,n,0,n+0.3);o.start(n);o.stop(n+0.3);}
+        if(t=='pick'){o.type='triangle';o.freq(600,n,1200,n+0.1);g.gainVal(0.05,n,0,n+0.2);o.start(n);o.stop(n+0.2);}
+    }
+    // Helpers for minification
+    AudioParam.prototype.freq = function(v1,t1,v2,t2){this.setValueAtTime(v1,t1);this.linearRampToValueAtTime(v2,t2);}
+    AudioParam.prototype.gainVal = function(v1,t1,v2,t2){this.setValueAtTime(v1,t1);this.linearRampToValueAtTime(v2,t2);}
+    return {init, play};
+})();
+
+// --- CLASSES ---
 class Player {
-    constructor(id, x, y, col, ctrls) {
-        this.id=id; this.x=x; this.y=y; this.col=col; this.ctrls=ctrls;
+    constructor(id, col, ctrls) {
+        this.id=id; this.col=col; this.ctrls=ctrls;
         this.w=20; this.h=24; this.vx=0; this.vy=0;
         this.hp=100; this.gun=0; this.cd=0; this.score=0; this.face=1; this.ground=false;
+        this.respawn();
     }
-
+    respawn() {
+        this.hp=100; this.gun=0; this.vx=0; this.vy=0;
+        let s = findSpawn(this.id);
+        this.x = s.x; this.y = s.y;
+    }
     update() {
         if(this.hp<=0) return;
+        // Input
+        let l = keys[this.ctrls.l], r = keys[this.ctrls.r], u = keys[this.ctrls.u], d = keys[this.ctrls.d], s = keys[this.ctrls.s];
 
-        // -- INPUT (Forcing Lowercase Fix) --
-        let l = keys[this.ctrls.l], r = keys[this.ctrls.r];
-        let u = keys[this.ctrls.u], d = keys[this.ctrls.d];
-        let s = keys[this.ctrls.s];
-
-        // -- PHYSICS --
-        let mSpd = 1.0 * Phys.spd;
-        let fric = 0.82;
-        let grav = Phys.g;
-
+        // Physics
+        let mSpd = 1.0 * Phys.spd, fric = 0.82, grav = Phys.g;
         if(l) { this.vx -= mSpd; this.face = -1; }
         if(r) { this.vx += mSpd; this.face = 1; }
 
         if(Phys.top) {
-            if(u) this.vy -= mSpd;
-            if(d) this.vy += mSpd;
+            if(u) this.vy -= mSpd; if(d) this.vy += mSpd;
         } else {
-            let cx = this.x+this.w/2, cy = this.y+this.h/2;
-            let t = getTileAtPx(cx,cy);
+            let cx=this.x+this.w/2, cy=this.y+this.h/2;
+            let t=getTileAtPx(cx,cy);
             if(t) {
                 if(t.fric) fric=t.fric;
-                if(t.drag) { this.vy *= 0.85; fric=0.85; }
-                if(t.push) this.vx += t.push;
-                if(t.eff=='heal') this.hp = Math.min(100, this.hp+0.5);
+                if(t.drag) { this.vy*=0.85; fric=0.85; }
+                if(t.push) this.vx+=t.push;
+                if(t.eff=='heal') this.hp=Math.min(100,this.hp+0.5);
                 if(t.kill) this.die();
                 if(t.tele) this.tele(t.tele);
             }
-
-            let jPow = -13 * (grav<0?-1:1);
             if(u) {
-                if(Phys.fly) this.vy -= 0.8 * (grav<0?-1:1);
-                else if(t && t.drag) this.vy = -3.5 * (grav<0?-1:1);
-                else if(this.ground) { this.vy = jPow; this.ground=false; Audio.play('jump'); }
+                if(Phys.fly) this.vy-=0.8*(grav<0?-1:1);
+                else if(t && t.drag) this.vy=-3.5*(grav<0?-1:1);
+                else if(this.ground) { this.vy=-13*(grav<0?-1:1); this.ground=false; Audio.play('jump'); }
             }
             this.vy += grav;
         }
-
-        this.vx *= fric;
-        if(Phys.top) this.vy *= fric;
-        this.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, this.vx));
-        this.vy = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, this.vy));
-        this.w = 20 * Phys.sz; this.h = 24 * Phys.sz;
-
-        if(this.cd>0) this.cd--;
-        if(s && (this.cd<=0 || Phys.inf)) { this.shoot(); if(!Phys.inf) this.vx -= this.face*2; }
+        this.vx*=fric; if(Phys.top)this.vy*=fric;
+        this.vx=Math.max(-MAX_SPEED,Math.min(MAX_SPEED,this.vx));
+        this.vy=Math.max(-MAX_SPEED,Math.min(MAX_SPEED,this.vy));
+        
+        if(this.cd>0)this.cd--;
+        if(s && (this.cd<=0||Phys.inf)) { this.shoot(); if(!Phys.inf)this.vx-=this.face*2; }
 
         this.move();
 
-        if(this.y>h+100 || this.y<-1000) this.die();
-        if(this.x<0) this.x=0; if(this.x>w-this.w) this.x=w-this.w;
+        if(this.y>h+200 || this.y<-2000) this.die();
+        if(this.x<0)this.x=0; if(this.x>w-this.w)this.x=w-this.w;
     }
-
     move() {
-        this.ground = false;
-        this.x += this.vx * Phys.ts; this.col(true);
-        this.y += this.vy * Phys.ts; this.col(false);
+        this.ground=false;
+        this.x+=this.vx*Phys.ts; this.col(true);
+        this.y+=this.vy*Phys.ts; this.col(false);
     }
-
     col(isX) {
         let tx1=Math.floor(this.x/TILE), tx2=Math.floor((this.x+this.w)/TILE);
         let ty1=Math.floor(this.y/TILE), ty2=Math.floor((this.y+this.h)/TILE);
-
-        for(let y=ty1; y<=ty2; y++) {
-            for(let x=tx1; x<=tx2; x++) {
-                let t = TILES[getMap(x,y)];
-                if(!t || !t.s) continue;
-                if(t.ow) {
-                    if(isX || Phys.top || Phys.g<0) continue;
-                    let ft = this.y+this.h-(this.vy*Phys.ts);
-                    if(this.vy>0 && ft <= y*TILE+8) { this.y=y*TILE-this.h-0.01; this.vy=0; this.ground=true; }
-                    continue;
-                }
-                if(isX) {
-                    if(this.vx>0) this.x=x*TILE-this.w; else if(this.vx<0) this.x=(x+1)*TILE;
-                    this.vx=0;
-                } else {
-                    if(this.vy>0) {
-                        this.y=y*TILE-this.h;
-                        if(!Phys.top) {
-                            this.vy=0; this.ground=true;
-                            if(t.jump) { this.vy = t.jump*(Phys.g<0?-1:1); this.ground=false; Audio.play('jump'); }
-                            if(t.bnc) { this.vy = -12*(Phys.g<0?-1:1); this.ground=false; Audio.play('jump'); }
-                            if(t.crm) map[y][x]=0;
-                        }
-                    } else if(this.vy<0) {
-                        this.y=(y+1)*TILE;
-                        if(!Phys.top) {
-                            this.vy=0;
-                            if(Phys.g<0) { this.ground=true; if(t.jump){this.vy=t.jump*-1; this.ground=false;} }
-                        }
-                        if(t.brk) { map[y][x]=0; Audio.play('boom'); }
+        for(let y=ty1;y<=ty2;y++) for(let x=tx1;x<=tx2;x++) {
+            let t=TILES[getMap(x,y)];
+            if(!t || !t.s) continue;
+            if(t.ow) {
+                if(isX || Phys.top || Phys.g<0) continue;
+                let ft=this.y+this.h-(this.vy*Phys.ts);
+                if(this.vy>0 && ft<=y*TILE+8) { this.y=y*TILE-this.h-0.01; this.vy=0; this.ground=true; }
+                continue;
+            }
+            if(isX) {
+                if(this.vx>0)this.x=x*TILE-this.w; else if(this.vx<0)this.x=(x+1)*TILE;
+                this.vx=0;
+            } else {
+                if(this.vy>0) {
+                    this.y=y*TILE-this.h;
+                    if(!Phys.top){
+                        this.vy=0; this.ground=true;
+                        if(t.jump){this.vy=t.jump*(Phys.g<0?-1:1);this.ground=false;Audio.play('jump');}
+                        if(t.bnc){this.vy=-12*(Phys.g<0?-1:1);this.ground=false;Audio.play('jump');}
+                        if(t.crm)map[y][x]=0;
                     }
+                } else if(this.vy<0) {
+                    this.y=(y+1)*TILE;
+                    if(!Phys.top){this.vy=0; if(Phys.g<0){this.ground=true; if(t.jump){this.vy=t.jump*-1;this.ground=false;}}}
+                    if(t.brk){map[y][x]=0;Audio.play('boom');}
                 }
             }
         }
     }
-
     shoot() {
         Audio.play('shoot');
         let g=GUNS[this.gun]; this.cd=g.cd;
         let dmg=Phys.glass?100:g.dmg;
-        for(let i=0; i<g.c; i++) {
-            let a = (this.face==1?0:Math.PI) + (Math.random()-0.5)*(g.spr||0);
-            if(Phys.top) { if(keys[this.ctrls.u])a=-Math.PI/2; else if(keys[this.ctrls.d])a=Math.PI/2; else if(keys[this.ctrls.l])a=Math.PI; else if(keys[this.ctrls.r])a=0; }
+        for(let i=0;i<g.c;i++){
+            let a=(this.face==1?0:Math.PI)+(Math.random()-0.5)*(g.spr||0);
+            if(Phys.top){if(keys[this.ctrls.u])a=-Math.PI/2; else if(keys[this.ctrls.d])a=Math.PI/2; else if(keys[this.ctrls.l])a=Math.PI; else if(keys[this.ctrls.r])a=0;}
             bullets.push({x:this.x+this.w/2, y:this.y+this.h/2, vx:Math.cos(a)*g.spd, vy:Math.sin(a)*g.spd, s:g, o:this.id, l:g.life||80, dmg:dmg});
         }
     }
-
     die() {
         Audio.play('boom'); explode(this.x,this.y,30);
-        if(this.id==1) p2.score++; else p1.score++;
-        this.hp=100; this.gun=0; this.vx=0; this.vy=0; Phys.sz=1;
-        let s=findSpawn(); this.x=s.x; this.y=s.y;
-        updateHud();
+        if(this.id==1)p2.score++; else p1.score++;
+        this.respawn(); updateHud();
     }
-    tele(id){ for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){let t=TILES[map[y][x]];if(t.tele&&t.tele!=id){this.x=x*TILE;this.y=y*TILE;return;}} }
+    tele(id){for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){let t=TILES[map[y][x]];if(t.tele&&t.tele!=id){this.x=x*TILE;this.y=y*TILE;return;}}}
 }
 
 class Box {
-    constructor(eff) { this.eff=eff; this.life=0; this.w=20; this.h=20; this.respawn(); }
+    constructor(eff) { this.eff=eff; this.w=20; this.h=20; this.respawn(); }
     respawn() {
         this.life=600; this.gun=Math.floor(Math.random()*GUNS.length); this.ei=Math.floor(Math.random()*EFFECTS.length);
-        for(let i=0;i<50;i++) {
-            let x=Math.floor(Math.random()*(cols-2))+1, y=Math.floor(Math.random()*(rows-4))+1;
-            if(!getTileAtPx(x*TILE,y*TILE)?.s) { this.x=x*TILE+6; this.y=y*TILE+6; return; }
-        }
-        this.x=w/2; this.y=100;
+        let s = findSpawn(-1); // -1 = random
+        this.x=s.x; this.y=s.y;
     }
     update() {
         this.life-=Phys.ts;
@@ -363,9 +319,8 @@ class Box {
     }
 }
 
-/** SYSTEM */
+// --- CORE ---
 function init() {
-    // Key Handler with Lowercase Normalization
     window.addEventListener('keydown', e => {
         let k = e.key.toLowerCase();
         if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
@@ -373,13 +328,10 @@ function init() {
         if(k=='r') resetGame();
     }, {passive:false});
     window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-    
+
     cvs.onmousedown = e => { Audio.init(); mouse.down=1; mouse.btn=e.button; handleEdit(); };
     window.onmouseup = () => mouse.down=0;
-    cvs.onmousemove = e => { 
-        let r=cvs.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; 
-        if(mouse.down) handleEdit(); 
-    };
+    cvs.onmousemove = e => { let r=cvs.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; if(mouse.down)handleEdit(); };
     cvs.oncontextmenu = e => e.preventDefault();
     window.onresize = resize;
 
@@ -389,72 +341,118 @@ function init() {
     loop();
 }
 
+function resize() {
+    w = window.innerWidth;
+    h = window.innerHeight - 50; // Toolbar space
+    if(h < 100) h = 100;
+    cvs.width = w; cvs.height = h;
+    
+    let old = map;
+    cols = Math.ceil(w/TILE); rows = Math.ceil(h/TILE);
+    
+    // Create new Map
+    map = [];
+    for(let y=0; y<rows; y++) {
+        let r = [];
+        for(let x=0; x<cols; x++) {
+            if(x==0 || x==cols-1 || y==0 || y==rows-1) r.push(1);
+            else if(y==rows-2 && x%6==0) r.push(2); // Jump
+            else if(y==rows-5 && x>5 && x<cols-5) r.push(11); // Plat
+            else r.push(0);
+        }
+        map.push(r);
+    }
+    
+    // Copy old map if exists
+    if(old.length > 0) {
+        for(let y=0; y<Math.min(rows,old.length); y++)
+            for(let x=0; x<Math.min(cols,old[0].length); x++)
+                map[y][x] = old[y][x];
+    }
+}
+
+function findSpawn(id) {
+    // Try to find a safe spot (Air with Wall/Platform below)
+    let best = {x:w/2, y:100};
+    let found = false;
+    let startX = (id === 2) ? cols - 5 : 5; // Preference sides
+    if(id === -1) startX = Math.floor(Math.random()*(cols-4))+2;
+    
+    // Simple scan
+    for(let i=0; i<1000; i++) {
+        let x = Math.floor(Math.random()*(cols-4))+2;
+        let y = Math.floor(Math.random()*(rows-5))+2;
+        
+        let t = getTileAtPx(x*TILE, y*TILE);
+        let below = getTileAtPx(x*TILE, (y+1)*TILE);
+        
+        if (t && !t.s && below && below.s) {
+            return {x: x*TILE + 6, y: y*TILE - 24};
+        }
+    }
+    return {x: 100, y: 100}; // Fallback
+}
+
 function resetGame() {
-    // Ensuring P1 uses lowercase 'w','a','s','d'
-    p1 = new Player(1, 100, 100, '#ff4444', {l:'a',r:'d',u:'w',d:'s',s:'e'});
-    // Ensuring P2 uses lowercase 'arrow...'
-    p2 = new Player(2, w-100, 100, '#4444ff', {l:'arrowleft',r:'arrowright',u:'arrowup',d:'arrowdown',s:'enter'});
+    // Clean state
+    activeEff=null; Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0};
+    document.getElementById('effect-banner').style.opacity=0;
+    
+    // Ensure P1 uses WASD
+    p1 = new Player(1, '#ff4444', {l:'a',r:'d',u:'w',d:'s',s:'e'});
+    // Ensure P2 uses Arrows
+    p2 = new Player(2, '#4444ff', {l:'arrowleft',r:'arrowright',u:'arrowup',d:'arrowdown',s:'enter'});
     
     bullets=[]; parts=[]; boxes=[];
-    for(let i=0; i<3; i++) boxes.push(new Box(false));
-    for(let i=0; i<2; i++) boxes.push(new Box(true));
+    for(let i=0;i<3;i++) boxes.push(new Box(false));
+    for(let i=0;i<2;i++) boxes.push(new Box(true));
     
-    if(activeEff!==null && EFFECTS[activeEff].off) EFFECTS[activeEff].off();
-    Phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-    document.getElementById('effect-banner').style.opacity = 0;
     updateHud();
 }
 
 function loop() {
     requestAnimationFrame(loop);
-    if(keys['l']) keys['enter']=true; // Alt shoot
+    try {
+        if(keys['l']) keys['enter']=true; 
 
-    if(effTimer>0) {
-        effTimer-=Phys.ts;
-        if(effTimer<=0) {
-            EFFECTS[activeEff].off();
-            Phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-            document.getElementById('effect-banner').style.opacity=0;
-        }
-    }
-    if(Phys.disco) shake=2;
+        // Effects
+        if(effTimer>0){effTimer-=Phys.ts; if(effTimer<=0){EFFECTS[activeEff].off(); Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0}; document.getElementById('effect-banner').style.opacity=0;}}
+        if(Phys.disco) shake=2;
 
-    [p1,p2].forEach(p=>p.update());
-    boxes.forEach(b=>b.update());
-    
-    for(let i=bullets.length-1; i>=0; i--) {
-        let b=bullets[i];
-        if(b.s.grav && !Phys.top) b.vy += b.s.grav*(Phys.g<0?-1:1);
-        if(b.s.seek) {
-            let t=b.o==1?p2:p1, ang=Math.atan2((t.y+t.h/2)-b.y, (t.x+t.w/2)-b.x);
-            b.vx+=Math.cos(ang)*0.5; b.vy+=Math.sin(ang)*0.5;
+        [p1,p2].forEach(p=>p.update());
+        boxes.forEach(b=>b.update());
+        
+        // Bullets
+        for(let i=bullets.length-1; i>=0; i--) {
+            let b=bullets[i];
+            if(b.s.grav && !Phys.top) b.vy += b.s.grav*(Phys.g<0?-1:1);
+            if(b.s.seek) { let t=b.o==1?p2:p1, ang=Math.atan2((t.y+t.h/2)-b.y, (t.x+t.w/2)-b.x); b.vx+=Math.cos(ang)*0.5; b.vy+=Math.sin(ang)*0.5; }
+            b.x+=b.vx*Phys.ts; b.y+=b.vy*Phys.ts; b.l-=Phys.ts;
+            let hit=false, t=getTileAtPx(b.x,b.y);
+            if(t && t.s) {
+                if(b.s.bnc) { let tx=Math.floor(b.x/TILE)*TILE; if(b.x<tx+4||b.x>tx+28) b.vx*=-1; else b.vy*=-1; }
+                else { hit=true; if(t.brk) { map[Math.floor(b.y/TILE)][Math.floor(b.x/TILE)]=0; Audio.play('boom'); } }
+            }
+            let tgt=b.o==1?p2:p1;
+            if(b.x>tgt.x && b.x<tgt.x+tgt.w && b.y>tgt.y && b.y<tgt.y+tgt.h) {
+                tgt.hp-=b.dmg; if(Phys.vamp){let a=b.o==1?p1:p2; a.hp=Math.min(100,a.hp+10);}
+                hit=true; part(b.x,b.y,6,'#f00'); if(tgt.hp<=0) tgt.die();
+            }
+            if(hit || b.l<=0) { if(b.s.exp){Audio.play('boom'); explode(b.x,b.y,b.s.rad||60);} bullets.splice(i,1); part(b.x,b.y,3,b.s.col); }
         }
-        b.x+=b.vx*Phys.ts; b.y+=b.vy*Phys.ts; b.l-=Phys.ts;
-        let hit=false, t=getTileAtPx(b.x,b.y);
-        if(t && t.s) {
-            if(b.s.bnc) { let tx=Math.floor(b.x/TILE)*TILE; if(b.x<tx+4||b.x>tx+28) b.vx*=-1; else b.vy*=-1; }
-            else { hit=true; if(t.brk) { map[Math.floor(b.y/TILE)][Math.floor(b.x/TILE)]=0; Audio.play('boom'); } }
-        }
-        let tgt=b.o==1?p2:p1;
-        if(b.x>tgt.x && b.x<tgt.x+tgt.w && b.y>tgt.y && b.y<tgt.y+tgt.h) {
-            tgt.hp-=b.dmg; if(Phys.vamp){let a=b.o==1?p1:p2; a.hp=Math.min(100,a.hp+10);}
-            hit=true; part(b.x,b.y,6,'#f00'); if(tgt.hp<=0) tgt.die();
-        }
-        if(hit || b.l<=0) { if(b.s.exp){Audio.play('boom'); explode(b.x,b.y,b.s.rad||60);} bullets.splice(i,1); part(b.x,b.y,3,b.s.col); }
+
+        draw(); 
+        frame++;
+    } catch(e) {
+        console.error(e);
+        document.getElementById('debug-log').innerHTML = "CRASH: " + e.message;
     }
-    
-    draw(); frame++;
 }
 
 function draw() {
     ctx.fillStyle = Phys.disco ? `hsl(${frame%360},60%,10%)` : '#050505';
     ctx.fillRect(0,0,w,h);
-    if(!Phys.disco) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.beginPath();
-        for(let x=0;x<w;x+=TILE){ctx.moveTo(x,0);ctx.lineTo(x,h);}
-        for(let y=0;y<h;y+=TILE){ctx.moveTo(0,y);ctx.lineTo(w,y);}
-        ctx.stroke();
-    }
+
     ctx.save();
     if(shake>0) { ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake); shake*=0.9; }
     if(Phys.g<0) { ctx.translate(0, h); ctx.scale(1, -1); }
@@ -472,10 +470,23 @@ function draw() {
     }
 
     bullets.forEach(b=>{ctx.fillStyle=b.s.col; ctx.beginPath(); ctx.arc(b.x,b.y,3,0,7); ctx.fill();});
-    drawP(p1); drawP(p2);
-    parts.forEach((p,i)=>{ p.x+=p.vx; p.y+=p.vy; p.l--; ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,p.s,p.s); if(p.l<=0)parts.splice(i,1); });
     
+    // Draw P1
+    if(!Phys.vamp) {
+        ctx.fillStyle=p1.col; ctx.fillRect(p1.x,p1.y,p1.w,p1.h);
+        ctx.fillStyle='#f00'; ctx.fillRect(p1.x, p1.y-8, p1.w, 3);
+        ctx.fillStyle='#0f0'; ctx.fillRect(p1.x, p1.y-8, p1.w*(p1.hp/100), 3);
+    }
+    // Draw P2
+    if(!Phys.vamp || p2.id===2) { // Logic fix for vamp invis
+        ctx.fillStyle=p2.col; ctx.fillRect(p2.x,p2.y,p2.w,p2.h);
+        ctx.fillStyle='#f00'; ctx.fillRect(p2.x, p2.y-8, p2.w, 3);
+        ctx.fillStyle='#0f0'; ctx.fillRect(p2.x, p2.y-8, p2.w*(p2.hp/100), 3);
+    }
+
+    parts.forEach((p,i)=>{ p.x+=p.vx; p.y+=p.vy; p.l--; ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,p.s,p.s); if(p.l<=0)parts.splice(i,1); });
     ctx.restore();
+
     let mx=Math.floor(mouse.x/TILE)*TILE, my=Math.floor(mouse.y/TILE)*TILE;
     ctx.strokeStyle='#fff'; ctx.strokeRect(mx,my,TILE,TILE);
     
@@ -486,18 +497,10 @@ function draw() {
     }
 }
 
-function drawP(p) {
-    if(Phys.vamp && p.id!==1) return;
-    ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,p.w,p.h);
-    ctx.fillStyle='#fff'; let off=p.face==1?p.w:-12; if(Phys.top) off=p.w/2-6;
-    ctx.fillRect(p.x+off, p.y+p.h/2, 12, 4);
-    ctx.fillStyle='#f00'; ctx.fillRect(p.x, p.y-8, p.w, 3);
-    ctx.fillStyle='#0f0'; ctx.fillRect(p.x, p.y-8, p.w*(p.hp/100), 3);
-}
-
+// Helpers
 function trigEff(i) {
     if(activeEff!==null && EFFECTS[activeEff].off) EFFECTS[activeEff].off();
-    Phys={g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0};
+    Phys={g:0.6,top:0,ts:1,spd:1,sz:1,fly:0,vamp:0,glass:0,inf:0,dark:0,disco:0};
     activeEff=i; effTimer=EFFECTS[i].t; EFFECTS[i].on();
     let b=document.getElementById('effect-banner'); b.innerText=EFFECTS[i].n; b.style.opacity=1; shake=5;
 }
@@ -507,14 +510,6 @@ function getMap(x,y){if(x<0||x>=cols||y<0||y>=rows)return 1; return map[y][x];}
 function getTileAtPx(x,y){return TILES[getMap(Math.floor(x/TILE), Math.floor(y/TILE))];}
 function handleEdit(){let tx=Math.floor(mouse.x/TILE), ty=Math.floor(mouse.y/TILE); if(tx>=0&&tx<cols&&ty>=0&&ty<rows){if(mouse.btn==0)map[ty][tx]=editTile; if(mouse.btn==2)map[ty][tx]=0;}}
 function updateHud(){document.getElementById('s1').innerText=p1.score; document.getElementById('s2').innerText=p2.score; document.getElementById('g1').innerText=GUNS[p1.gun].n; document.getElementById('g2').innerText=GUNS[p2.gun].n;}
-function findSpawn(){return {x:w/2, y:100};}
-function resize(){
-    let box = document.getElementById('game-container').getBoundingClientRect();
-    w=box.width; h=box.height; cvs.width=w; cvs.height=h;
-    let old=map; cols=Math.ceil(w/TILE); rows=Math.ceil(h/TILE);
-    map=[]; for(let y=0;y<rows;y++){let r=[];for(let x=0;x<cols;x++){if(x==0||x==cols-1||y==0||y==rows-1)r.push(1);else if(y==rows-2&&x%6==0)r.push(2);else if(y==rows-5&&x>5&&x<cols-5)r.push(11);else r.push(0);}map.push(r);}
-    if(old.length){for(let y=0;y<Math.min(rows,old.length);y++)for(let x=0;x<Math.min(cols,old[0].length);x++)map[y][x]=old[y][x];}
-}
 function buildPalette(){
     let p=document.getElementById('palette');
     TILES.forEach((t,i)=>{
@@ -524,8 +519,8 @@ function buildPalette(){
         p.appendChild(b);
     });
 }
-function saveMap(){localStorage.setItem('chaos_final',JSON.stringify(map)); alert('Saved!');}
-function loadMap(){let d=localStorage.getItem('chaos_final'); if(d){map=JSON.parse(d); alert('Loaded!');}}
+function saveMap(){localStorage.setItem('chaos_safe',JSON.stringify(map)); alert('Saved!');}
+function loadMap(){let d=localStorage.getItem('chaos_safe'); if(d){map=JSON.parse(d); alert('Loaded!');}}
 function clearMap(){map=map.map(r=>r.fill(0));}
 
 init();
