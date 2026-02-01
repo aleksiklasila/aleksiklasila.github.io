@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Jump-Tile Arena PvP</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Courier New', Courier, monospace;
+            color: white;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .hud {
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 2px 2px 0 #000;
+        }
+        #menu, #editor-ui {
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.85);
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 40px;
+            text-align: center;
+            border: 2px solid #fff;
+            border-radius: 10px;
+        }
+        button {
+            background: #444;
+            color: white;
+            border: 2px solid white;
+            padding: 10px 20px;
+            margin: 10px;
+            font-family: inherit;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #666;
+            transform: scale(1.05);
+        }
+        .hidden { display: none !important; }
+        #editor-palette {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            display: flex;
+            gap: 5px;
+            pointer-events: auto;
+            border-radius: 8px;
+        }
+        .tile-btn {
+            width: 30px;
+            height: 30px;
+            border: 1px solid white;
+            cursor: pointer;
+        }
+        .selected { border: 2px solid yellow; transform: scale(1.2); }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="hud" id="hud">
+            <span style="color: #ff4444">P1: <span id="p1-score">0</span> | <span id="p1-gun">Pistol</span></span>
+            <span style="color: #4444ff">P2: <span id="p2-score">0</span> | <span id="p2-gun">Pistol</span></span>
+        </div>
+        
+        <div id="menu">
+            <h1>JUMP-TILE ARENA</h1>
+            <p>P1: WASD + E (Shoot) | P2: Arrows + Enter (Shoot)</p>
+            <p style="color: yellow; font-size: 0.8em;">NOTE: You can ONLY jump when standing on Green/Blue pads!</p>
+            <button onclick="startGame()">PLAY GAME</button>
+            <button onclick="openEditor()">MAP EDITOR</button>
+        </div>
+
+        <div id="editor-ui" class="hidden">
+            <h2>MAP EDITOR</h2>
+            <p>Left Click: Place | Right Click: Erase</p>
+            <p>Press 'S' to Save & Play</p>
+            <div id="editor-palette"></div>
+        </div>
+    </div>
+
+<script>
+/**
+ * ENGINE & CONFIGURATION
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const TILE_SIZE = 32;
+let WIDTH, HEIGHT;
+let COLS, ROWS;
+
+// Game State
+let gameState = 'MENU'; // MENU, PLAY, EDITOR
+let frameCount = 0;
+let shakeTime = 0;
+
+// Inputs
+const keys = {};
+
+// Physics Constants
+const GRAVITY = 0.5;
+const FRICTION = 0.8;
+const TERMINAL_VELOCITY = 15;
+
+/**
+ * TILE DEFINITIONS (15+ Types)
+ * IDs: 0=Air, 1=Wall, 2=JumpPad, 3=SuperJump, 4=Spike, 5=Lava, 6=Ice, 7=Mud, 8=Heal, 9=BoxSpawn, 10=RightBoost, 11=LeftBoost, 12=Glass, 13=Bouncy, 14=Decor, 15=Water
+ */
+const TILES = {
+    0: { color: null, solid: false, name: 'Air' },
+    1: { color: '#666', solid: true, name: 'Wall' },
+    2: { color: '#0f0', solid: true, name: 'Jump Pad', isJump: true, force: -12 },
+    3: { color: '#0ff', solid: true, name: 'Super Jump', isJump: true, force: -20 },
+    4: { color: '#888', solid: false, name: 'Spikes', kill: true, draw: 'tri' },
+    5: { color: '#f40', solid: false, name: 'Lava', kill: true },
+    6: { color: '#aef', solid: true, name: 'Ice', friction: 0.98 },
+    7: { color: '#542', solid: true, name: 'Mud', friction: 0.4 },
+    8: { color: '#f0f', solid: false, name: 'Heal', effect: 'heal' },
+    9: { color: '#ffd700', solid: false, name: 'Weapon Spawn', effect: 'spawner' },
+    10: { color: '#aa0', solid: true, name: 'Right Boost', velX: 2 },
+    11: { color: '#aa0', solid: true, name: 'Left Boost', velX: -2 },
+    12: { color: '#acf', solid: true, name: 'Glass', breakable: true },
+    13: { color: '#d0d', solid: true, name: 'Bouncy', bounce: 1.2 },
+    14: { color: '#444', solid: false, name: 'Background' },
+    15: { color: '#00f', solid: false, name: 'Water', drag: 0.8 },
+};
+
+/**
+ * GUN DEFINITIONS (10 Types)
+ */
+const GUNS = [
+    { name: 'Pistol', delay: 20, speed: 10, dmg: 10, spread: 0, count: 1, color: '#fff' },
+    { name: 'Machine Gun', delay: 5, speed: 12, dmg: 4, spread: 0.1, count: 1, color: '#ff0' },
+    { name: 'Shotgun', delay: 40, speed: 10, dmg: 6, spread: 0.3, count: 5, color: '#f00' },
+    { name: 'Sniper', delay: 60, speed: 25, dmg: 50, spread: 0, count: 1, color: '#0f0' },
+    { name: 'Bazooka', delay: 50, speed: 6, dmg: 30, spread: 0, count: 1, size: 8, explode: true, color: '#fa0' },
+    { name: 'Laser', delay: 2, speed: 20, dmg: 1, spread: 0, count: 1, color: '#0ff' },
+    { name: 'Spread Gun', delay: 15, speed: 8, dmg: 5, spread: 0.5, count: 3, color: '#f0f' },
+    { name: 'Minigun', delay: 2, speed: 14, dmg: 2, spread: 0.2, count: 1, color: '#aaa' },
+    { name: 'Grenade Launcher', delay: 40, speed: 8, dmg: 25, spread: 0.1, count: 1, gravity: 0.2, explode: true, color: '#555' },
+    { name: 'Railgun', delay: 90, speed: 40, dmg: 100, spread: 0, count: 1, pierce: true, color: '#fff' }
+];
+
+// Map Data
+let map = [];
+let particles = [];
+let bullets = [];
+let gunBoxes = [];
+let editorTile = 1;
+
+/**
+ * CLASSES
+ */
+class Player {
+    constructor(id, x, y, color, controls) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+        this.w = 24;
+        this.h = 24;
+        this.vx = 0;
+        this.vy = 0;
+        this.color = color;
+        this.controls = controls;
+        this.hp = 100;
+        this.gunIndex = 0;
+        this.shootTimer = 0;
+        this.score = 0;
+        this.grounded = false;
+        this.facing = 1; // 1 right, -1 left
+        this.canJump = false; // Based on tile
+    }
+
+    update() {
+        if (this.hp <= 0) return;
+
+        // Controls
+        let moveSpeed = 1.0; // Acceleration
+        let currentFriction = FRICTION;
+
+        // Apply Input
+        if (keys[this.controls.left]) { this.vx -= moveSpeed; this.facing = -1; }
+        if (keys[this.controls.right]) { this.vx += moveSpeed; this.facing = 1; }
+        
+        // Jump Logic (Restricted)
+        if (keys[this.controls.jump] && this.grounded && this.canJump) {
+            this.vy = this.jumpForce;
+            this.grounded = false;
+            createParticles(this.x + this.w/2, this.y + this.h, 5, '#fff');
+        }
+
+        // Shooting
+        if (this.shootTimer > 0) this.shootTimer--;
+        if (keys[this.controls.shoot] && this.shootTimer <= 0) {
+            this.shoot();
+        }
+
+        // Physics
+        this.vy += GRAVITY;
+        this.vx *= currentFriction;
+        
+        // Clamp speed
+        if(this.vx > TERMINAL_VELOCITY) this.vx = TERMINAL_VELOCITY;
+        if(this.vx < -TERMINAL_VELOCITY) this.vx = -TERMINAL_VELOCITY;
+        if(this.vy > TERMINAL_VELOCITY) this.vy = TERMINAL_VELOCITY;
+
+        // Map Collision
+        this.handleCollisions();
+
+        // Update position
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Screen bounds (Die if fall out)
+        if (this.y > HEIGHT) this.die();
+        if (this.x < 0) this.x = 0;
+        if (this.x > WIDTH - this.w) this.x = WIDTH - this.w;
+    }
+
+    handleCollisions() {
+        this.grounded = false;
+        this.canJump = false;
+
+        // Horizontal
+        let tx1 = Math.floor((this.x + this.vx) / TILE_SIZE);
+        let tx2 = Math.floor((this.x + this.w + this.vx) / TILE_SIZE);
+        let ty1 = Math.floor(this.y / TILE_SIZE);
+        let ty2 = Math.floor((this.y + this.h) / TILE_SIZE);
+
+        if (this.checkSolid(tx1, ty1) || this.checkSolid(tx1, ty2) || 
+            this.checkSolid(tx2, ty1) || this.checkSolid(tx2, ty2)) {
+            this.vx = 0; // Stop
+        }
+
+        // Vertical
+        let nextY = this.y + this.vy;
+        tx1 = Math.floor(this.x / TILE_SIZE);
+        tx2 = Math.floor((this.x + this.w) / TILE_SIZE);
+        let tvy1 = Math.floor(nextY / TILE_SIZE);
+        let tvy2 = Math.floor((nextY + this.h) / TILE_SIZE);
+
+        // Ceiling
+        if (this.vy < 0 && (this.checkSolid(tx1, tvy1) || this.checkSolid(tx2, tvy1))) {
+            this.vy = 0;
+            this.y = (tvy1 + 1) * TILE_SIZE;
+        }
+
+        // Floor
+        if (this.vy >= 0 && (this.checkSolid(tx1, tvy2) || this.checkSolid(tx2, tvy2))) {
+            this.vy = 0;
+            this.y = tvy2 * TILE_SIZE - this.h;
+            this.grounded = true;
+
+            // Check what tile we are standing on to enable jumping
+            this.checkTileEffects(tx1, tvy2);
+            this.checkTileEffects(tx2, tvy2);
+        }
+
+        // Interaction with non-solids (Hazards, Powerups)
+        let cx = Math.floor((this.x + this.w/2) / TILE_SIZE);
+        let cy = Math.floor((this.y + this.h/2) / TILE_SIZE);
+        let tile = getTile(cx, cy);
+        
+        if (tile) {
+            if (tile.kill) this.die();
+            if (tile.effect === 'heal') { this.hp = Math.min(100, this.hp + 0.5); }
+            if (tile.name === 'Water') { this.vy *= 0.8; this.vx *= 0.8; }
+        }
+    }
+
+    checkSolid(x, y) {
+        let t = getTile(x, y);
+        if (!t) return false;
+        if (t.solid) {
+            // Special physics for special solids
+            if (t.bounce) { this.vy = -Math.abs(this.vy) * t.bounce; return true; } // Bouncy logic handles differently ideally, but simplified here
+            return true;
+        }
+        return false;
+    }
+
+    checkTileEffects(tx, ty) {
+        let t = getTile(tx, ty);
+        if (!t) return;
+        
+        if (t.isJump) {
+            this.canJump = true;
+            this.jumpForce = t.force;
+        }
+        if (t.friction) this.vx *= t.friction; // Ice/Mud
+        if (t.velX) this.vx += t.velX; // Boosters
+    }
+
+    shoot() {
+        const gun = GUNS[this.gunIndex];
+        this.shootTimer = gun.delay;
+        
+        for(let i=0; i<gun.count; i++) {
+            let angle = (this.facing === 1 ? 0 : Math.PI);
+            let spread = (Math.random() - 0.5) * gun.spread;
+            let vx = Math.cos(angle + spread) * gun.speed;
+            let vy = Math.sin(angle + spread) * gun.speed;
+            
+            bullets.push(new Bullet(
+                this.x + this.w/2, 
+                this.y + this.h/2, 
+                vx, vy, 
+                gun, 
+                this.id
+            ));
+        }
+        // Recoil
+        this.vx -= (this.facing * (gun.speed * 0.2));
+    }
+
+    die() {
+        createParticles(this.x, this.y, 30, this.color);
+        screenShake(10);
+        // Respawn
+        let spawn = getSpawnPoint();
+        this.x = spawn.x;
+        this.y = spawn.y;
+        this.vx = 0;
+        this.vy = 0;
+        this.hp = 100;
+        this.gunIndex = 0; // Lose gun on death
+        
+        // Give point to other player
+        if (this.id === 1) p2.score++;
+        else p1.score++;
+        updateHud();
+    }
+}
+
+class Bullet {
+    constructor(x, y, vx, vy, stats, ownerId) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.stats = stats;
+        this.ownerId = ownerId;
+        this.life = 100;
+        this.r = stats.size || 3;
+    }
+
+    update() {
+        if (this.stats.gravity) this.vy += this.stats.gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life--;
+
+        // Tile Collision
+        let tx = Math.floor(this.x / TILE_SIZE);
+        let ty = Math.floor(this.y / TILE_SIZE);
+        let tile = getTile(tx, ty);
+        
+        if (tile && tile.solid) {
+            if (tile.breakable) {
+                map[ty][tx] = 0; // Break glass
+                createParticles(tx*TILE_SIZE, ty*TILE_SIZE, 5, '#acf');
+            }
+            this.destroy();
+            return;
+        }
+
+        // Player Collision
+        let target = (this.ownerId === 1) ? p2 : p1;
+        if (target.hp > 0 && 
+            this.x > target.x && this.x < target.x + target.w &&
+            this.y > target.y && this.y < target.y + target.h) {
+            
+            target.hp -= this.stats.dmg;
+            createParticles(this.x, this.y, 5, '#f00'); // Blood
+            if(target.hp <= 0) target.die();
+            this.destroy();
+            return;
+        }
+
+        if (this.life <= 0) this.destroy();
+    }
+
+    destroy() {
+        this.life = 0;
+        if (this.stats.explode) {
+            createExplosion(this.x, this.y);
+            screenShake(5);
+        }
+        createParticles(this.x, this.y, 3, this.stats.color);
+    }
+}
+
+class GunBox {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.w = 20;
+        this.h = 20;
+        this.gunIdx = Math.floor(Math.random() * GUNS.length);
+        this.offset = 0;
+    }
+    
+    update() {
+        this.offset += 0.1;
+        let floatY = this.y + Math.sin(this.offset) * 5;
+
+        // Draw
+        ctx.fillStyle = '#eda';
+        ctx.fillRect(this.x, floatY, this.w, this.h);
+        ctx.strokeStyle = '#fff';
+        ctx.strokeRect(this.x, floatY, this.w, this.h);
+        ctx.fillStyle = '#000';
+        ctx.fillText("?", this.x + 6, floatY + 15);
+
+        // Check pickup
+        [p1, p2].forEach(p => {
+            if (p.x < this.x + this.w && p.x + p.w > this.x &&
+                p.y < floatY + this.h && p.y + p.h > floatY) {
+                p.gunIndex = this.gunIdx;
+                createParticles(this.x, this.y, 10, '#ff0');
+                this.respawn();
+                updateHud();
+            }
+        });
+    }
+
+    respawn() {
+        // Move box to a new random location (simplified: remove and let spawner logic handle it)
+        this.x = -999; 
+        // Force immediate respawn logic elsewhere or just move it to a valid spawn tile
+        let spawns = [];
+        for(let y=0; y<ROWS; y++) {
+            for(let x=0; x<COLS; x++) {
+                if(map[y][x] === 9) spawns.push({x: x*TILE_SIZE, y: y*TILE_SIZE});
+            }
+        }
+        if(spawns.length > 0) {
+            let s = spawns[Math.floor(Math.random() * spawns.length)];
+            this.x = s.x + 6;
+            this.y = s.y + 6;
+            this.gunIdx = Math.floor(Math.random() * GUNS.length);
+        }
+    }
+}
+
+/**
+ * INITIALIZATION & HELPERS
+ */
+let p1, p2;
+
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // Create UI Palette
+    const palette = document.getElementById('editor-palette');
+    Object.keys(TILES).forEach(id => {
+        if(id == 0) return;
+        let btn = document.createElement('div');
+        btn.className = 'tile-btn';
+        btn.style.backgroundColor = TILES[id].color;
+        btn.title = TILES[id].name;
+        btn.onclick = () => {
+            editorTile = parseInt(id);
+            document.querySelectorAll('.tile-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+        };
+        palette.appendChild(btn);
+    });
+
+    // Default Map (Simple Arena)
+    createDefaultMap();
+
+    // Loop
+    requestAnimationFrame(gameLoop);
+}
+
+function createDefaultMap() {
+    map = [];
+    ROWS = Math.ceil(HEIGHT / TILE_SIZE);
+    COLS = Math.ceil(WIDTH / TILE_SIZE);
+    
+    for (let y = 0; y < ROWS; y++) {
+        let row = [];
+        for (let x = 0; x < COLS; x++) {
+            if (y === 0 || y === ROWS - 1 || x === 0 || x === COLS - 1) row.push(1); // Walls
+            else if (y === ROWS - 2) {
+                if(x % 5 === 0) row.push(2); // Jump pads
+                else row.push(1);
+            } 
+            else if (y === ROWS - 6 && x > 5 && x < COLS - 5) row.push(1); // Platform
+            else row.push(0);
+        }
+        map.push(row);
+    }
+}
+
+function startGame() {
+    document.getElementById('menu').classList.add('hidden');
+    document.getElementById('editor-ui').classList.add('hidden');
+    gameState = 'PLAY';
+    
+    p1 = new Player(1, 100, 100, '#ff4444', { left: 'a', right: 'd', jump: 'w', shoot: 'e' });
+    p2 = new Player(2, WIDTH-100, 100, '#4444ff', { left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', shoot: 'Enter' });
+    
+    bullets = [];
+    particles = [];
+    gunBoxes = [];
+    
+    // Spawn initial gun boxes
+    checkGunSpawns();
+    
+    updateHud();
+}
+
+function openEditor() {
+    document.getElementById('menu').classList.add('hidden');
+    document.getElementById('editor-ui').classList.remove('hidden');
+    gameState = 'EDITOR';
+    // Ensure map fits grid
+    ROWS = Math.ceil(HEIGHT / TILE_SIZE);
+    COLS = Math.ceil(WIDTH / TILE_SIZE);
+    if(map.length < ROWS) {
+        for(let i=map.length; i<ROWS; i++) map.push(new Array(COLS).fill(0));
+    }
+}
+
+function getTile(x, y) {
+    if (y < 0 || y >= ROWS || x < 0 || x >= COLS) return null;
+    return TILES[map[y][x]];
+}
+
+function checkGunSpawns() {
+    // Ensure boxes exist on spawn tiles
+    let spawnTiles = [];
+    for(let y=0; y<ROWS; y++) {
+        for(let x=0; x<COLS; x++) {
+            if(map[y][x] === 9) spawnTiles.push({x: x*TILE_SIZE, y: y*TILE_SIZE});
+        }
+    }
+
+    // If we have fewer boxes than spawn tiles (and less than max), spawn more
+    if (gunBoxes.length < spawnTiles.length && gunBoxes.length < 5) {
+        let s = spawnTiles[Math.floor(Math.random() * spawnTiles.length)];
+        // Check if box already there
+        let occupied = gunBoxes.some(b => Math.abs(b.x - s.x) < 10 && Math.abs(b.y - s.y) < 10);
+        if(!occupied) {
+            gunBoxes.push(new GunBox(s.x + 6, s.y + 6));
+        }
+    }
+}
+
+function getSpawnPoint() {
+    // Simple air search
+    for(let y=5; y<ROWS-5; y++) {
+        for(let x=5; x<COLS-5; x++) {
+            if(map[y][x] === 0 && map[y+1][x] === 1) {
+                return {x: x*TILE_SIZE, y: y*TILE_SIZE};
+            }
+        }
+    }
+    return {x: WIDTH/2, y: HEIGHT/2};
+}
+
+/**
+ * GAME LOOP
+ */
+function gameLoop() {
+    // Clear
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // Camera Shake
+    ctx.save();
+    if (shakeTime > 0) {
+        let dx = (Math.random() - 0.5) * shakeTime;
+        let dy = (Math.random() - 0.5) * shakeTime;
+        ctx.translate(dx, dy);
+        shakeTime *= 0.9;
+        if(shakeTime < 1) shakeTime = 0;
+    }
+
+    // Draw Map
+    drawMap();
+
+    if (gameState === 'PLAY') {
+        // Updates
+        if(Math.random() < 0.01) checkGunSpawns();
+
+        gunBoxes.forEach(b => b.update());
+        
+        p1.update();
+        p2.update();
+
+        bullets = bullets.filter(b => b.life > 0);
+        bullets.forEach(b => { b.update(); drawBullet(b); });
+
+        // Draw Players
+        drawPlayer(p1);
+        drawPlayer(p2);
+    } else if (gameState === 'EDITOR') {
+        drawGrid();
+        handleEditorInput();
+    }
+
+    // Particles (Always render)
+    particles = particles.filter(p => p.life > 0);
+    particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        ctx.fillStyle = p.c;
+        ctx.fillRect(p.x, p.y, p.s, p.s);
+    });
+
+    ctx.restore();
+    frameCount++;
+    requestAnimationFrame(gameLoop);
+}
+
+/**
+ * RENDER FUNCTIONS
+ */
+function drawMap() {
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            let id = map[y][x];
+            if (id !== 0) {
+                let t = TILES[id];
+                ctx.fillStyle = t.color;
+                
+                if (t.draw === 'tri') {
+                    // Draw spikes
+                    ctx.beginPath();
+                    ctx.moveTo(x*TILE_SIZE, (y+1)*TILE_SIZE);
+                    ctx.lineTo((x+0.5)*TILE_SIZE, y*TILE_SIZE + 10);
+                    ctx.lineTo((x+1)*TILE_SIZE, (y+1)*TILE_SIZE);
+                    ctx.fill();
+                } else {
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    // Detail for jump pads
+                    if(t.isJump) {
+                        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                        ctx.fillRect(x*TILE_SIZE+4, y*TILE_SIZE+4, TILE_SIZE-8, TILE_SIZE-8);
+                    }
+                }
+            }
+        }
+    }
+}
+
+function drawGrid() {
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.beginPath();
+    for(let x=0; x<COLS; x++) { ctx.moveTo(x*TILE_SIZE, 0); ctx.lineTo(x*TILE_SIZE, HEIGHT); }
+    for(let y=0; y<ROWS; y++) { ctx.moveTo(0, y*TILE_SIZE); ctx.lineTo(WIDTH, y*TILE_SIZE); }
+    ctx.stroke();
+    
+    // Mouse hover
+    let mx = Math.floor(mouseX / TILE_SIZE) * TILE_SIZE;
+    let my = Math.floor(mouseY / TILE_SIZE) * TILE_SIZE;
+    ctx.strokeStyle = '#fff';
+    ctx.strokeRect(mx, my, TILE_SIZE, TILE_SIZE);
+}
+
+function drawPlayer(p) {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    
+    // Eyes
+    ctx.fillStyle = '#fff';
+    let eyeOff = p.facing === 1 ? 4 : 0;
+    ctx.fillRect(p.x + 4 + eyeOff, p.y + 4, 6, 6);
+    ctx.fillRect(p.x + 14 + eyeOff, p.y + 4, 6, 6);
+
+    // HP Bar
+    ctx.fillStyle = 'red';
+    ctx.fillRect(p.x, p.y - 10, p.w, 4);
+    ctx.fillStyle = '#0f0';
+    ctx.fillRect(p.x, p.y - 10, p.w * (p.hp/100), 4);
+}
+
+function drawBullet(b) {
+    ctx.fillStyle = b.stats.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+    ctx.fill();
+}
+
+function createParticles(x, y, count, color) {
+    for(let i=0; i<count; i++) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 5,
+            vy: (Math.random() - 0.5) * 5,
+            life: 30 + Math.random() * 20,
+            c: color,
+            s: Math.random() * 4 + 1
+        });
+    }
+}
+
+function createExplosion(x, y) {
+    createParticles(x, y, 20, 'orange');
+    createParticles(x, y, 10, 'red');
+    // Area damage
+    [p1, p2].forEach(p => {
+        let dist = Math.hypot(p.x - x, p.y - y);
+        if(dist < 60) p.hp -= 20;
+    });
+}
+
+function screenShake(amt) {
+    shakeTime = amt;
+}
+
+function updateHud() {
+    if(!p1 || !p2) return;
+    document.getElementById('p1-score').innerText = p1.score;
+    document.getElementById('p2-score').innerText = p2.score;
+    document.getElementById('p1-gun').innerText = GUNS[p1.gunIndex].name;
+    document.getElementById('p2-gun').innerText = GUNS[p2.gunIndex].name;
+}
+
+/**
+ * INPUT & EVENTS
+ */
+let mouseX = 0, mouseY = 0, mouseDown = 0; // 0=none, 1=left, 3=right
+
+window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (gameState === 'EDITOR' && e.key.toLowerCase() === 's') {
+        startGame(); // Save & Play
+    }
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+window.addEventListener('mousemove', e => {
+    let rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+});
+
+window.addEventListener('mousedown', e => {
+    if(gameState !== 'EDITOR') return;
+    if(e.target.tagName === 'BUTTON' || e.target.classList.contains('tile-btn')) return;
+    mouseDown = e.which;
+});
+window.addEventListener('mouseup', () => mouseDown = 0);
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+function handleEditorInput() {
+    if (mouseDown === 0) return;
+    
+    let tx = Math.floor(mouseX / TILE_SIZE);
+    let ty = Math.floor(mouseY / TILE_SIZE);
+    
+    if (tx >= 0 && tx < COLS && ty >= 0 && ty < ROWS) {
+        if (mouseDown === 1) map[ty][tx] = editorTile; // Left click place
+        if (mouseDown === 3) map[ty][tx] = 0; // Right click erase
+    }
+}
+
+function resize() {
+    WIDTH = window.innerWidth;
+    HEIGHT = window.innerHeight;
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+    ROWS = Math.ceil(HEIGHT / TILE_SIZE);
+    COLS = Math.ceil(WIDTH / TILE_SIZE);
+    // Don't reset map on resize if playing
+}
+
+init();
+
+</script>
+</body>
+</html>
