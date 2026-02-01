@@ -2,62 +2,37 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Neon Chaos PvP: Redux</title>
+    <title>Neon Chaos PvP [Physics Fix]</title>
     <style>
-        /* RESET & LAYOUT */
         :root { --bg: #050505; --ui: #151515; --accent: #00ffcc; }
         body {
-            margin: 0; padding: 0;
-            width: 100vw; height: 100vh;
-            background: var(--bg);
-            color: white;
+            margin: 0; padding: 0; width: 100vw; height: 100vh;
+            background: var(--bg); color: white;
             font-family: 'Segoe UI', monospace;
-            overflow: hidden; /* No scrollbars */
-            display: flex;
-            flex-direction: column; /* Stack Game on top of Editor */
+            overflow: hidden; display: flex; flex-direction: column;
             user-select: none;
         }
 
-        /* GAME WINDOW (Flex Grow) */
         #game-wrapper {
-            flex-grow: 1;
-            position: relative;
-            overflow: hidden;
-            cursor: crosshair;
+            flex-grow: 1; position: relative; overflow: hidden;
+            background: #000; cursor: crosshair;
         }
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-        }
+        canvas { display: block; width: 100%; height: 100%; }
 
-        /* EDITOR TOOLBAR (Fixed Height at Bottom) */
         #editor-bar {
-            height: 64px;
-            background: var(--ui);
-            border-top: 2px solid #333;
-            display: flex;
-            align-items: center;
-            padding: 0 10px;
-            gap: 8px;
-            overflow-x: auto;
-            flex-shrink: 0;
-            z-index: 100;
+            height: 64px; background: var(--ui);
+            border-top: 2px solid #333; display: flex; align-items: center;
+            padding: 0 10px; gap: 8px; overflow-x: auto; flex-shrink: 0; z-index: 100;
         }
-        /* Scrollbar styling */
         #editor-bar::-webkit-scrollbar { height: 6px; }
         #editor-bar::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
 
-        /* HUD OVERLAY */
         #hud-layer {
             position: absolute; top: 0; left: 0; right: 0;
-            padding: 15px;
-            pointer-events: none; /* Let clicks pass through to game */
-            display: flex; justify-content: space-between;
+            padding: 15px; pointer-events: none; display: flex; justify-content: space-between;
             text-shadow: 2px 2px 0 #000;
         }
         .p-score { font-size: 32px; font-weight: 900; line-height: 1; }
-        .p-gun { font-size: 14px; opacity: 0.8; letter-spacing: 1px; }
         
         #center-info {
             position: absolute; top: 10px; left: 0; right: 0;
@@ -65,29 +40,22 @@
         }
         #effect-msg {
             font-size: 24px; font-weight: bold; color: #fff;
-            text-shadow: 0 0 10px var(--accent);
-            opacity: 0; transition: opacity 0.3s;
+            text-shadow: 0 0 10px var(--accent); opacity: 0; transition: opacity 0.3s;
         }
 
-        /* BUTTONS */
         .tile-btn {
-            width: 40px; height: 40px;
-            border: 2px solid #444; border-radius: 4px;
-            cursor: pointer; flex-shrink: 0;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 10px; font-weight: bold;
-            transition: 0.1s;
+            width: 40px; height: 40px; border: 2px solid #444; border-radius: 4px;
+            cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: bold; transition: 0.1s;
         }
-        .tile-btn:hover { transform: translateY(-2px); border-color: white; }
+        .tile-btn:hover { border-color: white; transform: translateY(-2px); }
         .tile-btn.active { border-color: var(--accent); box-shadow: 0 0 10px var(--accent); }
         
         .sys-btn {
             background: #333; color: #ccc; border: 1px solid #555;
-            padding: 0 15px; height: 40px; font-weight: bold;
-            cursor: pointer; border-radius: 4px;
+            padding: 0 15px; height: 40px; font-weight: bold; cursor: pointer; border-radius: 4px;
         }
         .sys-btn:hover { background: #555; color: white; }
-
         .sep { width: 1px; height: 30px; background: #444; margin: 0 5px; }
     </style>
 </head>
@@ -98,16 +66,16 @@
         <div id="hud-layer">
             <div style="color:#ff4444">
                 <div class="p-score" id="s1">0</div>
-                <div class="p-gun" id="g1">PISTOL</div>
+                <div style="font-size:12px; opacity:0.8" id="g1">PISTOL</div>
             </div>
             <div style="color:#4444ff; text-align:right">
                 <div class="p-score" id="s2">0</div>
-                <div class="p-gun" id="g2">PISTOL</div>
+                <div style="font-size:12px; opacity:0.8" id="g2">PISTOL</div>
             </div>
         </div>
         <div id="center-info">
             <div id="effect-msg">CHAOS MODE</div>
-            <div style="font-size:12px; color:#888; margin-top:5px;">P1: WASD+E | P2: ARROWS+ENT | CLICK TO DRAW</div>
+            <div style="font-size:12px; color:#888; margin-top:5px;">P1: WASD+E | P2: ARROWS+ENT</div>
         </div>
     </div>
 
@@ -121,32 +89,28 @@
     </div>
 
 <script>
-/** * CONFIGURATION & ASSETS 
- */
 const TILE_SIZE = 32;
 
-// --- TILES ---
-// s: solid(1=yes), d: drawType, k: kill, f: friction, b: bounce
+// TILES: s=solid, k=kill, f=friction
 const TILES = [
     { name:'Air', c:null, s:0 },
     { name:'Wall', c:'#444', s:1 },
-    { name:'Jump', c:'#0f0', s:1, jump:-14, glow:1 },
-    { name:'Boost', c:'#0ff', s:1, jump:-22, glow:1 },
+    { name:'Jump', c:'#0f0', s:1, jump:-15, glow:1 }, // Stronger jump
+    { name:'Boost', c:'#0ff', s:1, jump:-24, glow:1 },
     { name:'Spike', c:'#777', s:0, k:1, d:'tri' },
     { name:'Lava', c:'#f40', s:0, k:1, glow:1 },
     { name:'Ice', c:'#aef', s:1, f:0.98 },
-    { name:'Mud', c:'#542', s:1, f:0.6 },
+    { name:'Mud', c:'#542', s:1, f:0.5 },
     { name:'Heal', c:'#f0f', s:0, eff:'heal', d:'heart' },
     { name:'Glass', c:'rgba(180,220,255,0.4)', s:1, brk:1 },
-    { name:'Bounc', c:'#d0d', s:1, b:1.3 },
-    { name:'Plat', c:'#666', s:1, ow:1 }, // One Way
+    { name:'Bounc', c:'#d0d', s:1, b:1.5 },
+    { name:'Plat', c:'#666', s:1, ow:1 },
     { name:'PushR', c:'#aa0', s:1, push:2, d:'R' },
     { name:'PushL', c:'#aa0', s:1, push:-2, d:'L' },
     { name:'Water', c:'rgba(0,0,255,0.3)', s:0, drag:1 },
     { name:'Void', c:'#000', s:1, k:1 }
 ];
 
-// --- GUNS ---
 const GUNS = [
     { n:'Pistol', cd:25, spd:12, dmg:10, c:1, col:'#fff' },
     { n:'Uzi', cd:5, spd:14, dmg:4, spr:0.15, c:1, col:'#ff0' },
@@ -156,12 +120,10 @@ const GUNS = [
     { n:'Laser', cd:3, spd:20, dmg:2, c:1, col:'#0ff' },
     { n:'Spread', cd:25, spd:10, dmg:8, spr:0.3, c:3, col:'#f0f' },
     { n:'Ricochet', cd:30, spd:12, dmg:15, c:1, bnc:1, col:'#aff' },
-    { n:'Flamer', cd:3, spd:7, dmg:1.5, spr:0.3, c:2, life:25, col:'#f80' },
     { n:'Grenade', cd:50, spd:10, dmg:45, spr:0.1, c:1, grav:0.3, exp:1, col:'#462' },
     { n:'Seeker', cd:50, spd:8, dmg:20, c:1, seek:1, col:'#f00' },
 ];
 
-// --- CHAOS EFFECTS ---
 const EFFECTS = [
     { n:"⚠ GRAVITY REVERSE", t:600, set: s=>{s.g=-0.6} },
     { n:"⚠ TOP DOWN VIEW", t:800, set: s=>{s.top=1; s.g=0} },
@@ -179,505 +141,288 @@ const EFFECTS = [
     { n:"DISCO MODE", t:600, set: s=>{s.disco=1} }
 ];
 
-/** * GAME ENGINE 
- */
 const Game = {
     cvs: document.getElementById('cvs'),
     ctx: document.getElementById('cvs').getContext('2d'),
-    width: 0, height: 0,
-    cols: 0, rows: 0,
-    map: [],
-    
-    // Entities
-    p1: null, p2: null,
-    bullets: [],
-    particles: [],
-    boxes: [],
-    
-    // State
-    frame: 0,
-    shake: 0,
-    keys: {},
-    editTile: 1,
-    mouse: { x:0, y:0, down:false, btn:0 },
-    
-    // Physics State
+    width: 0, height: 0, cols: 0, rows: 0, map: [],
+    p1: null, p2: null, bullets: [], particles: [], boxes: [],
+    frame: 0, shake: 0, keys: {}, editTile: 1, mouse: { x:0, y:0, down:false, btn:0 },
     phys: { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 },
-    activeEffect: null,
-    effectTimer: 0,
+    activeEffect: null, effectTimer: 0,
 
     init() {
-        // Event Listeners
         window.addEventListener('resize', () => this.resize());
-        
         window.addEventListener('keydown', e => {
             let k = e.key.toLowerCase();
-            // Prevent scrolling
             if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
             this.keys[k] = true;
             if(k === 'r') this.reset();
         });
-        
         window.addEventListener('keyup', e => this.keys[e.key.toLowerCase()] = false);
-
-        // Mouse (Relative to Canvas)
-        this.cvs.addEventListener('mousedown', e => {
-            this.mouse.down = true;
-            this.mouse.btn = e.button;
-            this.handleEditor();
-        });
-        window.addEventListener('mouseup', () => this.mouse.down = false);
+        this.cvs.addEventListener('mousedown', e => { this.mouse.down=true; this.mouse.btn=e.button; this.handleEditor(); });
+        window.addEventListener('mouseup', () => this.mouse.down=false);
         this.cvs.addEventListener('mousemove', e => {
-            const rect = this.cvs.getBoundingClientRect();
-            this.mouse.x = e.clientX - rect.left;
-            this.mouse.y = e.clientY - rect.top;
+            const r = this.cvs.getBoundingClientRect();
+            this.mouse.x = e.clientX - r.left; this.mouse.y = e.clientY - r.top;
             if(this.mouse.down) this.handleEditor();
         });
         this.cvs.addEventListener('contextmenu', e => e.preventDefault());
-
-        this.buildPalette();
-        this.resize();
-        this.reset();
-        this.loop();
+        this.buildPalette(); this.resize(); this.reset(); this.loop();
     },
 
     resize() {
         const box = document.getElementById('game-wrapper').getBoundingClientRect();
-        this.width = box.width;
-        this.height = box.height;
-        this.cvs.width = this.width;
-        this.cvs.height = this.height;
-        
+        this.width = box.width; this.height = box.height;
+        this.cvs.width = this.width; this.cvs.height = this.height;
         const oldMap = this.map;
-        this.cols = Math.ceil(this.width / TILE_SIZE);
-        this.rows = Math.ceil(this.height / TILE_SIZE);
-        
-        // Rebuild map array
+        this.cols = Math.ceil(this.width / TILE_SIZE); this.rows = Math.ceil(this.height / TILE_SIZE);
         this.map = [];
         for(let y=0; y<this.rows; y++) {
             let row = [];
             for(let x=0; x<this.cols; x++) {
-                // Default Map Generation
-                if(x===0 || x===this.cols-1 || y===0 || y===this.rows-1) row.push(1); // Borders
-                else if(y===this.rows-2 && x%6===0) row.push(2); // Jump pads
-                else if(y===this.rows-5 && x>5 && x<this.cols-5) row.push(11); // Platforms
+                if(x===0 || x===this.cols-1 || y===0 || y===this.rows-1) row.push(1);
+                else if(y===this.rows-2 && x%6===0) row.push(2);
+                else if(y===this.rows-5 && x>5 && x<this.cols-5) row.push(11);
                 else row.push(0);
             }
             this.map.push(row);
         }
-
-        // Copy old map data if it existed
         if(oldMap.length > 0) {
-            for(let y=0; y<Math.min(this.rows, oldMap.length); y++) {
-                for(let x=0; x<Math.min(this.cols, oldMap[0].length); x++) {
+            for(let y=0; y<Math.min(this.rows, oldMap.length); y++)
+                for(let x=0; x<Math.min(this.cols, oldMap[0].length); x++)
                     this.map[y][x] = oldMap[y][x];
-                }
-            }
         }
     },
 
     reset() {
-        // Reset Physics
         this.phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-        this.activeEffect = null;
-        document.getElementById('effect-msg').style.opacity = 0;
-
-        // Reset Entities
-        this.bullets = [];
-        this.particles = [];
-        this.boxes = [];
-
-        // Players
+        this.activeEffect = null; document.getElementById('effect-msg').style.opacity = 0;
+        this.bullets = []; this.particles = []; this.boxes = [];
         this.p1 = new Player(1, '#ff4444', {u:'w', d:'s', l:'a', r:'d', s:'e'});
         this.p2 = new Player(2, '#4444ff', {u:'arrowup', d:'arrowdown', l:'arrowleft', r:'arrowright', s:'enter'});
-
-        // Spawn Boxes
         for(let i=0; i<3; i++) this.boxes.push(new Box(false));
         for(let i=0; i<2; i++) this.boxes.push(new Box(true));
-
         this.updateHud();
     },
 
     loop() {
         requestAnimationFrame(() => this.loop());
-        
-        // Double binding for P2 Shoot
-        if(this.keys['l']) this.keys['enter'] = true;
-
-        this.update();
-        this.draw();
-        this.frame++;
+        // REMOVED: keys['l'] = keys['enter'] double binding. Fixed properly in Player.
+        this.update(); this.draw(); this.frame++;
     },
 
     update() {
-        // Effect Timer
         if(this.effectTimer > 0) {
             this.effectTimer -= this.phys.ts;
             if(this.effectTimer <= 0) {
-                // Reset to default
                 this.phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-                this.activeEffect = null;
-                document.getElementById('effect-msg').style.opacity = 0;
+                this.activeEffect = null; document.getElementById('effect-msg').style.opacity = 0;
             }
         }
         if(this.phys.disco) this.shake = 2;
-
-        // Updates
-        this.p1.update();
-        this.p2.update();
+        this.p1.update(); this.p2.update();
         this.boxes.forEach(b => b.update());
-        
-        // Bullet Logic
-        for(let i = this.bullets.length - 1; i >= 0; i--) {
-            let b = this.bullets[i];
-            b.update();
-            if(b.life <= 0) {
-                this.bullets.splice(i, 1);
-            }
+        for(let i=this.bullets.length-1; i>=0; i--) {
+            let b=this.bullets[i]; b.update();
+            if(b.life <= 0) this.bullets.splice(i, 1);
         }
     },
 
     draw() {
-        // Background
         this.ctx.fillStyle = this.phys.disco ? `hsl(${this.frame%360}, 60%, 10%)` : '#050505';
         this.ctx.fillRect(0, 0, this.width, this.height);
-
         this.ctx.save();
-
-        // Camera Shake
         if(this.shake > 0) {
-            let dx = (Math.random()-0.5) * this.shake;
-            let dy = (Math.random()-0.5) * this.shake;
-            this.ctx.translate(dx, dy);
+            this.ctx.translate((Math.random()-0.5)*this.shake, (Math.random()-0.5)*this.shake);
             this.shake *= 0.9;
         }
+        if(this.phys.g < 0) { this.ctx.translate(0, this.height); this.ctx.scale(1, -1); }
 
-        // Gravity Flip Transform
-        if(this.phys.g < 0) {
-            this.ctx.translate(0, this.height);
-            this.ctx.scale(1, -1);
-        }
-
-        // 1. Draw Map
         for(let y=0; y<this.rows; y++) {
             for(let x=0; x<this.cols; x++) {
-                let id = this.map[y][x];
-                if(!id) continue;
-                let t = TILES[id];
-                let tx = x * TILE_SIZE, ty = y * TILE_SIZE;
-
+                let id = this.map[y][x]; if(!id) continue;
+                let t = TILES[id]; let tx=x*TILE_SIZE, ty=y*TILE_SIZE;
                 this.ctx.fillStyle = this.phys.dark ? '#222' : t.c;
-                
-                // Fancy Drawing
-                if(t.d === 'tri') {
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(tx, ty + 32);
-                    this.ctx.lineTo(tx + 16, ty);
-                    this.ctx.lineTo(tx + 32, ty + 32);
-                    this.ctx.fill();
-                } else if (t.d === 'heart') {
-                    this.ctx.font = '20px sans-serif'; this.ctx.fillText('♥', tx+5, ty+24);
-                } else if(t.ow) {
-                    this.ctx.fillRect(tx, ty, 32, 10);
-                } else {
-                    this.ctx.fillRect(tx, ty, 32, 32);
-                }
-
-                if(t.glow && !this.phys.dark) {
-                    this.ctx.shadowColor = t.c;
-                    this.ctx.shadowBlur = 10;
-                    this.ctx.fillRect(tx+8, ty+8, 16, 16);
-                    this.ctx.shadowBlur = 0;
-                }
+                if(t.d==='tri') {
+                    this.ctx.beginPath(); this.ctx.moveTo(tx, ty+32); this.ctx.lineTo(tx+16, ty); this.ctx.lineTo(tx+32, ty+32); this.ctx.fill();
+                } else if(t.d==='heart') { this.ctx.font='20px sans'; this.ctx.fillText('♥', tx+5, ty+24); }
+                else if(t.ow) this.ctx.fillRect(tx, ty, 32, 10);
+                else this.ctx.fillRect(tx, ty, 32, 32);
+                if(t.glow && !this.phys.dark) { this.ctx.shadowColor=t.c; this.ctx.shadowBlur=10; this.ctx.fillRect(tx+8, ty+8, 16, 16); this.ctx.shadowBlur=0; }
             }
         }
 
-        // 2. Draw Entities
         this.boxes.forEach(b => b.draw());
         this.bullets.forEach(b => b.draw());
-        this.p1.draw();
-        this.p2.draw();
-
-        // 3. Draw Particles
+        this.p1.draw(); this.p2.draw();
         this.particles.forEach((p, i) => {
             p.x += p.vx; p.y += p.vy; p.life--;
-            this.ctx.fillStyle = p.c;
-            this.ctx.fillRect(p.x, p.y, p.s, p.s);
+            this.ctx.fillStyle = p.c; this.ctx.fillRect(p.x, p.y, p.s, p.s);
             if(p.life <= 0) this.particles.splice(i, 1);
         });
-
         this.ctx.restore();
 
-        // 4. Editor Cursor (Overlay)
-        let mx = Math.floor(this.mouse.x / TILE_SIZE) * TILE_SIZE;
-        let my = Math.floor(this.mouse.y / TILE_SIZE) * TILE_SIZE;
-        this.ctx.strokeStyle = 'white';
-        this.ctx.lineWidth = 2;
-        this.ctx.strokeRect(mx, my, TILE_SIZE, TILE_SIZE);
-
-        // 5. Dark Mode Mask
+        let mx = Math.floor(this.mouse.x/TILE_SIZE)*TILE_SIZE, my = Math.floor(this.mouse.y/TILE_SIZE)*TILE_SIZE;
+        this.ctx.strokeStyle = 'white'; this.ctx.lineWidth = 2; this.ctx.strokeRect(mx, my, TILE_SIZE, TILE_SIZE);
+        
         if(this.phys.dark) {
-            this.ctx.fillStyle = 'black';
-            this.ctx.beginPath();
-            this.ctx.rect(0, 0, this.width, this.height);
-            // Cut outs for entities
+            this.ctx.fillStyle = 'black'; this.ctx.beginPath(); this.ctx.rect(0, 0, this.width, this.height);
             [this.p1, this.p2, ...this.boxes].forEach(e => {
                 let cy = this.phys.g < 0 ? this.height - e.y : e.y;
-                this.ctx.moveTo(e.x+10, cy+10);
-                this.ctx.arc(e.x+10, cy+10, 100, 0, Math.PI*2, true);
+                this.ctx.moveTo(e.x+10, cy+10); this.ctx.arc(e.x+10, cy+10, 100, 0, Math.PI*2, true);
             });
             this.ctx.fill('evenodd');
         }
     },
 
     handleEditor() {
-        let x = Math.floor(this.mouse.x / TILE_SIZE);
-        let y = Math.floor(this.mouse.y / TILE_SIZE);
-        // Bounds Check to prevent crash
+        let x = Math.floor(this.mouse.x / TILE_SIZE), y = Math.floor(this.mouse.y / TILE_SIZE);
         if(x >= 0 && x < this.cols && y >= 0 && y < this.rows) {
-            if(this.mouse.btn === 0) this.map[y][x] = this.editTile; // Left Click Draw
-            if(this.mouse.btn === 2) this.map[y][x] = 0; // Right Click Erase
+            if(this.mouse.btn === 0) this.map[y][x] = this.editTile;
+            if(this.mouse.btn === 2) this.map[y][x] = 0;
         }
     },
 
     triggerEffect(idx) {
-        // Reset first
         this.phys = { g:0.6, top:0, ts:1, spd:1, sz:1, fly:0, vamp:0, glass:0, inf:0, dark:0, disco:0 };
-        
-        let e = EFFECTS[idx];
-        e.set(this.phys);
-        this.activeEffect = idx;
-        this.effectTimer = e.t;
-        
-        let el = document.getElementById('effect-msg');
-        el.innerText = e.n;
-        el.style.opacity = 1;
-        this.shake = 5;
+        let e = EFFECTS[idx]; e.set(this.phys);
+        this.activeEffect = idx; this.effectTimer = e.t;
+        let el = document.getElementById('effect-msg'); el.innerText = e.n; el.style.opacity = 1; this.shake = 5;
     },
-
-    spawnParticle(x, y, n, c) {
-        for(let i=0; i<n; i++) {
-            this.particles.push({
-                x: x, y: y,
-                vx: (Math.random()-0.5)*5, vy: (Math.random()-0.5)*5,
-                life: 20+Math.random()*20, c: c, s: Math.random()*3+2
-            });
-        }
-    },
-
+    spawnParticle(x, y, n, c) { for(let i=0; i<n; i++) this.particles.push({x:x, y:y, vx:(Math.random()-0.5)*5, vy:(Math.random()-0.5)*5, life:20+Math.random()*20, c:c, s:Math.random()*3+2}); },
     spawnExplosion(x, y, rad) {
-        this.shake = 10;
-        this.spawnParticle(x, y, 40, '#fa0');
-        [this.p1, this.p2].forEach(p => {
-            let d = Math.hypot((p.x+p.w/2)-x, (p.y+p.h/2)-y);
-            if(d < rad + p.w) p.hp -= 40;
-        });
+        this.shake = 10; this.spawnParticle(x, y, 40, '#fa0');
+        [this.p1, this.p2].forEach(p => { if(Math.hypot((p.x+p.w/2)-x, (p.y+p.h/2)-y) < rad+p.w) p.hp -= 40; });
     },
-
     updateHud() {
-        document.getElementById('s1').innerText = this.p1.score;
-        document.getElementById('s2').innerText = this.p2.score;
-        document.getElementById('g1').innerText = GUNS[this.p1.gun].n;
-        document.getElementById('g2').innerText = GUNS[this.p2.gun].n;
+        document.getElementById('s1').innerText = this.p1.score; document.getElementById('s2').innerText = this.p2.score;
+        document.getElementById('g1').innerText = GUNS[this.p1.gun].n; document.getElementById('g2').innerText = GUNS[this.p2.gun].n;
     },
-
     save() { localStorage.setItem('pvp_map', JSON.stringify(this.map)); alert('Saved'); },
-    load() { 
-        let d=localStorage.getItem('pvp_map'); 
-        if(d){ 
-            let loaded = JSON.parse(d);
-            // Safety Copy
-            for(let y=0; y<Math.min(this.rows, loaded.length); y++)
-                for(let x=0; x<Math.min(this.cols, loaded[0].length); x++)
-                    this.map[y][x] = loaded[y][x];
-            alert('Loaded'); 
-        } 
-    },
+    load() { let d=localStorage.getItem('pvp_map'); if(d){ let l=JSON.parse(d); for(let y=0;y<Math.min(this.rows,l.length);y++)for(let x=0;x<Math.min(this.cols,l[0].length);x++)this.map[y][x]=l[y][x]; alert('Loaded'); } },
     clear() { this.map = this.map.map(r => r.fill(0)); },
-
     buildPalette() {
         const p = document.getElementById('palette');
         TILES.forEach((t, i) => {
-            let b = document.createElement('div');
-            b.className = 'tile-btn ' + (i===1 ? 'active' : '');
+            let b = document.createElement('div'); b.className = 'tile-btn ' + (i===1 ? 'active' : '');
             b.style.background = t.c || '#222';
             if(t.d==='tri') b.style.clipPath = 'polygon(50% 0, 0 100%, 100% 100%)';
             else if(t.d==='heart') b.innerText = '♥';
             else if(t.ow) b.style.height = '10px';
             else if(t.name.includes('Push')) b.innerText = t.name.includes('R')?'>':'<';
-            
-            b.onclick = () => {
-                document.querySelectorAll('.tile-btn').forEach(x => x.classList.remove('active'));
-                b.classList.add('active');
-                this.editTile = i;
-            };
+            b.onclick = () => { document.querySelectorAll('.tile-btn').forEach(x => x.classList.remove('active')); b.classList.add('active'); this.editTile = i; };
             p.appendChild(b);
         });
     }
 };
 
-/**
- * PLAYER CLASS
- */
 class Player {
     constructor(id, color, ctrls) {
-        this.id = id;
-        this.color = color;
-        this.ctrls = ctrls;
-        this.w = 20; this.h = 24;
-        this.vx = 0; this.vy = 0;
-        this.hp = 100;
-        this.gun = 0; this.cd = 0; this.score = 0;
-        this.facing = 1; this.grounded = false;
-        
+        this.id = id; this.color = color; this.ctrls = ctrls;
+        this.w = 20; this.h = 24; this.vx = 0; this.vy = 0;
+        this.hp = 100; this.gun = 0; this.cd = 0; this.score = 0; this.facing = 1; this.grounded = false;
         this.respawn();
     }
-
     respawn() {
         this.hp = 100; this.gun = 0; this.vx = 0; this.vy = 0;
-        // SAFE SPAWN LOGIC: Scan for air tile with solid below
         let safe = { x: Game.width/2, y: 100 };
         for(let i=0; i<200; i++) {
             let tx = Math.floor(Math.random()*(Game.cols-4))+2;
             let ty = Math.floor(Math.random()*(Game.rows-5))+2;
-            if(Game.map[ty][tx] === 0 && TILES[Game.map[ty+1][tx]].s) {
-                safe = { x: tx*TILE_SIZE + 6, y: ty*TILE_SIZE - 24 };
-                break;
-            }
+            if(Game.map[ty][tx] === 0 && TILES[Game.map[ty+1][tx]].s) { safe = { x: tx*TILE_SIZE + 6, y: ty*TILE_SIZE - 24 }; break; }
         }
         this.x = safe.x; this.y = safe.y;
     }
-
     update() {
         if(this.hp <= 0) return;
+        let k = Game.keys, phys = Game.phys;
+        let l = k[this.ctrls.l], r = k[this.ctrls.r], u = k[this.ctrls.u], d = k[this.ctrls.d];
+        
+        // FIXED INPUT CHECK: Check 'S' OR (If P2, check 'L')
+        let shoot = k[this.ctrls.s] || (this.id === 2 && k['l']);
 
-        let k = Game.keys;
-        let l = k[this.ctrls.l], r = k[this.ctrls.r];
-        let u = k[this.ctrls.u], d = k[this.ctrls.d];
-        let shoot = k[this.ctrls.s];
-
-        let phys = Game.phys;
-        let speed = 1.0 * phys.spd;
-        let friction = 0.82;
-        let gravity = phys.g;
-
-        // Move
+        let speed = 1.0 * phys.spd, fric = 0.82, grav = phys.g;
         if(l) { this.vx -= speed; this.facing = -1; }
         if(r) { this.vx += speed; this.facing = 1; }
 
-        if(phys.top) {
-            // Top Down
-            if(u) this.vy -= speed;
-            if(d) this.vy += speed;
-        } else {
-            // Platformer
-            // Check tile modifiers
-            let centerTile = this.getTileAtCenter();
-            if(centerTile) {
-                if(centerTile.f) friction = centerTile.f;
-                if(centerTile.drag) { this.vy *= 0.85; friction = 0.85; }
-                if(centerTile.push) this.vx += centerTile.push;
-                if(centerTile.eff==='heal') this.hp = Math.min(100, this.hp+0.5);
-                if(centerTile.k) this.die();
+        let ct = this.getTileAtCenter();
+        if(!phys.top) {
+            if(ct) {
+                if(ct.f) fric = ct.f;
+                if(ct.drag) { this.vy *= 0.85; fric = 0.85; }
+                if(ct.push) this.vx += ct.push;
+                if(ct.eff==='heal') this.hp = Math.min(100, this.hp+0.5);
+                if(ct.k) this.die();
             }
-
-            // Jump
-            let jumpForce = -13 * (gravity < 0 ? -1 : 1);
             if(u) {
-                if(phys.fly) this.vy -= 0.8 * (gravity < 0 ? -1 : 1);
-                else if(centerTile && centerTile.drag) this.vy = -3.5 * (gravity < 0 ? -1 : 1);
-                else if(this.grounded) {
-                    this.vy = jumpForce;
-                    this.grounded = false;
-                }
+                if(phys.fly) this.vy -= 0.8 * (grav<0?-1:1);
+                else if(ct && ct.drag) this.vy = -3.5 * (grav<0?-1:1);
+                else if(this.grounded) { this.vy = -14 * (grav<0?-1:1); this.grounded = false; }
             }
-            this.vy += gravity;
+            this.vy += grav;
+        } else {
+            if(u) this.vy -= speed; if(d) this.vy += speed;
+            this.vy *= fric;
         }
+        this.vx *= fric; this.vx = Math.max(-12, Math.min(12, this.vx)); this.vy = Math.max(-12, Math.min(12, this.vy));
+        this.w = 20 * phys.sz; this.h = 24 * phys.sz;
 
-        this.vx *= friction;
-        if(phys.top) this.vy *= friction;
-        
-        // Speed Cap
-        let max = 12;
-        this.vx = Math.max(-max, Math.min(max, this.vx));
-        this.vy = Math.max(-max, Math.min(max, this.vy));
-
-        // Size
-        this.w = 20 * phys.sz;
-        this.h = 24 * phys.sz;
-
-        // Shooting
         if(this.cd > 0) this.cd--;
         if(shoot && (this.cd <= 0 || phys.inf)) {
-            this.shoot();
-            if(!phys.inf) this.vx -= this.facing * 2;
+            this.shoot(); if(!phys.inf) this.vx -= this.facing * 2;
         }
 
         this.move();
-
         if(this.y > Game.height + 200 || this.y < -2000) this.die();
-        if(this.x < 0) this.x = 0; 
-        if(this.x > Game.width - this.w) this.x = Game.width - this.w;
+        if(this.x < 0) this.x = 0; if(this.x > Game.width - this.w) this.x = Game.width - this.w;
     }
-
     move() {
         this.grounded = false;
-        this.x += this.vx * Game.phys.ts;
-        this.collide(true);
-        this.y += this.vy * Game.phys.ts;
-        this.collide(false);
+        this.x += this.vx * Game.phys.ts; this.collide(true);
+        this.y += this.vy * Game.phys.ts; this.collide(false);
     }
-
     collide(isX) {
-        let tx1 = Math.floor(this.x / TILE_SIZE);
-        let tx2 = Math.floor((this.x + this.w) / TILE_SIZE);
-        let ty1 = Math.floor(this.y / TILE_SIZE);
-        let ty2 = Math.floor((this.y + this.h) / TILE_SIZE);
+        // Precise bounding box check to prevent falling through or teleporting
+        let tx1 = Math.floor(this.x / TILE_SIZE), tx2 = Math.floor((this.x + this.w - 0.1) / TILE_SIZE);
+        let ty1 = Math.floor(this.y / TILE_SIZE), ty2 = Math.floor((this.y + this.h - 0.1) / TILE_SIZE);
+        
+        // Clamp indices to prevent array out of bounds
+        tx1 = Math.max(0, tx1); tx2 = Math.min(Game.cols-1, tx2);
+        ty1 = Math.max(0, ty1); ty2 = Math.min(Game.rows-1, ty2);
 
         for(let y = ty1; y <= ty2; y++) {
             for(let x = tx1; x <= tx2; x++) {
-                // Safety check for map bounds
-                if(y < 0 || y >= Game.rows || x < 0 || x >= Game.cols) continue;
-                
                 let t = TILES[Game.map[y][x]];
                 if(!t || !t.s) continue;
-
-                // One Way Platforms
+                
                 if(t.ow) {
                     if(isX || Game.phys.top || Game.phys.g < 0) continue;
                     let feet = this.y + this.h - (this.vy * Game.phys.ts);
-                    if(this.vy > 0 && feet <= y * TILE_SIZE + 8) {
-                        this.y = y * TILE_SIZE - this.h - 0.01;
-                        this.vy = 0;
-                        this.grounded = true;
+                    if(this.vy > 0 && feet <= y * TILE_SIZE + 10) { 
+                        this.y = y * TILE_SIZE - this.h - 0.01; this.vy = 0; this.grounded = true; 
                     }
                     continue;
                 }
-
+                
                 if(isX) {
-                    if(this.vx > 0) this.x = x * TILE_SIZE - this.w;
-                    else if(this.vx < 0) this.x = (x+1) * TILE_SIZE;
+                    if(this.vx > 0) this.x = x * TILE_SIZE - this.w - 0.01;
+                    else if(this.vx < 0) this.x = (x+1) * TILE_SIZE + 0.01;
                     this.vx = 0;
                 } else {
-                    if(this.vy > 0) { // Floor
-                        this.y = y * TILE_SIZE - this.h;
+                    if(this.vy > 0) {
+                        this.y = y * TILE_SIZE - this.h - 0.01;
                         if(!Game.phys.top) {
-                            this.vy = 0;
-                            this.grounded = true;
-                            // Floor Effects
+                            this.vy = 0; this.grounded = true;
                             let dir = Game.phys.g < 0 ? -1 : 1;
                             if(t.jump) { this.vy = t.jump * dir; this.grounded = false; }
-                            if(t.b) { this.vy = -12 * dir; this.grounded = false; }
+                            if(t.b) { this.vy = -15 * dir; this.grounded = false; }
                             if(t.brk) { Game.map[y][x] = 0; Game.spawnParticle(x*32, y*32, 5, '#aff'); }
                         }
-                    } else if(this.vy < 0) { // Ceiling
-                        this.y = (y+1) * TILE_SIZE;
+                    } else if(this.vy < 0) {
+                        this.y = (y+1) * TILE_SIZE + 0.01;
                         if(!Game.phys.top) {
                             this.vy = 0;
-                            if(Game.phys.g < 0) { // Ceiling is floor
-                                this.grounded = true;
-                                if(t.jump) { this.vy = t.jump * -1; this.grounded = false; }
-                            }
+                            if(Game.phys.g < 0) { this.grounded = true; if(t.jump) { this.vy = t.jump * -1; this.grounded = false; } }
                         }
                         if(t.brk) Game.map[y][x] = 0;
                     }
@@ -685,186 +430,91 @@ class Player {
             }
         }
     }
-
     shoot() {
-        let g = GUNS[this.gun];
-        this.cd = g.cd;
+        let g = GUNS[this.gun]; this.cd = g.cd;
         let dmg = Game.phys.glass ? 100 : g.dmg;
         for(let i=0; i<g.c; i++) {
-            let angle = (this.facing===1 ? 0 : Math.PI) + (Math.random()-0.5)*(g.spr||0);
+            let a = (this.facing===1 ? 0 : Math.PI) + (Math.random()-0.5)*(g.spr||0);
             if(Game.phys.top) {
-                if(Game.keys[this.ctrls.u]) angle = -Math.PI/2;
-                else if(Game.keys[this.ctrls.d]) angle = Math.PI/2;
-                else if(Game.keys[this.ctrls.l]) angle = Math.PI;
-                else if(Game.keys[this.ctrls.r]) angle = 0;
+                if(Game.keys[this.ctrls.u]) a = -Math.PI/2; else if(Game.keys[this.ctrls.d]) a = Math.PI/2;
+                else if(Game.keys[this.ctrls.l]) a = Math.PI; else if(Game.keys[this.ctrls.r]) a = 0;
             }
-            Game.bullets.push(new Bullet(
-                this.x + this.w/2, this.y + this.h/2,
-                Math.cos(angle)*g.spd, Math.sin(angle)*g.spd,
-                g, this.id, dmg
-            ));
+            Game.bullets.push(new Bullet(this.x + this.w/2, this.y + this.h/2, Math.cos(a)*g.spd, Math.sin(a)*g.spd, g, this.id, dmg));
         }
     }
-
     die() {
         Game.spawnExplosion(this.x, this.y, 10);
         if(this.id === 1) Game.p2.score++; else Game.p1.score++;
-        this.respawn();
-        Game.phys.sz = 1;
-        Game.updateHud();
+        this.respawn(); Game.phys.sz = 1; Game.updateHud();
     }
-
     draw() {
-        if(Game.phys.vamp && this.id !== 1) return; // Invis effect
-        Game.ctx.fillStyle = this.color;
-        Game.ctx.fillRect(this.x, this.y, this.w, this.h);
-        
-        // Gun
-        Game.ctx.fillStyle = '#fff';
-        let off = this.facing===1 ? this.w : -12;
-        if(Game.phys.top) off = this.w/2 - 6;
+        if(Game.phys.vamp && this.id !== 1) return;
+        Game.ctx.fillStyle = this.color; Game.ctx.fillRect(this.x, this.y, this.w, this.h);
+        Game.ctx.fillStyle = '#fff'; let off = this.facing===1 ? this.w : -12; if(Game.phys.top) off = this.w/2 - 6;
         Game.ctx.fillRect(this.x + off, this.y + this.h/2 - 2, 12, 4);
-
-        // HP
-        Game.ctx.fillStyle = 'red';
-        Game.ctx.fillRect(this.x, this.y - 8, this.w, 3);
-        Game.ctx.fillStyle = '#0f0';
-        Game.ctx.fillRect(this.x, this.y - 8, this.w * (this.hp/100), 3);
+        Game.ctx.fillStyle = 'red'; Game.ctx.fillRect(this.x, this.y - 8, this.w, 3);
+        Game.ctx.fillStyle = '#0f0'; Game.ctx.fillRect(this.x, this.y - 8, this.w * (this.hp/100), 3);
     }
-
     getTileAtCenter() {
-        let cx = Math.floor((this.x + this.w/2) / TILE_SIZE);
-        let cy = Math.floor((this.y + this.h/2) / TILE_SIZE);
-        if(cy >= 0 && cy < Game.rows && cx >= 0 && cx < Game.cols) {
-            return TILES[Game.map[cy][cx]];
-        }
+        let cx = Math.floor((this.x + this.w/2) / TILE_SIZE), cy = Math.floor((this.y + this.h/2) / TILE_SIZE);
+        if(cy >= 0 && cy < Game.rows && cx >= 0 && cx < Game.cols) return TILES[Game.map[cy][cx]];
         return null;
     }
 }
 
-/**
- * OBJECTS
- */
 class Bullet {
-    constructor(x, y, vx, vy, stats, owner, dmg) {
-        this.x = x; this.y = y; this.vx = vx; this.vy = vy;
-        this.s = stats; this.o = owner; this.dmg = dmg;
-        this.life = stats.life || 80;
-    }
+    constructor(x, y, vx, vy, stats, owner, dmg) { this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.s = stats; this.o = owner; this.dmg = dmg; this.life = stats.life || 80; }
     update() {
         if(this.s.grav && !Game.phys.top) this.vy += this.s.grav * (Game.phys.g<0 ? -1 : 1);
-        if(this.s.seek) {
-            let t = this.o === 1 ? Game.p2 : Game.p1;
-            let ang = Math.atan2((t.y+t.h/2)-this.y, (t.x+t.w/2)-this.x);
-            this.vx += Math.cos(ang)*0.5; this.vy += Math.sin(ang)*0.5;
-        }
-
-        this.x += this.vx * Game.phys.ts;
-        this.y += this.vy * Game.phys.ts;
-        this.life -= Game.phys.ts;
-
-        // Map Collision
-        let cx = Math.floor(this.x / TILE_SIZE);
-        let cy = Math.floor(this.y / TILE_SIZE);
-        let hit = false;
-        
+        if(this.s.seek) { let t = this.o === 1 ? Game.p2 : Game.p1; let ang = Math.atan2((t.y+t.h/2)-this.y, (t.x+t.w/2)-this.x); this.vx += Math.cos(ang)*0.5; this.vy += Math.sin(ang)*0.5; }
+        this.x += this.vx * Game.phys.ts; this.y += this.vy * Game.phys.ts; this.life -= Game.phys.ts;
+        let cx = Math.floor(this.x / TILE_SIZE), cy = Math.floor(this.y / TILE_SIZE), hit = false;
         if(cy >= 0 && cy < Game.rows && cx >= 0 && cx < Game.cols) {
             let t = TILES[Game.map[cy][cx]];
             if(t && t.s) {
-                if(this.s.bnc) { 
-                    // Simple bounce
-                    let tx = cx*TILE_SIZE; 
-                    if(this.x < tx+4 || this.x > tx+28) this.vx *= -1; else this.vy *= -1;
-                } else {
-                    hit = true;
-                    if(t.brk) { Game.map[cy][cx] = 0; Game.spawnParticle(this.x, this.y, 5, '#fff'); }
-                }
+                if(this.s.bnc) { let tx = cx*TILE_SIZE; if(this.x < tx+4 || this.x > tx+28) this.vx *= -1; else this.vy *= -1; }
+                else { hit = true; if(t.brk) { Game.map[cy][cx] = 0; Game.spawnParticle(this.x, this.y, 5, '#fff'); } }
             }
         }
-
-        // Player Collision
-        let target = this.o === 1 ? Game.p2 : Game.p1;
-        if(this.x > target.x && this.x < target.x + target.w &&
-           this.y > target.y && this.y < target.y + target.h) {
-             target.hp -= this.dmg;
-             if(Game.phys.vamp) { let atk = this.o===1?Game.p1:Game.p2; atk.hp=Math.min(100, atk.hp+10); }
-             hit = true;
-             Game.spawnParticle(this.x, this.y, 5, 'red');
-             if(target.hp <= 0) target.die();
+        let tgt = this.o === 1 ? Game.p2 : Game.p1;
+        if(this.x > tgt.x && this.x < tgt.x + tgt.w && this.y > tgt.y && this.y < tgt.y + tgt.h) {
+             tgt.hp -= this.dmg; if(Game.phys.vamp) { let atk = this.o===1?Game.p1:Game.p2; atk.hp=Math.min(100, atk.hp+10); }
+             hit = true; Game.spawnParticle(this.x, this.y, 5, 'red'); if(tgt.hp <= 0) tgt.die();
         }
-
-        if(hit || this.life <= 0) {
-            if(this.s.exp) Game.spawnExplosion(this.x, this.y, this.s.rad || 60);
-            this.life = 0;
-            Game.spawnParticle(this.x, this.y, 3, this.s.col);
-        }
+        if(hit || this.life <= 0) { if(this.s.exp) Game.spawnExplosion(this.x, this.y, this.s.rad || 60); this.life = 0; Game.spawnParticle(this.x, this.y, 3, this.s.col); }
     }
-    draw() {
-        Game.ctx.fillStyle = this.s.col;
-        Game.ctx.beginPath();
-        Game.ctx.arc(this.x, this.y, 3, 0, Math.PI*2);
-        Game.ctx.fill();
-    }
+    draw() { Game.ctx.fillStyle = this.s.col; Game.ctx.beginPath(); Game.ctx.arc(this.x, this.y, 3, 0, Math.PI*2); Game.ctx.fill(); }
 }
 
 class Box {
-    constructor(isEff) {
-        this.isEff = isEff;
-        this.w = 20; this.h = 20;
-        this.life = 0;
-        this.respawn();
-    }
+    constructor(isEff) { this.isEff = isEff; this.w = 20; this.h = 20; this.life = 0; this.respawn(); }
     respawn() {
-        this.life = 600;
-        this.gun = Math.floor(Math.random() * GUNS.length);
-        this.effIdx = Math.floor(Math.random() * EFFECTS.length);
-        
-        // Find safe spot
+        this.life = 600; this.gun = Math.floor(Math.random() * GUNS.length); this.effIdx = Math.floor(Math.random() * EFFECTS.length);
         for(let i=0; i<50; i++) {
-            let x = Math.floor(Math.random() * (Game.cols-4))+2;
-            let y = Math.floor(Math.random() * (Game.rows-5))+2;
-            if(Game.map[y][x] === 0 && !TILES[Game.map[y][x]].s) {
-                this.x = x * TILE_SIZE + 6;
-                this.y = y * TILE_SIZE + 6;
-                return;
-            }
+            let x = Math.floor(Math.random() * (Game.cols-4))+2, y = Math.floor(Math.random() * (Game.rows-5))+2;
+            if(Game.map[y][x] === 0 && !TILES[Game.map[y][x]].s) { this.x = x * TILE_SIZE + 6; this.y = y * TILE_SIZE + 6; return; }
         }
         this.x = Game.width/2; this.y = 100;
     }
     update() {
         this.life -= Game.phys.ts;
-        if(this.life <= 0) {
-            Game.spawnParticle(this.x, this.y, 5, '#fff');
-            this.respawn();
-            return;
-        }
-
+        if(this.life <= 0) { Game.spawnParticle(this.x, this.y, 5, '#fff'); this.respawn(); return; }
         let bob = Math.sin(Game.frame * 0.1) * 4;
-        
-        // Check Pickup
         [Game.p1, Game.p2].forEach(p => {
-            if(p.x < this.x + 20 && p.x + p.w > this.x &&
-               p.y < this.y + bob + 20 && p.y + p.h > this.y + bob) {
+            if(p.x < this.x + 20 && p.x + p.w > this.x && p.y < this.y + bob + 20 && p.y + p.h > this.y + bob) {
                 Game.spawnParticle(this.x, this.y, 15, this.isEff ? '#0ff' : '#fc0');
-                if(this.isEff) Game.triggerEffect(this.effIdx);
-                else { p.gun = this.gun; Game.updateHud(); }
+                if(this.isEff) Game.triggerEffect(this.effIdx); else { p.gun = this.gun; Game.updateHud(); }
                 this.respawn();
             }
         });
         this.drawY = this.y + bob;
     }
     draw() {
-        Game.ctx.fillStyle = this.isEff ? '#0ff' : '#fc0';
-        Game.ctx.fillRect(this.x, this.drawY, 20, 20);
-        Game.ctx.fillStyle = '#000';
-        Game.ctx.font = '16px monospace';
-        Game.ctx.fillText(this.isEff ? '!' : '?', this.x+6, this.drawY+15);
+        Game.ctx.fillStyle = this.isEff ? '#0ff' : '#fc0'; Game.ctx.fillRect(this.x, this.drawY, 20, 20);
+        Game.ctx.fillStyle = '#000'; Game.ctx.font = '16px monospace'; Game.ctx.fillText(this.isEff ? '!' : '?', this.x+6, this.drawY+15);
     }
 }
-
-// Start
 Game.init();
-
 </script>
 </body>
 </html>
