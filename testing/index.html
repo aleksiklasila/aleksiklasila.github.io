@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Golf & Editor: Desktop Edition</title>
+<style>
+    :root { --bg: #2c3e50; --ui: #ecf0f1; --accent: #e74c3c; }
+    body { margin: 0; overflow: hidden; background: var(--bg); font-family: 'Segoe UI', sans-serif; color: var(--ui); touch-action: none; user-select: none; -webkit-user-select: none; }
+    canvas { display: block; }
+    
+    /* UI Overlay Layer */
+    #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
+    
+    .panel { background: rgba(0,0,0,0.85); padding: 30px; border-radius: 12px; pointer-events: auto; text-align: center; max-width: 600px; box-shadow: 0 0 30px rgba(0,0,0,0.6); border: 1px solid #444; }
+    h1 { margin: 0 0 20px 0; color: #2ecc71; text-transform: uppercase; letter-spacing: 2px; font-size: 32px; text-shadow: 0 2px 0 #000; }
+    p { color: #bdc3c7; margin-bottom: 20px; }
+
+    button { background: var(--accent); color: white; border: none; padding: 12px 24px; margin: 8px; font-size: 16px; cursor: pointer; border-radius: 4px; transition: 0.2s; font-weight: bold; text-transform: uppercase; }
+    button:hover { filter: brightness(1.2); transform: translateY(-2px); }
+    button:active { transform: scale(0.95) translateY(0); }
+    button.secondary { background: #34495e; border: 1px solid #7f8c8d; }
+    
+    /* Editor UI */
+    #editor-ui { position: absolute; bottom: 0; left: 0; width: 100%; height: 110px; background: rgba(0,0,0,0.9); display: none; pointer-events: auto; padding: 10px; box-sizing: border-box; z-index: 20; border-top: 2px solid #2ecc71; display: flex; align-items: center; justify-content: space-between;}
+    
+    #tile-palette { overflow-x: auto; white-space: nowrap; flex-grow: 1; padding-right: 20px; }
+
+    .tile-btn { width: 60px; height: 60px; display: inline-block; margin-right: 8px; border: 2px solid #555; cursor: pointer; position: relative; border-radius: 6px; vertical-align: middle; transition: 0.1s; }
+    .tile-btn:hover { border-color: #aaa; }
+    .tile-btn.selected { border-color: #2ecc71; transform: scale(1.1); box-shadow: 0 0 15px rgba(46, 204, 113, 0.4); z-index: 10; }
+    .tile-btn span { position: absolute; bottom: -22px; width: 100%; font-size: 11px; text-align: center; color: #ccc; pointer-events: none; font-weight: bold; text-shadow: 1px 1px 0 #000; }
+
+    #editor-controls { min-width: 120px; display: flex; flex-direction: column; gap: 5px; border-left: 1px solid #444; padding-left: 15px; }
+    #editor-controls button { margin: 0; padding: 8px 12px; font-size: 12px; width: 100%; }
+
+    /* Custom Scrollbar for palette */
+    #tile-palette::-webkit-scrollbar { height: 8px; }
+    #tile-palette::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+    
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+    <div id="main-menu" class="panel">
+        <h1>Mini Golf Designer</h1>
+        <p>Use WASD/Arrows to Aim | Space/Enter to Shoot</p>
+        <div style="margin: 20px 0; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 4px;">
+            <label style="font-size: 18px;">PLAYERS: 
+                <input type="number" id="player-count" min="1" max="4" value="1" style="width:50px; height: 30px; text-align:center; font-size: 18px; border:none; border-radius: 4px;">
+            </label>
+        </div>
+        <button onclick="startGame()">Play Current Map</button>
+        <button class="secondary" onclick="generateRandomMap()">New Random Map</button>
+        <hr style="border:0; border-top:1px solid #555; margin: 15px 0;">
+        <button onclick="openEditor()">Map Editor</button>
+        <button class="secondary" onclick="loadUserMap()">Load Saved Map</button>
+    </div>
+
+    <div id="pause-menu" class="panel" style="display:none;">
+        <h1>Paused</h1>
+        <button onclick="resumeGame()">Resume</button>
+        <button class="secondary" onclick="exitToMenu()">Exit to Menu</button>
+    </div>
+</div>
+
+<div id="editor-ui" style="display:none;">
+    <div id="tile-palette"></div>
+    <div id="editor-controls">
+        <button style="background:#2ecc71;" onclick="saveCurrentMap()">💾 Save Map</button>
+        <button class="secondary" onclick="exitToMenu()">❌ Exit</button>
+    </div>
+</div>
+
+<script>
+/** * CONFIGURATION & GLOBALS */
+const CANVAS = document.getElementById('gameCanvas');
+const CTX = CANVAS.getContext('2d', { alpha: false });
+const TILE_SIZE = 40;
+const FRICTION = 0.98;
+const MAX_POWER = 15;
+
+let STATE = 'MENU';
+let PLAYERS = [];
+let MAP = [];
+let MAP_WIDTH = 30;
+let MAP_HEIGHT = 20;
+let EDITOR_ZOOM = 1.0;
+
+// Tile Types
+const TILES = {
+    0: { name: 'Grass', color: '#27ae60', type: 'floor' },
+    1: { name: 'Start', color: '#f1c40f', type: 'floor' },
+    2: { name: 'Hole',  color: '#2c3e50', type: 'hole' },
+    3: { name: 'Block', color: '#7f8c8d', type: 'wall' },
+    4: { name: 'Water', color: '#3498db', type: 'hazard' },
+    5: { name: 'Sand',  color: '#e67e22', type: 'slow' },
+    6: { name: 'Ice',   color: '#ecf0f1', type: 'slide' },
+    7: { name: 'Jump',  color: '#9b59b6', type: 'jump' },
+    8: { name: 'Bst ^', color: '#c0392b', type: 'boost', dx:0, dy:-1, angle: -Math.PI/2 },
+    9: { name: 'Bst >', color: '#c0392b', type: 'boost', dx:1, dy:0,  angle: 0 },
+    10:{ name: 'Bst v', color: '#c0392b', type: 'boost', dx:0, dy:1,  angle: Math.PI/2 },
+    11:{ name: 'Bst <', color: '#c0392b', type: 'boost', dx:-1, dy:0, angle: Math.PI },
+    20:{ name: 'Wood',  color: '#8e44ad', type: 'wall' }, 
+    99:{ name: 'ERASE', color: '#e74c3c', type: 'empty' }
+};
+
+let EDITOR_SELECTED_TILE = 3;
+
+/** * SYSTEM INIT */
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // Controls
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('keyup', handleKeyUp);
+    
+    // Mouse (Editor)
+    CANVAS.addEventListener('mousedown', handleMouse);
+    CANVAS.addEventListener('mousemove', handleMouseMove);
+    CANVAS.addEventListener('wheel', handleWheel); // Zoom
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('contextmenu', e => e.preventDefault());
+
+    setupEditorUI();
+    generateRandomMap();
+    requestAnimationFrame(loop);
+}
+
+function resize() {
+    CANVAS.width = window.innerWidth;
+    CANVAS.height = window.innerHeight;
+}
+
+/** * EDITOR UI GENERATION */
+function setupEditorUI() {
+    const palette = document.getElementById('tile-palette');
+    palette.innerHTML = '';
+    
+    for (let id in TILES) {
+        if(id == 0) continue; 
+        let btn = document.createElement('div');
+        btn.className = 'tile-btn';
+        if(id == EDITOR_SELECTED_TILE) btn.classList.add('selected');
+        
+        // Icon logic
+        if(id == 99) {
+            btn.style.backgroundColor = '#333';
+            btn.style.borderColor = '#e74c3c';
+            btn.innerHTML = `<div style="font-size:24px; line-height:56px; text-align:center; color:#e74c3c">✖</div><span>Erase</span>`;
+        } else {
+            btn.style.backgroundColor = TILES[id].color;
+            // Draw a mini arrow for boosters on the button
+            if(TILES[id].type === 'boost') {
+                let rot = (TILES[id].angle * 180 / Math.PI);
+                btn.innerHTML = `<div style="font-size:20px; line-height:56px; text-align:center; color:rgba(255,255,255,0.8); transform: rotate(${rot}deg)">➤</div><span>${TILES[id].name}</span>`;
+            } else {
+                btn.innerHTML = `<span>${TILES[id].name}</span>`;
+            }
+        }
+        
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.tile-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            EDITOR_SELECTED_TILE = parseInt(id);
+        };
+        palette.appendChild(btn);
+    }
+}
+
+/** * MAP STORAGE */
+function saveCurrentMap() {
+    let name = prompt("Enter a name for this map:", "My Golf Course");
+    if(name) {
+        let savedData = JSON.parse(localStorage.getItem('golf_maps') || '{}');
+        savedData[name] = MAP;
+        localStorage.setItem('golf_maps', JSON.stringify(savedData));
+        alert(`Map "${name}" saved!`);
+    }
+}
+
+function loadUserMap() {
+    let savedData = JSON.parse(localStorage.getItem('golf_maps') || '{}');
+    let names = Object.keys(savedData);
+    if(names.length === 0) {
+        alert("No saved maps found.");
+        return;
+    }
+    
+    // Simple prompt for now (could be a modal in full version)
+    let choice = prompt("Enter exact map name to load:\n\nAvailable:\n" + names.join("\n"));
+    if(choice && savedData[choice]) {
+        MAP = savedData[choice];
+        // Ensure dimensions match if map size changed
+        MAP_HEIGHT = MAP.length;
+        MAP_WIDTH = MAP[0].length;
+        alert("Map loaded!");
+    } else if (choice) {
+        alert("Map not found.");
+    }
+}
+
+/** * MAP GENERATION */
+function createEmptyMap() {
+    MAP = [];
+    for(let y=0; y<MAP_HEIGHT; y++) {
+        let row = [];
+        for(let x=0; x<MAP_WIDTH; x++) row.push(0);
+        MAP.push(row);
+    }
+}
+
+function generateRandomMap() {
+    createEmptyMap();
+    // Borders
+    for(let x=0; x<MAP_WIDTH; x++) { MAP[0][x]=3; MAP[MAP_HEIGHT-1][x]=3; }
+    for(let y=0; y<MAP_HEIGHT; y++) { MAP[y][0]=3; MAP[y][MAP_WIDTH-1]=3; }
+    
+    MAP[2][2] = 1; // Start
+    MAP[MAP_HEIGHT-3][MAP_WIDTH-3] = 2; // Hole
+
+    for(let i=0; i<35; i++) {
+        let rx = Math.floor(Math.random() * (MAP_WIDTH-2)) + 1;
+        let ry = Math.floor(Math.random() * (MAP_HEIGHT-2)) + 1;
+        if(MAP[ry][rx] === 0) MAP[ry][rx] = Math.floor(Math.random() * 5) + 3; 
+    }
+}
+
+/** * PLAYER LOGIC */
+class Player {
+    constructor(id) {
+        this.id = id;
+        this.color = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6'][id % 4];
+        this.reset();
+        this.strokes = 0;
+        this.finished = false;
+        this.angle = 0;
+        this.power = 0;
+        this.charging = false;
+        this.powerDir = 1;
+    }
+
+    reset() {
+        let started = false;
+        for(let y=0; y<MAP_HEIGHT; y++){
+            for(let x=0; x<MAP_WIDTH; x++){
+                if(MAP[y][x] == 1) {
+                    this.x = x * TILE_SIZE + TILE_SIZE/2;
+                    this.y = y * TILE_SIZE + TILE_SIZE/2;
+                    started = true;
+                }
+            }
+        }
+        if(!started) { this.x = 100; this.y = 100; }
+        this.vx = 0; this.vy = 0; this.z = 0; this.vz = 0;
+    }
+
+    update() {
+        if (this.finished) return;
+
+        // Physics
+        this.x += this.vx;
+        this.y += this.vy;
+
+        if (this.z <= 0) {
+            let tile = getTileAt(this.x, this.y);
+            let friction = FRICTION;
+            if(tile.type === 'slow') friction = 0.90;
+            if(tile.type === 'slide') friction = 0.995;
+            
+            this.vx *= friction;
+            this.vy *= friction;
+            
+            if(Math.abs(this.vx) < 0.05 && Math.abs(this.vy) < 0.05) { this.vx = 0; this.vy = 0; }
+            if(tile.type === 'hazard') { this.reset(); this.strokes++; }
+            if(tile.type === 'boost') { 
+                // Push in direction
+                this.vx += tile.dx * 0.8; 
+                this.vy += tile.dy * 0.8; 
+            }
+            if(tile.type === 'jump' && this.vz === 0) this.vz = 4;
+            if(tile.type === 'hole') {
+                let dist = Math.hypot(this.x - (Math.floor(this.x/TILE_SIZE)*TILE_SIZE+TILE_SIZE/2), 
+                                      this.y - (Math.floor(this.y/TILE_SIZE)*TILE_SIZE+TILE_SIZE/2));
+                if(dist < 10 && (Math.abs(this.vx) + Math.abs(this.vy)) < 5) {
+                    this.finished = true;
+                    this.vx = 0; this.vy = 0;
+                }
+            }
+        } else {
+            this.vx *= 0.99; this.vy *= 0.99;
+        }
+
+        this.z += this.vz;
+        if(this.z > 0 || this.vz !== 0) this.vz -= 0.2;
+        if(this.z < 0) { this.z = 0; this.vz = 0; }
+
+        if (this.z <= 10) this.handleCollision();
+        this.handleInput();
+    }
+
+    handleCollision() {
+        let checkTile = (x, y) => {
+            let t = getTileAt(x, y);
+            return (t.type === 'wall');
+        };
+        let r = 8;
+        if(checkTile(this.x + this.vx + (this.vx>0?r:-r), this.y)) this.vx *= -0.8;
+        if(checkTile(this.x, this.y + this.vy + (this.vy>0?r:-r))) this.vy *= -0.8;
+    }
+
+    handleInput() {
+        if (Math.abs(this.vx) > 0.1 || Math.abs(this.vy) > 0.1) return;
+
+        let gp = navigator.getGamepads()[this.id];
+        let shootPressed = false;
+
+        // Keyboard / Gamepad logic
+        if(this.id === 0) {
+            if(keys['KeyA']) this.angle -= 0.05;
+            if(keys['KeyD']) this.angle += 0.05;
+            if(keys['Space']) shootPressed = true;
+        } 
+        else if (this.id === 1) {
+            if(keys['ArrowLeft']) this.angle -= 0.05;
+            if(keys['ArrowRight']) this.angle += 0.05;
+            if(keys['Enter']) shootPressed = true;
+        }
+
+        if(gp) {
+            if(Math.abs(gp.axes[0]) > 0.2 || Math.abs(gp.axes[1]) > 0.2) 
+                this.angle = Math.atan2(gp.axes[1], gp.axes[0]);
+            if(gp.buttons[0].pressed) shootPressed = true;
+        }
+
+        if(shootPressed) {
+            this.charging = true;
+            this.power += 0.5 * this.powerDir;
+            if(this.power >= MAX_POWER || this.power <= 0) this.powerDir *= -1;
+        } else if (this.charging) {
+            this.charging = false;
+            this.vx = Math.cos(this.angle) * this.power;
+            this.vy = Math.sin(this.angle) * this.power;
+            this.power = 0;
+            this.strokes++;
+            this.powerDir = 1;
+        }
+    }
+
+    draw(ctx, width, height) {
+        let camX = Math.max(0, Math.min(this.x - width/2, MAP_WIDTH*TILE_SIZE - width));
+        let camY = Math.max(0, Math.min(this.y - height/2, MAP_HEIGHT*TILE_SIZE - height));
+
+        ctx.save();
+        ctx.translate(-camX, -camY);
+
+        drawMap(ctx, camX, camY, width, height);
+
+        PLAYERS.forEach(p => { if(p !== this) drawBall(ctx, p, true); });
+        drawBall(ctx, this, false);
+
+        // Aim Line
+        if (Math.abs(this.vx) < 0.1 && Math.abs(this.vy) < 0.1 && !this.finished) {
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(this.x + Math.cos(this.angle)*50, this.y + Math.sin(this.angle)*50);
+            ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([]);
+
+            if(this.charging) {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x - 20, this.y - 30, (this.power/MAX_POWER)*40, 6);
+                ctx.strokeStyle = 'white'; ctx.lineWidth=1; ctx.strokeRect(this.x-20, this.y-30, 40, 6);
+            }
+        }
+        ctx.restore();
+
+        // HUD
+        ctx.fillStyle = 'white'; ctx.font = 'bold 20px sans-serif'; ctx.strokeStyle = 'black'; ctx.lineWidth = 3;
+        ctx.strokeText(`P${this.id+1}: ${this.strokes}`, 20, 30); ctx.fillText(`P${this.id+1}: ${this.strokes}`, 20, 30);
+        if(this.finished) { ctx.fillStyle = '#f1c40f'; ctx.fillText("HOLE IN ONE!", width/2 - 60, height/2); }
+    }
+}
+
+function getTileAt(worldX, worldY) {
+    let tx = Math.floor(worldX / TILE_SIZE);
+    let ty = Math.floor(worldY / TILE_SIZE);
+    if(tx < 0 || tx >= MAP_WIDTH || ty < 0 || ty >= MAP_HEIGHT) return { type: 'wall' };
+    return TILES[MAP[ty][tx]] || TILES[0];
+}
+
+function drawBall(ctx, p, isGhost) {
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.arc(p.x, p.y + 4, 6, 0, Math.PI*2); ctx.fill(); // Shadow
+    
+    ctx.beginPath();
+    ctx.arc(p.x, p.y - p.z, 7, 0, Math.PI*2);
+    ctx.fillStyle = p.color;
+    if(isGhost) ctx.globalAlpha = 0.5;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+    ctx.lineWidth = 2; ctx.strokeStyle = 'white'; ctx.stroke();
+}
+
+function drawMap(ctx, cx, cy, w, h) {
+    let startX = Math.floor(cx / TILE_SIZE);
+    let startY = Math.floor(cy / TILE_SIZE);
+    let endX = startX + (w / TILE_SIZE) + 1;
+    let endY = startY + (h / TILE_SIZE) + 1;
+
+    for(let y = startY; y <= endY; y++) {
+        for(let x = startX; x <= endX; x++) {
+            if(y < 0 || y >= MAP_HEIGHT || x < 0 || x >= MAP_WIDTH) continue;
+            let tid = MAP[y][x];
+            let t = TILES[tid] || TILES[0];
+            let px = x * TILE_SIZE, py = y * TILE_SIZE;
+
+            // Base Floor
+            ctx.fillStyle = (tid === 0) ? '#27ae60' : t.color;
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth=1; ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+
+            // Special Visuals
+            if(tid === 2) { // Hole
+                ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(px+20, py+20, 10, 0, 7); ctx.fill(); 
+                ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth=2; ctx.stroke();
+            }
+            else if(t.type === 'boost') { // Arrows
+                drawArrow(ctx, px+20, py+20, t.angle);
+            }
+            else if(t.type === 'jump') { // Jump pad
+                ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.arc(px+20, py+20, 8, 0, 7); ctx.fill(); 
+                ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+            }
+            else if(tid === 3 || tid === 20) { // Wall 3D effect
+                ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.fillRect(px, py+30, 40, 10); // Shadow
+                ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(px, py, 40, 5); // Highlight
+            }
+        }
+    }
+}
+
+function drawArrow(ctx, x, y, angle) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(-8, -8);
+    ctx.lineTo(8, 0);
+    ctx.lineTo(-8, 8);
+    ctx.closePath();
+    ctx.fillStyle = 'white';
+    ctx.fill();
+    ctx.restore();
+}
+
+/** * GAME LOOP */
+let keys = {};
+function handleKey(e) { keys[e.code] = true; if(e.key === 'Escape') togglePause(); }
+function handleKeyUp(e) { keys[e.code] = false; }
+
+function loop() {
+    CTX.fillStyle = '#111';
+    CTX.fillRect(0, 0, CANVAS.width, CANVAS.height);
+
+    if(STATE === 'PLAY') {
+        PLAYERS.forEach(p => p.update());
+        
+        let count = PLAYERS.length;
+        let w = CANVAS.width, h = CANVAS.height;
+
+        if (count === 1) renderView(0, 0, 0, w, h);
+        else if (count === 2) {
+            renderView(0, 0, 0, w/2, h);
+            renderView(1, w/2, 0, w/2, h);
+            CTX.fillStyle = '#000'; CTX.fillRect(w/2 - 2, 0, 4, h);
+        } 
+        else {
+            let hw = w/2, hh = h/2;
+            renderView(0, 0, 0, hw, hh); renderView(1, hw, 0, hw, hh);
+            if(PLAYERS[2]) renderView(2, 0, hh, hw, hh);
+            if(PLAYERS[3]) renderView(3, hw, hh, hw, hh);
+            CTX.fillStyle = '#000'; CTX.fillRect(hw-2, 0, 4, h); CTX.fillRect(0, hh-2, w, 4);
+        }
+    } else if (STATE === 'EDITOR') {
+        renderEditor();
+    }
+    requestAnimationFrame(loop);
+}
+
+function renderView(pid, x, y, w, h) {
+    CTX.save();
+    CTX.beginPath(); CTX.rect(x, y, w, h); CTX.clip();
+    CTX.translate(x, y);
+    CTX.fillStyle = '#27ae60'; CTX.fillRect(0, 0, w, h);
+    PLAYERS[pid].draw(CTX, w, h);
+    CTX.strokeStyle = PLAYERS[pid].color; CTX.lineWidth = 4; CTX.strokeRect(0,0,w,h);
+    CTX.restore();
+}
+
+/** * STATE MANAGEMENT */
+function startGame() {
+    let count = parseInt(document.getElementById('player-count').value);
+    PLAYERS = [];
+    for(let i=0; i<count; i++) PLAYERS.push(new Player(i));
+    document.getElementById('ui-layer').style.display = 'none';
+    document.getElementById('editor-ui').style.display = 'none';
+    STATE = 'PLAY';
+}
+
+function openEditor() {
+    document.getElementById('main-menu').style.display = 'none';
+    document.getElementById('editor-ui').style.display = 'flex';
+    STATE = 'EDITOR';
+    EDITOR_ZOOM = 1.0;
+}
+
+function exitToMenu() {
+    STATE = 'MENU';
+    document.getElementById('ui-layer').style.display = 'flex';
+    document.getElementById('main-menu').style.display = 'block';
+    document.getElementById('pause-menu').style.display = 'none';
+    document.getElementById('editor-ui').style.display = 'none';
+}
+
+function togglePause() {
+    if(STATE === 'PLAY') {
+        STATE = 'PAUSED';
+        document.getElementById('ui-layer').style.display = 'flex';
+        document.getElementById('pause-menu').style.display = 'block';
+    }
+}
+
+function resumeGame() {
+    STATE = 'PLAY';
+    document.getElementById('ui-layer').style.display = 'none';
+}
+
+/** * EDITOR LOGIC */
+let isDragging = false;
+let dragButton = 0; // 0 left, 2 right
+
+function renderEditor() {
+    CTX.fillStyle = '#1e272e'; CTX.fillRect(0,0,CANVAS.width, CANVAS.height); // Darker background for editor
+    
+    // Grid Calculations with Zoom
+    let mapWpx = MAP_WIDTH * TILE_SIZE * EDITOR_ZOOM;
+    let mapHpx = MAP_HEIGHT * TILE_SIZE * EDITOR_ZOOM;
+    
+    // Center map
+    let ox = (CANVAS.width - mapWpx)/2;
+    let oy = (CANVAS.height - mapHpx)/2;
+
+    CTX.save();
+    CTX.translate(ox, oy);
+    CTX.scale(EDITOR_ZOOM, EDITOR_ZOOM);
+    
+    // Shadow behind map
+    CTX.shadowColor = 'black'; CTX.shadowBlur = 20; CTX.shadowOffsetX = 10; CTX.shadowOffsetY = 10;
+    
+    drawMap(CTX, 0, 0, MAP_WIDTH * TILE_SIZE, MAP_HEIGHT * TILE_SIZE);
+    
+    CTX.shadowBlur = 0; CTX.shadowOffsetX = 0; CTX.shadowOffsetY = 0;
+
+    // Editor Grid Overlay
+    CTX.strokeStyle = 'rgba(255,255,255,0.1)'; CTX.lineWidth = 1;
+    for(let y=0; y<=MAP_HEIGHT; y++) { CTX.beginPath(); CTX.moveTo(0, y*TILE_SIZE); CTX.lineTo(MAP_WIDTH*TILE_SIZE, y*TILE_SIZE); CTX.stroke(); }
+    for(let x=0; x<=MAP_WIDTH; x++) { CTX.beginPath(); CTX.moveTo(x*TILE_SIZE, 0); CTX.lineTo(x*TILE_SIZE, MAP_HEIGHT*TILE_SIZE); CTX.stroke(); }
+    
+    // Highlight hovered tile
+    if(hoverX >= 0 && hoverX < MAP_WIDTH && hoverY >= 0 && hoverY < MAP_HEIGHT) {
+        CTX.strokeStyle = '#fff'; CTX.lineWidth = 2;
+        CTX.strokeRect(hoverX*TILE_SIZE, hoverY*TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+    
+    CTX.restore();
+}
+
+let hoverX = -1, hoverY = -1;
+
+function handleWheel(e) {
+    if(STATE !== 'EDITOR') return;
+    let dir = Math.sign(e.deltaY);
+    if(dir < 0) EDITOR_ZOOM = Math.min(EDITOR_ZOOM + 0.1, 2.5);
+    else EDITOR_ZOOM = Math.max(EDITOR_ZOOM - 0.1, 0.5);
+}
+
+function handleMouse(e) {
+    if(STATE !== 'EDITOR' || e.target.closest('#editor-ui')) return;
+    isDragging = true;
+    dragButton = e.button;
+    editMap(e.clientX, e.clientY);
+}
+
+function handleMouseMove(e) {
+    if(STATE !== 'EDITOR') return;
+    
+    // Calculate hover coordinates for rendering
+    let mapWpx = MAP_WIDTH * TILE_SIZE * EDITOR_ZOOM;
+    let mapHpx = MAP_HEIGHT * TILE_SIZE * EDITOR_ZOOM;
+    let ox = (CANVAS.width - mapWpx)/2;
+    let oy = (CANVAS.height - mapHpx)/2;
+    
+    hoverX = Math.floor((e.clientX - ox) / (TILE_SIZE * EDITOR_ZOOM));
+    hoverY = Math.floor((e.clientY - oy) / (TILE_SIZE * EDITOR_ZOOM));
+
+    if(isDragging) editMap(e.clientX, e.clientY);
+}
+
+function editMap(cx, cy) {
+    if(hoverX >= 0 && hoverX < MAP_WIDTH && hoverY >= 0 && hoverY < MAP_HEIGHT) {
+        if(EDITOR_SELECTED_TILE === 99) MAP[hoverY][hoverX] = 0; // Eraser
+        else if(dragButton === 0) MAP[hoverY][hoverX] = EDITOR_SELECTED_TILE;
+        else if(dragButton === 2) MAP[hoverY][hoverX] = 0; // Right click erase
+    }
+}
+
+init();
+</script>
+</body>
+</html>
