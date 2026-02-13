@@ -1125,7 +1125,8 @@
             cloud_3a: { name: "Cloud Y1", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 2.", weight: 1, unlock_wave: 70, limit: 1, pairId: 3, isCloud: true },
             cloud_3b: { name: "Cloud Y2", price: 100, icon: "☁️", color: "#ff6", range: 0, target: 'wall', desc: "Links groups with Yellow Cloud 1.", weight: 1, unlock_wave: 80, limit: 1, pairId: 3, isCloud: true },
             // MULTIPLAYER CARDS
-            spawn_enemy: { name: "Spawn Enemy", price: 50, icon: "⚔️", color: "#f0f", target: 'remote', desc: "Send enemies to another player.", weight: 1.5, unlock_wave: 2 }
+            spawn_enemy: { name: "Spawn Enemy", price: 50, icon: "⚔️", color: "#f0f", target: 'remote', desc: "Send enemies to another player.", weight: 1.5, unlock_wave: 2 },
+            barrack: { name: "Barrack", price: 100, icon: "⛺", color: "#686", hp: 100, target: 'floor', desc: "Spawns units. Allies go to corners, Enemies attack you.", weight: 0.5, unlock_wave: 0 }
         };
 
         function get_random_enemy_type(level) {
@@ -1181,9 +1182,53 @@
             }, { passive: false });
             window.addEventListener('touchend', () => handlePressEnd());
 
-            document.getElementById('castle-btn').addEventListener('click', () => {
+            // Better Click Handling: separate function
+            function handleCastleClick() {
+                if (isMultiplayer) {
+                    // Logic Split
+                    if (gameState.waveTimer <= 0) {
+                        // CASE A: Timer is 0. FREE.
+                        // Action: Start Next Wave Cycle LOCALLY only.
+                        // - Reset Timer to 30s.
+                        // - Reset Click Count to 0.
+                        // - Reset Price Base.
+
+                        startWave();
+                        gameState.mpStartTime = Date.now();
+                        gameState.nextWaveClickCount = 0;
+
+                        // REMOVED: Broadcasting to others. Wave is now local.
+                    } else {
+                        // CASE B: Timer > 0. PAID EXTRA WAVE.
+                        // Action: Spawn Wave IMMEDIATELY, but keep timer running.
+
+                        // Calculate Cost
+                        let base = Math.floor(45 * (gameState.shopLevel || 1));
+                        let count = gameState.nextWaveClickCount || 0;
+                        let cost = Math.pow(base, count + 1);
+
+                        if (gameState.money >= cost) {
+                            gameState.money -= cost;
+
+                            // Increment Count
+                            gameState.nextWaveClickCount = (gameState.nextWaveClickCount || 0) + 1;
+
+                            // Trigger Spawn (Locally)
+                            startWave();
+
+                            // REMOVED: Broadcasting EXTRA WAVE.
+                        }
+                    }
+                    updateUI(); // Immediate feedback
+                    return;
+                }
+                // Singleplayer
                 startWave();
-            });
+            }
+
+            let cBtn = document.getElementById('castle-btn');
+            cBtn.onclick = handleCastleClick;
+            cBtn.ontouchstart = (e) => { e.preventDefault(); handleCastleClick(); };
 
 
             document.getElementById('market-strip').addEventListener('click', (e) => {
@@ -1351,6 +1396,8 @@
             droppedItems = [];
             collectors = [];
             collectorSpawners = [];
+            barracks = [];
+            allies = [];
             grid = []; // Clear grid to show black or loading
 
             // Start Async Loop
@@ -1376,6 +1423,7 @@
             gameState.generating = false;
             gameState.maxHpAchieved = 20;
             gameState.fullyClearedWave = 0;
+            gameState.lastTriggeredCycle = -1;
 
             selectedEntity = null;
             updateStatsPanel();
@@ -1597,8 +1645,46 @@
          */
         function update() {
             if (gameState.gameOver) return;
-
             let uiDirty = false;
+
+            // Multiplayer Auto-Wave Timer (SYNCED)
+            if (isMultiplayer) {
+                if (!gameState.mpStartTime) gameState.mpStartTime = Date.now();
+
+                let now = Date.now();
+                let elapsed = now - gameState.mpStartTime;
+
+                // Host Sync Broadcast (Every 5s) - REMOVED for Independent Waves
+                // if (isHost) {
+                //     if (!gameState.lastSyncTime || now - gameState.lastSyncTime > 5000) {
+                //         gameState.lastSyncTime = now;
+                //         connections.forEach(c => c.send({ type: 'sync_timer', elapsed: elapsed }));
+                //     }
+                // }
+
+                // Manual Wave Start (30s -> 0s, then Wait)
+                // Timer now represents time since *this specific wave* started.
+                // We do NOT wrap around automatically.
+                let secondsLeft = 30 - (elapsed / 1000);
+                if (secondsLeft < 0) {
+                    secondsLeft = 0;
+                    gameState.nextWaveClickCount = 0; // Reset if timer runs out naturally
+                }
+
+                gameState.waveTimer = Math.ceil(secondsLeft * 60);
+
+                // No Auto Trigger. User must click "Castle" (Start Wave) button.
+
+                uiDirty = true;
+            } else {
+                // Reset timer if active or generating
+                if (typeof gameState.waveTimer !== 'undefined' && gameState.waveTimer < 30 * 60 && gameState.active) {
+                    gameState.waveTimer = 30 * 60;
+                }
+            }
+
+
+
 
             if (gameState.active && gameState.spawnQueue.length > 0) {
                 gameState.spawnTimer++;
@@ -1658,6 +1744,27 @@
                     continue;
                 }
                 c.update();
+            }
+
+            // Update Barracks
+            for (let i = barracks.length - 1; i >= 0; i--) {
+                let b = barracks[i];
+                if (b.hp <= 0) {
+                    grid[b.gy][b.gx].item = null;
+                    createExplosion(b.x, b.y, '#f44', 10);
+                    barracks.splice(i, 1);
+                    continue;
+                }
+                b.update();
+            }
+
+            // Update Allies
+            for (let i = allies.length - 1; i >= 0; i--) {
+                let a = allies[i];
+                a.update();
+                if (a.dead || a.reachedGoal) {
+                    allies.splice(i, 1);
+                }
             }
 
             // Update Dropped Items
@@ -1763,6 +1870,8 @@
             towers.forEach(t => t.draw(ctx));
             collectorSpawners.forEach(s => s.draw(ctx));
             collectors.forEach(c => c.draw(ctx));
+            barracks.forEach(b => b.draw(ctx));
+            allies.forEach(a => a.draw(ctx));
             enemies.forEach(e => e.draw(ctx));
             projectiles.forEach(p => p.draw(ctx));
             particles.forEach(p => p.draw(ctx));
@@ -2190,6 +2299,10 @@
                 let unlocked = data.unlock_wave !== undefined ? (gameState.wave >= data.unlock_wave) : true;
                 // EXCLUDE REMOTE CARDS FROM MAIN MARKET
                 if (data.target === 'remote') return false;
+
+                // Exclude Barracks from RANDOM pool (Always Manual in MP)
+                if (k === 'barrack') return false;
+
                 return unlocked;
             });
 
@@ -2198,72 +2311,41 @@
             keys.forEach(k => totalWeight += (CARD_TYPES[k].weight || 1));
 
             // Fill empty slots
+            let generatedIndices = [];
             for (let i = 0; i < MARKET_SIZE; i++) {
                 if (newCards[i] === null) {
+                    generatedIndices.push(i);
+
                     if (totalWeight <= 0) break; // Safety
 
                     let r = Math.random() * totalWeight;
                     let selectedType = keys[0];
-                    let currentW = 0;
-
+                    let acc = 0;
                     for (let k of keys) {
-                        currentW += (CARD_TYPES[k].weight || 1);
-                        if (r <= currentW) {
-                            selectedType = k;
-                            break;
-                        }
+                        acc += (CARD_TYPES[k].weight || 1);
+                        if (r <= acc) { selectedType = k; break; }
                     }
 
-                    // Limit Check: If limited, remove from keys for next iteration
-                    if (CARD_TYPES[selectedType].limit) {
-                        let kIdx = keys.indexOf(selectedType);
-                        if (kIdx !== -1) {
-                            keys.splice(kIdx, 1);
-                            totalWeight -= (CARD_TYPES[selectedType].weight || 1);
-                        }
-                    }
-
-                    // Calculate Level and Price
                     let level = 1;
-                    let price = CARD_TYPES[selectedType].price; // Base
+                    // Item Price Calculation
+                    let basePrice = CARD_TYPES[selectedType].price;
+                    let price = basePrice;
 
-                    if (selectedType === 'shop_up') {
-                        price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
-                        level = gameState.shopLevel + 1; // Visual mostly
-                    } else if (selectedType === 'spawn_enemy') {
-                        // Always use Current Shop Level
-                        level = gameState.shopLevel;
-                        price = Math.floor(price * (1 + (level - 1) * 0.4)); // Slightly cheaper scaling?
-                        price *= (gameState.reshufflePriceMultiplier || 1);
+                    // Special items might have level logic?
+                    if (selectedType === 'spawn_enemy') {
+                        // see below
                     } else {
-                        let pool = [];
-                        for (let l = 1; l <= gameState.shopLevel; l++) {
-                            let weight = 1 / Math.pow(2, gameState.shopLevel - l);
-                            pool.push({ l: l, w: weight });
-                        }
-                        let totalW = pool.reduce((a, b) => a + b.w, 0);
-                        let rL = Math.random() * totalW;
-                        let sumL = 0;
-                        for (let p of pool) {
-                            sumL += p.w;
-                            if (rL <= sumL) {
-                                level = p.l;
-                                break;
-                            }
-                        }
-                        // Scale Price
-                        if (CARD_TYPES[selectedType].hpCost) {
+                        // Shop Up?
+                        if (selectedType === 'shop_up') {
+                            // Handled in Guarantee
+                        } else if (selectedType === 'area_upgrader') {
+                            price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
                         } else {
-                            // Special Scaling for Area Upgrader (like Shop Up)
-                            if (selectedType === 'area_upgrader') {
-                                price = Math.floor(price * (1 + (gameState.shopLevel - 1) * 0.5));
-                            } else {
-                                price = Math.floor(price * (1 + (level - 1) * 0.5));
-                            }
-
-                            // Apply Reshuffle Multiplier
-                            price *= (gameState.reshufflePriceMultiplier || 1);
+                            price = Math.floor(price * (1 + (level - 1) * 0.5));
                         }
+
+                        // Apply Reshuffle Multiplier
+                        price *= (gameState.reshufflePriceMultiplier || 1);
                     }
 
                     newCards[i] = { type: selectedType, bought: false, locked: false, level: level, price: price, canYield: canYieldMoney };
@@ -2288,6 +2370,37 @@
                         if (count > 10) count = 10; // Cap
                         newCards[i].count = count;
                     }
+                }
+            }
+
+            // GUARANTEE BARRACK IN MULTIPLAYER
+            if (isMultiplayer) {
+                // Check if we already have one (locked)
+                let hasBarrack = newCards.some(c => c && c.type === 'barrack' && !c.bought);
+                if (!hasBarrack && generatedIndices.length > 0) {
+                    // Replace one random card
+                    let replaceIdx = generatedIndices[Math.floor(Math.random() * generatedIndices.length)];
+
+                    // Generate Barrack Card
+                    let uType = get_random_enemy_type(gameState.shopLevel);
+
+                    let price = CARD_TYPES['barrack'].price;
+                    if (uType.includes('boss')) price *= 5;
+                    price *= (gameState.reshufflePriceMultiplier || 1);
+
+                    let level = 1;
+                    let isAlly = (gameState.shopLevel % 2) === 0;
+
+                    newCards[replaceIdx] = {
+                        type: 'barrack',
+                        barrackType: isAlly ? 'ally' : 'enemy',
+                        unitType: uType,
+                        bought: false,
+                        locked: false,
+                        level: level,
+                        price: price,
+                        canYield: canYieldMoney
+                    };
                 }
             }
             marketCards = newCards;
@@ -2450,6 +2563,158 @@
          * ENTITIES
          */
         class Enemy {
+            static getVisualProps(type) {
+                let props = {
+                    count: 1, // Default spawning count not relevant here but handy
+                    hpBase: 40,
+                    speed: 1.3,
+                    color: '#fff',
+                    r: 8,
+                    visualization: 'circle',
+                    isSnake: false,
+                    isFlying: false,
+                    turretImmune: false,
+                    iceResistant: false,
+                    fireResistant: false,
+                    waterResistant: false,
+                    poisonResistant: false,
+                    laserResistant: false,
+                    sandResistant: false
+                };
+
+                // Type Specifics
+                if (type === 'boss') { props.hpBase = 400; props.speed = 0.6; props.color = '#222'; props.r = 12; }
+                else if (type === 'fast') { props.hpBase = 20; props.speed = 2.4; props.color = '#eee'; props.r = 6; }
+                else if (type === 'tank') { props.hpBase = 80; props.speed = 0.7; props.color = '#555'; props.r = 10; }
+                else if (type === 'poison_resistant') { props.hpBase = 60; props.speed = 1.2; props.color = '#2d2'; props.r = 9; }
+                else if (type === 'fire_resistant') { props.hpBase = 70; props.speed = 1.0; props.color = '#f50'; props.r = 10; }
+                else if (type === 'water_resistant') { props.hpBase = 50; props.speed = 1.6; props.color = '#4af'; props.r = 8; }
+                else if (type === 'ice_resistant') { props.hpBase = 65; props.speed = 1.1; props.color = '#afe'; props.r = 9; }
+                else if (type === 'laser_resistant') { props.hpBase = 55; props.speed = 1.15; props.color = '#d0f'; props.r = 9; }
+                else if (type === 'fly_bird') { props.hpBase = 40; props.speed = 1.3; props.color = '#fff'; props.r = 8; }
+                else if (type === 'ice_bird') { props.hpBase = 55; props.speed = 1.4; props.color = '#acf'; props.r = 8; }
+                else if (type === 'water_bird') { props.hpBase = 50; props.speed = 1.45; props.color = '#4af'; props.r = 16; }
+                else if (type === 'fire_bird') { props.hpBase = 50; props.speed = 1.5; props.color = '#f50'; props.r = 14; }
+                else if (type === 'poison_bird') { props.hpBase = 60; props.speed = 1.4; props.color = '#2d2'; props.r = 18; }
+                else if (type === 'sand_bird') { props.hpBase = 65; props.speed = 2; props.color = '#aa8'; props.r = 15; }
+                else if (type === 'flying') { props.hpBase = 45; props.speed = 1.5; props.color = '#dd0'; props.r = 7; }
+                else if (type === 'snake') { props.hpBase = 800; props.speed = 1.6; props.color = '#0f0'; props.r = 7; }
+                else if (type.startsWith('snake_boss')) {
+                    props.hpBase = 12000;
+                    props.speed = 0.32;
+                    props.r = 12;
+                    if (type === 'snake_boss_poison') props.color = '#2d2';
+                    else if (type === 'snake_boss_water') props.color = '#4af';
+                    else if (type === 'snake_boss_fire') props.color = '#f50';
+                    else if (type === 'snake_boss_ice') props.color = '#afe';
+                    else if (type === 'snake_boss_laser') props.color = '#d0f';
+                }
+                else if (type === 'mole') { props.hpBase = 10; props.speed = 0.8; props.color = '#543'; props.r = 7.5; props.visualization = 'mole_visual'; }
+
+                // Flags
+                props.isFlying = (type === 'ice_bird' || type === 'water_bird' || type === 'fire_bird' || type === 'poison_bird' || type === 'sand_bird' || type === 'fly_bird' || type === 'flying'); // Added fly_bird
+                props.isSnake = (type === 'snake' || type.startsWith('snake_boss'));
+                props.turretImmune = (type === 'mole');
+
+                if (props.isFlying) props.visualization = 'triangle';
+                else if (props.isSnake) props.visualization = 'snake';
+
+                // Snake Max History
+                if (props.isSnake) {
+                    props.snakeMaxHistory = type.startsWith('snake_boss') ? 120 : 20;
+                }
+
+                // Resistances
+                props.iceResistant = (type === 'ice_resistant' || type === 'ice_bird' || type === 'snake_boss_ice');
+                props.fireResistant = (type === 'fire_resistant' || type === 'fire_bird' || type === 'snake_boss_fire');
+                props.waterResistant = (type === 'water_resistant' || type === 'water_bird' || type === 'snake_boss_water');
+                props.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird' || type === 'snake_boss_poison');
+                props.laserResistant = (type === 'laser_resistant' || type === 'snake_boss_laser');
+                props.sandResistant = (type === 'sand_bird' || type === 'flying');
+
+                return props;
+            }
+
+            static render(ctx, x, y, props, snakeHistory = [], status = {}) {
+                // status contains: { burning, poisoned, frozen, wet }
+                // Props contains: { color, r, visualization, isSnake, ... }
+
+                let { color, r, visualization, isSnake } = props;
+                let strokeColor = '#000';
+                let lineWidth = 1;
+
+                // 1. Status Effects (Stroke)
+                if ((status.burning || 0) > 0) strokeColor = '#f50';
+                else if ((status.poisoned || 0) > 0) strokeColor = '#2d2';
+                else if ((status.frozen || 0) > 0 && (status.wet || 0) > 0) strokeColor = '#fff';
+                else if ((status.frozen || 0) > 0) strokeColor = '#afe';
+                else if ((status.wet || 0) > 0) strokeColor = '#4af';
+                else if (color === '#222' || color === '#555') strokeColor = '#fff';
+
+                if ((status.burning || 0) > 0 || (status.poisoned || 0) > 0 || (status.frozen || 0) > 0 || (status.wet || 0) > 0) lineWidth = 2;
+
+                // 2. Render Body
+                if (isSnake) {
+                    ctx.save();
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.lineWidth = r * 2;
+                    ctx.strokeStyle = color;
+                    if (status.burning > 0) ctx.strokeStyle = '#f50';
+                    else if (status.poisoned > 0) ctx.strokeStyle = '#2d2';
+                    else if (status.frozen > 0 && status.wet > 0) ctx.strokeStyle = '#fff';
+                    else if (status.frozen > 0) ctx.strokeStyle = '#afe';
+                    else if (status.wet > 0) ctx.strokeStyle = '#4af';
+
+                    ctx.beginPath();
+                    ctx.moveTo(x, y);
+                    for (let p of snakeHistory) {
+                        ctx.lineTo(p.x, p.y);
+                    }
+                    ctx.stroke();
+
+                    // Head
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.beginPath(); ctx.arc(x, y, r + 2, 0, 6.28); ctx.fill();
+
+                    // Eyes
+                    ctx.fillStyle = "black";
+                    ctx.beginPath(); ctx.arc(x - 2, y - 2, 2, 0, 6.28); ctx.fill();
+                    ctx.beginPath(); ctx.arc(x + 2, y - 2, 2, 0, 6.28); ctx.fill();
+                    ctx.restore();
+                } else if (visualization === 'triangle') {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    let tr = r * 0.5; // Visual adjustment
+                    ctx.moveTo(x, y + tr);
+                    ctx.lineTo(x - tr, y - tr);
+                    ctx.lineTo(x + tr, y - tr);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    ctx.strokeStyle = strokeColor;
+                    ctx.lineWidth = lineWidth;
+                    ctx.stroke();
+                } else if (visualization === 'mole_visual') {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.ellipse(x, y, r * 0.8, r * 1.1, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.strokeStyle = strokeColor;
+                    ctx.lineWidth = lineWidth;
+                    ctx.stroke();
+                } else {
+                    // Circle (Default)
+                    ctx.fillStyle = color;
+                    ctx.beginPath(); ctx.arc(x, y, r, 0, 6.28); ctx.fill();
+
+                    ctx.strokeStyle = strokeColor;
+                    ctx.lineWidth = lineWidth;
+                    ctx.stroke();
+                }
+            }
+
             constructor(type, waveIndex) {
                 let corners = [[0, 0], [GRID_W - 1, 0], [0, GRID_H - 1], [GRID_W - 1, GRID_H - 1]];
                 let corner = corners[Math.floor(Math.random() * corners.length)];
@@ -2461,40 +2726,25 @@
                 this.waveIndex = waveIndex;
 
                 let mult = Math.pow(1.15, waveIndex);
-                if (type === 'boss') { this.hp = 400 * mult; this.speed = 0.6; this.color = '#222'; this.r = 12; }
-                else if (type === 'fast') { this.hp = 20 * mult; this.speed = 2.4; this.color = '#eee'; this.r = 6; }
-                else if (type === 'tank') { this.hp = 80 * mult; this.speed = 0.7; this.color = '#555'; this.r = 10; }
-                else if (type === 'poison_resistant') { this.hp = 60 * mult; this.speed = 1.2; this.color = '#2d2'; this.r = 9; }
-                else if (type === 'fire_resistant') { this.hp = 70 * mult; this.speed = 1.0; this.color = '#f50'; this.r = 10; }
-                else if (type === 'water_resistant') { this.hp = 50 * mult; this.speed = 1.6; this.color = '#4af'; this.r = 8; }
-                else if (type === 'ice_resistant') { this.hp = 65 * mult; this.speed = 1.1; this.color = '#afe'; this.r = 9; }
-                else if (type === 'laser_resistant') { this.hp = 55 * mult; this.speed = 1.15; this.color = '#d0f'; this.r = 9; } // Purple
-                else if (type === 'fly_bird') { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; } // Generic?
-                // NEW BIRDS
-                else if (type === 'ice_bird') { this.hp = 55 * mult; this.speed = 1.4; this.color = '#acf'; this.r = 8; }
-                else if (type === 'water_bird') { this.hp = 50 * mult; this.speed = 1.45; this.color = '#4af'; this.r = 16; }
-                else if (type === 'fire_bird') { this.hp = 50 * mult; this.speed = 1.5; this.color = '#f50'; this.r = 14; }
-                else if (type === 'poison_bird') { this.hp = 60 * mult; this.speed = 1.4; this.color = '#2d2'; this.r = 18; }
-                else if (type === 'sand_bird') { this.hp = 65 * mult; this.speed = 2; this.color = '#aa8'; this.r = 15; }
-                else if (type === 'flying') { this.hp = 45 * mult; this.speed = 1.5; this.color = '#dd0'; this.r = 7; }
-                else if (type === 'snake') { this.hp = 800 * mult; this.speed = 1.6; this.color = '#0f0'; this.r = 7; } // Snake: Tanky, Long
-                else if (type.startsWith('snake_boss')) {
-                    // BOSS SNAKE STATS
-                    this.hp = 12000 * mult; // Very tanky (Boss)
-                    this.speed = 0.32; // Slower, majestic (Halved from 1.3)
-                    this.r = 12; // Big
+                // --- VISUAL & STATS LOOKUP ---
+                let props = Enemy.getVisualProps(type);
+                this.hp = props.hpBase * mult;
+                this.speed = props.speed;
+                this.color = props.color;
+                this.r = props.r;
+                this.visualization = props.visualization;
+                this.isFlying = props.isFlying;
+                this.isSnake = props.isSnake;
+                this.turretImmune = props.turretImmune;
+                this.snakeMaxHistory = props.snakeMaxHistory || 0;
 
-                    if (type === 'snake_boss_poison') { this.color = '#2d2'; }
-                    else if (type === 'snake_boss_water') { this.color = '#4af'; }
-                    else if (type === 'snake_boss_fire') { this.color = '#f50'; }
-                    else if (type === 'snake_boss_ice') { this.color = '#afe'; }
-                    else if (type === 'snake_boss_laser') { this.color = '#d0f'; }
-                }
-                else if (type === 'mole') {
-                    this.hp = 10 * mult; this.speed = 0.8; this.color = '#543'; this.r = 7.5;
-                    this.visualization = 'mole_visual'; // Distinct shape
-                }
-                else { this.hp = 40 * mult; this.speed = 1.3; this.color = '#fff'; this.r = 8; }
+                // Resistances
+                this.iceResistant = props.iceResistant;
+                this.fireResistant = props.fireResistant;
+                this.waterResistant = props.waterResistant;
+                this.poisonResistant = props.poisonResistant;
+                this.laserResistant = props.laserResistant;
+                this.sandResistant = props.sandResistant;
 
                 // CASTLE DAMAGE
                 this.damageToCastle = 1 * (waveIndex / 10);
@@ -2502,24 +2752,10 @@
                 else if (type.startsWith('snake_boss')) this.damageToCastle = 10 * (waveIndex / 10);
                 if (this.damageToCastle < 1) this.damageToCastle = 1;
 
-                // Properties
-                this.iceResistant = (type === 'ice_resistant' || type === 'ice_bird' || type === 'snake_boss_ice');
-                this.fireResistant = (type === 'fire_resistant' || type === 'fire_bird' || type === 'snake_boss_fire');
-                this.waterResistant = (type === 'water_resistant' || type === 'water_bird' || type === 'snake_boss_water');
-                this.poisonResistant = (type === 'poison_resistant' || type === 'poison_bird' || type === 'snake_boss_poison');
-                this.laserResistant = (type === 'laser_resistant' || type === 'snake_boss_laser');
-                this.sandResistant = (type === 'sand_bird' || type === 'flying');
 
-                this.isFlying = (type === 'ice_bird' || type === 'water_bird' || type === 'fire_bird' || type === 'poison_bird' || type === 'sand_bird');
-                this.visualization = (this.isFlying) ? 'triangle' : ((type === 'mole') ? 'mole_visual' : 'circle');
-
-                this.turretImmune = (type === 'mole');
-
-                // SNAKE PROPERTIES
-                this.isSnake = (type === 'snake' || type.startsWith('snake_boss'));
+                // SNAKE INIT
                 if (this.isSnake) {
                     this.snakeHistory = [];
-                    this.snakeMaxHistory = (type.startsWith('snake_boss')) ? 120 : 20; // Even Longer for Boss
                     this.snakeRecordTimer = 0;
                 }
 
@@ -2535,7 +2771,6 @@
                 this.sandy = 0; // NEW: Replaces slowed
                 this.wet = 0;
                 this.frozen = 0;
-                this.iceTickDamage = 0;
 
                 // Damage Source Tracking
                 this.lastSource = null;   // { x: gx, y: gy }
@@ -2934,113 +3169,22 @@
             }
 
             draw(ctx) {
-                if (this.isSnake) {
-                    ctx.save();
-                    // Draw Body first (below head)
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.lineWidth = this.r * 2;
-                    ctx.strokeStyle = this.color;
+                // Use Shared Render Logic
+                // Construct Property Object on the fly or reuse? 
+                // We have this.color, this.r, this.visualization etc already set on instance.
+                // We can pass `this` as props effectively, or reconstruct.
+                // `this` contains all necessary fields: color, r, visualization, isSnake.
 
-                    if (!this.type.startsWith('snake_boss')) {
-                        if (this.burning > 0) ctx.strokeStyle = '#f50';
-                        else if (this.poisoned > 0) ctx.strokeStyle = '#2d2';
-                        else if (this.frozen > 0 && this.wet > 0) ctx.strokeStyle = '#fff';
-                        else if (this.frozen > 0) ctx.strokeStyle = '#afe';
-                        else if (this.wet > 0) ctx.strokeStyle = '#4af';
-                    }
+                let status = {
+                    burning: this.burning,
+                    poisoned: this.poisoned,
+                    frozen: this.frozen,
+                    wet: this.wet
+                };
 
-                    ctx.beginPath();
-                    // Connect head to history
-                    ctx.moveTo(this.x, this.y);
-                    for (let p of this.snakeHistory) {
-                        ctx.lineTo(p.x, p.y);
-                    }
-                    ctx.stroke();
+                Enemy.render(ctx, this.x, this.y, this, this.snakeHistory, status);
 
-                    // Optional: Draw Head Distinctly?
-                    ctx.fillStyle = ctx.strokeStyle; // Match status
-                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 2, 0, 6.28); ctx.fill();
-
-                    // Draw eyes
-                    ctx.fillStyle = "black";
-                    ctx.beginPath(); ctx.arc(this.x - 2, this.y - 2, 2, 0, 6.28); ctx.fill();
-                    ctx.beginPath(); ctx.arc(this.x + 2, this.y - 2, 2, 0, 6.28); ctx.fill();
-
-                    ctx.restore();
-
-                    ctx.fillStyle = '#400'; ctx.fillRect(this.x - 8, this.y - 12, 16, 4);
-                    ctx.fillStyle = (this.hp / this.maxHp) > 0.5 ? '#0f0' : '#f00'; ctx.fillRect(this.x - 8, this.y - 12, 16 * (this.hp / this.maxHp), 4);
-                    return;
-                }
-
-                if (this.visualization === 'triangle') {
-                    // Triangle pointing down
-                    ctx.fillStyle = this.color;
-                    ctx.beginPath();
-                    // Center is x,y. r is roughly radius.
-                    // Point 1 (Bottom): x, y + r
-                    // Point 2 (Top Left): x - r, y - r
-                    // Point 3 (Top Right): x + r, y - r
-                    // "one corner down, and the two others up left, and up right" matches this description.
-                    let r = this.r * 0.5;
-                    ctx.moveTo(this.x, this.y + r); // Bottom Tip
-                    ctx.lineTo(this.x - r, this.y - r); // Top Left
-                    ctx.lineTo(this.x + r, this.y - r); // Top Right
-                    ctx.closePath();
-                    ctx.fill();
-                } else if (this.visualization === 'mole_visual') {
-                    // Skip fill here, handled in stroke block or we do it here?
-                    // The stroke block I added does BOTH fill and stroke.
-                    // safely do nothing here.
-                } else {
-                    ctx.fillStyle = this.color;
-                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
-                }
-
-                // Add stroke for visibility (esp for white/black enemies)
-                ctx.strokeStyle = '#000';
-                if (this.burning > 0) ctx.strokeStyle = '#f50'; // Lava/Fire Color
-                else if (this.poisoned > 0) ctx.strokeStyle = '#2d2'; // Poison Color
-                else if (this.frozen > 0 && this.wet > 0) ctx.strokeStyle = '#fff'; // Combo Flash
-                else if (this.frozen > 0) ctx.strokeStyle = '#afe'; // Ice Color
-                else if (this.wet > 0) ctx.strokeStyle = '#4af'; // Wet Color
-                else if (this.color === '#222' || this.color === '#555') ctx.strokeStyle = '#fff';
-
-                ctx.lineWidth = (this.burning > 0 || this.poisoned > 0 || this.frozen > 0 || this.wet > 0) ? 2 : 1;
-
-                if (this.visualization === 'triangle') {
-                    ctx.stroke(); // Stroke the triangle path we just closed?
-                    ctx.beginPath();
-                    let r = this.r * 0.5;
-                    ctx.moveTo(this.x, this.y + r);
-                    ctx.lineTo(this.x - r, this.y - r);
-                    ctx.lineTo(this.x + r, this.y - r);
-                    ctx.closePath();
-                    ctx.stroke();
-                } else if (this.visualization === 'square') {
-                    ctx.strokeRect(this.x - this.r, this.y - this.r, this.r * 2, this.r * 2);
-                } else if (this.visualization === 'mole_visual') {
-                    ctx.fillStyle = this.color;
-                    ctx.beginPath();
-                    ctx.ellipse(this.x, this.y, this.r * 0.8, this.r * 1.1, 0, 0, Math.PI * 2);
-                    ctx.fill();
-
-                    // Stroke
-                    ctx.strokeStyle = '#000';
-                    if (this.burning > 0) ctx.strokeStyle = '#f50';
-                    else if (this.poisoned > 0) ctx.strokeStyle = '#2d2';
-                    else if (this.frozen > 0 && this.wet > 0) ctx.strokeStyle = '#fff';
-                    else if (this.frozen > 0) ctx.strokeStyle = '#afe';
-                    else if (this.wet > 0) ctx.strokeStyle = '#4af';
-
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                } else {
-                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28);
-                    ctx.stroke();
-                }
-
+                // Health Bar (Not part of shared render)
                 ctx.fillStyle = '#400'; ctx.fillRect(this.x - 8, this.y - 12, 16, 4);
                 ctx.fillStyle = (this.hp / this.maxHp) > 0.5 ? '#0f0' : '#f00'; ctx.fillRect(this.x - 8, this.y - 12, 16 * (this.hp / this.maxHp), 4);
             }
@@ -3588,49 +3732,56 @@
                     if (!this.targetItem || !this.targetItem.markedForSalvage) {
                         this.targetItem = null;
                         this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
-
-                        // If path found, return home. If not (stuck?), stick to IDLE/RETURNING with empty path which snaps home if close?
-                        if (this.path) {
-                            this.state = 'RETURNING';
-                            this.pathIndex = 0;
-                        } else {
-                            // If no path home found, maybe just reset to IDLE and hope next tick helps or drift?
-                            this.state = 'RETURNING';
-                            this.path = [];
-                        }
+                        this.state = 'RETURNING';
+                        this.pathIndex = 0;
+                        if (!this.path) this.path = [];
                         return;
                     }
                     if (this.followPath()) {
-                        this.state = 'SALVAGING';
-                    }
-                } else if (this.state === 'SALVAGING') {
-                    // Destroy
-                    let val = 0;
-                    if (this.targetItem instanceof Tower) {
-                        val = this.targetItem.baseStats.price * this.targetItem.stacks;
-                        towers = towers.filter(t => t !== this.targetItem);
-                    } else if (this.targetItem.type === 'spawner' || this.targetItem.type === 'salvager') {
-                        val = 150 * this.targetItem.stacks;
-                        collectorSpawners = collectorSpawners.filter(s => s !== this.targetItem);
-                        grid[this.targetItem.gy][this.targetItem.gx].item = null;
-                    } else {
-                        let data = CARD_TYPES[this.targetItem.type];
-                        let price = data ? data.price : 10;
-                        val = price * (this.targetItem.stacks || 1); // Refund based on Base Stacks (Investment)
-                        grid[Math.floor(this.targetItem.y / TILE_SIZE)][Math.floor(this.targetItem.x / TILE_SIZE)].item = null;
-                    }
-                    this.carryingValue = Math.floor(val * 0.1);
-                    createExplosion(this.targetItem.x, this.targetItem.y, '#888', 10);
-                    recalculateAdjacency(); // NEW: Item destroyed
+                        // Reached Target
+                        let t = this.targetItem;
+                        // Verify distance again?
+                        let dist = Math.hypot(t.x - this.x, t.y - this.y);
+                        if (dist <= 48) {
+                            // SALVAGE IT
+                            // Calculate Refund
+                            let refund = 0;
+                            if (t instanceof Tower || (t.type && CARD_TYPES[t.type])) {
+                                let p = CARD_TYPES[t.type].price || 0;
+                                let s = t.stacks || 1;
+                                refund = Math.floor(p * s * 0.1); // 10%
+                            } else if (t instanceof CollectorSpawner || t instanceof SalvagerSpawner) {
+                                let p = CARD_TYPES[t.type].price || 0;
+                                let s = t.stacks || 1;
+                                refund = Math.floor(p * s * 0.1);
+                            }
 
-                    if (this.targetItem instanceof Tower && this.targetItem.type === 'laser') recalculateLaserConnections();
-                    calcFlowFieldFlying();
+                            this.carryingValue = refund;
 
-                    this.targetItem = null;
-                    this.state = 'RETURNING';
-                    // Re-path home
-                    this.path = findPathBFS(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE), this.spawner.gx, this.spawner.gy);
-                    this.pathIndex = 0;
+                            // Destroy Entity
+                            if (t instanceof Tower) {
+                                towers.splice(towers.indexOf(t), 1);
+                                recalculateAdjacency();
+                                recalculateLaserConnections();
+                            } else if (t instanceof CollectorSpawner || t instanceof SalvagerSpawner) {
+                                collectorSpawners.splice(collectorSpawners.indexOf(t), 1);
+                            } else if (t.item) {
+                                // Floor Item
+                                grid[t.gy][t.gx].item = null;
+                            }
+                            updateUI();
+                            createExplosion(t.x, t.y, '#fff', 5);
+
+                            this.targetItem = null;
+                            this.state = 'RETURNING';
+                            this.path = this.path.reverse();
+                            this.pathIndex = 0;
+                        } else {
+                            // Failed?
+                            this.targetItem.lockedBy = null; this.targetItem = null;
+                            this.state = 'RETURNING'; this.path = [];
+                        }
+                    }
                 } else if (this.state === 'RETURNING') {
                     if (this.followPath()) {
                         if (this.carryingValue > 0) {
@@ -3643,8 +3794,8 @@
                 }
             }
             draw(ctx) {
-                // Recycle Icon (Green triangle thing?)
-                ctx.fillStyle = '#8d8'; ctx.beginPath();
+                // Similar to Collector
+                ctx.fillStyle = '#765'; ctx.beginPath();
                 for (let i = 0; i < 3; i++) {
                     let angle = (i * 2 * Math.PI) / 3 - Math.PI / 2;
                     let r = 8; ctx.lineTo(this.x + Math.cos(angle) * r, this.y + Math.sin(angle) * r);
@@ -3653,6 +3804,230 @@
                 if (this.carryingValue > 0) { ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - 10); }
             }
         }
+
+        // --- BARRACKS & ALLIES ---
+        let barracks = [];
+        let allies = [];
+
+        class Barrack {
+            constructor(gx, gy, stacks = 1, type = 'ally', unitType = 'norm') {
+                this.gx = gx; this.gy = gy;
+                this.x = gx * TILE_SIZE + 16; this.y = gy * TILE_SIZE + 16;
+                this.stacks = stacks;
+                this.hp = 100; this.maxHp = 100;
+                this.type = 'barrack';
+                this.barrackType = type; // 'ally' or 'enemy'
+                this.unitType = unitType; // Specific unit to spawn
+                console.log("Barrack Created:", { gx, gy, type, unitType, stacks });
+
+                this.effectiveStacks = stacks;
+                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+
+                this.spawnTimer = 0;
+                // this.spawnCooldown = 300; // Removed periodic spawn
+
+                barracks.push(this);
+                this.markedForSalvage = false;
+
+                // Init Text
+                updateItemTextCache(this);
+            }
+
+            update() {
+                if (this.hp <= 0) return;
+
+                // Maintain Base Level (Visuals)
+                let properVisualLevel = Math.floor(Math.log2(this.stacks)) + 1;
+                if (this.level !== properVisualLevel) {
+                    this.level = properVisualLevel;
+                    updateItemTextCache(this);
+                }
+            }
+
+            spawnUnit() {
+                let lvl = this.effectiveLevel || this.level || 1;
+                console.log(`Barrack Spawning: ${this.barrackType} ${this.unitType} (Level ${lvl})`);
+                if (this.barrackType === 'ally') {
+                    // Spawn Ally -> Walk to Corner
+                    allies.push(new Ally(this.x, this.y, lvl, this.unitType || 'norm'));
+                } else {
+                    // Spawn Specific Enemy -> Walk to Castle
+                    let type = this.unitType || 'norm';
+                    let e = new Enemy(type, gameState.wave); // Logic might ignore wave if stats are overridden?
+                    // Enemy Level/Diff logic usually depends on wave. 
+                    // But if we want STRONGER enemies from stronger barracks, we need to pass level or stats?
+                    // Enemy constructor: constructor(type, wave)
+                    // It calculates HP based on wave. 
+                    // Does it support specific level override?
+                    // If not, boosting Barrack level might not boost Enemy strength unless we subclass or modify Enemy.
+                    // User said: "Barracks... should use stacks -> level -> effective level. Everything as any other item would work."
+                    // If "any other item" implies stats scalability.
+                    // But enemies are separate entities.
+                    // If I spawn a L5 enemy vs L1 enemy, how do I differentiate?
+                    // Maybe pass 'wave' as 'wave + bonus'?
+                    // Or set stats after spawn?
+
+                    e.x = this.x; e.y = this.y;
+                    e.gx = this.gx; e.gy = this.gy; // virtual start
+                    e.path = null; e.pathIndex = 0;
+
+                    // BOOST ENEMY STATS BASED ON BARRACK LEVEL
+                    // Base Wave = gameState.wave
+                    // Bonus Wave power?
+                    // Or direct stat multiplier?
+                    let mult = Math.pow(1.5, lvl - 1);
+                    e.maxHp = Math.floor(e.maxHp * mult);
+                    e.hp = e.maxHp;
+
+                    enemies.push(e);
+                }
+            }
+
+            draw(ctx) {
+                // Outline
+                ctx.strokeStyle = this.barrackType === 'ally' ? '#4f4' : '#f44';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+
+                // Tent (Background)
+                ctx.fillStyle = this.barrackType === 'ally' ? '#46f' : '#844';
+                ctx.beginPath();
+                ctx.moveTo(this.x - 12, this.y - 12);
+                ctx.lineTo(this.x + 12, this.y - 12);
+                ctx.lineTo(this.x, this.y - 20); // Peak
+                ctx.fill();
+
+                let type = this.unitType || 'norm';
+
+                drawUnitPreview(ctx, this.x, this.y + 4, type, this.barrackType === 'ally');
+
+                if (this.markedForSalvage) {
+                    ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(this.x - 6, this.y - 6); ctx.lineTo(this.x + 6, this.y + 6);
+                    ctx.moveTo(this.x + 6, this.y - 6); ctx.lineTo(this.x - 6, this.y + 6); ctx.stroke();
+                }
+
+                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+            }
+        }
+
+        class Ally {
+            constructor(x, y, level, type = 'norm') {
+                this.x = x; this.y = y;
+                this.level = level;
+                this.type = type;
+
+                // VISUALS & STATS FROM ENEMY CLASS
+                let props = Enemy.getVisualProps(type);
+                this.speed = props.speed; // Use Enemy speed? Or Keep Ally speed logic?
+                this.speed = props.speed;
+                this.color = props.color;
+                this.r = props.r;
+                this.visualization = props.visualization;
+                this.isFlying = props.isFlying;
+                this.isSnake = props.isSnake;
+                this.snakeMaxHistory = props.snakeMaxHistory || 0;
+
+                this.hp = props.hpBase * Math.pow(1.15, level);
+                this.maxHp = this.hp;
+
+                // Snake Init
+                if (this.isSnake) {
+                    this.snakeHistory = [];
+                    this.snakeRecordTimer = 0;
+                }
+
+                this.dead = false;
+                this.reachedGoal = false;
+
+                // Pick Target Corner
+                this.targetCorner = this.pickCorner();
+
+                // Calculate Path
+                let gx = Math.floor(x / TILE_SIZE);
+                let gy = Math.floor(y / TILE_SIZE);
+                let dest = this.targetCorner.pos;
+
+                // Ensure dest is walkable (it is, floor at corners)
+                this.path = findPathBFS(gx, gy, dest.x, dest.y);
+                this.pathIndex = 0;
+
+                this.vx = 0; this.vy = 0;
+            }
+
+            pickCorner() {
+                let corners = [
+                    { id: 0, pos: { x: 0, y: 0 } },             // TL
+                    { id: 1, pos: { x: GRID_W - 1, y: 0 } },    // TR
+                    { id: 2, pos: { x: 0, y: GRID_H - 1 } },    // BL
+                    { id: 3, pos: { x: GRID_W - 1, y: GRID_H - 1 } } // BR
+                ];
+                return corners[Math.floor(Math.random() * corners.length)];
+            }
+
+            update() {
+                if (this.dead || this.reachedGoal) return;
+
+                // SNAKE HISTORY
+                if (this.isSnake) {
+                    this.snakeRecordTimer++;
+                    if (this.snakeRecordTimer >= 3) { // Record every 3 frames (~20fps capture)
+                        this.snakeRecordTimer = 0;
+                        this.snakeHistory.unshift({ x: this.x, y: this.y });
+                        if (this.snakeHistory.length > this.snakeMaxHistory) {
+                            this.snakeHistory.pop();
+                        }
+                    }
+                }
+
+                // Path Following
+                if (this.path && this.pathIndex < this.path.length) {
+                    let targetNode = this.path[this.pathIndex];
+                    let ttx = targetNode.x * TILE_SIZE + 16;
+                    let tty = targetNode.y * TILE_SIZE + 16;
+
+                    if (Math.hypot(this.x - ttx, this.y - tty) < 4) {
+                        this.pathIndex++;
+                    } else {
+                        let dx = ttx - this.x, dy = tty - this.y;
+                        let dist = Math.hypot(dx, dy);
+                        this.vx = (dx / dist) * this.speed;
+                        this.vy = (dy / dist) * this.speed;
+                        this.x += this.vx; this.y += this.vy;
+                    }
+                } else {
+                    // Reached end of path? Check if at corner
+                    let distToTarget = Math.hypot(this.x - (this.targetCorner.pos.x * TILE_SIZE + 16), this.y - (this.targetCorner.pos.y * TILE_SIZE + 16));
+                    if (distToTarget < 16) {
+                        this.reachedGoal = true;
+                        this.onReachCorner();
+                    }
+                }
+            }
+
+            onReachCorner() {
+                createExplosion(this.x, this.y, '#4af', 8);
+                // Multiplayer Trigger
+                if (isMultiplayer) {
+                    // Map Corner to Direction: TL(0)/BL(2) -> LEFT (-1), TR(1)/BR(3) -> RIGHT (1)
+                    let dir = (this.targetCorner.id === 0 || this.targetCorner.id === 2) ? -1 : 1;
+
+                    if (typeof sendEnemyToNeighbor === 'function') {
+                        sendEnemyToNeighbor(dir, this.targetCorner.id, this.level, this.type);
+                    } else {
+                        console.warn("sendEnemyToNeighbor is not defined");
+                    }
+                }
+                this.reachedGoal = true; // Ensure it gets removed
+            }
+
+            draw(ctx) {
+                // Use Shared Render Logic
+                Enemy.render(ctx, this.x, this.y, this, this.snakeHistory, {});
+            }
+        }
+
+
 
 
 
@@ -3769,7 +4144,7 @@
                     t.wet = 120 + (this.level * 20);
 
                     if (t.waterResistant) {
-                        createExplosion(t.x, t.y, "#888", 5); // Resisted
+                        createExplosion(this.x, this.y, "#888", 5); // Resisted
                         return;
                     }
                     t.hp -= this.dmg;
@@ -3828,6 +4203,49 @@
         }
 
         function createExplosion(x, y, c, n) { for (let i = 0; i < n; i++) particles.push(new Particle(x, y, c)); }
+
+        function findPathBFS(sx, sy, ex, ey) {
+            let queue = [{ x: sx, y: sy, path: [] }];
+            let visited = new Set([`${sx},${sy}`]);
+
+            while (queue.length > 0) {
+                let cur = queue.shift();
+                if (cur.x === ex && cur.y === ey) return cur.path;
+
+                // Limit path length to prevent huge searches
+                if (cur.path.length > 100) continue;
+
+                [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
+                    let nx = cur.x + d[0];
+                    let ny = cur.y + d[1];
+                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                        let cell = grid[ny][nx];
+                        if (cell.type !== TYPE_WALL && !visited.has(`${nx},${ny}`)) {
+                            visited.add(`${nx},${ny}`);
+                            let newPath = [...cur.path, { x: nx, y: ny }];
+                            queue.push({ x: nx, y: ny, path: newPath });
+                        }
+                    }
+                });
+            }
+            return null;
+        }
+
+        function sendEnemyToNeighbor(dir, cornerId, level, type) {
+            // dir: -1 (Left), 1 (Right)
+            if (connections.length === 0) return;
+
+            // Send to ALL peers (or random/round-robin in future)
+            connections.forEach(conn => {
+                conn.send({
+                    type: 'action', // Generic Action
+                    action: 'card',
+                    enemyType: type || 'norm',
+                    count: 1,
+                    level: level,
+                });
+            });
+        }
 
         /**
          * PATHFINDING
@@ -3934,9 +4352,6 @@
                 // If path gets too long, prune (heuristic)
                 if (cur.path.length > 100) continue;
 
-                // Optimization: Guide DFS by flowField to find reasonable paths first
-                // Sort neighbors by flowField distance (ascending = shortest path, descending = exploring loops)
-                // We shuffle or just pick valid neighbors to find variations.
                 let properNeighbors = [];
                 [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(d => {
                     let nx = cur.x + d[0], ny = cur.y + d[1];
@@ -3948,8 +4363,6 @@
                     }
                 });
 
-                // Shuffle to get random paths, or sort by flowField to get "good" paths first?
-                // We want VARIETY. Random shuffle is good for DFS to find different jagged routes.
                 properNeighbors.sort(() => Math.random() - 0.5);
 
                 properNeighbors.forEach(n => {
@@ -3959,10 +4372,6 @@
                     stack.push({ x: n.x, y: n.y, path: newPath, visited: newVisited });
                 });
             }
-
-            // Always ensure the shortest path (flow field trace) is included if DFS failed to find many
-            // (Not strictly necessary if DFS works well, but good for robustness)
-
             return paths;
         }
 
@@ -4019,6 +4428,8 @@
             } else if (type === 'water_puddle') {
                 stats.maxHp = Math.floor(700 * mult);
                 stats.damage = 0;
+            } else if (type === 'barrack') {
+                stats.maxHp = Math.floor(100 * mult);
             }
             return stats;
         }
@@ -4032,9 +4443,7 @@
             towers.forEach(t => {
                 t.effectiveStacks = t.stacks;
                 t.effectiveLevel = Math.floor(Math.log2(t.stacks)) + 1;
-                // REVERTED: Do NOT sync t.level (Base) with effectiveLevel.
-                // t.level remains base visual level.
-                // Ensure text cache matches base level (should already match unless mutated elsewhere)
+
                 if (t.level !== (Math.floor(Math.log2(t.stacks)) + 1)) {
                     t.level = Math.floor(Math.log2(t.stacks)) + 1;
                     t.updateTextCache();
@@ -4172,12 +4581,6 @@
                             // i.e. every cell in area must be occupied by an object in 'group'
                             let filled = true;
                             for (let cellPos of area.cells) {
-                                // Find object at this pos in group
-                                // Optimization: checking group for inclusion is O(N*M).
-                                // But group has objects with .gx/.gy (towers) or .x/.y (items - need to be careful with coordinate systems).
-                                // Items in grid[y][x].item don't always have .gx/.gy set unless we did it.
-                                // But we know valid cells in area have coords.
-                                // Let's check grid directly?
                                 let c = grid[cellPos.y][cellPos.x];
                                 let occupied = false;
                                 if (isTower) {
@@ -4250,6 +4653,7 @@
 
                                 // Update MaxHP/Damage based on Level (1.5x scaling)
                                 let level = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
+                                obj.effectiveLevel = level; // Save effective level explicitly
                                 let stats = calculateItemStats(obj.type, level);
 
                                 // Handle Ratio (for Passive Grouping) or Full Heal (if hp set to Infinity)
@@ -4273,8 +4677,6 @@
             // CLEANUP: Reset Inactive Area Multipliers
             areas.forEach(a => {
                 if (!a.active) {
-                    // Reset to Level 0 (Green) if inactive
-                    // But if it JUST became inactive, we need to ensure the visual updates.
                     if (a.multiplierLevel > 0) {
                         a.multiplierLevel = 0;
                         dirtyAreas = true;
@@ -4335,10 +4737,6 @@
         }
 
         function handlePressMove(cx, cy) {
-            // Optional: Cancel long press if moved too far
-            // For now, simple logic: if mouse leaves canvas or moves significantly? 
-            // Let's keep it simple for touch devices. 
-            // Ideally we check distance from start pos.
         }
 
         function handlePressEnd() {
@@ -4415,24 +4813,29 @@
         }
 
         // Renamed from handleInput - primarily handles Placement now
-        function handlePlacement(gx, gy, x, y) {
+        function handlePlacement(gx, gy, x, y, isRemote = false, remoteCardData = null) {
             if (gameState.gameOver) return;
 
-
-
-            let marketCard = marketCards[selectedMarketIndex];
-            if (marketCard.bought) return;
+            let marketCard;
+            if (isRemote) {
+                marketCard = remoteCardData;
+            } else {
+                marketCard = marketCards[selectedMarketIndex];
+                if (marketCard.bought) return;
+            }
 
             let cardKey = marketCard.type;
             let data = CARD_TYPES[cardKey];
             let actualPrice = marketCard.price !== undefined ? marketCard.price : data.price;
 
-            if (data.hpCost) {
-                if (gameState.hp <= data.hpCost) {
+            if (!isRemote) { // Only check costs for local placements
+                if (data.hpCost) {
+                    if (gameState.hp <= data.hpCost) {
+                        return;
+                    }
+                } else if (gameState.money < actualPrice) {
                     return;
                 }
-            } else if (gameState.money < actualPrice) {
-                return;
             }
 
             let tile = grid[gy][gx];
@@ -4459,7 +4862,7 @@
                     marketCard.bought = true;
 
                     // Pay for it
-                    gameState.money -= actualPrice;
+                    if (!isRemote) gameState.money -= actualPrice;
                     createExplosion(x, y, "#f8f", 10);
 
                     // Reset Multiplier
@@ -4510,9 +4913,11 @@
 
                 if (existingTower) {
                     // Refund 50% of Value
-                    let value = existingTower.baseStats.price * existingTower.stacks;
-                    let refund = Math.floor(value * 0.5);
-                    gameState.money += refund;
+                    if (!isRemote) {
+                        let value = existingTower.baseStats.price * existingTower.stacks;
+                        let refund = Math.floor(value * 0.5);
+                        gameState.money += refund;
+                    }
 
                     towers = towers.filter(t => !(t.gx === gx && t.gy === gy));
                     createExplosion(gx * TILE_SIZE + 16, gy * TILE_SIZE + 16, "#88f", 15);
@@ -4522,13 +4927,15 @@
                     actionTaken = true;
                 } else if (existingItem) {
                     // Refund 50% of Value
-                    let data = CARD_TYPES[existingItem.type];
-                    let price = data ? data.price : 10;
-                    if (existingItem.type === 'spawner' || existingItem.type === 'salvager') price = 150; // Hardcoded base price for spawners if not in CARD_TYPES correctly or just to be safe
+                    if (!isRemote) {
+                        let data = CARD_TYPES[existingItem.type];
+                        let price = data ? data.price : 10;
+                        if (existingItem.type === 'spawner' || existingItem.type === 'salvager') price = 150; // Hardcoded base price for spawners if not in CARD_TYPES correctly or just to be safe
 
-                    let value = price * (existingItem.stacks || 1);
-                    let refund = Math.floor(value * 0.5);
-                    gameState.money += refund;
+                        let value = price * (existingItem.stacks || 1);
+                        let refund = Math.floor(value * 0.5);
+                        gameState.money += refund;
+                    }
 
                     // Remove Spawner from global list if necessary
                     if (existingItem.type === 'spawner' || existingItem.type === 'salvager') {
@@ -4564,6 +4971,13 @@
                             spawner.maxHp = stats.maxHp;
                             tile.item = spawner;
                             collectorSpawners.push(spawner);
+                        } else if (cardKey === 'barrack') {
+                            console.log("Placing Barrack:", marketCard);
+                            // Barrack constructor automatically pushes to 'barracks' array
+                            let barrack = new Barrack(gx, gy, marketCard.level, marketCard.barrackType || 'ally', marketCard.unitType);
+                            barrack.hp = stats.maxHp;
+                            barrack.maxHp = stats.maxHp;
+                            tile.item = barrack;
                         } else {
                             tile.item = {
                                 type: cardKey,
@@ -4740,19 +5154,10 @@
             let level = data.level || 1;
 
             for (let i = 0; i < count; i++) {
-                // Spawn using standard logic (random corners)
-                // We pass 'level' as 'waveIndex' to simulate difficulty
                 spawnEnemy({ type: type, waveIndex: level });
             }
 
-            // Alert User?
-            // "Incoming Attack!"
-            // Maybe a sound or text?
-            let msg = document.createElement('div');
-            msg.innerText = `⚠️ INCOMING: ${type.toUpperCase()} x${count} ⚠️`;
-            msg.style.cssText = "position:absolute; top:20%; left:50%; transform:translate(-50%, -50%); color:#f00; font-size:24px; font-weight:bold; text-shadow:0 0 10px #000; z-index:999; pointer-events:none; transition:opacity 3s;";
-            document.body.appendChild(msg);
-            setTimeout(() => { msg.style.opacity = 0; setTimeout(() => msg.remove(), 3000); }, 2000);
+            // (Msg removed as requested)
         }
 
         function get_random_enemy_type(level) {
@@ -4785,32 +5190,51 @@
                 gameState.wave++;
             } else {
                 gameState.active = true;
+                if (isMultiplayer && gameState.wave > 1 && !gameState.gameOver) {
+                    gameState.wave++;
+                } else if (isMultiplayer && gameState.wave === 1 && gameState.killedEnemies > 0) {
+                    // Should capture restart case or similar
+                    gameState.wave++;
+                }
+
+                if (isMultiplayer) {
+                    if (gameState.wave > 1 || gameState.killedEnemies > 0 || (gameState.maxHpAchieved && gameState.maxHpAchieved > 20)) {
+                        gameState.wave++;
+                    }
+                }
             }
 
             updateUI(); // Updates button text
 
-            // BOSS WAVE CHECK (Every 12 waves)
-            if (gameState.wave % 12 === 0) {
-                // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(4), 60->Laser(0) ...
-                let cycle = (gameState.wave / 12) % 5;
-                // 1=Poison, 2=Water, 3=Fire, 4=Ice, 0=Laser
-                let bossType = 'snake_boss_laser'; // Default 0
-                if (cycle === 1) bossType = 'snake_boss_poison';
-                else if (cycle === 2) bossType = 'snake_boss_water';
-                else if (cycle === 3) bossType = 'snake_boss_fire';
-                else if (cycle === 4) bossType = 'snake_boss_ice';
+            // Barrack Spawns (Start of Wave) - RUN ALWAYS regardless of Boss
+            // ONLY in Multiplayer (User Request)
+            if (isMultiplayer) {
+                console.log("Multiplayer StartWave: Spawning Barracks...", barracks.length);
+                barracks.forEach(b => b.spawnUnit());
+            } else {
+                // BOSS WAVE CHECK (Every 12 waves)
+                if (gameState.wave % 12 === 0) {
+                    // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(4), 60->Laser(0) ...
+                    let cycle = (gameState.wave / 12) % 5;
+                    // 1=Poison, 2=Water, 3=Fire, 4=Ice, 0=Laser
+                    let bossType = 'snake_boss_laser'; // Default 0
+                    if (cycle === 1) bossType = 'snake_boss_poison';
+                    else if (cycle === 2) bossType = 'snake_boss_water';
+                    else if (cycle === 3) bossType = 'snake_boss_fire';
+                    else if (cycle === 4) bossType = 'snake_boss_ice';
 
-                gameState.spawnQueue.push({ type: bossType, waveIndex: gameState.wave });
-                return; // EXCLUSIVE SPAWN
-            }
+                    gameState.spawnQueue.push({ type: bossType, waveIndex: gameState.wave });
+                    return; // EXCLUSIVE SPAWN
+                }
 
-            let count = 6 + Math.floor(gameState.wave * 1.8);
-            if (gameState.wave % 3 === 0) { gameState.spawnQueue.push({ type: 'boss', waveIndex: gameState.wave }); count += 4; }
+                // from corners
+                let count = 6 + Math.floor(gameState.wave * 1.8);
+                if (gameState.wave % 3 === 0) { gameState.spawnQueue.push({ type: 'boss', waveIndex: gameState.wave }); count += 4; }
 
-            for (let i = 0; i < count; i++) {
-                let type = get_random_enemy_type(gameState.wave)
-
-                gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
+                for (let i = 0; i < count; i++) {
+                    let type = get_random_enemy_type(gameState.wave)
+                    gameState.spawnQueue.push({ type: type, waveIndex: gameState.wave });
+                }
             }
         }
 
@@ -4900,6 +5324,42 @@
             let hue = Math.floor(120 * hpPct);
             btn.style.background = `hsl(${hue}, 80%, 40%)`;
             btn.style.display = gameState.generating ? 'none' : 'flex';
+
+            if (isMultiplayer && typeof gameState.waveTimer !== 'undefined') {
+                btn.style.flexDirection = 'column';
+                btn.style.lineHeight = '1';
+                // Calculate Cost
+                let base = Math.floor(45 * (gameState.shopLevel || 1));
+                let count = gameState.nextWaveClickCount || 0;
+                let cost = Math.pow(base, count + 1);
+
+                // If Timer is 0, allow click for free (or just 'GO'?)
+                // User said: "if nextwave countdown timer is 0, set the price to 0"
+                if (gameState.waveTimer <= 0) {
+                    cost = 0;
+                }
+
+                // Color Logic
+                if (gameState.money >= cost) {
+                    // Greenish
+                    btn.style.background = `hsl(120, 80%, 40%)`;
+                    btn.style.borderColor = '#fff';
+                    btn.style.color = '#fff';
+                } else {
+                    // Reddish
+                    btn.style.background = `hsl(0, 80%, 40%)`;
+                    btn.style.borderColor = '#fa0';
+                    btn.style.color = '#ccc';
+                }
+
+                let sec = Math.ceil(gameState.waveTimer / 60);
+                let costText = cost > 0 ? `$${formatBigNumber(cost)}` : "FREE";
+
+                btn.innerHTML = `
+                    <span style="font-size:10px;font-weight:bold;margin-bottom:2px;pointer-events:none;">${sec}s</span>
+                    <span style="font-size:9px;color:${cost > 0 && gameState.money < cost ? '#f88' : '#ffea00'};pointer-events:none;">${costText}</span>
+                `;
+            } else { }
         }
 
         function updateUI() {
@@ -4953,7 +5413,28 @@
 
                 // Name & Level
                 let nameHtml = data.name;
-                if (card.type !== 'shop_up') {
+                if (card.type === 'shop_up') {
+                    // SHOP UP LOGIC would go here if it had special name formatting
+                    // But currently it just uses defaults or falls through?
+                    // Actually original code had `if (card.type !== 'shop_up')` -> Apply Levels.
+                    // So shop_up basically skipped level logic.
+                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
+                }
+                else if (card.type === 'spawn_enemy') {
+                    // SPAWN ENEMY DISPLAY
+                    nameHtml = `${card.enemyType.toUpperCase()}`;
+                    nameHtml += `<br><span style="font-size:10px;color:#fff">${card.count}x (L${card.level})</span>`;
+                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
+                } else if (card.type === 'barrack') {
+                    // MATCHING USER REQUEST: Show Specific Unit Type Name e.g. "BOSS"
+                    // User said: "it should not say 'ally', it should say what the enemy (ally) type is"
+                    let uName = (card.unitType || 'NORM').toUpperCase();
+                    nameHtml = `<span style="font-size:12px">${uName}</span>`;
+                    nameHtml += `<br><span style="font-size:10px;color:#fff">L${card.level}</span>`;
+                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
+                }
+                else {
+                    // GENERIC ITEM (Towers, etc) - Has Levels
                     // card.level is STACKS.
                     // Calculate Display Level
                     let trueLevel = Math.floor(Math.log2(card.level)) + 1;
@@ -4970,15 +5451,6 @@
                     }
                     d.querySelector('.stack-info').innerText = `${formatBigNumber(card.level)}/${formatBigNumber(nextThreshold)}`;
                     d.querySelector('.stack-info').style.display = 'block';
-
-                } else if (card.type === 'spawn_enemy') {
-                    // SPAWN ENEMY DISPLAY
-                    nameHtml = `${card.enemyType.toUpperCase()}`; // Replace "SPAWN ENEMY" with "TANK" etc?
-                    // Let's append "xCount"
-                    nameHtml += `<br><span style="font-size:10px;color:#fff">${card.count}x (L${card.level})</span>`;
-                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
-                } else {
-                    if (d.querySelector('.stack-info')) d.querySelector('.stack-info').style.display = 'none';
                 }
                 d.querySelector('.m-name').innerHTML = nameHtml;
                 d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
@@ -5001,6 +5473,31 @@
             let cx = canvas.width / 2;
             let cy = canvas.height / 2;
 
+            if (card.type === 'barrack') {
+                // Draw Barrack Preview
+                // Outline
+                ctx.strokeStyle = card.barrackType === 'ally' ? '#4f4' : '#f44';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(cx - 10, cy - 10, 20, 20);
+
+                // Tent
+                ctx.fillStyle = card.barrackType === 'ally' ? '#46f' : '#844';
+                ctx.beginPath();
+                ctx.moveTo(cx - 8, cy - 8);
+                ctx.lineTo(cx + 8, cy - 8);
+                ctx.lineTo(cx, cy - 14);
+                ctx.fill();
+
+                // Unit
+                // User Request: "visuals should be exactly the same" as in game.
+                // We use drawUnitPreview for BOTH Ally and Enemy barracks.
+                // The TENT color (drawn above) distinguishes them (Blue vs Red).
+                drawUnitPreview(ctx, cx, cy + 4, card.unitType || 'norm', card.barrackType === 'ally');
+
+                ctx.restore();
+                return;
+            }
+
             if (data.target === 'wall') {
                 drawTowerIcon(ctx, cx, cy + 2, data.color, -Math.PI / 2, 0, card.type);
             } else if (card.type === 'sand') {
@@ -5021,35 +5518,7 @@
                 // Draw Enemy Icon
                 // Mimic Enemy Drawing lightly
                 let type = card.enemyType || 'norm';
-                // Colors
-                let color = "#fff";
-                if (type === 'tank') color = '#555';
-                else if (type === 'fast') color = '#eee';
-                else if (type === 'poison_resistant' || type === 'snake_boss_poison' || type === 'poison_bird') color = '#2d2';
-                else if (type === 'fire_resistant' || type === 'snake_boss_fire' || type === 'fire_bird') color = '#f50';
-                else if (type === 'water_resistant' || type === 'snake_boss_water' || type === 'water_bird') color = '#4af';
-                else if (type === 'ice_resistant' || type === 'snake_boss_ice' || type === 'ice_bird') color = '#afe';
-                else if (type === 'laser_resistant' || type === 'snake_boss_laser') color = '#d0f';
-                else if (type === 'boss') color = '#222';
-                else if (type === 'snake') color = '#0f0';
-                else if (type === 'flying') color = '#dd0';
-
-                ctx.fillStyle = color;
-
-                if (type.includes('bird') || type === 'flying') {
-                    // Triangle
-                    let r = 8;
-                    ctx.beginPath();
-                    ctx.moveTo(cx, cy + r);
-                    ctx.lineTo(cx - r, cy - r);
-                    ctx.lineTo(cx + r, cy - r);
-                    ctx.fill();
-                } else if (type === 'mole') {
-                    ctx.fillStyle = '#543';
-                    ctx.beginPath(); ctx.ellipse(cx, cy, 8, 11, 0, 0, Math.PI * 2); ctx.fill();
-                } else {
-                    ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 6.28); ctx.fill();
-                }
+                drawUnitPreview(ctx, cx, cy, type, false);
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
             } else {
                 ctx.font = "24px Arial";
@@ -5061,11 +5530,37 @@
             ctx.restore();
         }
 
+        function drawUnitPreview(ctx, cx, cy, type, isAlly) {
+            let props = Enemy.getVisualProps(type);
+
+            let fakeHistory = [];
+            if (props.isSnake) {
+                fakeHistory.push({ x: cx + 10, y: cy - 10 });
+            }
+
+            Enemy.render(ctx, cx, cy, props, fakeHistory, {});
+
+            if (!isAlly && !props.isSnake) { }
+        }
+
         function updateStatsPanel() {
             let panel = document.getElementById('stats-panel');
             let nameEl = document.getElementById('sp-name');
             let iconEl = document.getElementById('sp-icon');
             let contentEl = document.getElementById('sp-content');
+
+            const updateDualStat = (id, baseVal, effVal, suffix = "") => {
+                let baseEl = document.getElementById(`${id}-base`);
+                let effEl = document.getElementById(`${id}-eff`);
+                if (baseEl) baseEl.innerText = baseVal + suffix;
+
+                if (effEl) {
+                    let valToShow = (effVal !== undefined) ? effVal : baseVal;
+
+                    effEl.innerText = valToShow + suffix;
+                    effEl.style.display = 'block';
+                }
+            };
 
             if (!selectedEntity) {
                 panel.style.display = 'none';
@@ -5093,6 +5588,12 @@
                 }
             } else if (selectedEntity instanceof SalvagerSpawner) {
                 if (selectedEntity.hp <= 0 || !collectorSpawners.includes(selectedEntity)) {
+                    selectedEntity = null;
+                    panel.style.display = 'none';
+                    return;
+                }
+            } else if (selectedEntity instanceof Barrack) {
+                if (selectedEntity.hp <= 0 || !barracks.includes(selectedEntity)) {
                     selectedEntity = null;
                     panel.style.display = 'none';
                     return;
@@ -5211,18 +5712,6 @@
                 // Checkbox Removed
             }
 
-            const updateDualStat = (id, baseVal, effVal, suffix = "") => {
-                let baseEl = document.getElementById(`${id}-base`);
-                let effEl = document.getElementById(`${id}-eff`);
-                if (baseEl) baseEl.innerText = baseVal + suffix;
-
-                if (effEl) {
-                    let valToShow = (effVal !== undefined) ? effVal : baseVal;
-
-                    effEl.innerText = valToShow + suffix;
-                    effEl.style.display = 'block';
-                }
-            };
 
             if (selectedEntity instanceof Tower) {
                 let t = selectedEntity;
@@ -5414,7 +5903,78 @@
 
         function setupConnection(conn) {
             connections.push(conn);
-            conn.on('data', (data) => handleData(conn.peer, data));
+            conn.on('data', (data) => {
+                if (data.type === 'HELLO') {
+                    let existing = connectedPlayers.find(p => p.id === conn.peer);
+                    if (!existing) {
+                        connectedPlayers.push({ id: conn.peer, name: data.name });
+                        updatePlayerList();
+                        if (isHost) broadcastPlayerList();
+                    }
+                } else if (data.type === 'PLAYER_LIST') {
+                    connectedPlayers = data.list.filter(p => p.id !== myPeerId);
+                    updatePlayerList();
+                } else if (data.type === 'START_GAME') {
+                    // START!
+                    selectedLobbyDiff = data.difficulty;
+                    playerOrder = data.order;
+                    startGameInternal(selectedLobbyDiff, true);
+
+                    // REMOVED: Wave Sync handlers
+                    /*
+                    } else if (data.type === 'NEXT_WAVE_RESET') {
+                        // Timer hit 0, someone clicked "Next Wave"
+                        startWave();
+                        gameState.mpStartTime = Date.now(); // Reset Timer
+                        gameState.nextWaveClickCount = 0;   // Reset Price
+                    } else if (data.type === 'NEXT_WAVE_EXTRA') {
+                        // Paid Early Start
+                        startWave();
+                        // Do NOT reset timer
+                        if (data.clickCount !== undefined) {
+                            gameState.nextWaveClickCount = data.clickCount;
+                        }
+                    */
+
+                } else if (data.type === 'action') {
+                    if (data.action === 'card') {
+                        handleIncomingCard(data);
+                    } else if (data.action === 'place') {
+                        // Remote Placement
+                        // data: { gx, gy, cardType, level, barrackType, unitType }
+                        // We need to mimic holding a card? Or just force placement?
+                        // handlePlacement(gx, gy, x, y, isRemote, remoteCardData)
+
+                        let fakeCard = {
+                            type: data.cardType,
+                            level: data.level,
+                            barrackType: data.barrackType,
+                            unitType: data.unitType,
+                            price: 0 // Remote actions shouldn't cost local money properly? 
+                            // Wait, handlePlacement deducts money.
+                            // We updated handlePlacement to skip money deduction if isRemote=true.
+                        };
+
+                        // X/Y from gx/gy
+                        let x = data.gx * TILE_SIZE + 16;
+                        let y = data.gy * TILE_SIZE + 16;
+
+                        handlePlacement(data.gx, data.gy, x, y, true, fakeCard);
+                    }
+
+                    // REMOVED: Timer Sync
+                    /*
+                    } else if (data.type === 'sync_timer') {
+                        // Sync our start time to match Host's elapsed time
+                        let hostElapsed = data.elapsed;
+                        // Apply smooth correction? Or hard snap?
+                        // Hard snap is safer for cycle logic.
+                        // Adjust local mpStartTime so that (Date.now() - mpStartTime) === hostElapsed
+                        // We assume latency is small enough for this casual game.
+                        gameState.mpStartTime = Date.now() - hostElapsed;
+                    */
+                }
+            });
             conn.on('open', () => {
                 let myName = document.getElementById('player-name').value;
                 conn.send({ type: 'HELLO', name: myName });
@@ -5425,27 +5985,6 @@
                 // If game active, handle disconnect (remove from ring?)
                 // Allow reconnect? Complex. For now, just keep going.
             });
-        }
-
-        function handleData(peerId, data) {
-            if (data.type === 'HELLO') {
-                let existing = connectedPlayers.find(p => p.id === peerId);
-                if (!existing) {
-                    connectedPlayers.push({ id: peerId, name: data.name });
-                    updatePlayerList();
-                    if (isHost) broadcastPlayerList();
-                }
-            } else if (data.type === 'PLAYER_LIST') {
-                connectedPlayers = data.list.filter(p => p.id !== myPeerId);
-                updatePlayerList();
-            } else if (data.type === 'START_GAME') {
-                // START!
-                selectedLobbyDiff = data.difficulty;
-                playerOrder = data.order;
-                startGameInternal(selectedLobbyDiff, true);
-            } else if (data.type === 'action' && data.action === 'card') {
-                handleIncomingCard(data);
-            }
         }
 
         function broadcastPlayerList() {
@@ -5847,6 +6386,7 @@
             }
 
             gameState.difficulty = difficulty;
+            gameState.nextWaveClickCount = 0; // Init Click Count
             resetGame();
             setTimeout(resize, 0);
         }

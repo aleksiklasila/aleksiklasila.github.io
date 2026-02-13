@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Retro Olympics: Speed & Air</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #eee;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            color: #f0f;
+            text-shadow: 2px 2px #0ff;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 25px rgba(0, 0, 0, 0.8);
+            border: 4px solid #fff;
+            outline: none;
+        }
+
+        canvas {
+            background-color: #87CEEB;
+            display: block;
+            cursor: pointer;
+        }
+
+        #controls {
+            margin-top: 15px;
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            width: 800px;
+            box-sizing: border-box;
+        }
+
+        .key {
+            display: inline-block;
+            background: #fff;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 900;
+            margin: 0 3px;
+            box-shadow: 0 2px 0 #999;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Retro Olympics</h1>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="400" tabindex="1"></canvas>
+    </div>
+
+    <div id="controls">
+        <p id="instruction-text">Click Game to Focus. Loading...</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const instructionText = document.getElementById('instruction-text');
+
+        canvas.addEventListener('click', () => { canvas.focus(); });
+        canvas.focus();
+
+        // --- STATES ---
+        const STATES = { MENU: 0, SPRINT: 1, LONGJUMP: 2, SKIJUMP: 3, SWIM: 4, RESULTS: 5 };
+        let currentState = STATES.MENU;
+        let scoreMessage = "";
+        let subMessage = "";
+
+        // --- GLOBAL VARIABLES ---
+        let frameCount = 0;
+        let player = { x: 0, y: 0, vx: 0, vy: 0, rotation: 0, armFrame: 0, legFrame: 0 };
+        let gameData = {};
+
+        // --- INPUT ---
+        const keys = {};
+        const keyPresses = {};
+
+        window.addEventListener('keydown', (e) => {
+            if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code) || e.key === " ") {
+                e.preventDefault();
+            }
+            if (!keys[e.key]) keyPresses[e.key] = true;
+            keys[e.key] = true;
+
+            if (currentState === STATES.MENU) {
+                if (e.key === '1') startSprint();
+                if (e.key === '2') startLongJump();
+                if (e.key === '3') startSkiJump();
+                if (e.key === '4') startSwim();
+            } else if (currentState === STATES.RESULTS) {
+                if (e.key === ' ') currentState = STATES.MENU;
+            } else {
+                if (currentState === STATES.SPRINT) inputSprint(e.key);
+                if (currentState === STATES.LONGJUMP) inputLongJump(e.key);
+                if (currentState === STATES.SKIJUMP) inputSkiJump(e.key);
+                if (currentState === STATES.SWIM) inputSwim(e.key);
+            }
+        });
+        window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        // --- VISUAL HELPERS ---
+        function drawRhythmBar(currentValue, type = 'ENDS', yPos = 350, label = "") {
+            const cx = 400; const w = 300; const h = 25;
+            ctx.fillStyle = "#222"; ctx.fillRect(cx - w / 2, yPos, w, h);
+
+            if (type === 'ENDS') {
+                let grdL = ctx.createLinearGradient(cx - w / 2 + 60, yPos, cx - w / 2, yPos);
+                grdL.addColorStop(0, "rgba(0,100,0,0.3)"); grdL.addColorStop(1, "#0f0");
+                ctx.fillStyle = grdL; ctx.fillRect(cx - w / 2, yPos, 60, h);
+
+                let grdR = ctx.createLinearGradient(cx + w / 2 - 60, yPos, cx + w / 2, yPos);
+                grdR.addColorStop(0, "rgba(0,100,0,0.3)"); grdR.addColorStop(1, "#0f0");
+                ctx.fillStyle = grdR; ctx.fillRect(cx + w / 2 - 60, yPos, 60, h);
+            }
+            let mx = cx + (currentValue * (w / 2));
+            ctx.fillStyle = "white"; ctx.fillRect(mx - 4, yPos - 5, 8, h + 10);
+            ctx.fillStyle = "#aaa"; ctx.font = "12px Courier"; ctx.textAlign = "center";
+            ctx.fillText(label, cx, yPos - 8);
+        }
+
+        function drawSpeedometer(speed, maxSpeed) {
+            let pct = speed / maxSpeed;
+            if (pct > 1) pct = 1;
+
+            // Draw Dial
+            ctx.save();
+            ctx.translate(70, 360);
+            ctx.beginPath();
+            ctx.arc(0, 0, 50, Math.PI, 0);
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = "#444";
+            ctx.stroke();
+
+            // Draw Fill
+            ctx.beginPath();
+            ctx.arc(0, 0, 50, Math.PI, Math.PI + (Math.PI * pct));
+            ctx.strokeStyle = pct > 0.8 ? "red" : (pct > 0.5 ? "yellow" : "lime");
+            ctx.stroke();
+
+            // Text
+            ctx.fillStyle = "white"; ctx.font = "14px Courier"; ctx.textAlign = "center";
+            ctx.fillText("SPD", 0, -10);
+
+            ctx.restore();
+        }
+
+        function drawStickman(x, y, anim, leanAngle, mode = "RUN") {
+            ctx.strokeStyle = "black"; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round";
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(leanAngle);
+
+            if (mode === "SKI") {
+                // Skis
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(5, -15); ctx.lineTo(0, -30); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(10, -50); ctx.stroke();
+                ctx.beginPath(); ctx.arc(12, -58, 8, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(5, -45); ctx.lineTo(-10, -35); ctx.stroke();
+            }
+            else if (mode === "SWIM") {
+                ctx.rotate(Math.PI / 2);
+                let kick = Math.sin(player.legFrame) * 10;
+                let stroke = Math.sin(player.armFrame) * 20;
+                ctx.beginPath(); ctx.moveTo(0, 30); ctx.lineTo(-10 + kick, 60); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, 30); ctx.lineTo(10 - kick, 60); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, 30); ctx.lineTo(0, -10); ctx.stroke();
+                ctx.beginPath(); ctx.arc(0, -20, 10, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(-15, 10 - stroke); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(15, 10 + stroke); ctx.stroke();
+            }
+            else {
+                let legOff = Math.sin(anim / 5) * 15;
+                ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(-legOff, 0); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(legOff, 0); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(0, -60); ctx.stroke();
+                ctx.beginPath(); ctx.arc(0, -70, 10, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -55); ctx.lineTo(legOff, -35); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, -55); ctx.lineTo(-legOff, -35); ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        function loop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            frameCount++;
+            switch (currentState) {
+                case STATES.MENU: drawMenu(); break;
+                case STATES.SPRINT: updateSprint(); drawSprint(); break;
+                case STATES.LONGJUMP: updateLongJump(); drawLongJump(); break;
+                case STATES.SKIJUMP: updateSkiJump(); drawSkiJump(); break;
+                case STATES.SWIM: updateSwim(); drawSwim(); break;
+                case STATES.RESULTS: drawResults(); break;
+            }
+            for (let k in keyPresses) delete keyPresses[k];
+            requestAnimationFrame(loop);
+        }
+
+        // --- SHARED PHYSICS ---
+        function updatePendulum(gameObj, propVal, propDir, speed) {
+            gameObj[propVal] += gameObj[propDir] * speed;
+            if (gameObj[propVal] > 1) { gameObj[propVal] = 1; gameObj[propDir] = -1; }
+            if (gameObj[propVal] < -1) { gameObj[propVal] = -1; gameObj[propDir] = 1; }
+        }
+
+        function checkRhythmHit(val, key, type = "ENDS") {
+            let hit = false;
+            let acc = 0;
+            if (type === "ENDS") {
+                if (key === 'ArrowRight' && val > 0.6) hit = true;
+                if (key === 'ArrowLeft' && val < -0.6) hit = true;
+                acc = Math.abs(val);
+            }
+            if (hit) {
+                let boost = (acc > 0.9) ? 0.8 : (acc > 0.75 ? 0.4 : 0.15);
+                return boost;
+            }
+            return -1;
+        }
+
+        // --- 1. SPRINT (MASHING) ---
+        function startSprint() {
+            currentState = STATES.SPRINT;
+            player = { x: 50, y: 260, vx: 0 };
+            gameData = { distance: 0, timer: 0, finished: false, lastKey: null };
+            instructionText.innerHTML = "MASH <span class='key'>←</span> then <span class='key'>→</span> repeatedly!";
+        }
+        function inputSprint(key) {
+            if (gameData.finished) return;
+            if (key === 'ArrowLeft' && gameData.lastKey !== 'ArrowLeft') {
+                player.vx += 1.5; gameData.lastKey = 'ArrowLeft';
+            } else if (key === 'ArrowRight' && gameData.lastKey !== 'ArrowRight') {
+                player.vx += 1.5; gameData.lastKey = 'ArrowRight';
+            }
+        }
+        function updateSprint() {
+            if (gameData.finished) { player.vx *= 0.95; player.x += player.vx; return; }
+            gameData.timer += 1 / 60;
+            player.vx *= 0.94; if (player.vx < 0) player.vx = 0;
+            gameData.distance += player.vx / 15;
+            if (gameData.distance >= 100) {
+                gameData.finished = true; scoreMessage = `${gameData.timer.toFixed(2)}s`;
+                subMessage = (gameData.timer < 9.5) ? "WORLD RECORD!" : "Finished";
+                setTimeout(() => currentState = STATES.RESULTS, 2000);
+            }
+        }
+        function drawSprint() {
+            ctx.fillStyle = "#87CEEB"; ctx.fillRect(0, 0, 800, 400);
+            ctx.fillStyle = "#d45"; ctx.fillRect(0, 260, 800, 140);
+            ctx.strokeStyle = "white"; ctx.lineWidth = 2;
+            let offset = (gameData.distance * 100) % 100;
+            for (let i = 0; i < 900; i += 100) { ctx.beginPath(); ctx.moveTo(i - offset, 260); ctx.lineTo(i - offset - 50, 400); ctx.stroke(); }
+            drawStickman(100, 260, (frameCount * player.vx * 0.5), 0, "RUN");
+            drawSpeedometer(player.vx, 10);
+            ctx.fillStyle = "black"; ctx.font = "20px Courier"; ctx.fillText(`Time: ${gameData.timer.toFixed(2)}`, 650, 30);
+        }
+
+        // --- 2. LONG JUMP ---
+        function startLongJump() {
+            currentState = STATES.LONGJUMP;
+            player = { x: 0, y: 260, vx: 0, vy: 0 };
+            gameData = {
+                phase: 'RUN', angle: 90, foulLine: 600,
+                pendulumVal: 0, pendulumDir: 1, rhythmSpeed: 0.02,
+                momentumX: 0
+            };
+            instructionText.innerHTML = "Run: Arrows (Rhythm). Before Line: Press SPACE to Aim.";
+        }
+        function inputLongJump(key) {
+            if (gameData.phase === 'RUN') {
+                let boost = checkRhythmHit(gameData.pendulumVal, key, "ENDS");
+                if (boost > 0) { player.vx += boost; if (player.vx > 9.5) player.vx = 9.5; }
+                else if (key.includes("Arrow")) { player.vx *= 0.95; }
+
+                if (key === ' ' && player.x < gameData.foulLine) {
+                    gameData.phase = 'AIM'; gameData.momentumX = player.vx;
+                }
+            }
+            else if (gameData.phase === 'AIM' && key === ' ') {
+                gameData.phase = 'AIR';
+                let rad = gameData.angle * (Math.PI / 180);
+                let jumpPower = 12 + (gameData.momentumX * 0.5);
+                player.vx = gameData.momentumX + (jumpPower * 0.4 * Math.cos(rad));
+                player.vy = -(jumpPower * Math.sin(rad));
+                if (player.vy < -14) player.vy = -14;
+            }
+        }
+        function updateLongJump() {
+            if (gameData.phase === 'RUN') {
+                player.vx *= 0.99; if (player.vx < 0) player.vx = 0;
+                gameData.rhythmSpeed = 0.02 + (player.vx * 0.012);
+                updatePendulum(gameData, 'pendulumVal', 'pendulumDir', gameData.rhythmSpeed);
+                player.x += player.vx;
+                if (player.x >= gameData.foulLine) {
+                    scoreMessage = "FOUL!"; subMessage = "Pressed Space too late";
+                    currentState = STATES.RESULTS;
+                }
+            }
+            else if (gameData.phase === 'AIM') {
+                player.x += gameData.momentumX * 0.1;
+                gameData.angle -= 1.0;
+                if (gameData.angle <= 0) { gameData.angle = 0; gameData.phase = 'AIR'; player.vy = 0; player.vx = gameData.momentumX; }
+            }
+            else if (gameData.phase === 'AIR') {
+                player.x += player.vx; player.y += player.vy;
+                player.vy += 0.5;
+                if (player.y >= 260) {
+                    player.y = 260; gameData.phase = 'LAND';
+                    let dist = Math.max(0, player.x - gameData.foulLine);
+                    scoreMessage = `${(dist / 10).toFixed(2)}m`; subMessage = (dist > 600) ? "Great Jump!" : "Nice";
+                    setTimeout(() => currentState = STATES.RESULTS, 2000);
+                }
+            }
+        }
+        function drawLongJump() {
+            ctx.fillStyle = "#87CEEB"; ctx.fillRect(0, 0, 800, 400);
+            ctx.save();
+            let camX = Math.max(0, player.x - 150); ctx.translate(-camX, 0);
+            ctx.fillStyle = "#d45"; ctx.fillRect(0, 260, gameData.foulLine, 140);
+            ctx.fillStyle = "#edcaaa"; ctx.fillRect(gameData.foulLine, 260, 2000, 140);
+            ctx.fillStyle = "white"; ctx.fillRect(gameData.foulLine - 5, 260, 5, 140);
+            drawStickman(player.x, player.y, (gameData.phase === 'AIR' ? 0 : player.x), 0, "RUN");
+
+            if (gameData.phase === 'AIM') {
+                ctx.save(); ctx.translate(player.x, player.y - 40);
+                ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 50, 0, -Math.PI / 2, true); ctx.stroke();
+                let rad = -gameData.angle * (Math.PI / 180);
+                ctx.rotate(rad); ctx.fillStyle = "yellow"; ctx.fillRect(0, -5, 60, 10);
+                ctx.restore();
+            }
+            ctx.restore();
+
+            drawSpeedometer(player.vx, 10);
+            if (gameData.phase === 'RUN') drawRhythmBar(gameData.pendulumVal, 'ENDS', 350, "RUN SPEED");
+        }
+
+        // --- 3. SKI JUMP (REFACTORED TERRAIN & JUMP) ---
+        const SKI = {
+            RAMP_START_X: 0, RAMP_START_Y: -600,
+            CURVE_X: 1200,
+            TABLE_X: 1400, TABLE_Y: 350, // The flat Takeoff Table
+            EDGE_X: 1500, // Where physics switches to air
+            HILL_START_X: 1500,
+            HILL_BTM_X: 4000, HILL_BTM_Y: 1200,
+            FLAT_END_X: 5500
+        };
+
+        function startSkiJump() {
+            currentState = STATES.SKIJUMP;
+            player = { x: 0, y: SKI.RAMP_START_Y, vx: 0, vy: 0, rotation: 0 };
+            gameData = {
+                phase: 'SLIDE',
+                angle: 90,
+                lastKey: null,
+                groundSlopeAngle: 0
+            };
+            instructionText.innerHTML = "MASH Arrows to Slide. Table: Space->Space to Jump. Air: Rotate with Arrows.";
+        }
+
+        function inputSkiJump(key) {
+            // PHASE 1: SLIDE (MASHING)
+            if (gameData.phase === 'SLIDE') {
+                // Mash for speed
+                if (key === 'ArrowLeft' && gameData.lastKey !== 'ArrowLeft') {
+                    player.vx += 1.0; gameData.lastKey = 'ArrowLeft';
+                } else if (key === 'ArrowRight' && gameData.lastKey !== 'ArrowRight') {
+                    player.vx += 1.0; gameData.lastKey = 'ArrowRight';
+                }
+
+                // Trigger Takeoff Sequence (Must be near table)
+                if (key === ' ' && player.x > SKI.CURVE_X && player.x < SKI.EDGE_X) {
+                    gameData.phase = 'ANGLE';
+                }
+            }
+            // PHASE 2: TAKEOFF ANGLE
+            else if (gameData.phase === 'ANGLE' && key === ' ') {
+                gameData.phase = 'AIR';
+
+                // Physics: 
+                // In Ski Jump, you carry horizontal speed. Vertical pop depends on angle.
+                // 90 deg = High jump, 0 deg = Long flat jump.
+                // Optimal is around 30-45 deg forward.
+
+                let rad = gameData.angle * (Math.PI / 180);
+                // Vertical pop
+                player.vy = -6 * Math.sin(rad);
+                // Horizontal conservation (slight boost if angled fwd)
+                player.vx += 2 * Math.cos(rad);
+
+                // Initial rotation matches flight path
+                player.rotation = -0.1;
+            }
+            // PHASE 3: AIR (MANUAL ROTATION)
+            else if (gameData.phase === 'AIR') {
+                if (key === 'ArrowLeft') player.rotation -= 0.1; // CCW (Tips Up)
+                if (key === 'ArrowRight') player.rotation += 0.1; // CW (Tips Down)
+            }
+        }
+
+        function updateSkiJump() {
+            if (gameData.phase === 'SLIDE') {
+                // Terrain Geometry
+                let slope = 0.5;
+                if (player.x > SKI.CURVE_X) slope = 0.1;
+                if (player.x > SKI.TABLE_X) slope = 0; // Flat table
+
+                // Physics
+                if (player.vx < 15) player.vx += 0.05 + (slope * 0.1);
+                player.vx *= 0.96; // Friction
+
+                player.x += player.vx;
+
+                // Y Calc
+                if (player.x <= SKI.CURVE_X) {
+                    player.y = SKI.RAMP_START_Y + (player.x * 0.8); // Steep down
+                    player.rotation = 0.7;
+                } else if (player.x <= SKI.TABLE_X) {
+                    let pct = (player.x - SKI.CURVE_X) / (SKI.TABLE_X - SKI.CURVE_X);
+                    let startY = SKI.RAMP_START_Y + (SKI.CURVE_X * 0.8);
+                    player.y = startY + (pct * (SKI.TABLE_Y - startY));
+                    player.rotation = 0.7 - (pct * 0.7);
+                } else {
+                    player.y = SKI.TABLE_Y; // Flat
+                    player.rotation = 0;
+                }
+
+                // Fell off edge without jumping?
+                if (player.x >= SKI.EDGE_X) {
+                    gameData.phase = 'AIR';
+                    player.vy = 0; // Just fall
+                    gameData.angle = 0; // No pop
+                }
+            }
+            else if (gameData.phase === 'ANGLE') {
+                player.x += player.vx; // Continue sliding
+                gameData.angle -= 4; // Fast rotation 90 -> 0
+                if (gameData.angle <= 0) {
+                    gameData.angle = 0;
+                    gameData.phase = 'AIR';
+                    player.vy = 0;
+                }
+
+                // If sliding past edge while aiming
+                if (player.x >= SKI.EDGE_X) {
+                    gameData.phase = 'AIR';
+                    player.vy = 0;
+                }
+            }
+            else if (gameData.phase === 'AIR') {
+                let dt = 0.8;
+                player.x += player.vx * dt;
+                player.y += player.vy * dt;
+                player.vy += 0.06 * dt; // Gravity
+
+                // Calculate Ground Info
+                let groundY = 10000;
+                let groundSlope = 0;
+
+                if (player.x < SKI.HILL_START_X) {
+                    groundY = 10000; // Gap
+                } else if (player.x < SKI.HILL_BTM_X) {
+                    // Landing Hill
+                    let pct = (player.x - SKI.HILL_START_X) / (SKI.HILL_BTM_X - SKI.HILL_START_X);
+                    groundY = SKI.TABLE_Y + 150 + (pct * (SKI.HILL_BTM_Y - SKI.TABLE_Y));
+                    groundSlope = 0.4; // Approx slope
+                } else {
+                    // Runout
+                    groundY = SKI.HILL_BTM_Y + 150 + (player.x - SKI.HILL_BTM_X) * 0.05;
+                    groundSlope = 0.05;
+                }
+
+                gameData.groundSlopeAngle = groundSlope;
+
+                // Hit Ground?
+                if (player.x > SKI.HILL_START_X && player.y >= groundY) {
+                    player.y = groundY;
+
+                    // Angle Check
+                    let diff = Math.abs(player.rotation - groundSlope);
+
+                    if (diff < 0.3) {
+                        let dist = (player.x - SKI.EDGE_X) / 10;
+                        scoreMessage = `${dist.toFixed(1)}m`; subMessage = "Landed!";
+                    } else {
+                        scoreMessage = "CRASH!"; subMessage = `Bad Angle`;
+                    }
+                    setTimeout(() => currentState = STATES.RESULTS, 500);
+                }
+            }
+        }
+
+        function drawSkiJump() {
+            ctx.fillStyle = "#ddeeff"; ctx.fillRect(0, 0, 800, 400);
+            ctx.save();
+            let camX = player.x - 200; let camY = player.y - 250;
+            if (camX < 0) camX = 0; if (camY < -600) camY = -600;
+            ctx.translate(-camX, -camY);
+
+            // RAMP
+            ctx.strokeStyle = "#888"; ctx.lineWidth = 10; ctx.beginPath();
+            ctx.moveTo(SKI.RAMP_START_X, SKI.RAMP_START_Y);
+            let curveY = SKI.RAMP_START_Y + (SKI.CURVE_X * 0.8);
+            ctx.lineTo(SKI.CURVE_X, curveY);
+            ctx.lineTo(SKI.TABLE_X, SKI.TABLE_Y);
+            ctx.lineTo(SKI.EDGE_X, SKI.TABLE_Y);
+            ctx.stroke();
+
+            // LANDING HILL
+            ctx.beginPath(); ctx.strokeStyle = "#66a";
+            ctx.moveTo(SKI.HILL_START_X, SKI.TABLE_Y + 150);
+            ctx.lineTo(SKI.HILL_BTM_X, SKI.HILL_BTM_Y + 150);
+            ctx.lineTo(SKI.FLAT_END_X, SKI.HILL_BTM_Y + 200);
+            ctx.stroke();
+            ctx.lineTo(SKI.FLAT_END_X, SKI.HILL_BTM_Y + 1000);
+            ctx.lineTo(SKI.HILL_START_X, SKI.HILL_BTM_Y + 1000);
+            ctx.fillStyle = "#ddeeff"; ctx.fill();
+
+            // K-Point
+            ctx.strokeStyle = "red"; ctx.lineWidth = 2; ctx.beginPath();
+            ctx.moveTo(3500, 700); ctx.lineTo(3500, 900); ctx.stroke();
+
+            ctx.save(); ctx.translate(player.x, player.y);
+            ctx.rotate(player.rotation);
+            ctx.fillStyle = "red"; ctx.fillRect(-20, 0, 50, 5);
+            drawStickman(0, 0, 0, 0.3, "SKI");
+            ctx.restore();
+
+            // ANGLE METER
+            if (gameData.phase === 'ANGLE') {
+                ctx.save(); ctx.translate(player.x, player.y - 50);
+                ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 3;
+                ctx.beginPath(); ctx.arc(0, 0, 40, 0, Math.PI / 2, false); ctx.stroke();
+
+                let rad = gameData.angle * (Math.PI / 180);
+                // Draw Arrow
+                ctx.rotate(-Math.PI / 2 + rad); // Adjust so 90 is UP, 0 is RIGHT
+                ctx.fillStyle = "yellow";
+                // Draw arrow shape
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(35, 0); ctx.stroke();
+                ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+                ctx.restore();
+            }
+            ctx.restore();
+
+            drawSpeedometer(player.vx, 20);
+
+            // HUD
+            if (gameData.phase === 'SLIDE') {
+                ctx.fillStyle = "white"; ctx.font = "20px Arial"; ctx.fillText("MASH ARROWS! SPACE AT TABLE!", 400, 350);
+            } else if (gameData.phase === 'AIR') {
+                ctx.fillStyle = "white"; ctx.font = "20px Arial"; ctx.fillText("ARROWS TO ROTATE SKIS", 400, 350);
+                // Helper
+                let diff = (player.rotation - gameData.groundSlopeAngle) * 57;
+                ctx.fillStyle = Math.abs(diff) < 15 ? "lime" : "red";
+                ctx.fillText(`Angle Diff: ${diff.toFixed(0)}°`, 400, 380);
+            }
+        }
+
+        // --- 4. SWIMMING (INDEPENDENT) ---
+        function startSwim() {
+            currentState = STATES.SWIM;
+            player = { x: 0, vx: 0, armFrame: 0, legFrame: 0 };
+            gameData = {
+                distance: 0, timer: 0, finished: false,
+                pValLegs: 0, pDirLegs: 1, legMomentum: 0,
+                pValArms: 0, pDirArms: 1, armMomentum: 0
+            };
+            instructionText.innerHTML = "TOP: Space (Legs) | BOTTOM: Arrows (Arms). Independent Rhythms.";
+        }
+        function inputSwim(key) {
+            if (gameData.finished) return;
+            if (key === ' ') {
+                if (Math.abs(gameData.pValLegs) > 0.6) {
+                    gameData.legMomentum += 0.5; player.legFrame += 1.5;
+                } else {
+                    gameData.legMomentum *= 0.8;
+                }
+            }
+            else if (key === 'ArrowLeft' || key === 'ArrowRight') {
+                let boost = checkRhythmHit(gameData.pValArms, key, "ENDS");
+                if (boost > 0) {
+                    gameData.armMomentum += 0.5; player.armFrame += 1.5;
+                } else {
+                    gameData.armMomentum *= 0.8;
+                }
+            }
+            if (gameData.legMomentum > 4) gameData.legMomentum = 4;
+            if (gameData.armMomentum > 4) gameData.armMomentum = 4;
+        }
+        function updateSwim() {
+            gameData.timer += 1 / 60;
+            gameData.legMomentum *= 0.99; gameData.armMomentum *= 0.99;
+            let legSpeed = 0.02 + (gameData.legMomentum * 0.02);
+            let armSpeed = 0.02 + (gameData.armMomentum * 0.02);
+            updatePendulum(gameData, 'pValLegs', 'pDirLegs', legSpeed);
+            updatePendulum(gameData, 'pValArms', 'pDirArms', armSpeed);
+            player.vx = (gameData.legMomentum + gameData.armMomentum);
+            gameData.distance += player.vx / 10;
+            if (gameData.distance >= 1000) {
+                gameData.finished = true; scoreMessage = `${gameData.timer.toFixed(2)}s`;
+                subMessage = "Excellent!";
+                setTimeout(() => currentState = STATES.RESULTS, 2000);
+            }
+        }
+        function drawSwim() {
+            ctx.fillStyle = "#006994"; ctx.fillRect(0, 0, 800, 400);
+            ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 2;
+            let offset = (gameData.distance * 50) % 100;
+            for (let i = 0; i < 900; i += 100) { ctx.beginPath(); ctx.moveTo(i - offset, 0); ctx.lineTo(i - offset, 400); ctx.stroke(); }
+
+            ctx.save(); ctx.translate(200, 200);
+            drawStickman(0, 0, 0, 0, "SWIM");
+            ctx.restore();
+
+            ctx.fillStyle = "white"; ctx.font = "20px Courier"; ctx.fillText(`Dist: ${Math.floor(gameData.distance)}m`, 400, 50);
+
+            if (!gameData.finished) {
+                drawRhythmBar(gameData.pValLegs, 'ENDS', 310, "SPACE (FEET)");
+                drawRhythmBar(gameData.pValArms, 'ENDS', 350, "ARROWS (ARMS)");
+            }
+        }
+
+        // --- MENUS ---
+        function drawMenu() {
+            ctx.fillStyle = "#111"; ctx.fillRect(0, 0, 800, 400);
+            ctx.fillStyle = "lime"; ctx.font = "40px Courier"; ctx.textAlign = "center";
+            ctx.fillText("RETRO OLYMPICS", 400, 100);
+            ctx.fillStyle = "white"; ctx.font = "18px Courier";
+            ctx.fillText("[1] 100m SPRINT (Mashing)", 400, 180);
+            ctx.fillText("[2] LONG JUMP (Rhythm)", 400, 220);
+            ctx.fillText("[3] SKI JUMP (Mash/Angle)", 400, 260);
+            ctx.fillText("[4] SWIMMING (Dual Rhythm)", 400, 300);
+            instructionText.innerHTML = "Click Game to Focus. Select [1-4].";
+        }
+        function drawResults() {
+            ctx.fillStyle = "rgba(0,0,0,0.9)"; ctx.fillRect(100, 100, 600, 200);
+            ctx.strokeStyle = "lime"; ctx.lineWidth = 4; ctx.strokeRect(100, 100, 600, 200);
+            ctx.fillStyle = "white"; ctx.textAlign = "center"; ctx.font = "30px Courier";
+            ctx.fillText("RESULT", 400, 150);
+            ctx.fillStyle = "yellow"; ctx.fillText(scoreMessage, 400, 200);
+            ctx.fillStyle = "#aaa"; ctx.font = "18px Courier"; ctx.fillText(subMessage, 400, 240);
+            instructionText.innerHTML = "Press SPACE to return to menu.";
+        }
+
+        loop();
+    </script>
+</body>
+
+</html>
