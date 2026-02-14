@@ -1688,13 +1688,52 @@
 
             if (gameState.active && gameState.spawnQueue.length > 0) {
                 gameState.spawnTimer++;
-                let waitTime = 30
-                if (gameState.spawnQueue.length > 100) waitTime = 1
-                if (gameState.spawnTimer > waitTime) {
-                    spawnEnemy(gameState.spawnQueue.pop());
-                    gameState.spawnTimer = 0;
-                    uiDirty = true;
+
+                // Exponential Rate: 
+                // < 100: 1 per frame (if timer allows? No, user said rate depends on queue size. "1 every tick or so" implies per frame or close to it)
+                // Actually user said: "less than 100... maybe spawn 1 every tick... then at 200, 2 every tick..."
+                // Default loop runs at 60Hz (approx).
+
+                let qSize = gameState.spawnQueue.length;
+                let rate = 1;
+
+                // Formula: 2 ^ floor((qSize - 100) / 100)
+                // If qSize < 100: (qSize-100)/100 is negative. floor is -1. 2^-1 = 0.5.
+                // We want 1 base.
+                // Let's use: if qSize < 100 -> 1.
+                // If qSize >= 100 -> 2.
+                // If qSize >= 200 -> 4.
+
+                if (qSize >= 100) {
+                    let power = Math.floor((qSize - 100) / 100) + 1; // 100->1, 200->2, 300->3
+                    rate = Math.pow(2, power); // 2^1=2, 2^2=4, 2^3=8
                 }
+
+                // Prevent infinite freeze if queue is massive? Cap at 100?
+                if (rate > 100) rate = 100;
+
+                for (let i = 0; i < rate; i++) {
+                    if (gameState.spawnQueue.length === 0) break;
+                    let data = gameState.spawnQueue.shift(); // FIFO for queue
+
+                    if (data.type === 'ally') {
+                        allies.push(new Ally(data.x, data.y, data.level, data.subtype));
+                    } else {
+                        // Enemy
+                        // Support startGx/startGy
+                        let e = new Enemy(data.type, data.waveIndex, data.gx, data.gy);
+
+                        // Apply Barrack Stats Scaling if 'level' is provided
+                        if (data.level && data.level > 1) {
+                            // Formula: 1.5^(level - 1)
+                            let mult = Math.pow(1.5, data.level - 1);
+                            e.maxHp = Math.floor(e.maxHp * mult);
+                            e.hp = e.maxHp;
+                        }
+                        enemies.push(e);
+                    }
+                }
+                uiDirty = true;
             } else if (gameState.active && gameState.spawnQueue.length === 0 && enemies.length === 0) {
                 // Wave Fully Cleared
                 if (gameState.active) {
@@ -2715,11 +2754,16 @@
                 }
             }
 
-            constructor(type, waveIndex) {
-                let corners = [[0, 0], [GRID_W - 1, 0], [0, GRID_H - 1], [GRID_W - 1, GRID_H - 1]];
-                let corner = corners[Math.floor(Math.random() * corners.length)];
-                this.gx = corner[0];
-                this.gy = corner[1];
+            constructor(type, waveIndex, startGx, startGy) {
+                if (startGx !== undefined && startGy !== undefined) {
+                    this.gx = startGx;
+                    this.gy = startGy;
+                } else {
+                    let corners = [[0, 0], [GRID_W - 1, 0], [0, GRID_H - 1], [GRID_W - 1, GRID_H - 1]];
+                    let corner = corners[Math.floor(Math.random() * corners.length)];
+                    this.gx = corner[0];
+                    this.gy = corner[1];
+                }
                 this.x = this.gx * TILE_SIZE + 16;
                 this.y = this.gy * TILE_SIZE + 16;
                 this.type = type;
@@ -3847,42 +3891,37 @@
             spawnUnit() {
                 let lvl = this.effectiveLevel || this.level || 1;
                 console.log(`Barrack Spawning: ${this.barrackType} ${this.unitType} (Level ${lvl})`);
-                if (this.barrackType === 'ally') {
-                    // Spawn Ally -> Walk to Corner
-                    allies.push(new Ally(this.x, this.y, lvl, this.unitType || 'norm'));
-                } else {
-                    // Spawn Specific Enemy -> Walk to Castle
-                    let type = this.unitType || 'norm';
-                    let e = new Enemy(type, gameState.wave); // Logic might ignore wave if stats are overridden?
-                    // Enemy Level/Diff logic usually depends on wave. 
-                    // But if we want STRONGER enemies from stronger barracks, we need to pass level or stats?
-                    // Enemy constructor: constructor(type, wave)
-                    // It calculates HP based on wave. 
-                    // Does it support specific level override?
-                    // If not, boosting Barrack level might not boost Enemy strength unless we subclass or modify Enemy.
-                    // User said: "Barracks... should use stacks -> level -> effective level. Everything as any other item would work."
-                    // If "any other item" implies stats scalability.
-                    // But enemies are separate entities.
-                    // If I spawn a L5 enemy vs L1 enemy, how do I differentiate?
-                    // Maybe pass 'wave' as 'wave + bonus'?
-                    // Or set stats after spawn?
 
-                    e.x = this.x; e.y = this.y;
-                    e.gx = this.gx; e.gy = this.gy; // virtual start
-                    e.path = null; e.pathIndex = 0;
+                // Spawn 'lvl' number of units
+                // "Each stack spawns 1 unit" effectively, since Count = Level, and Level ~ log2(Stacks)
+                // Wait, user said: "Make the barrack level dependent on the stack size... Increase the number of spawned allies/enemies to match the spawner's level."
+                // So count = lvl.
 
-                    // BOOST ENEMY STATS BASED ON BARRACK LEVEL
-                    // Base Wave = gameState.wave
-                    // Bonus Wave power?
-                    // Or direct stat multiplier?
-                    let mult = Math.pow(1.5, lvl - 1);
-                    e.maxHp = Math.floor(e.maxHp * mult);
-                    e.hp = e.maxHp;
+                let count = lvl;
+                let spawnLevel = Math.pow(2, lvl); // "level calculated as 2 to the power of the spawner's level"
 
-                    enemies.push(e);
+                let uType = this.unitType || 'norm';
+
+                for (let i = 0; i < count; i++) {
+                    if (this.barrackType === 'ally') {
+                        gameState.spawnQueue.push({
+                            type: 'ally',
+                            subtype: uType,
+                            level: spawnLevel, // Ally constructor uses level for power
+                            x: this.x,
+                            y: this.y
+                        });
+                    } else {
+                        gameState.spawnQueue.push({
+                            type: uType,
+                            waveIndex: gameState.wave,
+                            gx: this.gx,
+                            gy: this.gy,
+                            level: spawnLevel // Used for stat boosting in update()
+                        });
+                    }
                 }
             }
-
             draw(ctx) {
                 // Outline
                 ctx.strokeStyle = this.barrackType === 'ally' ? '#4f4' : '#f44';
@@ -5154,7 +5193,7 @@
             let level = data.level || 1;
 
             for (let i = 0; i < count; i++) {
-                spawnEnemy({ type: type, waveIndex: level });
+                gameState.spawnQueue.push({ type: type, waveIndex: level });
             }
 
             // (Msg removed as requested)
@@ -5260,7 +5299,7 @@
             updateUI();
         }
 
-        function spawnEnemy(data) { enemies.push(new Enemy(data.type, data.waveIndex)); }
+        function spawnEnemy(data) { gameState.spawnQueue.push(data); }
 
         function endWave() {
             // Called when all enemies derived from spawnQueue are dead

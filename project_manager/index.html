@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cabin Plan</title>
+
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.3.0/model-viewer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --bg-primary: #121212;
+            --bg-secondary: #1e1e1e;
+            --bg-tertiary: #2d2d2d;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --accent: #4caf50;
+            --danger: #cf6679;
+            --border: #444;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            padding-bottom: 80px;
+            overflow-x: hidden;
+            overscroll-behavior: none;
+            /* Prevent pull-to-refresh interfering */
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-secondary);
+            padding: 0 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            height: 50px;
+        }
+
+        #mode-toggle-btn {
+            background: var(--accent);
+            color: #000;
+            font-weight: bold;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .controls-container {
+            display: flex;
+            gap: 5px;
+        }
+
+        button {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        /* Main Container */
+        #main-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            /* Default gap for Edit mode */
+            padding: 10px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Section/Box Styles */
+        .section-box {
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            position: relative;
+            padding: 35px 5px 5px 5px;
+            /* Top padding for Edit controls */
+            transition: all 0.2s ease;
+        }
+
+        .section-controls {
+            position: absolute;
+            top: 0;
+            right: 0;
+            display: flex;
+            background: var(--bg-tertiary);
+            border-bottom-left-radius: 6px;
+            overflow: hidden;
+            border-bottom: 1px solid var(--border);
+            border-left: 1px solid var(--border);
+        }
+
+        .section-btn {
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .section-btn.add-btn {
+            color: var(--accent);
+            border-right: 1px solid var(--border);
+        }
+
+        .section-btn.del-btn:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            min-height: 80px;
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: stretch;
+        }
+
+        .drop-zone.sortable-ghost {
+            opacity: 0.4;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .drop-zone:empty:before {
+            content: 'Empty Section - Click + to add items';
+            color: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            font-size: 0.9rem;
+            font-style: italic;
+        }
+
+        /* Items */
+        .item-card {
+            background-color: var(--bg-secondary);
+            border-radius: 4px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            width: calc(50% - 8px);
+            max-width: 100%;
+        }
+
+        @media (min-width: 768px) {
+            .item-card {
+                width: calc(33.33% - 8px);
+            }
+        }
+
+        @media (min-width: 1200px) {
+            .item-card {
+                width: calc(25% - 8px);
+            }
+        }
+
+        .item-header {
+            padding: 4px 6px;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .item-title {
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 80%;
+        }
+
+        .item-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .drag-handle {
+            cursor: grab;
+            color: var(--accent);
+            padding: 4px;
+        }
+
+        .delete-btn {
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 4px;
+        }
+
+        .item-content {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            min-height: 150px;
+        }
+
+        /* Content Types */
+        model-viewer {
+            width: 100%;
+            height: 200px;
+            background-color: #111;
+        }
+
+        .img-preview {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            cursor: zoom-in;
+            display: block;
+        }
+
+        .link-wrapper {
+            width: 100%;
+            height: 100%;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-tertiary);
+            min-height: 100px;
+        }
+
+        .link-btn {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1rem;
+            text-align: center;
+            word-break: break-word;
+        }
+
+        .note-wrapper {
+            width: 100%;
+            padding: 8px;
+            background: var(--bg-secondary);
+            height: auto;
+            min-height: 100px;
+            overflow-y: auto;
+            max-height: 300px;
+        }
+
+        .note-text {
+            white-space: pre-wrap;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+
+        /* Add Section Button (Edit Mode Only) */
+        #add-section-btn {
+            width: 100%;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px dashed var(--border);
+            color: var(--text-secondary);
+            border-radius: 8px;
+            font-size: 1rem;
+            margin-top: 10px;
+            cursor: pointer;
+        }
+
+        /* =============================
+           VIEW MODE STYLES (Compact)
+           ============================= */
+        body.view-mode .controls-container {
+            display: none;
+        }
+
+        body.view-mode #add-section-btn {
+            display: none;
+        }
+
+        body.view-mode .section-controls {
+            display: none;
+        }
+
+        body.view-mode .item-actions {
+            display: none;
+        }
+
+        body.view-mode #main-container {
+            gap: 0px;
+            padding: 0;
+            width: 100%;
+        }
+
+        body.view-mode .section-box {
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            padding: 0;
+            margin: 0;
+            width: 100%;
+        }
+
+        body.view-mode .drop-zone {
+            border: none;
+            gap: 2px;
+            padding: 0;
+            justify-content: center;
+        }
+
+        body.view-mode .drop-zone:empty:before {
+            display: none;
+        }
+
+        body.view-mode .item-card {
+            border: none;
+            border-radius: 0;
+            margin: 0;
+            width: 100%;
+            flex-basis: calc(50% - 2px);
+        }
+
+        @media (min-width: 768px) {
+            body.view-mode .item-card {
+                flex-basis: calc(33.33% - 2px);
+            }
+        }
+
+        body.view-mode .item-title {
+            text-align: center;
+            padding: 6px;
+            max-width: 100%;
+        }
+
+        body.view-mode .item-header {
+            background: var(--bg-secondary);
+            justify-content: center;
+            border-bottom: none;
+        }
+
+
+        /* Modals (Generic) */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: var(--bg-secondary);
+            padding: 1.5rem;
+            border-radius: 8px;
+            width: 95%;
+            max-width: 500px;
+        }
+
+        .form-group {
+            margin-bottom: 0.8rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.3rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 8px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: 4px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* ========================
+           ZOOM LIGHTBOX STYLES
+           ======================== */
+        #lightboxModal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            z-index: 5000;
+            display: none;
+            overflow: hidden;
+            /* Important for custom touch logic */
+            touch-action: none;
+            /* Disable browser handling of gestures */
+        }
+
+        #lightboxContainer {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #lightboxImage {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transform-origin: center center;
+            will-change: transform;
+            /* Hardware acceleration hint */
+            user-select: none;
+        }
+
+        .lightbox-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 5001;
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+
+<body class="view-mode">
+
+    <header>
+        <button id="mode-toggle-btn" onclick="toggleMode()">
+            <i class="fa-solid fa-pen"></i> Edit
+        </button>
+
+        <div class="controls-container">
+            <button onclick="shareWorkspace()"><i class="fa-solid fa-share-nodes"></i> Share</button>
+            <button onclick="copyStateJson()"><i class="fa-solid fa-copy"></i> JSON</button>
+            <button onclick="openImportModal()"><i class="fa-solid fa-file-import"></i> Import</button>
+        </div>
+    </header>
+
+    <div id="main-container"></div>
+    <button id="add-section-btn" onclick="addSection()"><i class="fa-solid fa-plus-circle"></i> Add New Section</button>
+
+    <div id="addItemModal" class="modal">
+        <div class="modal-content">
+            <h2>Add New Item</h2>
+            <div class="form-group">
+                <label>Type</label>
+                <select id="itemType" onchange="toggleUrlInput()">
+                    <option value="model">3D Model (GLB)</option>
+                    <option value="image">Image</option>
+                    <option value="link">Link Button</option>
+                    <option value="note">Text Note</option>
+                </select>
+            </div>
+            <div class="form-group"><label>Title</label><input type="text" id="itemName" placeholder="Name..."></div>
+            <div class="form-group" id="urlInputGroup"><label>URL</label><input type="url" id="itemUrl"
+                    placeholder="https://..."></div>
+            <div class="form-group hidden" id="textInputGroup"><label>Note</label><textarea id="itemText"
+                    rows="4"></textarea></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
+                <button onclick="closeAddModal()">Cancel</button>
+                <button class="accent" onclick="addNewItem()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="importModal" class="modal">
+        <div class="modal-content">
+            <h2>Import Layout</h2>
+            <textarea id="importTextarea" style="min-height: 150px; font-family: monospace; width:100%;"></textarea>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
+                <button onclick="document.getElementById('importModal').style.display='none'">Cancel</button>
+                <button class="accent" onclick="loadImportedJson()">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="lightboxModal">
+        <div class="lightbox-close" onclick="closeLightbox()">&times;</div>
+        <div id="lightboxContainer">
+            <img id="lightboxImage" src="" alt="Fullscreen view" draggable="false">
+        </div>
+    </div>
+
+    <script>
+        // ===========================
+        // State & Utils
+        // ===========================
+        let appState = [];
+        let targetZoneId = null;
+
+        function normalizeUrl(url) {
+            if (!url) return '';
+            const googleDriveRegex = /(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|drive\.google\.com\/([a-zA-Z0-9_-]+)\/view)([a-zA-Z0-9_-]+)/;
+            const match = url.match(googleDriveRegex);
+            if (match && match[2]) return `https://drive.google.com/uc?export=view&id=${match[2]}`;
+            return url;
+        }
+        function generateId() { return 'id_' + Date.now() + Math.random().toString(36).substr(2, 5); }
+        function escapeHtml(text) { if (!text) return ''; return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+
+        // ===========================
+        // Rendering
+        // ===========================
+        function renderAppState() {
+            const container = document.getElementById('main-container');
+            container.innerHTML = '';
+
+            appState.forEach(zone => {
+                const sectionDiv = document.createElement('div');
+                sectionDiv.className = 'section-box';
+
+                const controlsDiv = document.createElement('div');
+                controlsDiv.className = 'section-controls';
+                controlsDiv.innerHTML = `
+                <button class="section-btn add-btn" onclick="openAddModal('${zone.id}')"><i class="fa-solid fa-plus"></i></button>
+                <button class="section-btn del-btn" onclick="deleteSection('${zone.id}')"><i class="fa-solid fa-trash"></i></button>
+            `;
+                sectionDiv.appendChild(controlsDiv);
+
+                const dropZone = document.createElement('div');
+                dropZone.className = 'drop-zone';
+                dropZone.dataset.zoneId = zone.id;
+
+                zone.items.forEach(item => {
+                    dropZone.appendChild(createItemElement(item));
+                });
+
+                sectionDiv.appendChild(dropZone);
+                container.appendChild(sectionDiv);
+
+                new Sortable(dropZone, {
+                    group: 'shared-workspace',
+                    animation: 150,
+                    ghostClass: 'sortable-ghost',
+                    handle: '.drag-handle',
+                    disabled: document.body.classList.contains('view-mode'),
+                    onEnd: function (evt) { updateStateFromDOM(); }
+                });
+            });
+        }
+
+        function createItemElement(item) {
+            const div = document.createElement('div');
+            div.className = 'item-card';
+            div.dataset.id = item.id; div.dataset.type = item.type; div.dataset.name = item.name; div.dataset.url = item.url;
+            if (item.text) div.dataset.text = item.text;
+
+            let contentHtml = '';
+            switch (item.type) {
+                case 'model':
+                    contentHtml = `<model-viewer src="${item.url}" ar auto-rotate camera-controls shadow-intensity="1" alt="${item.name}" ar-scale="auto"></model-viewer>`;
+                    break;
+                case 'image':
+                    contentHtml = `<img src="${item.url}" alt="${item.name}" class="img-preview" loading="lazy" onclick="openLightbox('${item.url}')">`;
+                    break;
+                case 'link':
+                    contentHtml = `<div class="link-wrapper"><a href="${item.url}" target="_blank" class="link-btn"><i class="fa-solid fa-external-link-alt"></i> Link</a></div>`;
+                    break;
+                case 'note':
+                    contentHtml = `<div class="note-wrapper"><div class="note-text">${escapeHtml(item.text)}</div></div>`;
+                    break;
+            }
+
+            div.innerHTML = `
+            <div class="item-header">
+                <span class="item-title">${escapeHtml(item.name)}</span>
+                <div class="item-actions">
+                    <i class="fa-solid fa-grip-vertical drag-handle" title="Drag"></i>
+                    <i class="fa-solid fa-trash delete-btn" onclick="deleteItem(this, '${item.id}')" title="Delete"></i>
+                </div>
+            </div>
+            <div class="item-content">${contentHtml}</div>
+        `;
+            return div;
+        }
+
+        // ===========================
+        // ROBUST TOUCH ZOOM ENGINE
+        // ===========================
+        const lightboxModal = document.getElementById('lightboxModal');
+        const lightboxImg = document.getElementById('lightboxImage');
+
+        // Zoom State
+        let state = {
+            scale: 1,
+            panning: false,
+            pointX: 0,
+            pointY: 0,
+            startX: 0,
+            startY: 0,
+            lastScale: 1
+        }
+
+        function openLightbox(url) {
+            lightboxImg.src = url;
+            lightboxModal.style.display = 'block'; // Block, not flex, to handle absolute pos if needed
+            resetZoom();
+            document.body.style.overflow = 'hidden'; // Lock background scroll
+        }
+
+        function closeLightbox() {
+            lightboxModal.style.display = 'none';
+            lightboxImg.src = '';
+            document.body.style.overflow = '';
+        }
+
+        function resetZoom() {
+            state = { scale: 1, panning: false, pointX: 0, pointY: 0, startX: 0, startY: 0, lastScale: 1 };
+            updateTransform();
+        }
+
+        function updateTransform() {
+            // Hardware accelerated transform
+            lightboxImg.style.transform = `translate(${state.pointX}px, ${state.pointY}px) scale(${state.scale})`;
+        }
+
+        // --- Touch Logic ---
+        let initialPinchDistance = null;
+        let initialScale = 1;
+
+        // Helper: Distance between two touch points
+        function getDistance(touches) {
+            return Math.hypot(
+                touches[0].clientX - touches[1].clientX,
+                touches[0].clientY - touches[1].clientY
+            );
+        }
+
+        lightboxModal.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                // Pinch Start
+                state.panning = false;
+                initialPinchDistance = getDistance(e.touches);
+                initialScale = state.scale;
+            } else if (e.touches.length === 1) {
+                // Pan Start (only if zoomed in)
+                if (state.scale > 1) {
+                    state.panning = true;
+                    state.startX = e.touches[0].clientX - state.pointX;
+                    state.startY = e.touches[0].clientY - state.pointY;
+                }
+            }
+        });
+
+        lightboxModal.addEventListener('touchmove', (e) => {
+            e.preventDefault(); // Prevent standard browser scrolling
+
+            if (e.touches.length === 2 && initialPinchDistance) {
+                // Pinch Move
+                const currentDistance = getDistance(e.touches);
+                // Calculate new scale
+                const newScale = initialScale * (currentDistance / initialPinchDistance);
+                // Limit scale levels
+                state.scale = Math.min(Math.max(1, newScale), 5); // Max 5x zoom, Min 1x
+                state.pointX = 0; // Reset center on pinch for simplicity in single file
+                state.pointY = 0;
+                updateTransform();
+
+            } else if (e.touches.length === 1 && state.panning && state.scale > 1) {
+                // Pan Move
+                state.pointX = e.touches[0].clientX - state.startX;
+                state.pointY = e.touches[0].clientY - state.startY;
+                updateTransform();
+            }
+        });
+
+        lightboxModal.addEventListener('touchend', (e) => {
+            state.panning = false;
+            if (e.touches.length < 2) initialPinchDistance = null;
+
+            // Snap back if scale < 1
+            if (state.scale < 1) {
+                state.scale = 1;
+                state.pointX = 0;
+                state.pointY = 0;
+                updateTransform();
+            }
+        });
+
+        // --- Mouse Wheel Logic (Desktop) ---
+        lightboxModal.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const delta = e.deltaY * -0.01;
+            const newScale = Math.min(Math.max(1, state.scale + delta), 5);
+            state.scale = newScale;
+            if (state.scale === 1) { state.pointX = 0; state.pointY = 0; }
+            updateTransform();
+        });
+
+        // --- Double Tap to Zoom ---
+        let lastTap = 0;
+        lightboxModal.addEventListener('click', (e) => {
+            // Ignore clicks on close button
+            if (e.target.closest('.lightbox-close')) return;
+
+            const curTime = new Date().getTime();
+            const tapLen = curTime - lastTap;
+            if (tapLen < 300 && tapLen > 0) {
+                // Double tap detected
+                if (state.scale > 1) {
+                    resetZoom();
+                } else {
+                    state.scale = 3; // Zoom in to 3x
+                    state.pointX = 0; state.pointY = 0;
+                    updateTransform();
+                }
+            }
+            lastTap = curTime;
+        });
+
+
+        // ===========================
+        // App Logic (Standard)
+        // ===========================
+        function toggleMode() {
+            const body = document.body;
+            const btn = document.getElementById('mode-toggle-btn');
+            if (body.classList.contains('view-mode')) {
+                body.classList.remove('view-mode');
+                btn.innerHTML = '<i class="fa-solid fa-eye"></i> View';
+                btn.style.background = '#e0e0e0';
+                document.querySelectorAll('.drop-zone').forEach(el => Sortable.get(el)?.option("disabled", false));
+            } else {
+                body.classList.add('view-mode');
+                btn.innerHTML = '<i class="fa-solid fa-pen"></i> Edit';
+                btn.style.background = 'var(--accent)';
+                document.querySelectorAll('.drop-zone').forEach(el => Sortable.get(el)?.option("disabled", true));
+            }
+        }
+
+        function updateStateFromDOM() {
+            const newZones = [];
+            document.querySelectorAll('.drop-zone').forEach(zoneEl => {
+                const zoneObj = { id: zoneEl.dataset.zoneId, items: [] };
+                zoneEl.querySelectorAll('.item-card').forEach(itemEl => {
+                    zoneObj.items.push({
+                        id: itemEl.dataset.id, type: itemEl.dataset.type, name: itemEl.dataset.name, url: itemEl.dataset.url, text: itemEl.dataset.text || ''
+                    });
+                });
+                newZones.push(zoneObj);
+            });
+            appState = newZones;
+        }
+
+        function addSection() {
+            updateStateFromDOM();
+            appState.push({ id: generateId(), items: [] });
+            renderAppState();
+            window.scrollTo(0, document.body.scrollHeight);
+        }
+
+        function deleteSection(zoneId) {
+            if (confirm("Delete this entire section?")) {
+                updateStateFromDOM();
+                appState = appState.filter(z => z.id !== zoneId);
+                renderAppState();
+            }
+        }
+
+        function deleteItem(btn, itemId) {
+            if (confirm("Delete item?")) {
+                btn.closest('.item-card').remove();
+                updateStateFromDOM();
+            }
+        }
+
+        // Modal Helpers
+        const addModal = document.getElementById('addItemModal');
+        function openAddModal(zoneId) { targetZoneId = zoneId; addModal.style.display = 'flex'; resetForm(); }
+        function closeAddModal() { addModal.style.display = 'none'; targetZoneId = null; }
+        function toggleUrlInput() {
+            const type = document.getElementById('itemType').value;
+            const urlGroup = document.getElementById('urlInputGroup'), textGroup = document.getElementById('textInputGroup');
+            if (type === 'note') { urlGroup.classList.add('hidden'); textGroup.classList.remove('hidden'); }
+            else { urlGroup.classList.remove('hidden'); textGroup.classList.add('hidden'); }
+        }
+        function resetForm() {
+            document.getElementById('itemName').value = ''; document.getElementById('itemUrl').value = '';
+            document.getElementById('itemText').value = ''; document.getElementById('itemType').value = 'model';
+            toggleUrlInput();
+        }
+
+        function addNewItem() {
+            const type = document.getElementById('itemType').value;
+            const name = document.getElementById('itemName').value || 'Untitled';
+            const rawUrl = document.getElementById('itemUrl').value;
+            const textContent = document.getElementById('itemText').value;
+            let finalUrl = (type !== 'note' && rawUrl) ? normalizeUrl(rawUrl) : '';
+            if (type !== 'note' && !rawUrl) { alert("URL required"); return; }
+
+            const newItem = { id: generateId(), type, name, url: finalUrl, text: type === 'note' ? textContent : '' };
+            updateStateFromDOM();
+            const targetZone = appState.find(z => z.id === targetZoneId);
+            if (targetZone) { targetZone.items.push(newItem); renderAppState(); closeAddModal(); }
+        }
+
+        // Share/Load
+        function shareWorkspace() {
+            updateStateFromDOM();
+            const url = new URL(window.location.href);
+            url.searchParams.set('state', btoa(encodeURIComponent(JSON.stringify(appState))));
+            navigator.clipboard.writeText(url.toString()).then(() => alert('Link copied!')).catch(() => prompt("Copy:", url.toString()));
+        }
+
+        function loadStateFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            const encoded = params.get('state');
+            if (encoded) {
+                try {
+                    const parsed = JSON.parse(decodeURIComponent(atob(encoded)));
+                    if (Array.isArray(parsed)) appState = parsed;
+                    renderAppState();
+                } catch (e) { console.error(e); }
+            } else {
+                toggleMode();
+                appState.push({ id: generateId(), items: [] });
+                renderAppState();
+            }
+        }
+
+        function copyStateJson() { updateStateFromDOM(); navigator.clipboard.writeText(JSON.stringify(appState, null, 2)).then(() => alert("JSON copied")); }
+        function openImportModal() { document.getElementById('importModal').style.display = 'flex'; document.getElementById('importTextarea').value = ''; }
+        function loadImportedJson() {
+            try {
+                const parsed = JSON.parse(document.getElementById('importTextarea').value);
+                if (Array.isArray(parsed)) appState = parsed;
+                renderAppState();
+                document.getElementById('importModal').style.display = 'none';
+            } catch (e) { alert("Invalid JSON"); }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadStateFromURL);
+    </script>
+</body>
+
+</html>
