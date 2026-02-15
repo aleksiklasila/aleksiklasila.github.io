@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 
 // --- Global State ---
@@ -234,6 +235,12 @@ function loadGLBModel(url) {
     transformControl.detach();
 
     const loader = new GLTFLoader();
+
+    // Setup Draco Loader for compressed models
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+    loader.setDRACOLoader(dracoLoader);
+
     loader.load(url, (gltf) => {
         const model = gltf.scene;
 
