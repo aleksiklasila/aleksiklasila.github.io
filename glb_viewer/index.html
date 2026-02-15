@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal GLB Viewer</title>
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Import Model Viewer -->
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+
+    <!-- Import Map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+
+    <!-- STATE 1: Model Input (Shown if no ?model= parameter) -->
+    <div id="input-screen" class="screen active">
+        <div class="input-container">
+            <h1>GLB Viewer</h1>
+            <p>Enter a URL to a .glb or .gltf file to view it.</p>
+            <input type="text" id="model-url-input" placeholder="https://example.com/model.glb">
+            <button id="load-btn">Load Model</button>
+        </div>
+    </div>
+
+    <!-- STATE 2: Selection Menu (Split Screen) -->
+    <div id="selection-screen" class="screen">
+        <div class="split-top" id="btn-standard">
+            <div class="content">
+                <h2>Standard Viewer</h2>
+                <p>View in 3D or AR. Best for quick preview.</p>
+                <button class="action-btn">Open Standard Viewer</button>
+            </div>
+        </div>
+        <div class="split-bottom" id="btn-enhanced">
+            <div class="content">
+                <h2>Enhanced Viewer</h2>
+                <p>Advanced controls. Move, rotate, and pinch to zoom.</p>
+                <button class="action-btn">Open Enhanced Viewer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATE 3: Standard Viewer (Full Screen) -->
+    <div id="standard-viewer-screen" class="screen">
+        <button class="back-btn" data-target="selection-screen">← Back</button>
+        <model-viewer id="main-model-viewer" src="" ar ar-modes="webxr scene-viewer quick-look" camera-controls
+            shadow-intensity="1" auto-rotate>
+            <div class="progress-bar hide" slot="progress-bar">
+                <div class="update-bar"></div>
+            </div>
+            <button slot="ar-button" id="ar-button">
+                View in your space
+            </button>
+        </model-viewer>
+    </div>
+
+    <!-- STATE 4: Enhanced Viewer (Three.js Full Screen) -->
+    <div id="enhanced-viewer-screen" class="screen">
+        <button class="back-btn" data-target="selection-screen" style="z-index: 1001;">← Back</button>
+        <div id="three-canvas-container"></div>
+        <div id="instructions" class="overlay">
+            <p>1 Finger: Rotate | 2 Fingers: Pan/Zoom</p>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
