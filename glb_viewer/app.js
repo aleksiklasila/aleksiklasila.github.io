@@ -19,6 +19,20 @@ const state = {
     }
 };
 
+// --- Debug Utilities ---
+function log(msg) {
+    const console = document.getElementById('debug-console');
+    if (console) {
+        const div = document.createElement('div');
+        div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        console.appendChild(div);
+        console.scrollTop = console.scrollHeight;
+    }
+    // Also log to browser console
+    // console.log(msg); // Naming conflict with element, use window.console
+    window.console.log(msg);
+}
+
 // --- DOM Elements ---
 const screens = {
     input: document.getElementById('input-screen'),
@@ -117,11 +131,13 @@ function loadEnhancedViewer() {
         state.threeInitialized = true;
     }
 
+    log(`Loading Enhanced Viewer for: ${state.modelUrl}`);
     // Load model if not already loaded or if URL changed (logic simplified for now, usually clear scene)
     loadGLBModel(state.modelUrl);
 }
 
 function initThreeJS() {
+    log("Initializing Three.js...");
     const container = document.getElementById('three-canvas-container');
     const width = container.clientWidth;
     const height = container.clientHeight;
@@ -234,25 +250,36 @@ function loadGLBModel(url) {
     }
     transformControl.detach();
 
+    log(`Starting GLB load: ${url}`);
     const loader = new GLTFLoader();
 
     // Setup Draco Loader for compressed models
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+    dracoLoader.preload(); // Preload to check if it works
     loader.setDRACOLoader(dracoLoader);
 
     loader.load(url, (gltf) => {
+        log("GLB Loaded successfully.");
         const model = gltf.scene;
 
         // Auto-center and scale calculation (based on whole scene)
         const box = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3()).length();
+
+        log(`Model Bounds: Center(${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)}) Size(${size.toFixed(2)})`);
 
         // Adjust Camera to fit
-        const size = box.getSize(new THREE.Vector3()).length();
         const fitHeightDistance = size / (2 * Math.atan(Math.PI * camera.fov / 360));
         const fitWidthDistance = fitHeightDistance / camera.aspect;
-        const distance = 1.5 * Math.max(fitHeightDistance, fitWidthDistance);
+        let distance = 1.5 * Math.max(fitHeightDistance, fitWidthDistance);
+
+        // Fallback for distance
+        if (!isFinite(distance) || distance === 0) {
+            log("Camera distance invalid, using fallback 5.0");
+            distance = 5.0;
+        }
 
         // Reset controls target to center of the scene (0,0,0) because we will center objects there
         controls.target.set(0, 0, 0);
@@ -260,6 +287,7 @@ function loadGLBModel(url) {
         // Position camera
         camera.position.set(distance, distance * 0.5, distance);
         camera.lookAt(0, 0, 0);
+        log(`Camera Position set to: ${camera.position.x.toFixed(2)}, ${camera.position.y.toFixed(2)}, ${camera.position.z.toFixed(2)}`);
 
         // Offset to center objects at (0,0,0)
         const offset = center.negate();
@@ -284,9 +312,17 @@ function loadGLBModel(url) {
 
         controls.update();
 
-    }, undefined, (error) => {
+    }, (xhr) => {
+        // Progress
+        if (xhr.lengthComputable) {
+            const percent = (xhr.loaded / xhr.total) * 100;
+            if (percent % 20 === 0 || percent === 100)
+                log(`Download progress: ${Math.round(percent)}%`);
+        }
+    }, (error) => {
         console.error("An error occurred loading the GLB:", error);
-        alert("Failed to load model. Check console or CORS settings.");
+        log(`ERROR: ${error.message || error}`);
+        alert("Failed to load model. Check console for details.");
     });
 }
 
