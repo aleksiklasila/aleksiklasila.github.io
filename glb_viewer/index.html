@@ -11,33 +11,8 @@
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
 
     <!-- Import Map for Three.js -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-                "three/examples/jsm/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-            }
-        }
-    </script>
-    <style>
-        #debug-console {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            width: 300px;
-            max-height: 200px;
-            overflow-y: auto;
-            background: rgba(0, 0, 0, 0.7);
-            color: #0f0;
-            font-family: monospace;
-            font-size: 12px;
-            padding: 10px;
-            border-radius: 5px;
-            pointer-events: none;
-            z-index: 2000;
-        }
-    </style>
+
+
 </head>
 
 <body>
@@ -52,23 +27,7 @@
         </div>
     </div>
 
-    <!-- STATE 2: Selection Menu (Split Screen) -->
-    <div id="selection-screen" class="screen">
-        <div class="split-top" id="btn-standard">
-            <div class="content">
-                <h2>Standard Viewer</h2>
-                <p>View in 3D or AR. Best for quick preview.</p>
-                <button class="action-btn">Open Standard Viewer</button>
-            </div>
-        </div>
-        <div class="split-bottom" id="btn-enhanced">
-            <div class="content">
-                <h2>Enhanced Viewer</h2>
-                <p>Advanced controls. Move, rotate, and pinch to zoom.</p>
-                <button class="action-btn">Open Enhanced Viewer</button>
-            </div>
-        </div>
-    </div>
+
 
     <!-- STATE 3: Standard Viewer (Full Screen) -->
     <div id="standard-viewer-screen" class="screen">
@@ -84,15 +43,7 @@
         </model-viewer>
     </div>
 
-    <!-- STATE 4: Enhanced Viewer (Three.js Full Screen) -->
-    <div id="enhanced-viewer-screen" class="screen">
-        <button class="back-btn" data-target="selection-screen" style="z-index: 1001;">← Back</button>
-        <div id="three-canvas-container"></div>
-        <div id="instructions" class="overlay">
-            <p>1 Finger: Rotate | 2 Fingers: Pan/Zoom</p>
-        </div>
-        <div id="debug-console">Debug Console Initialized...</div>
-    </div>
+
 
     <script type="module" src="app.js"></script>
 </body>

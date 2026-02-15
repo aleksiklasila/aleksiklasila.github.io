@@ -2,8 +2,6 @@
     --primary-color: #007bff;
     --text-color: #333;
     --bg-color: #f4f4f9;
-    --split-top-bg: #e0f7fa;
-    --split-bottom-bg: #fff3e0;
 }
 
 body,
@@ -72,41 +70,6 @@ button:hover {
     background-color: #0056b3;
 }
 
-/* Selection Screen (Split Layout) */
-#selection-screen {
-    flex-direction: column;
-}
-
-.split-top,
-.split-bottom {
-    flex: 1;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    text-align: center;
-    cursor: pointer;
-    transition: flex 0.3s ease;
-    padding: 20px;
-}
-
-.split-top {
-    background-color: var(--split-top-bg);
-}
-
-.split-bottom {
-    background-color: var(--split-bottom-bg);
-    border-top: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-.split-top:hover,
-.split-bottom:hover {
-    flex: 1.2;
-}
-
-.content h2 {
-    margin-top: 0;
-}
-
 /* Standard Viewer */
 model-viewer {
     width: 100%;
@@ -134,15 +97,6 @@ model-viewer {
     border: 1px solid #DADCE0;
 }
 
-/* Enhanced Viewer */
-#three-canvas-container {
-    width: 100%;
-    height: 100%;
-    background-color: #222;
-    touch-action: none;
-    /* Prevent scrolling on mobile */
-}
-
 .back-btn {
     position: absolute;
     top: 20px;
@@ -152,16 +106,4 @@ model-viewer {
     color: #333;
     font-weight: bold;
     backdrop-filter: blur(4px);
-}
-
-.overlay {
-    position: absolute;
-    bottom: 24px;
-    left: 0;
-    width: 100%;
-    text-align: center;
-    pointer-events: none;
-    color: white;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-    font-size: 0.9rem;
 }
