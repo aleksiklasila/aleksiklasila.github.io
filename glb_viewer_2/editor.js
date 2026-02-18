@@ -23,6 +23,10 @@ let onRequestViewScene = null;
 let statusEl = null;
 let editorActive = false;
 
+// Click-vs-drag tracking (to avoid deselecting on orbit rotations)
+let pointerDownPos = null;
+const CLICK_THRESHOLD = 5; // pixels
+
 // ---- Public API ----
 
 export function pauseEditor() {
@@ -95,8 +99,9 @@ export function initEditor(canvasEl, callbacks) {
     });
     scene.add(transformControls);
 
-    // Events
+    // Events — use pointerdown + pointerup for click-vs-drag detection
     canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointerup', onPointerUp);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', updateSize);
 
@@ -145,6 +150,9 @@ export async function loadModel(url) {
             child.userData._isCloned = false;
             editableObjects.push(child);
         });
+
+        // Re-pivot each editable object so the gizmo appears at its visual center
+        editableObjects.forEach(obj => rePivotToBBoxCenter(obj));
 
         // Frame the model
         frameModel();
@@ -213,12 +221,41 @@ export function getSceneState() {
     return state;
 }
 
+/**
+ * Re-center a scene group so that its bounding-box center X/Z is at origin
+ * and its bottom (min Y) sits at Y=0 (floor plane). This ensures correct
+ * WebXR AR floor placement.
+ */
+function centerForExport(group) {
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    const minY = box.min.y;
+
+    // Shift all top-level children so the scene is centered at origin with floor at Y=0
+    group.children.forEach(child => {
+        child.position.x -= center.x;
+        child.position.y -= minY;   // lift so bottom = 0
+        child.position.z -= center.z;
+    });
+
+    // Reset the root group transform
+    group.position.set(0, 0, 0);
+    group.rotation.set(0, 0, 0);
+    group.scale.set(1, 1, 1);
+    group.updateMatrixWorld(true);
+}
+
 export async function exportSceneAsGLB() {
     if (!loadedModel) return null;
+
+    // Clone the model so we don't modify the editor's live scene
+    const exportClone = loadedModel.clone(true);
+    centerForExport(exportClone);
+
     return new Promise((resolve, reject) => {
         const exporter = new GLTFExporter();
         exporter.parse(
-            loadedModel,
+            exportClone,
             (buffer) => {
                 const blob = new Blob([buffer], { type: 'model/gltf-binary' });
                 resolve(URL.createObjectURL(blob));
@@ -232,13 +269,45 @@ export async function exportSceneAsGLB() {
 export function dispose() {
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('resize', updateSize);
-    if (canvas) canvas.removeEventListener('pointerdown', onPointerDown);
+    if (canvas) {
+        canvas.removeEventListener('pointerdown', onPointerDown);
+        canvas.removeEventListener('pointerup', onPointerUp);
+    }
     if (renderer) renderer.dispose();
     if (orbitControls) orbitControls.dispose();
     if (transformControls) transformControls.dispose();
 }
 
 // ---- Internal ----
+
+/**
+ * Re-pivot an object so its local origin is at its bounding-box center.
+ * This makes TransformControls gizmo appear at the "center of mass".
+ * Shifts children geometry and compensates by adjusting world position.
+ */
+function rePivotToBBoxCenter(obj) {
+    const box = new THREE.Box3().setFromObject(obj);
+    const center = box.getCenter(new THREE.Vector3());
+
+    // Convert world center to the object's local coordinate space
+    const localCenter = obj.worldToLocal(center.clone());
+
+    // If the offset is negligible, skip
+    if (localCenter.lengthSq() < 0.0001) return;
+
+    // Shift all children by the negative offset so geometry moves
+    obj.children.forEach(child => {
+        child.position.sub(localCenter);
+    });
+
+    // Compensate by moving the object itself in parent space
+    // We need to transform the local offset into parent space
+    const worldOffset = localCenter.clone().applyQuaternion(obj.quaternion);
+    worldOffset.multiply(obj.scale);
+    obj.position.add(worldOffset);
+
+    obj.updateMatrixWorld(true);
+}
 
 function animate() {
     if (!editorActive) return;
@@ -278,8 +347,25 @@ function frameModel() {
 }
 
 function onPointerDown(event) {
-    // Ignore if clicking on transform controls
+    // Ignore if interacting with transform controls gizmo
     if (transformControls.dragging) return;
+
+    // Record pointer start for click-vs-drag detection
+    pointerDownPos = { x: event.clientX, y: event.clientY };
+}
+
+function onPointerUp(event) {
+    // If no recorded down position, ignore (could be transform controls drag)
+    if (!pointerDownPos) return;
+
+    // Check if this was a click (not a drag/orbit rotation)
+    const dx = event.clientX - pointerDownPos.x;
+    const dy = event.clientY - pointerDownPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    pointerDownPos = null;
+
+    // If pointer moved more than threshold, it was an orbit/pan — don't change selection
+    if (dist > CLICK_THRESHOLD) return;
 
     const rect = canvas.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -306,7 +392,7 @@ function onPointerDown(event) {
         }
     }
 
-    // Clicked empty space
+    // Clicked empty space — deselect
     deselectObject();
 }
 
@@ -527,6 +613,9 @@ export async function loadAndComposeGLB(modelUrl, sceneData) {
             }
         });
     }
+
+    // Re-center for AR floor placement
+    centerForExport(modelScene);
 
     // Export composed scene
     return new Promise((resolve, reject) => {
