@@ -249,17 +249,14 @@ function createReticle() {
 // ---- Touch Gesture Handling ----
 
 function onTouchStart(event) {
-    event.preventDefault();
-
-    // If consuming gizmo, don't do custom logic
-    if (transformControl && transformControl.dragging) return;
-
     // Check if touching a UI element (toolbar buttons).
     // The browser might handle this, but if we preventDefault everywhere, buttons might break unless they are on the overlay.
     // Since listeners are on containerEl (the overlay root), bubbling from buttons should be fine if we don't block them.
     if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
         return; // Allow UI interaction
     }
+
+    event.preventDefault();
 
     if (!modelPlaced) {
         // Place model at reticle position on first tap
@@ -330,6 +327,11 @@ function onTouchStart(event) {
 }
 
 function onTouchMove(event) {
+    // Check if touching a UI element
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+        return;
+    }
+
     event.preventDefault();
     if (!modelPlaced || !arModel) return;
     if (transformControl && transformControl.dragging) return;
@@ -389,6 +391,11 @@ function onTouchMove(event) {
 }
 
 function onTouchEnd(event) {
+    // Check if touching a UI element
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+        return;
+    }
+
     event.preventDefault();
 
     for (let i = 0; i < event.changedTouches.length; i++) {
