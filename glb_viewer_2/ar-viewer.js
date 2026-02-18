@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 let renderer, scene, camera;
 let arModel = null;
@@ -16,6 +17,12 @@ let reticle = null;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let modelPlaced = false;
+
+// Gizmo Controls
+let transformControl = null;
+let currentTool = 'generic'; // 'generic', 'translate', 'rotate', 'scale'
+let toolbarEl = null;
+let toolbarHandleEl = null;
 
 // Touch gesture state
 let touches = {};
@@ -63,6 +70,9 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
 
     containerEl.appendChild(renderer.domElement);
 
+    // --- UI Setup ---
+    setupARToolbar();
+
     // --- Scene ---
     scene = new THREE.Scene();
 
@@ -82,6 +92,14 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     reticle = createReticle();
     reticle.visible = false;
     scene.add(reticle);
+
+    // --- Transform Controls ---
+    transformControl = new TransformControls(camera, containerEl);
+    transformControl.addEventListener('dragging-changed', function (event) {
+        // Disable custom touch logic when gizmo is dragging
+        // We handle this check in touch handlers
+    });
+    scene.add(transformControl);
 
     // --- Load model ---
     const loader = new GLTFLoader();
@@ -136,10 +154,15 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
 
         // Touch events on the session's overlay or canvas
         renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
-        renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false });
-        renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: false });
+        // renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false }); // Handled by container
+        // renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: false }); // Handled by container
 
-        // Also on the container for dom-overlay
+        // Also on the container for dom-overlay (Primary Interaction Surface)
+        // Note: TransformControls attaches to renderer.domElement (canvas).
+        // Since we have a DOM overlay, we rely on standard event bubbling or direct attachment.
+        // TransformControls internally adds listeners to domElement.
+        // We need to ensure our custom listeners don't conflict.
+
         containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
         containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
         containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
@@ -228,6 +251,16 @@ function createReticle() {
 function onTouchStart(event) {
     event.preventDefault();
 
+    // If consuming gizmo, don't do custom logic
+    if (transformControl && transformControl.dragging) return;
+
+    // Check if touching a UI element (toolbar buttons).
+    // The browser might handle this, but if we preventDefault everywhere, buttons might break unless they are on the overlay.
+    // Since listeners are on containerEl (the overlay root), bubbling from buttons should be fine if we don't block them.
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+        return; // Allow UI interaction
+    }
+
     if (!modelPlaced) {
         // Place model at reticle position on first tap
         if (reticle.visible && arModel) {
@@ -243,7 +276,18 @@ function onTouchStart(event) {
 
             // Update drag plane height to placed position
             dragPlane.constant = -reticlePos.y;
+
+            // Set initial tool
+            updateToolState();
         }
+        return;
+    }
+
+    if (currentTool !== 'generic') {
+        // In Gizmo mode, we don't do custom drag/rotate/scale joy.
+        // We just let TransformControls handle it (via its own internal listeners on canvas/domElement).
+        // However, if the user clicks OFF the gizmo, maybe we want to allow placement move?
+        // For now, let's enforce: Tool selected -> Gizmo only. Generic -> Gestures only.
         return;
     }
 
@@ -288,6 +332,8 @@ function onTouchStart(event) {
 function onTouchMove(event) {
     event.preventDefault();
     if (!modelPlaced || !arModel) return;
+    if (transformControl && transformControl.dragging) return;
+    if (currentTool !== 'generic') return;
 
     // Update touch positions
     for (let i = 0; i < event.changedTouches.length; i++) {
@@ -367,6 +413,19 @@ function cleanup() {
     arModel = null;
     touches = {};
 
+    if (transformControl) {
+        transformControl.dispose();
+        transformControl = null;
+    }
+
+    // Teardown Toolbar
+    const tb = document.getElementById('ar-toolbar-container');
+    if (tb && tb.parentElement) {
+        // Reset state for next time or remove listeners if we added them dynamically
+        // But the HTML is static in index.html, so we just hide it or leave it.
+        // Ideally we should reset active state.
+    }
+
     if (renderer) {
         renderer.setAnimationLoop(null);
         if (renderer.domElement && renderer.domElement.parentElement) {
@@ -390,4 +449,111 @@ export async function endARSession() {
         await session.end();
     }
     cleanup();
+}
+
+// ---- Toolbar Logic ----
+
+function setupARToolbar() {
+    toolbarEl = document.getElementById('ar-toolbar');
+    toolbarHandleEl = document.getElementById('ar-toolbar-drag-handle');
+    const container = document.getElementById('ar-toolbar-container');
+
+    if (!toolbarEl || !container) return; // Should exist in HTML
+
+    // Reset UI state
+    currentTool = 'generic';
+    updateToolbarUI();
+
+    // Bind buttons
+    const buttons = toolbarEl.querySelectorAll('.ar-tool-btn');
+    buttons.forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (btn.id === 'ar-exit-btn') {
+                endARSession();
+                return;
+            }
+            const mode = btn.dataset.mode;
+            if (mode) {
+                currentTool = mode;
+                updateToolbarUI();
+                updateToolState();
+            }
+        };
+        // Fix for touch devices mostly needing touchstart if click is simulated poorly? 
+        // Usually click works fine on buttons even with touchstart prevented on parent if we didn't stop propagation excessively.
+        // We added logic in onTouchStart to return if target is button.
+    });
+
+    // Drag handle logic
+    if (toolbarHandleEl) {
+        let isDraggingRaw = false;
+        let startY = 0;
+
+        toolbarHandleEl.addEventListener('touchstart', (e) => {
+            isDraggingRaw = true;
+            startY = e.touches[0].clientY;
+            e.stopPropagation();
+        }, { passive: false });
+
+        document.addEventListener('touchmove', (e) => {
+            if (!isDraggingRaw) return;
+            const y = e.touches[0].clientY;
+            const delta = y - startY;
+            // Simple toggle logic on drag
+            if (delta > 50) {
+                container.classList.add('collapsed');
+                isDraggingRaw = false;
+            } else if (delta < -50) {
+                container.classList.remove('collapsed');
+                isDraggingRaw = false;
+            }
+        });
+
+        document.addEventListener('touchend', () => {
+            isDraggingRaw = false;
+        });
+
+        // Click to toggle
+        toolbarHandleEl.addEventListener('click', () => {
+            container.classList.toggle('collapsed');
+        });
+    }
+}
+
+function updateToolbarUI() {
+    const buttons = document.querySelectorAll('.ar-tool-btn');
+    buttons.forEach(btn => {
+        if (btn.dataset.mode === currentTool) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+function updateToolState() {
+    if (!transformControl || !arModel) return;
+
+    if (currentTool === 'generic') {
+        transformControl.detach();
+        return;
+    }
+
+    // Attach if not attached (or verify)
+    if (transformControl.object !== arModel) {
+        transformControl.attach(arModel);
+    }
+
+    switch (currentTool) {
+        case 'translate':
+            transformControl.setMode('translate');
+            break;
+        case 'rotate':
+            transformControl.setMode('rotate');
+            break;
+        case 'scale':
+            transformControl.setMode('scale');
+            break;
+    }
 }
