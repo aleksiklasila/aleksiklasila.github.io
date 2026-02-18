@@ -15,6 +15,7 @@
 // ============================================================
 
 import { initEditor, loadModel, applySceneState, getSceneState, exportSceneAsGLB, loadAndComposeGLB, pauseEditor, resumeEditor } from './editor.js';
+import { startARSession, isARSupported } from './ar-viewer.js';
 
 // --- URL Compression Helpers ---
 
@@ -80,6 +81,8 @@ const inputUrl = document.getElementById('model-url-input');
 const btnLoad = document.getElementById('load-btn');
 const btnEdit = document.getElementById('edit-btn');
 const btnEditFromViewer = document.getElementById('btn-edit-from-viewer');
+const btnARLaunch = document.getElementById('ar-launch-btn');
+const arOverlay = document.getElementById('ar-overlay');
 const btnsBack = document.querySelectorAll('.back-btn');
 
 // --- Initialization ---
@@ -148,6 +151,14 @@ async function init() {
             window.history.pushState({}, '', url);
         });
     });
+
+    // AR launch button
+    btnARLaunch.addEventListener('click', launchAR);
+
+    // Check AR support and show/hide the AR button
+    isARSupported().then(supported => {
+        btnARLaunch.style.display = supported ? '' : 'none';
+    });
 }
 
 async function handleUrlInput(mode) {
@@ -196,6 +207,32 @@ function loadStandardViewer(url) {
     const viewer = document.getElementById('main-model-viewer');
     if (url && viewer.src !== url) {
         viewer.src = url;
+    }
+}
+
+// --- AR Viewer ---
+
+async function launchAR() {
+    // Get the current model URL from model-viewer (could be regular URL or blob URL)
+    const viewer = document.getElementById('main-model-viewer');
+    const modelUrl = viewer.src || (state.config && state.config.model);
+
+    if (!modelUrl) {
+        alert('No model loaded to view in AR.');
+        return;
+    }
+
+    // Show overlay
+    arOverlay.style.display = 'block';
+
+    const success = await startARSession(modelUrl, arOverlay, {
+        onExit: () => {
+            arOverlay.style.display = 'none';
+        }
+    });
+
+    if (!success) {
+        arOverlay.style.display = 'none';
     }
 }
 

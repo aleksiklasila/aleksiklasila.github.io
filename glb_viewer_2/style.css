@@ -102,7 +102,8 @@ model-viewer {
     touch-action: none;
 }
 
-#ar-button {
+/* Custom AR Launch Button */
+.ar-launch-btn {
     background-image: url(https://modelviewer.dev/shared-assets/icons/ic_view_in_ar_new_googblue_48dp.png);
     background-repeat: no-repeat;
     background-size: 20px 20px;
@@ -120,6 +121,24 @@ model-viewer {
     line-height: 36px;
     border-radius: 18px;
     border: 1px solid #DADCE0;
+    z-index: 10;
+    cursor: pointer;
+}
+
+.ar-launch-btn:hover {
+    background-color: #f8f8f8;
+}
+
+/* AR Overlay Container */
+.ar-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5000;
+    touch-action: none;
 }
 
 .back-btn {
