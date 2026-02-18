@@ -26,6 +26,7 @@ let isTwoFingerGesture = false;
 let isDragging = false;
 let dragRaycaster = new THREE.Raycaster();
 let dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // floor plane
+let dragOffset = new THREE.Vector3(); // offset between model and initial touch point
 
 // Callbacks
 let onExitAR = null;
@@ -265,6 +266,22 @@ function onTouchStart(event) {
     } else if (touchKeys.length === 1) {
         isTwoFingerGesture = false;
         isDragging = true;
+
+        // Compute drag offset: difference between model pos and where the ray hits the floor
+        const t = touches[touchKeys[0]];
+        const ndcX = (t.x / window.innerWidth) * 2 - 1;
+        const ndcY = -(t.y / window.innerHeight) * 2 + 1;
+        dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        const hitPoint = new THREE.Vector3();
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && arModel) {
+            dragOffset.set(
+                arModel.position.x - hitPoint.x,
+                0,
+                arModel.position.z - hitPoint.z
+            );
+        } else {
+            dragOffset.set(0, 0, 0);
+        }
     }
 }
 
@@ -319,8 +336,8 @@ function onTouchMove(event) {
 
         const intersection = new THREE.Vector3();
         if (dragRaycaster.ray.intersectPlane(dragPlane, intersection)) {
-            arModel.position.x = intersection.x;
-            arModel.position.z = intersection.z;
+            arModel.position.x = intersection.x + dragOffset.x;
+            arModel.position.z = intersection.z + dragOffset.z;
         }
     }
 }
