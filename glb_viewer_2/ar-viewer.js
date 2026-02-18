@@ -305,6 +305,39 @@ function onTouchStart(event) {
         return;
     }
 
+    if (currentTool === 'cursor') {
+        const t = event.changedTouches[0];
+        const ndcX = (t.clientX / window.innerWidth) * 2 - 1;
+        const ndcY = -(t.clientY / window.innerHeight) * 2 + 1;
+
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+
+        // Intersect recursive
+        const intersects = raycaster.intersectObjects(arModel.children, true);
+
+        if (intersects.length > 0) {
+            const hit = intersects[0];
+            const hitPoint = hit.point;
+
+            // Re-pivot logic
+            const children = [...arModel.children];
+            children.forEach(child => {
+                scene.attach(child);
+            });
+
+            arModel.position.copy(hitPoint);
+            arModel.updateMatrixWorld();
+
+            children.forEach(child => {
+                arModel.attach(child);
+            });
+
+            dragPlane.constant = -hitPoint.y;
+        }
+        return;
+    }
+
     if (currentTool !== 'generic' && currentTool !== 'placement') {
         // In Gizmo mode, we don't do custom drag/rotate/scale joy.
         // We just let TransformControls handle it (via its own internal listeners on canvas/domElement).
