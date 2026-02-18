@@ -21,8 +21,20 @@ let mouse = new THREE.Vector2();
 let onSceneChanged = null;
 let onRequestViewScene = null;
 let statusEl = null;
+let editorActive = false;
 
 // ---- Public API ----
+
+export function pauseEditor() {
+    editorActive = false;
+}
+
+export function resumeEditor() {
+    if (!editorActive && renderer) {
+        editorActive = true;
+        animate();
+    }
+}
 
 export function initEditor(canvasEl, callbacks) {
     canvas = canvasEl;
@@ -99,6 +111,7 @@ export function initEditor(canvasEl, callbacks) {
     document.getElementById('btn-share').addEventListener('click', shareLink);
 
     // Start render loop
+    editorActive = true;
     animate();
     setStatus('Editor ready. Load a model to begin.');
 }
@@ -228,6 +241,7 @@ export function dispose() {
 // ---- Internal ----
 
 function animate() {
+    if (!editorActive) return;
     requestAnimationFrame(animate);
     orbitControls.update();
     renderer.render(scene, camera);
