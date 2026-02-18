@@ -222,17 +222,23 @@ async function launchAR() {
         return;
     }
 
+    // Pause model-viewer to free GPU (hide stops its internal render loop)
+    viewer.style.display = 'none';
+
     // Show overlay
     arOverlay.style.display = 'block';
 
     const success = await startARSession(modelUrl, arOverlay, {
         onExit: () => {
             arOverlay.style.display = 'none';
+            // Resume model-viewer
+            viewer.style.display = '';
         }
     });
 
     if (!success) {
         arOverlay.style.display = 'none';
+        viewer.style.display = '';
     }
 }
 
