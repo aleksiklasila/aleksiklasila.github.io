@@ -20,7 +20,7 @@ let modelPlaced = false;
 
 // Gizmo Controls
 let transformControl = null;
-let currentTool = 'generic'; // 'generic', 'translate', 'rotate', 'scale'
+let currentTool = 'placement'; // Default to placement
 let toolbarEl = null;
 let toolbarHandleEl = null;
 
@@ -200,7 +200,7 @@ function onXRFrame(timestamp, frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
 
-    if (!modelPlaced) {
+    if (!modelPlaced || currentTool === 'placement') {
         // Request hit test source once
         if (!hitTestSourceRequested) {
             session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
@@ -220,6 +220,25 @@ function onXRFrame(timestamp, frame) {
                 if (pose) {
                     reticle.visible = true;
                     reticle.matrix.fromArray(pose.transform.matrix);
+
+                    // Auto-placement logic for 'placement' tool
+                    if (currentTool === 'placement' && arModel) {
+                        const reticlePos = new THREE.Vector3();
+                        const reticleQuat = new THREE.Quaternion();
+                        const reticleScale = new THREE.Vector3();
+                        reticle.matrix.decompose(reticlePos, reticleQuat, reticleScale);
+
+                        arModel.position.copy(reticlePos);
+                        // We do NOT copy rotation, as user might want to rotate manualy.
+                        // But we should ensure model is visible.
+                        arModel.visible = true;
+
+                        // If this is the very first placement, maybe align to surface? 
+                        // For now, keep Y up or whatever GLB default is.
+
+                        // Update floor plane for gestures (if they switch to generic later)
+                        dragPlane.constant = -reticlePos.y;
+                    }
                 }
             } else {
                 reticle.visible = false;
@@ -277,10 +296,16 @@ function onTouchStart(event) {
             // Set initial tool
             updateToolState();
         }
+
+        // If currentTool is 'placement', we consider it placed once hits are found in onXRFrame
+        if (currentTool === 'placement') {
+            modelPlaced = true;
+        }
+
         return;
     }
 
-    if (currentTool !== 'generic') {
+    if (currentTool !== 'generic' && currentTool !== 'placement') {
         // In Gizmo mode, we don't do custom drag/rotate/scale joy.
         // We just let TransformControls handle it (via its own internal listeners on canvas/domElement).
         // However, if the user clicks OFF the gizmo, maybe we want to allow placement move?
@@ -335,7 +360,7 @@ function onTouchMove(event) {
     event.preventDefault();
     if (!modelPlaced || !arModel) return;
     if (transformControl && transformControl.dragging) return;
-    if (currentTool !== 'generic') return;
+    if (currentTool !== 'generic' && currentTool !== 'placement') return;
 
     // Update touch positions
     for (let i = 0; i < event.changedTouches.length; i++) {
@@ -348,6 +373,7 @@ function onTouchMove(event) {
     const touchKeys = Object.keys(touches);
 
     if (isTwoFingerGesture && touchKeys.length === 2) {
+        // Allow scaling/rotation in both generic and placement modes
         const t1 = touches[touchKeys[0]];
         const t2 = touches[touchKeys[1]];
 
@@ -374,6 +400,9 @@ function onTouchMove(event) {
         lastTouchCenter = { x: (t1.x + t2.x) / 2, y: (t1.y + t2.y) / 2 };
 
     } else if (isDragging && touchKeys.length === 1) {
+        // Single finger drag — only in generic mode
+        if (currentTool === 'placement') return;
+
         // Single finger drag — move model on the floor plane
         const t = touches[touchKeys[0]];
 
@@ -468,7 +497,7 @@ function setupARToolbar() {
     if (!toolbarEl || !container) return; // Should exist in HTML
 
     // Reset UI state
-    currentTool = 'generic';
+    currentTool = 'placement';
     updateToolbarUI();
 
     // Bind buttons
@@ -542,7 +571,7 @@ function updateToolbarUI() {
 function updateToolState() {
     if (!transformControl || !arModel) return;
 
-    if (currentTool === 'generic') {
+    if (currentTool === 'generic' || currentTool === 'placement') {
         transformControl.detach();
         return;
     }
