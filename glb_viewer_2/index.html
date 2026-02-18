@@ -93,7 +93,23 @@
     </div>
 
     <!-- AR Overlay (custom Three.js WebXR) -->
-    <div id="ar-overlay" class="ar-overlay"></div>
+    <div id="ar-overlay" class="ar-overlay">
+        <!-- AR Toolbar -->
+        <div id="ar-toolbar-container">
+            <div id="ar-toolbar-drag-handle">
+                <div class="handle-bar"></div>
+            </div>
+            <div id="ar-toolbar">
+                <button class="ar-tool-btn active" data-mode="generic" title="Generic (Touch)">👆</button>
+                <div class="ar-toolbar-sep"></div>
+                <button class="ar-tool-btn" data-mode="translate" title="Move">✢</button>
+                <button class="ar-tool-btn" data-mode="rotate" title="Rotate">↻</button>
+                <button class="ar-tool-btn" data-mode="scale" title="Scale">⤢</button>
+                <div class="ar-toolbar-sep"></div>
+                <button class="ar-tool-btn danger" id="ar-exit-btn" title="Exit AR">✕</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Loading overlay for scene composition -->
     <div id="loading-overlay" class="screen">
