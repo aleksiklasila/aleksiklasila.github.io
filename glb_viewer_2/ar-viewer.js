@@ -525,34 +525,63 @@ function setupARToolbar() {
     if (toolbarHandleEl) {
         let isDraggingRaw = false;
         let startY = 0;
+        let startHeight = 0;
 
-        toolbarHandleEl.addEventListener('touchstart', (e) => {
+        const onPointerDown = (e) => {
             isDraggingRaw = true;
-            startY = e.touches[0].clientY;
+            startY = e.touches ? e.touches[0].clientY : e.clientY;
+            startHeight = container.offsetHeight;
+            container.classList.add('dragging');
             e.stopPropagation();
-        }, { passive: false });
+            e.preventDefault();
+        };
 
-        document.addEventListener('touchmove', (e) => {
+        toolbarHandleEl.addEventListener('touchstart', onPointerDown, { passive: false });
+        toolbarHandleEl.addEventListener('mousedown', onPointerDown);
+
+        const onPointerMove = (e) => {
             if (!isDraggingRaw) return;
-            const y = e.touches[0].clientY;
-            const delta = y - startY;
-            // Simple toggle logic on drag
-            if (delta > 50) {
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const delta = startY - clientY; // Dragging up (smaller Y) increases height
+
+            let newHeight = startHeight + delta;
+
+            // Constrain
+            if (newHeight < 24) newHeight = 24;
+            if (newHeight > window.innerHeight * 0.8) newHeight = window.innerHeight * 0.8;
+
+            container.style.height = newHeight + 'px';
+
+            if (newHeight <= 30) {
                 container.classList.add('collapsed');
-                isDraggingRaw = false;
-            } else if (delta < -50) {
+            } else {
                 container.classList.remove('collapsed');
-                isDraggingRaw = false;
             }
-        });
+        };
 
-        document.addEventListener('touchend', () => {
-            isDraggingRaw = false;
-        });
+        document.addEventListener('touchmove', onPointerMove, { passive: false });
+        document.addEventListener('mousemove', onPointerMove);
 
-        // Click to toggle
-        toolbarHandleEl.addEventListener('click', () => {
-            container.classList.toggle('collapsed');
+        const onPointerUp = () => {
+            if (isDraggingRaw) {
+                isDraggingRaw = false;
+                container.classList.remove('dragging');
+                // Optional: snap to nearest row? For now free resize is fine.
+            }
+        };
+
+        document.addEventListener('touchend', onPointerUp);
+        document.addEventListener('mouseup', onPointerUp);
+
+        // Double click to toggle full/min
+        toolbarHandleEl.addEventListener('dblclick', () => {
+            if (container.offsetHeight < 100) {
+                container.style.height = '100px';
+                container.classList.remove('collapsed');
+            } else {
+                container.style.height = '24px';
+                container.classList.add('collapsed');
+            }
         });
     }
 }
