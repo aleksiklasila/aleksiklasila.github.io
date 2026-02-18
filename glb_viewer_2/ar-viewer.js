@@ -252,17 +252,12 @@ function onXRFrame(timestamp, frame) {
 // ---- Reticle ----
 
 function createReticle() {
-    const ring = new THREE.RingGeometry(0.08, 0.10, 32);
-    ring.rotateX(-Math.PI / 2);
-    const material = new THREE.MeshBasicMaterial({
-        color: 0x00ff88,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.8
-    });
-    const mesh = new THREE.Mesh(ring, material);
-    mesh.matrixAutoUpdate = false;
-    return mesh;
+    // User requested to remove the green circle.
+    // We keep the reticle object for logic (hit-test tracking), but make it invisible/empty.
+    const reticlePlaceholder = new THREE.Object3D();
+    reticlePlaceholder.matrixAutoUpdate = false;
+    reticlePlaceholder.visible = false;
+    return reticlePlaceholder;
 }
 
 // ---- Touch Gesture Handling ----
