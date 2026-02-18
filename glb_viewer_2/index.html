@@ -44,7 +44,6 @@
         <div id="editor-toolbar">
             <div class="toolbar-left">
                 <button class="back-btn" data-target="input-screen">←</button>
-                <h3 id="editor-title">Scene Editor</h3>
             </div>
             <div class="toolbar-center">
                 <button class="tool-btn active" id="btn-move" title="Move (W)" data-mode="translate">✢</button>
@@ -54,24 +53,26 @@
                 <button class="tool-btn" id="btn-space" title="Toggle World/Local (Q)">L</button>
             </div>
             <div class="toolbar-right">
-                <button class="btn btn-accent" id="btn-open-viewer" title="Open in Model Viewer">👁 View</button>
-                <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗 Share</button>
+                <button class="btn btn-accent" id="btn-open-viewer" title="Open in Model Viewer">👁</button>
+                <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗</button>
             </div>
         </div>
         <div id="editor-main">
             <canvas id="editor-canvas"></canvas>
-            <div id="panel-drag-handle" class="panel-drag-handle">
-                <div class="handle-bar"></div>
-            </div>
-            <div id="object-panel">
-                <div class="panel-header">Objects</div>
-                <div id="object-list"></div>
-                <div class="panel-actions">
-                    <button class="btn btn-small" id="btn-clone" title="Clone Selected (Ctrl+D)">📋 Clone</button>
-                    <button class="btn btn-small btn-danger" id="btn-delete" title="Delete Selected (Del)">🗑️
-                        Delete</button>
+            <div id="bottom-panel-wrapper">
+                <div id="panel-drag-handle" class="panel-drag-handle">
+                    <div class="handle-bar"></div>
                 </div>
-                <div id="transform-info" class="transform-info"></div>
+                <div id="object-panel">
+                    <div class="panel-header">Objects</div>
+                    <div id="object-list"></div>
+                    <div class="panel-actions">
+                        <button class="btn btn-small" id="btn-clone" title="Clone Selected (Ctrl+D)">📋 Clone</button>
+                        <button class="btn btn-small btn-danger" id="btn-delete" title="Delete Selected (Del)">🗑️
+                            Delete</button>
+                    </div>
+                    <div id="transform-info" class="transform-info"></div>
+                </div>
             </div>
         </div>
         <div id="editor-status">Ready</div>
@@ -111,15 +112,22 @@
             if (!handle || !panel || !editorMain) return;
 
             let isDragging = false;
-            let startY = 0;
-            let startHeight = 0;
+            let handleOffset = 0;
             const MIN_HEIGHT = 40;
             const DEFAULT_HEIGHT = 180;
+            const HANDLE_HEIGHT = 24;
+
+            function getClientY(e) {
+                if (e.clientY != null) return e.clientY;
+                if (e.touches && e.touches.length) return e.touches[0].clientY;
+                return null;
+            }
 
             function onPointerDown(e) {
+                const clientY = getClientY(e);
+                if (clientY == null) return;
                 isDragging = true;
-                startY = e.clientY || e.touches[0].clientY;
-                startHeight = panel.offsetHeight;
+                handleOffset = clientY - handle.getBoundingClientRect().top;
                 panel.style.transition = 'none';
                 handle.classList.add('dragging');
                 document.body.style.cursor = 'ns-resize';
@@ -129,14 +137,15 @@
 
             function onPointerMove(e) {
                 if (!isDragging) return;
-                const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                const clientY = getClientY(e);
                 if (clientY == null) return;
-                const delta = startY - clientY;
-                let newHeight = startHeight + delta;
-                const maxHeight = editorMain.offsetHeight - 60;
+                const containerRect = editorMain.getBoundingClientRect();
+                const handleTop = clientY - handleOffset;
+                const handleBottom = handleTop + HANDLE_HEIGHT;
+                let newHeight = containerRect.bottom - handleBottom;
+                const maxHeight = containerRect.height - HANDLE_HEIGHT - 20;
                 newHeight = Math.max(0, Math.min(newHeight, maxHeight));
                 panel.style.height = newHeight + 'px';
-                // Visual feedback: if below threshold, show collapsed-ish
                 if (newHeight < MIN_HEIGHT) {
                     panel.classList.add('collapsed');
                 } else {
@@ -151,15 +160,12 @@
                 handle.classList.remove('dragging');
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
-                // Snap: if below threshold, collapse fully
-                const currentHeight = panel.offsetHeight;
-                if (currentHeight < MIN_HEIGHT) {
+                if (panel.offsetHeight < MIN_HEIGHT) {
                     panel.style.height = '0px';
                     panel.classList.add('collapsed');
                 }
             }
 
-            // Double-click to toggle
             handle.addEventListener('dblclick', () => {
                 if (panel.classList.contains('collapsed') || panel.offsetHeight < MIN_HEIGHT) {
                     panel.style.height = DEFAULT_HEIGHT + 'px';
@@ -170,12 +176,9 @@
                 }
             });
 
-            // Mouse events
             handle.addEventListener('mousedown', onPointerDown);
             document.addEventListener('mousemove', onPointerMove);
             document.addEventListener('mouseup', onPointerUp);
-
-            // Touch events
             handle.addEventListener('touchstart', onPointerDown, { passive: false });
             document.addEventListener('touchmove', onPointerMove, { passive: false });
             document.addEventListener('touchend', onPointerUp);
