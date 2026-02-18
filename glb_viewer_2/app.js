@@ -14,7 +14,7 @@
 // }
 // ============================================================
 
-import { initEditor, loadModel, applySceneState, getSceneState, exportSceneAsGLB, loadAndComposeGLB } from './editor.js';
+import { initEditor, loadModel, applySceneState, getSceneState, exportSceneAsGLB, loadAndComposeGLB, pauseEditor, resumeEditor } from './editor.js';
 
 // --- URL Compression Helpers ---
 
@@ -180,6 +180,13 @@ function showScreen(screenId) {
     if (screen) {
         screen.classList.add('active');
         state.currentScreen = screenId;
+    }
+
+    // Pause/resume editor render loop to avoid GPU contention
+    if (screenId === 'editor-screen') {
+        if (state.editorInitialized) resumeEditor();
+    } else {
+        if (state.editorInitialized) pauseEditor();
     }
 }
 
