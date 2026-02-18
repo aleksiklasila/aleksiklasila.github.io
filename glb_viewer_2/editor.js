@@ -251,7 +251,7 @@ function updateSize() {
     if (!canvas || !renderer) return;
     const parent = canvas.parentElement;
     if (!parent) return;
-    const w = parent.clientWidth - 220; // subtract panel width
+    const w = parent.clientWidth;
     const h = parent.clientHeight;
     if (w <= 0 || h <= 0) return;
     canvas.style.width = w + 'px';
