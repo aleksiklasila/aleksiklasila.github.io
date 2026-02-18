@@ -60,6 +60,9 @@
         </div>
         <div id="editor-main">
             <canvas id="editor-canvas"></canvas>
+            <div id="panel-drag-handle" class="panel-drag-handle">
+                <div class="handle-bar"></div>
+            </div>
             <div id="object-panel">
                 <div class="panel-header">Objects</div>
                 <div id="object-list"></div>
@@ -98,6 +101,86 @@
             <p id="loading-text">Composing scene...</p>
         </div>
     </div>
+
+    <script>
+        // --- Bottom panel drag-to-resize/hide ---
+        (function () {
+            const handle = document.getElementById('panel-drag-handle');
+            const panel = document.getElementById('object-panel');
+            const editorMain = document.getElementById('editor-main');
+            if (!handle || !panel || !editorMain) return;
+
+            let isDragging = false;
+            let startY = 0;
+            let startHeight = 0;
+            const MIN_HEIGHT = 40;
+            const DEFAULT_HEIGHT = 180;
+
+            function onPointerDown(e) {
+                isDragging = true;
+                startY = e.clientY || e.touches[0].clientY;
+                startHeight = panel.offsetHeight;
+                panel.style.transition = 'none';
+                handle.classList.add('dragging');
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
+            }
+
+            function onPointerMove(e) {
+                if (!isDragging) return;
+                const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                if (clientY == null) return;
+                const delta = startY - clientY;
+                let newHeight = startHeight + delta;
+                const maxHeight = editorMain.offsetHeight - 60;
+                newHeight = Math.max(0, Math.min(newHeight, maxHeight));
+                panel.style.height = newHeight + 'px';
+                // Visual feedback: if below threshold, show collapsed-ish
+                if (newHeight < MIN_HEIGHT) {
+                    panel.classList.add('collapsed');
+                } else {
+                    panel.classList.remove('collapsed');
+                }
+            }
+
+            function onPointerUp() {
+                if (!isDragging) return;
+                isDragging = false;
+                panel.style.transition = '';
+                handle.classList.remove('dragging');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                // Snap: if below threshold, collapse fully
+                const currentHeight = panel.offsetHeight;
+                if (currentHeight < MIN_HEIGHT) {
+                    panel.style.height = '0px';
+                    panel.classList.add('collapsed');
+                }
+            }
+
+            // Double-click to toggle
+            handle.addEventListener('dblclick', () => {
+                if (panel.classList.contains('collapsed') || panel.offsetHeight < MIN_HEIGHT) {
+                    panel.style.height = DEFAULT_HEIGHT + 'px';
+                    panel.classList.remove('collapsed');
+                } else {
+                    panel.style.height = '0px';
+                    panel.classList.add('collapsed');
+                }
+            });
+
+            // Mouse events
+            handle.addEventListener('mousedown', onPointerDown);
+            document.addEventListener('mousemove', onPointerMove);
+            document.addEventListener('mouseup', onPointerUp);
+
+            // Touch events
+            handle.addEventListener('touchstart', onPointerDown, { passive: false });
+            document.addEventListener('touchmove', onPointerMove, { passive: false });
+            document.addEventListener('touchend', onPointerUp);
+        })();
+    </script>
 
     <script type="module" src="app.js"></script>
 </body>
