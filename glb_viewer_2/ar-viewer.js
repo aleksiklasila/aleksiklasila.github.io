@@ -89,9 +89,9 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
 
     // --- Reticle (placement indicator) ---
-    // reticle = createReticle();
-    // reticle.visible = false;
-    // scene.add(reticle);
+    reticle = createReticle();
+    reticle.visible = false;
+    scene.add(reticle);
 
     // --- Transform Controls ---
     transformControl = new TransformControls(camera, containerEl);
@@ -218,27 +218,30 @@ function onXRFrame(timestamp, frame) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
-                    // Update reticle matrix (internally used for placement)
-                    // reticle.visible = true; 
-                    // reticle.matrix.fromArray(pose.transform.matrix);
+                    reticle.visible = true;
+                    reticle.matrix.fromArray(pose.transform.matrix);
 
                     // Auto-placement logic for 'placement' tool
                     if (currentTool === 'placement' && arModel) {
                         const reticlePos = new THREE.Vector3();
                         const reticleQuat = new THREE.Quaternion();
                         const reticleScale = new THREE.Vector3();
-                        // Decompose directly from pose matrix
-                        const mat = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                        mat.decompose(reticlePos, reticleQuat, reticleScale);
+                        reticle.matrix.decompose(reticlePos, reticleQuat, reticleScale);
 
                         arModel.position.copy(reticlePos);
+                        // We do NOT copy rotation, as user might want to rotate manualy.
+                        // But we should ensure model is visible.
                         arModel.visible = true;
 
+                        // If this is the very first placement, maybe align to surface? 
+                        // For now, keep Y up or whatever GLB default is.
+
+                        // Update floor plane for gestures (if they switch to generic later)
                         dragPlane.constant = -reticlePos.y;
                     }
                 }
             } else {
-                // reticle.visible = false;
+                reticle.visible = false;
             }
         }
     }
@@ -276,9 +279,6 @@ function onTouchStart(event) {
 
     if (!modelPlaced) {
         // Place model at reticle position on first tap
-        // if (reticle.visible && arModel) { ... }
-        // Reticle is hidden, but logic remains. However, we primarily use placement tool now.
-        return;
         if (reticle.visible && arModel) {
             // Get reticle world position
             const reticlePos = new THREE.Vector3();
@@ -506,9 +506,7 @@ function cleanup() {
 
     scene = null;
     camera = null;
-    scene = null;
-    camera = null;
-    // reticle = null;
+    reticle = null;
 }
 
 /**

@@ -349,8 +349,6 @@ function frameModel() {
 function onPointerDown(event) {
     // Ignore if interacting with transform controls gizmo
     if (transformControls.dragging) return;
-    // Also ignore if hovering over the gizmo (axis selection)
-    if (transformControls.axis) return;
 
     // Record pointer start for click-vs-drag detection
     pointerDownPos = { x: event.clientX, y: event.clientY };
