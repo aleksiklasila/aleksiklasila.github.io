@@ -15,6 +15,7 @@ let loadedModel = null;
 let editableObjects = []; // top-level objects from GLB
 let selectedObjects = [];
 let selectionGroup = null;
+let selectionBoxHelper = null;
 let selectedObject = null; // Deprecated, keeping for safety until fully refactored, but logic will use array
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
@@ -79,6 +80,11 @@ export function initEditor(canvasEl, callbacks) {
     // Selection Group (for multi-object transform)
     selectionGroup = new THREE.Group();
     scene.add(selectionGroup);
+
+    // Box Helper for selection highlighting
+    selectionBoxHelper = new THREE.BoxHelper(selectionGroup, 0xffff00); // Yellow
+    selectionBoxHelper.visible = false;
+    scene.add(selectionBoxHelper);
 
     // Grid
     const grid = new THREE.GridHelper(20, 40, 0x444466, 0x333355);
@@ -583,8 +589,21 @@ export function updateSelection(objects) {
         selectionGroup.attach(obj);
     });
 
-    // 7. Attach Controls
-    transformControls.attach(selectionGroup);
+    // 7. Update Helpers
+    if (selectionBoxHelper) {
+        selectionBoxHelper.update();
+        // Check visibility based on mode
+        const visibleModes = ['select', 'translate', 'rotate', 'scale', 'generic'];
+        selectionBoxHelper.visible = visibleModes.includes(currentMode);
+    }
+
+    // 8. Attach Controls (ONLY if NOT in select/cursor/none)
+    // Select Mode = No Gizmo (User Request)
+    if (currentMode === 'translate' || currentMode === 'rotate' || currentMode === 'scale') {
+        transformControls.attach(selectionGroup);
+    } else {
+        transformControls.detach();
+    }
 
     // 8. Update UI
     updateObjectList();
@@ -611,16 +630,23 @@ function setTransformMode(mode) {
     // Default: Orbit enabled (unless generic)
     orbitControls.enabled = true;
 
-    if (mode === 'none' || mode === 'cursor' || mode === 'generic' || mode === 'select') {
-        transformControls.detach();
-    } else {
+    // Gizmo Visibility
+    if (mode === 'translate' || mode === 'rotate' || mode === 'scale') {
         transformControls.setMode(mode);
         if (selectedObjects.length > 0) transformControls.attach(selectionGroup);
+    } else {
+        transformControls.detach();
     }
 
     if (mode === 'generic') {
-        // DISABLE OrbitControls entirely in generic mode
         orbitControls.enabled = false;
+    }
+
+    // Helper Visibility
+    if (selectionBoxHelper) {
+        const visibleModes = ['select', 'translate', 'rotate', 'scale', 'generic'];
+        selectionBoxHelper.visible = visibleModes.includes(mode) && selectedObjects.length > 0;
+        if (selectionBoxHelper.visible) selectionBoxHelper.update();
     }
 
     document.querySelectorAll('#editor-toolbar .tool-btn[data-mode]').forEach(btn => {
