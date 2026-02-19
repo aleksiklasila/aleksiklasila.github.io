@@ -27,6 +27,9 @@ let currentTool = 'placement'; // Default to placement
 let toolbarEl = null;
 let toolbarHandleEl = null;
 
+// Helper
+let selectionBoxHelper = null;
+
 // Touch gesture state
 let touches = {};
 let lastTouchDist = 0;
@@ -128,6 +131,11 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         // Selection Group
         selectionGroup = new THREE.Group();
         container.add(selectionGroup);
+
+        // Highlight Helper
+        selectionBoxHelper = new THREE.BoxHelper(selectionGroup, 0xffff00);
+        selectionBoxHelper.visible = false;
+        container.add(selectionBoxHelper);
 
         // Populate editable objects (top level children of GLB)
         editableObjects = [];
@@ -373,18 +381,20 @@ function onTouchStart(event) {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
-        const allMeshes = [];
+        // Raycast against all Meshes in editableObjects
+        const interactable = [];
         editableObjects.forEach(obj => {
             obj.traverse(child => {
-                if (child.isMesh) allMeshes.push(child);
+                if (child.isMesh) interactable.push(child);
             });
         });
 
-        const intersects = raycaster.intersectObjects(allMeshes, false);
+        const intersects = raycaster.intersectObjects(interactable, false);
 
         if (intersects.length > 0) {
             // Find root editable
             let hit = intersects[0].object;
+            // Walk up until hit is in editableObjects
             while (hit) {
                 if (editableObjects.includes(hit)) break;
                 if (hit === scene || hit === arModel) { hit = null; break; }
@@ -402,6 +412,7 @@ function onTouchStart(event) {
                 return;
             }
         } else {
+            // Tap background -> Select All
             updateSelection(editableObjects);
         }
         return;
@@ -626,6 +637,7 @@ function updateSelection(objects) {
 
     // 3. If no new selection
     if (selectedObjects.length === 0) {
+        if (selectionBoxHelper) selectionBoxHelper.visible = false;
         return;
     }
 
@@ -655,9 +667,17 @@ function updateSelection(objects) {
         selectionGroup.attach(obj);
     });
 
-    // 7. Attach Controls
-    if (currentTool !== 'generic' && currentTool !== 'placement') {
+    // 7. Helpers & Gizmo
+    if (selectionBoxHelper) {
+        selectionBoxHelper.update();
+        const visibleModes = ['select', 'translate', 'rotate', 'scale', 'generic'];
+        selectionBoxHelper.visible = visibleModes.includes(currentTool);
+    }
+
+    if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
         transformControl.attach(selectionGroup);
+    } else {
+        transformControl.detach();
     }
 }
 
@@ -779,34 +799,18 @@ function updateToolState() {
 
     if (currentTool === 'generic' || currentTool === 'placement' || currentTool === 'select') {
         transformControl.detach();
-        return;
-    }
-
-    if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
+    } else if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
         transformControl.setMode(currentTool);
         if (selectedObjects.length > 0) {
             transformControl.attach(selectionGroup);
-
-            // Fix axis visibility
-            // We want simple single-axis manipulation usually.
-            // TransformControls usually handles this visually.
-            // We can also ensure only one axis is visible? No, gizmo shows all.
         }
+    }
 
-        // Disable handles?
-        // TransformControls does not have easy "disable handles" without monkey patching or hiding children.
-        // We already did a monkey patch in previous step for this?
-        // Ah, looking at previous conversation summaries, user wanted "Only handle one axis at a time" (Resolved?).
-        // If I am overwriting the file, I must ensure I don't lose that fix if it was in `setPivot`/etc?
-        // The fix might have been in `setPivot` or `updateToolState` previously?
-        // Let's check if I have `disableHandles` helper from previous turns.
-        // I see `monkeyPatchGizmo` in my mental model? No.
-        // I see a diff from Step 120 adding `setPivot` and `rePivotToBBoxCenter` at the END of the file.
-        // My Rewrite above includes `setPivot` and `rePivotToBBoxCenter` at the END.
-        // Wait, I forgot to append them in the rewrite!!
-        // The `replace_file_content` at Step 120 added them.
-        // My `write_to_file` overwrites EVERYTHING.
-        // I need to add them back.
+    // Helper Visibility
+    if (selectionBoxHelper) {
+        const visibleModes = ['select', 'translate', 'rotate', 'scale', 'generic'];
+        selectionBoxHelper.visible = visibleModes.includes(currentTool) && selectedObjects.length > 0;
+        if (selectionBoxHelper.visible) selectionBoxHelper.update();
     }
 }
 
