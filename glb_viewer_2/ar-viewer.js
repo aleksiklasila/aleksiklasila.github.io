@@ -667,4 +667,45 @@ function updateToolState() {
             transformControl.setMode('scale');
             break;
     }
+
+    updateGizmoConstraints();
+}
+
+function updateGizmoConstraints() {
+    if (!transformControl) return;
+
+    // We need to traverse the gizmo children to hide specific handles (planes, etc.)
+    // TransformControls roughly has structure: TransformControls -> [GizmoTranslate, GizmoRotate, GizmoScale]
+    // But usually it only shows the active one.
+
+    // We can traverse all children of transformControl to find meshes/lines with specific names.
+    // Standard TransformControls names:
+    // Translate: X, Y, Z (arrows), XY, YZ, XZ (planes)
+    // Rotate: X, Y, Z (rings), E (screen), XYZE (virtual trackball)
+    // Scale: X, Y, Z (cubes), XY, YZ, XZ (planes), XYZ (uniform)
+
+    const axes = ['X', 'Y', 'Z'];
+    // Handles we want to hide/disable to force single-axis manipulation
+    const disabledHandles = [
+        'XY', 'YZ', 'XZ',       // Planes (Translate/Scale)
+        'XYZ',                  // Uniform Scale
+        'E', 'XYZE'             // Screen/Free Rotation
+    ];
+
+    transformControl.traverse((child) => {
+        // We only care about objects that might be handles (Meshes, Lines)
+        if (child.isMesh || child.isLine) {
+            // If it's one of our target handles, hide it
+            if (disabledHandles.includes(child.name)) {
+                child.visible = false;
+                // Some implementations might ignore visible=false for raycasting if not handled carefully,
+                // but TransformControls usually checks visible. 
+                // To be safe, we can also try to disable raycasting if possible, but visibility usually works.
+            } else if (axes.includes(child.name)) {
+                // Ensure axes are visible (in case we switched modes and they were reused/hidden previously? 
+                // Usually TransformControls resets this, but good to be sure if we are monkey-patching).
+                child.visible = true;
+            }
+        }
+    });
 }
