@@ -13,6 +13,9 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 let renderer, scene, camera;
 let arModel = null;
+let editableObjects = [];
+let selectedObjects = [];
+let selectionGroup = null;
 let reticle = null;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
@@ -121,10 +124,23 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         const container = new THREE.Group();
         container.name = '__arContainer';
         container.add(arModel);
+
+        // Selection Group
+        selectionGroup = new THREE.Group();
+        container.add(selectionGroup);
+
+        // Populate editable objects (top level children of GLB)
+        editableObjects = [];
+        arModel.children.forEach(child => {
+            editableObjects.push(child);
+        });
+
         container.visible = false; // hidden until placed
         scene.add(container);
 
-        // Replace arModel reference with container for transforms
+        // Replace arModel reference with container for transforms (This variable name is confusing now, but 'arModel' in rest of code refers to the group we move appropriately?)
+        // The existing code says: "Replace arModel reference with container for transforms"
+        // So 'arModel' becomes the container.
         arModel = container;
     } catch (err) {
         console.error('Failed to load AR model:', err);
@@ -352,11 +368,86 @@ function onTouchStart(event) {
     }
 
     if (currentTool !== 'generic' && currentTool !== 'placement') {
-        // In Gizmo mode, we don't do custom drag/rotate/scale joy.
-        // We just let TransformControls handle it (via its own internal listeners on canvas/domElement).
-        // However, if the user clicks OFF the gizmo, maybe we want to allow placement move?
-        // For now, let's enforce: Tool selected -> Gizmo only. Generic -> Gestures only.
+        // In Gizmo mode, check for direct hits to select
+        // Even in Gizmo mode, we might want to change selection by tapping another object.
+        const t = event.changedTouches[0];
+        const ndcX = (t.clientX / window.innerWidth) * 2 - 1;
+        const ndcY = -(t.clientY / window.innerHeight) * 2 + 1;
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+
+        // Raycast against all editable objects
+        // We need to traverse editableObjects' descendants because they are Groups/Meshes
+        // editableObjects contains the top-level nodes.
+        const allMeshes = [];
+        editableObjects.forEach(obj => {
+            obj.traverse(child => {
+                if (child.isMesh) allMeshes.push(child);
+            });
+        });
+
+        const intersects = raycaster.intersectObjects(allMeshes, false);
+
+        if (intersects.length > 0) {
+            // Find root editable
+            let hit = intersects[0].object;
+            while (hit) {
+                if (editableObjects.includes(hit)) break;
+                if (hit === scene || hit === arModel) { hit = null; break; }
+                hit = hit.parent;
+            }
+
+            if (hit) {
+                updateSelection([hit]);
+                return;
+            }
+        } else {
+            // Tap background -> Select All
+            updateSelection(editableObjects);
+        }
+
         return;
+    }
+
+    // Generic Mode: Handle Selection on Touch Start too?
+    // User says: "Select the tool, click an object -> only that object... click anywhere else -> all objects"
+    // This applies to generic/move tool as well.
+    if (currentTool === 'generic') {
+        // Check for hit
+        const t = event.changedTouches[0];
+        const ndcX = (t.clientX / window.innerWidth) * 2 - 1;
+        const ndcY = -(t.clientY / window.innerHeight) * 2 + 1;
+        dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+
+        const allMeshes = [];
+        editableObjects.forEach(obj => {
+            obj.traverse(child => { if (child.isMesh) allMeshes.push(child); });
+        });
+        const intersects = dragRaycaster.intersectObjects(allMeshes, false);
+
+        if (intersects.length > 0) {
+            let hit = intersects[0].object;
+            while (hit) {
+                if (editableObjects.includes(hit)) break;
+                if (hit === scene || hit === arModel) { hit = null; break; }
+                hit = hit.parent;
+            }
+            if (hit && !selectedObjects.includes(hit)) {
+                updateSelection([hit]);
+            }
+        } else {
+            // Background tap logic is tricky here because touch start is also for navigation/orbit?
+            // "Clicking outside of any objects, selects all objects"
+            // For AR, dragging background = move whole model (if all selected) or orbit?
+            // Actually AR viewer implies we move the camera by walking. We don't "Orbit" the camera in AR.
+            // But we might "Drag" the model to move it.
+            // If dragging background -> Moving the selected objects?
+            // If Select All is default, dragging background moves everything.
+            // If Single Selected, dragging background moves Single? Or does nothing?
+            // Usually "Click elsewhere" means deselect/select-all.
+            // Let's implement: If background hit, Select All.
+            updateSelection(editableObjects);
+        }
     }
 
     // Track fingers
@@ -385,11 +476,11 @@ function onTouchStart(event) {
         const ndcY = -(t.y / window.innerHeight) * 2 + 1;
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
         const hitPoint = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && arModel) {
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && selectionGroup) {
             dragOffset.set(
-                arModel.position.x - hitPoint.x,
+                selectionGroup.position.x - hitPoint.x,
                 0,
-                arModel.position.z - hitPoint.z
+                selectionGroup.position.z - hitPoint.z
             );
         } else {
             dragOffset.set(0, 0, 0);
@@ -418,6 +509,8 @@ function onTouchMove(event) {
 
     const touchKeys = Object.keys(touches);
 
+    if (selectedObjects.length === 0) return; // Should have selection if we are here (drag/gesture)
+
     if (isTwoFingerGesture && touchKeys.length === 2) {
         // Allow scaling/rotation in both generic and placement modes
         const t1 = touches[touchKeys[0]];
@@ -430,20 +523,22 @@ function onTouchMove(event) {
         // Pinch to scale
         if (lastTouchDist > 0) {
             const scaleFactor = dist / lastTouchDist;
-            arModel.scale.multiplyScalar(scaleFactor);
+            selectionGroup.scale.multiplyScalar(scaleFactor);
             // Clamp scale
-            const s = arModel.scale.x;
+            const s = selectionGroup.scale.x;
             const clamped = Math.max(0.01, Math.min(s, 20));
-            arModel.scale.setScalar(clamped);
+            selectionGroup.scale.setScalar(clamped);
         }
 
         // Rotate around Y axis
         const angleDelta = angle - lastTouchAngle;
-        arModel.rotation.y += angleDelta;
+        selectionGroup.rotation.y += angleDelta;
 
         lastTouchDist = dist;
         lastTouchAngle = angle;
         lastTouchCenter = { x: (t1.x + t2.x) / 2, y: (t1.y + t2.y) / 2 };
+
+        selectionGroup.updateMatrixWorld();
 
     } else if (isDragging && touchKeys.length === 1) {
         // Single finger drag — only in generic mode
@@ -459,8 +554,16 @@ function onTouchMove(event) {
 
         const intersection = new THREE.Vector3();
         if (dragRaycaster.ray.intersectPlane(dragPlane, intersection)) {
-            arModel.position.x = intersection.x + dragOffset.x;
-            arModel.position.z = intersection.z + dragOffset.z;
+            // Apply to group
+            // We need to maintain offset
+            const newPos = new THREE.Vector3(
+                intersection.x + dragOffset.x,
+                selectionGroup.position.y, // Maintain Y
+                intersection.z + dragOffset.z
+            );
+            selectionGroup.position.x = newPos.x;
+            selectionGroup.position.z = newPos.z;
+            selectionGroup.updateMatrixWorld();
         }
     }
 }
@@ -531,6 +634,68 @@ export async function endARSession() {
         await session.end();
     }
     cleanup();
+}
+
+function updateSelection(objects) {
+    if (!selectionGroup || !arModel) return;
+
+    // The 'arModel' variable is actually the Container Group now (see startARSession).
+    // The actual GLB model is a child of it.
+    // Let's find the original model root to re-attach objects to.
+    // We added: container.add(arModel_original); container.add(selectionGroup);
+    // So arModel (container) . children[0] is likely the original GLB root? 
+    // Wait, earlier code: `arModel = gltf.scene; ... container.add(arModel); ... arModel = container;`
+    // So `arModel` (global) is the container.
+    // The GLB root is `arModel.children.find(c => c !== selectionGroup)`.
+
+    // 1. Detach current
+    if (selectedObjects.length > 0) {
+        const glbRoot = arModel.children.find(c => c !== selectionGroup); // The original gltf scene
+        const currentChildren = [...selectionGroup.children];
+        currentChildren.forEach(child => {
+            if (glbRoot) glbRoot.attach(child);
+        });
+        if (transformControl) transformControl.detach();
+    }
+
+    // 2. Update state
+    selectedObjects = objects || [];
+
+    // 3. If no new selection
+    if (selectedObjects.length === 0) {
+        return;
+    }
+
+    // 4. Calculate Pivot (Avg X/Z, Min Y)
+    let avgX = 0, avgZ = 0, minY = Infinity;
+
+    selectedObjects.forEach(obj => {
+        const worldPos = new THREE.Vector3();
+        obj.getWorldPosition(worldPos);
+        avgX += worldPos.x;
+        avgZ += worldPos.z;
+        if (worldPos.y < minY) minY = worldPos.y;
+    });
+
+    avgX /= selectedObjects.length;
+    avgZ /= selectedObjects.length;
+    if (minY === Infinity) minY = 0;
+
+    // 5. Position Group
+    selectionGroup.position.set(avgX, minY, avgZ);
+    selectionGroup.rotation.set(0, 0, 0);
+    selectionGroup.scale.set(1, 1, 1);
+    selectionGroup.updateMatrixWorld();
+
+    // 6. Attach
+    selectedObjects.forEach(obj => {
+        selectionGroup.attach(obj);
+    });
+
+    // 7. Attach Controls
+    if (currentTool !== 'generic' && currentTool !== 'placement') {
+        transformControl.attach(selectionGroup);
+    }
 }
 
 // ---- Toolbar Logic ----
@@ -644,7 +809,7 @@ function updateToolbarUI() {
 }
 
 function updateToolState() {
-    if (!transformControl || !arModel) return;
+    if (!transformControl || !selectionGroup) return;
 
     if (currentTool === 'generic' || currentTool === 'placement') {
         transformControl.detach();
@@ -652,8 +817,12 @@ function updateToolState() {
     }
 
     // Attach if not attached (or verify)
-    if (transformControl.object !== arModel) {
-        transformControl.attach(arModel);
+    if (selectedObjects.length > 0) {
+        if (transformControl.object !== selectionGroup) {
+            transformControl.attach(selectionGroup);
+        }
+    } else {
+        transformControl.detach();
     }
 
     switch (currentTool) {
