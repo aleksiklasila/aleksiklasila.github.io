@@ -307,25 +307,38 @@ export function dispose() {
  * Uses scene attachment to preserve child world positions.
  */
 function setPivot(obj, targetWorldPos) {
-    if (!obj || !obj.parent) return;
+    if (!obj) return;
 
-    // Detach children to Scene to preserve their World Transforms
-    const children = [];
-    // We must copy the children array as we'll be modifying it
-    [...obj.children].forEach(child => {
-        children.push(child);
-        scene.attach(child);
-    });
-
-    // Move obj to target position (converting world to parent-local)
-    const parentLocalPos = obj.parent.worldToLocal(targetWorldPos.clone());
-    obj.position.copy(parentLocalPos);
+    // 1. Calculate offset in obj's Local Space
+    // We want to know where targetWorldPos is, relative to obj's current origin
     obj.updateMatrixWorld();
+    const localOffset = obj.worldToLocal(targetWorldPos.clone());
 
-    // Re-attach children
-    children.forEach(child => {
-        obj.attach(child);
+    if (localOffset.lengthSq() < 0.00001) return; // Already there
+
+    // 2. Shift Geometry (if it's a Mesh)
+    if (obj.geometry) {
+        obj.geometry.translate(-localOffset.x, -localOffset.y, -localOffset.z);
+    }
+
+    // 3. Shift Children (to keep them in place relative to visual pivot)
+    // Children positions are relative to obj origin. If origin moves +offset,
+    // children must move -offset to stay in same world spot.
+    obj.children.forEach(child => {
+        child.position.sub(localOffset);
     });
+
+    // 4. Move Object to new pivot location
+    // We set the object's position to the targetWorldPos
+    if (obj.parent) {
+        obj.parent.updateMatrixWorld();
+        const newLocalPos = obj.parent.worldToLocal(targetWorldPos.clone());
+        obj.position.copy(newLocalPos);
+    } else {
+        obj.position.copy(targetWorldPos);
+    }
+
+    obj.updateMatrixWorld();
 }
 
 /**
