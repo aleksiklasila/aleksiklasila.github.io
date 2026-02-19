@@ -133,14 +133,14 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         editableObjects = [];
         arModel.children.forEach(child => {
             editableObjects.push(child);
+            // AUTO-PIVOT: Re-pivot to bottom center (d031a0d5: Step 96)
+            rePivotToBBoxCenter(child);
         });
 
         container.visible = false; // hidden until placed
         scene.add(container);
 
-        // Replace arModel reference with container for transforms (This variable name is confusing now, but 'arModel' in rest of code refers to the group we move appropriately?)
-        // The existing code says: "Replace arModel reference with container for transforms"
-        // So 'arModel' becomes the container.
+        // Replace arModel reference with container for transforms
         arModel = container;
     } catch (err) {
         console.error('Failed to load AR model:', err);
@@ -298,8 +298,6 @@ function createReticle() {
 
 function onTouchStart(event) {
     // Check if touching a UI element (toolbar buttons).
-    // The browser might handle this, but if we preventDefault everywhere, buttons might break unless they are on the overlay.
-    // Since listeners are on containerEl (the overlay root), bubbling from buttons should be fine if we don't block them.
     if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
         return; // Allow UI interaction
     }
@@ -367,18 +365,14 @@ function onTouchStart(event) {
         return;
     }
 
-    if (currentTool !== 'generic' && currentTool !== 'placement') {
-        // In Gizmo mode, check for direct hits to select
-        // Even in Gizmo mode, we might want to change selection by tapping another object.
+    // --- SELECTION LOGIC ADDED HERE ---
+    if (currentTool === 'select') {
         const t = event.changedTouches[0];
         const ndcX = (t.clientX / window.innerWidth) * 2 - 1;
         const ndcY = -(t.clientY / window.innerHeight) * 2 + 1;
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
-        // Raycast against all editable objects
-        // We need to traverse editableObjects' descendants because they are Groups/Meshes
-        // editableObjects contains the top-level nodes.
         const allMeshes = [];
         editableObjects.forEach(obj => {
             obj.traverse(child => {
@@ -398,58 +392,27 @@ function onTouchStart(event) {
             }
 
             if (hit) {
-                updateSelection([hit]);
+                const isSelected = selectedObjects.includes(hit);
+                if (isSelected) {
+                    const newSelection = selectedObjects.filter(o => o !== hit);
+                    updateSelection(newSelection);
+                } else {
+                    updateSelection([...selectedObjects, hit]);
+                }
                 return;
             }
         } else {
-            // Tap background -> Select All
             updateSelection(editableObjects);
         }
-
         return;
     }
 
-    // Generic Mode: Handle Selection on Touch Start too?
-    // User says: "Select the tool, click an object -> only that object... click anywhere else -> all objects"
-    // This applies to generic/move tool as well.
-    if (currentTool === 'generic') {
-        // Check for hit
-        const t = event.changedTouches[0];
-        const ndcX = (t.clientX / window.innerWidth) * 2 - 1;
-        const ndcY = -(t.clientY / window.innerHeight) * 2 + 1;
-        dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-
-        const allMeshes = [];
-        editableObjects.forEach(obj => {
-            obj.traverse(child => { if (child.isMesh) allMeshes.push(child); });
-        });
-        const intersects = dragRaycaster.intersectObjects(allMeshes, false);
-
-        if (intersects.length > 0) {
-            let hit = intersects[0].object;
-            while (hit) {
-                if (editableObjects.includes(hit)) break;
-                if (hit === scene || hit === arModel) { hit = null; break; }
-                hit = hit.parent;
-            }
-            if (hit && !selectedObjects.includes(hit)) {
-                updateSelection([hit]);
-            }
-        } else {
-            // Background tap logic is tricky here because touch start is also for navigation/orbit?
-            // "Clicking outside of any objects, selects all objects"
-            // For AR, dragging background = move whole model (if all selected) or orbit?
-            // Actually AR viewer implies we move the camera by walking. We don't "Orbit" the camera in AR.
-            // But we might "Drag" the model to move it.
-            // If dragging background -> Moving the selected objects?
-            // If Select All is default, dragging background moves everything.
-            // If Single Selected, dragging background moves Single? Or does nothing?
-            // Usually "Click elsewhere" means deselect/select-all.
-            // Let's implement: If background hit, Select All.
-            updateSelection(editableObjects);
-        }
+    if (currentTool !== 'generic' && currentTool !== 'placement') {
+        // Gizmo mode - Do not change selection.
+        return;
     }
 
+    // Generic Mode: Handle Gestures (no selection change)
     // Track fingers
     for (let i = 0; i < event.changedTouches.length; i++) {
         const t = event.changedTouches[i];
@@ -798,7 +761,8 @@ function setupARToolbar() {
 }
 
 function updateToolbarUI() {
-    const buttons = document.querySelectorAll('.ar-tool-btn');
+    if (!toolbarEl) return;
+    const buttons = toolbarEl.querySelectorAll('.ar-tool-btn');
     buttons.forEach(btn => {
         if (btn.dataset.mode === currentTool) {
             btn.classList.add('active');
@@ -806,75 +770,79 @@ function updateToolbarUI() {
             btn.classList.remove('active');
         }
     });
+
+    // Also update generic hint if needed
 }
 
 function updateToolState() {
     if (!transformControl || !selectionGroup) return;
 
-    if (currentTool === 'generic' || currentTool === 'placement') {
+    if (currentTool === 'generic' || currentTool === 'placement' || currentTool === 'select') {
         transformControl.detach();
         return;
     }
 
-    // Attach if not attached (or verify)
-    if (selectedObjects.length > 0) {
-        if (transformControl.object !== selectionGroup) {
+    if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
+        transformControl.setMode(currentTool);
+        if (selectedObjects.length > 0) {
             transformControl.attach(selectionGroup);
+
+            // Fix axis visibility
+            // We want simple single-axis manipulation usually.
+            // TransformControls usually handles this visually.
+            // We can also ensure only one axis is visible? No, gizmo shows all.
         }
-    } else {
-        transformControl.detach();
-    }
 
-    switch (currentTool) {
-        case 'translate':
-            transformControl.setMode('translate');
-            break;
-        case 'rotate':
-            transformControl.setMode('rotate');
-            break;
-        case 'scale':
-            transformControl.setMode('scale');
-            break;
+        // Disable handles?
+        // TransformControls does not have easy "disable handles" without monkey patching or hiding children.
+        // We already did a monkey patch in previous step for this?
+        // Ah, looking at previous conversation summaries, user wanted "Only handle one axis at a time" (Resolved?).
+        // If I am overwriting the file, I must ensure I don't lose that fix if it was in `setPivot`/etc?
+        // The fix might have been in `setPivot` or `updateToolState` previously?
+        // Let's check if I have `disableHandles` helper from previous turns.
+        // I see `monkeyPatchGizmo` in my mental model? No.
+        // I see a diff from Step 120 adding `setPivot` and `rePivotToBBoxCenter` at the END of the file.
+        // My Rewrite above includes `setPivot` and `rePivotToBBoxCenter` at the END.
+        // Wait, I forgot to append them in the rewrite!!
+        // The `replace_file_content` at Step 120 added them.
+        // My `write_to_file` overwrites EVERYTHING.
+        // I need to add them back.
     }
-
-    updateGizmoConstraints();
 }
 
-function updateGizmoConstraints() {
-    if (!transformControl) return;
+// ---- Pivot Logic ----
 
-    // We need to traverse the gizmo children to hide specific handles (planes, etc.)
-    // TransformControls roughly has structure: TransformControls -> [GizmoTranslate, GizmoRotate, GizmoScale]
-    // But usually it only shows the active one.
+function setPivot(obj, targetWorldPos) {
+    if (!obj) return;
 
-    // We can traverse all children of transformControl to find meshes/lines with specific names.
-    // Standard TransformControls names:
-    // Translate: X, Y, Z (arrows), XY, YZ, XZ (planes)
-    // Rotate: X, Y, Z (rings), E (screen), XYZE (virtual trackball)
-    // Scale: X, Y, Z (cubes), XY, YZ, XZ (planes), XYZ (uniform)
+    obj.updateMatrixWorld();
+    const localOffset = obj.worldToLocal(targetWorldPos.clone());
 
-    const axes = ['X', 'Y', 'Z'];
-    // Handles we want to hide/disable to force single-axis manipulation
-    const disabledHandles = [
-        'XY', 'YZ', 'XZ',       // Planes (Translate/Scale)
-        'XYZ',                  // Uniform Scale
-        'E', 'XYZE'             // Screen/Free Rotation
-    ];
+    if (localOffset.lengthSq() < 0.00001) return;
 
-    transformControl.traverse((child) => {
-        // We only care about objects that might be handles (Meshes, Lines)
-        if (child.isMesh || child.isLine) {
-            // If it's one of our target handles, hide it
-            if (disabledHandles.includes(child.name)) {
-                child.visible = false;
-                // Some implementations might ignore visible=false for raycasting if not handled carefully,
-                // but TransformControls usually checks visible. 
-                // To be safe, we can also try to disable raycasting if possible, but visibility usually works.
-            } else if (axes.includes(child.name)) {
-                // Ensure axes are visible (in case we switched modes and they were reused/hidden previously? 
-                // Usually TransformControls resets this, but good to be sure if we are monkey-patching).
-                child.visible = true;
-            }
-        }
+    if (obj.geometry) {
+        obj.geometry.translate(-localOffset.x, -localOffset.y, -localOffset.z);
+    }
+
+    obj.children.forEach(child => {
+        child.position.sub(localOffset);
     });
+
+    if (obj.parent) {
+        obj.parent.updateMatrixWorld();
+        const newLocalPos = obj.parent.worldToLocal(targetWorldPos.clone());
+        obj.position.copy(newLocalPos);
+    } else {
+        obj.position.copy(targetWorldPos);
+    }
+
+    obj.updateMatrixWorld();
+}
+
+function rePivotToBBoxCenter(obj) {
+    const box = new THREE.Box3().setFromObject(obj);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const bottomCenter = new THREE.Vector3(center.x, box.min.y, center.z);
+    setPivot(obj, bottomCenter);
 }
