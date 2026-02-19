@@ -200,6 +200,24 @@ function onXRFrame(timestamp, frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
 
+    // Fix for TransformControls raycasting:
+    // Sync the main camera's matrices with the XR camera used by the renderer.
+    // TransformControls uses 'camera' for raycasting, which needs to match the XR view.
+    if (renderer.xr.isPresenting) {
+        const xrCamera = renderer.xr.getCamera(camera);
+        if (xrCamera) {
+            const cam = (xrCamera.cameras && xrCamera.cameras.length > 0) ? xrCamera.cameras[0] : xrCamera;
+            camera.projectionMatrix.copy(cam.projectionMatrix);
+            camera.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
+            // Also sync transform just in case
+            camera.matrixWorld.copy(cam.matrixWorld);
+            camera.position.setFromMatrixPosition(cam.matrixWorld);
+            camera.quaternion.setFromRotationMatrix(cam.matrixWorld);
+            camera.scale.setFromMatrixScale(cam.matrixWorld);
+            camera.updateMatrixWorld(true);
+        }
+    }
+
     if (!modelPlaced || currentTool === 'placement') {
         // Request hit test source once
         if (!hitTestSourceRequested) {
