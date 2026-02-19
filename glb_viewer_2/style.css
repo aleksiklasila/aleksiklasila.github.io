@@ -234,6 +234,22 @@ model-viewer {
     border-color: var(--accent);
 }
 
+/* Override back-btn specific styles when inside the editor toolbar */
+#editor-toolbar .back-btn {
+    position: static;
+    z-index: auto;
+    background-color: transparent;
+    color: var(--text-main);
+    backdrop-filter: none;
+    font-weight: normal;
+    border: 1px solid var(--border);
+    /* Reinforce tool-btn styling if needed */
+}
+
+#editor-toolbar .back-btn:hover {
+    background: #333;
+}
+
 .btn {
     background: var(--accent);
     color: white;
