@@ -41,32 +41,32 @@
 
     <!-- STATE 2: Editor Screen -->
     <div id="editor-screen" class="screen">
-        <div id="editor-toolbar">
-            <div class="toolbar-left">
-                <button class="back-btn" data-target="input-screen">←</button>
-            </div>
-            <div class="toolbar-center">
-                <button class="tool-btn active" id="btn-none" title="View Only (V)" data-mode="none">👁️</button>
-                <button class="tool-btn" id="btn-generic" title="Generic Interaction (G)"
-                    data-mode="generic">👆</button>
-                <button class="tool-btn" id="btn-cursor" title="Set Pivot / Cursor (C)" data-mode="cursor">📍</button>
-                <div class="toolbar-sep"></div>
-                <button class="tool-btn" id="btn-move" title="Move (W)" data-mode="translate">✢</button>
-                <button class="tool-btn" id="btn-rotate" title="Rotate (E)" data-mode="rotate">↻</button>
-                <button class="tool-btn" id="btn-scale" title="Scale (R)" data-mode="scale">⤢</button>
-                <div class="toolbar-sep"></div>
-                <button class="tool-btn" id="btn-space" title="Toggle World/Local (Q)">L</button>
-            </div>
-            <div class="toolbar-right">
-                <button class="btn btn-accent" id="btn-open-viewer" title="Open in Model Viewer">👁</button>
-                <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗</button>
-            </div>
-        </div>
         <div id="editor-main">
             <canvas id="editor-canvas"></canvas>
             <div id="bottom-panel-wrapper">
                 <div id="panel-drag-handle" class="panel-drag-handle">
                     <div class="handle-bar"></div>
+                </div>
+                <div id="editor-toolbar">
+                    <div class="toolbar-center">
+                        <button class="back-btn" data-target="input-screen">←</button>
+                        <button class="tool-btn active" id="btn-none" title="View Only (V)"
+                            data-mode="none">👁️</button>
+                        <button class="tool-btn" id="btn-generic" title="Generic Interaction (G)"
+                            data-mode="generic">👆</button>
+                        <button class="tool-btn" id="btn-cursor" title="Set Pivot / Cursor (C)"
+                            data-mode="cursor">📍</button>
+                        <div class="toolbar-sep"></div>
+                        <button class="tool-btn" id="btn-move" title="Move (W)" data-mode="translate">✢</button>
+                        <button class="tool-btn" id="btn-rotate" title="Rotate (E)" data-mode="rotate">↻</button>
+                        <button class="tool-btn" id="btn-scale" title="Scale (R)" data-mode="scale">⤢</button>
+                        <div class="toolbar-sep"></div>
+                        <button class="tool-btn" id="btn-space" title="Toggle World/Local (Q)">L</button>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn btn-accent" id="btn-open-viewer" title="Open in Model Viewer">👁</button>
+                        <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗</button>
+                    </div>
                 </div>
                 <div id="object-panel">
                     <div class="panel-header">Objects</div>
