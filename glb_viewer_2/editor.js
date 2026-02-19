@@ -411,10 +411,10 @@ function onPointerUp(event) {
             const targetObj = findEditableParent(hit.object);
             if (targetObj) {
                 setPivot(targetObj, hit.point);
-                selectObject(targetObj);
-                setStatus(`Pivot set for ${targetObj.userData._editorOriginalName}`);
+                // Do NOT select/attach gizmo. Just set pivot.
                 // Visual feedback
                 showPivotFeedback(hit.point);
+                setStatus(`Pivot set for ${targetObj.userData._editorOriginalName}`);
             }
         }
         return;
@@ -501,6 +501,8 @@ function setTransformMode(mode) {
     // Reset state
     isDragging = false;
     touches = {};
+
+    // Default: Orbit enabled (unless generic)
     orbitControls.enabled = true;
 
     if (mode === 'none' || mode === 'cursor' || mode === 'generic') {
@@ -508,6 +510,11 @@ function setTransformMode(mode) {
     } else {
         transformControls.setMode(mode);
         if (selectedObject) transformControls.attach(selectedObject);
+    }
+
+    if (mode === 'generic') {
+        // DISABLE OrbitControls entirely in generic mode
+        orbitControls.enabled = false;
     }
 
     document.querySelectorAll('#editor-toolbar .tool-btn[data-mode]').forEach(btn => {
