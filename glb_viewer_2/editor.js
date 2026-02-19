@@ -443,31 +443,56 @@ function onPointerUp(event) {
         return;
     }
 
-    raycaster.setFromCamera(mouse, camera);
+    // 4. Handle Selection (ONLY in 'select' mode)
+    if (currentMode === 'select') {
 
-    // Test against all editable objects
-    const allMeshes = [];
-    editableObjects.forEach(obj => {
-        obj.traverse(child => {
-            if (child.isMesh) allMeshes.push(child);
+        // Raycast for objects
+        raycaster.setFromCamera(mouse, camera);
+
+        // Intersect editable objects
+        // We need to recursively check children of editableObjects
+        let interactable = [];
+        editableObjects.forEach(obj => {
+            obj.traverse(child => {
+                if (child.isMesh || child.isGroup) interactable.push(child);
+            });
         });
-    });
 
-    const intersects = raycaster.intersectObjects(allMeshes, false);
-    if (intersects.length > 0) {
-        // Walk up to find the editable root
-        let hit = intersects[0].object;
-        const editable = findEditableParent(hit);
-        if (editable) {
-            // Clicked an object -> Single Select
-            updateSelection([editable]);
-            return;
+        const intersects = raycaster.intersectObjects(interactable, false);
+
+        if (intersects.length > 0) {
+            // Find the root editable object for this hit
+            let hit = intersects[0].object;
+            let editable = null;
+
+            // Walk up until we find a member of editableObjects
+            let curr = hit;
+            while (curr) {
+                if (editableObjects.includes(curr)) {
+                    editable = curr;
+                    break;
+                }
+                if (curr === scene || curr === loadedModel) break;
+                curr = curr.parent;
+            }
+
+            if (editable) {
+                // Toggle selection
+                const isSelected = selectedObjects.includes(editable);
+                if (isSelected) {
+                    const newSelection = selectedObjects.filter(o => o !== editable);
+                    updateSelection(newSelection);
+                } else {
+                    updateSelection([...selectedObjects, editable]);
+                }
+                return;
+            }
         }
-    }
 
-    // Clicked empty space -> Select All
-    updateSelection(editableObjects);
-    setStatus("Selected All Objects");
+        // Clicked empty space — Select All
+        updateSelection(editableObjects);
+        setStatus("Selected All Objects");
+    }
 }
 
 function findEditableParent(obj) {
@@ -586,7 +611,7 @@ function setTransformMode(mode) {
     // Default: Orbit enabled (unless generic)
     orbitControls.enabled = true;
 
-    if (mode === 'none' || mode === 'cursor' || mode === 'generic') {
+    if (mode === 'none' || mode === 'cursor' || mode === 'generic' || mode === 'select') {
         transformControls.detach();
     } else {
         transformControls.setMode(mode);
