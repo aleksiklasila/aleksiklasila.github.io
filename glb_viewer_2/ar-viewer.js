@@ -415,7 +415,7 @@ function onTouchMove(event) {
             arModel.scale.multiplyScalar(scaleFactor);
             // Clamp scale
             const s = arModel.scale.x;
-            const clamped = Math.max(0.05, Math.min(s, 20));
+            const clamped = Math.max(0.01, Math.min(s, 20));
             arModel.scale.setScalar(clamped);
         }
 

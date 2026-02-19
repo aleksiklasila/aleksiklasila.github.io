@@ -17,6 +17,20 @@ let selectedObject = null;
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
 
+// Tools state
+let currentMode = 'none'; // none, translate, rotate, scale, cursor, generic
+let isInteracting = false;
+
+// Touch state for 'generic' tool
+let touches = {};
+let lastTouchDist = 0;
+let lastTouchAngle = 0;
+let isDragging = false;
+let dragRaycaster = new THREE.Raycaster();
+let dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let dragOffset = new THREE.Vector3();
+let dragObject = null;
+
 // Callback to update URL params
 let onSceneChanged = null;
 let onRequestViewScene = null;
@@ -102,6 +116,12 @@ export function initEditor(canvasEl, callbacks) {
     // Events — use pointerdown + pointerup for click-vs-drag detection
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointerup', onPointerUp);
+
+    // Touch events for generic tool
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', updateSize);
 
@@ -109,6 +129,8 @@ export function initEditor(canvasEl, callbacks) {
     document.querySelectorAll('#editor-toolbar .tool-btn[data-mode]').forEach(btn => {
         btn.addEventListener('click', () => setTransformMode(btn.dataset.mode));
     });
+    // Set default mode
+    setTransformMode('none');
     document.getElementById('btn-space').addEventListener('click', toggleSpace);
     document.getElementById('btn-clone').addEventListener('click', cloneSelected);
     document.getElementById('btn-delete').addEventListener('click', deleteSelected);
@@ -281,32 +303,41 @@ export function dispose() {
 // ---- Internal ----
 
 /**
+ * Re-pivot an object so its local origin is at the specified world position.
+ * Uses scene attachment to preserve child world positions.
+ */
+function setPivot(obj, targetWorldPos) {
+    if (!obj || !obj.parent) return;
+
+    // Detach children to Scene to preserve their World Transforms
+    const children = [];
+    // We must copy the children array as we'll be modifying it
+    [...obj.children].forEach(child => {
+        children.push(child);
+        scene.attach(child);
+    });
+
+    // Move obj to target position (converting world to parent-local)
+    const parentLocalPos = obj.parent.worldToLocal(targetWorldPos.clone());
+    obj.position.copy(parentLocalPos);
+    obj.updateMatrixWorld();
+
+    // Re-attach children
+    children.forEach(child => {
+        obj.attach(child);
+    });
+}
+
+/**
  * Re-pivot an object so its local origin is at its bounding-box center.
  * This makes TransformControls gizmo appear at the "center of mass".
- * Shifts children geometry and compensates by adjusting world position.
  */
 function rePivotToBBoxCenter(obj) {
     const box = new THREE.Box3().setFromObject(obj);
     const center = box.getCenter(new THREE.Vector3());
-
-    // Convert world center to the object's local coordinate space
-    const localCenter = obj.worldToLocal(center.clone());
-
-    // If the offset is negligible, skip
-    if (localCenter.lengthSq() < 0.0001) return;
-
-    // Shift all children by the negative offset so geometry moves
-    obj.children.forEach(child => {
-        child.position.sub(localCenter);
-    });
-
-    // Compensate by moving the object itself in parent space
-    // We need to transform the local offset into parent space
-    const worldOffset = localCenter.clone().applyQuaternion(obj.quaternion);
-    worldOffset.multiply(obj.scale);
-    obj.position.add(worldOffset);
-
-    obj.updateMatrixWorld(true);
+    // User wants pivot at the bottom of the object centered horizontally
+    const bottomCenter = new THREE.Vector3(center.x, box.min.y, center.z);
+    setPivot(obj, bottomCenter);
 }
 
 function animate() {
@@ -369,7 +400,25 @@ function onPointerUp(event) {
 
     const rect = canvas.getBoundingClientRect();
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Handle Cursor Tool (Set Pivot)
+    if (currentMode === 'cursor') {
+        const intersects = getIntersects(mouse, editableObjects, true); // recursive
+        if (intersects.length > 0) {
+            const hit = intersects[0];
+            const targetObj = findEditableParent(hit.object);
+            if (targetObj) {
+                setPivot(targetObj, hit.point);
+                selectObject(targetObj);
+                setStatus(`Pivot set for ${targetObj.userData._editorOriginalName}`);
+                // Visual feedback
+                showPivotFeedback(hit.point);
+            }
+        }
+        return;
+    }
 
     raycaster.setFromCamera(mouse, camera);
 
@@ -399,9 +448,36 @@ function onPointerUp(event) {
 function findEditableParent(obj) {
     while (obj) {
         if (editableObjects.includes(obj)) return obj;
+        if (obj === scene) return null;
         obj = obj.parent;
     }
     return null;
+}
+
+function getIntersects(mouse, objects, recursive = false) {
+    raycaster.setFromCamera(mouse, camera);
+    const targets = [];
+    objects.forEach(obj => {
+        if (recursive) {
+            targets.push(obj);
+        } else {
+            obj.traverse(child => {
+                if (child.isMesh) targets.push(child);
+            });
+        }
+    });
+    // If recursive is true, Raycaster handles recursion if we pass the group
+    // BUT raycaster.intersectObjects(objects, true) where objects is array of groups works.
+    return raycaster.intersectObjects(objects, recursive);
+}
+
+function showPivotFeedback(pos) {
+    const geo = new THREE.SphereGeometry(0.05, 16, 16);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    setTimeout(() => scene.remove(mesh), 500);
 }
 
 function selectObject(obj) {
@@ -420,10 +496,32 @@ function deselectObject() {
 }
 
 function setTransformMode(mode) {
-    transformControls.setMode(mode);
+    currentMode = mode;
+
+    // Reset state
+    isDragging = false;
+    touches = {};
+    orbitControls.enabled = true;
+
+    if (mode === 'none' || mode === 'cursor' || mode === 'generic') {
+        transformControls.detach();
+    } else {
+        transformControls.setMode(mode);
+        if (selectedObject) transformControls.attach(selectedObject);
+    }
+
     document.querySelectorAll('#editor-toolbar .tool-btn[data-mode]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === mode);
     });
+
+    let msg = '';
+    switch (mode) {
+        case 'none': msg = 'View Only Mode'; break;
+        case 'generic': msg = 'Generic Interaction (1-finger drag, 2-finger scale/rotate)'; break;
+        case 'cursor': msg = 'Click on model to set pivot point'; break;
+        default: msg = `Tool: ${mode}`;
+    }
+    setStatus(msg);
 }
 
 function toggleSpace() {
@@ -475,12 +573,13 @@ function deleteSelected() {
 }
 
 function onKeyDown(e) {
-    // Don't capture if typing in an input
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    // Only handle if editor screen is active
     if (!document.getElementById('editor-screen').classList.contains('active')) return;
 
+    // Shortcuts
     switch (e.key.toLowerCase()) {
+        case 'v': setTransformMode('none'); break;
+        case 'g': setTransformMode('generic'); break;
+        case 'c': setTransformMode('cursor'); break;
         case 'w': setTransformMode('translate'); break;
         case 'e': setTransformMode('rotate'); break;
         case 'r': setTransformMode('scale'); break;
@@ -498,6 +597,152 @@ function onKeyDown(e) {
             break;
     }
 }
+
+// ---- Touch Logic for Generic Tool ----
+
+function onTouchStart(event) {
+    if (currentMode !== 'generic') return;
+
+    // If touching UI, ignore
+    if (event.target !== canvas) return;
+
+    // Prevent default to stop scrolling/zooming by browser
+    event.preventDefault();
+
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        const t = event.changedTouches[i];
+        touches[t.identifier] = { x: t.clientX, y: t.clientY };
+    }
+
+    const touchKeys = Object.keys(touches);
+
+    if (touchKeys.length === 1) {
+        // Check if we hit an object
+        const t = touches[touchKeys[0]];
+        const rect = canvas.getBoundingClientRect();
+        const m = new THREE.Vector2(
+            ((t.x - rect.left) / rect.width) * 2 - 1,
+            -((t.y - rect.top) / rect.height) * 2 + 1
+        );
+
+        dragRaycaster.setFromCamera(m, camera);
+        const intersects = dragRaycaster.intersectObjects(editableObjects, true);
+
+        if (intersects.length > 0) {
+            // Hit an object -> Start Drag
+            isDragging = true;
+            dragObject = findEditableParent(intersects[0].object);
+
+            if (dragObject) {
+                selectObject(dragObject);
+                orbitControls.enabled = false;
+
+                // Init drag plane at object height (or ground)
+                // We use a horizontal plane passing through the hit point
+                const hitPoint = intersects[0].point;
+                dragPlane.constant = -hitPoint.y;
+
+                // Offset
+                dragOffset.subVectors(dragObject.position, hitPoint);
+                dragOffset.y = 0; // We only drag in XZ plane effectively if we project to plane
+            }
+        } else {
+            // Hit background -> Orbit
+            isDragging = false;
+            orbitControls.enabled = true;
+            deselectObject();
+        }
+    } else if (touchKeys.length === 2) {
+        // Two fingers -> Scale/Rotate selected object OR Orbit if no object selected?
+        // Logic: If we are interacting, disable orbit.
+
+        if (selectedObject) {
+            orbitControls.enabled = false;
+            isTwoFingerGesture = true;
+
+            const t1 = touches[touchKeys[0]];
+            const t2 = touches[touchKeys[1]];
+            lastTouchDist = Math.hypot(t2.x - t1.x, t2.y - t1.y);
+            lastTouchAngle = Math.atan2(t2.y - t1.y, t2.x - t1.x);
+        } else {
+            orbitControls.enabled = true; // Let orbit handle 2-finger zoom/pan
+        }
+    }
+}
+
+let isTwoFingerGesture = false;
+
+function onTouchMove(event) {
+    if (currentMode !== 'generic') return;
+    event.preventDefault();
+
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        const t = event.changedTouches[i];
+        if (touches[t.identifier]) {
+            touches[t.identifier] = { x: t.clientX, y: t.clientY };
+        }
+    }
+
+    const touchKeys = Object.keys(touches);
+
+    if (touchKeys.length === 1 && isDragging && dragObject) {
+        const t = touches[touchKeys[0]];
+        const rect = canvas.getBoundingClientRect();
+        const m = new THREE.Vector2(
+            ((t.x - rect.left) / rect.width) * 2 - 1,
+            -((t.y - rect.top) / rect.height) * 2 + 1
+        );
+
+        dragRaycaster.setFromCamera(m, camera);
+        const hit = new THREE.Vector3();
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hit)) {
+            dragObject.position.x = hit.x + dragOffset.x;
+            dragObject.position.z = hit.z + dragOffset.z;
+            // Keep Y same?
+            updateTransformInfo();
+            debouncedSave();
+        }
+    } else if (touchKeys.length === 2 && isTwoFingerGesture && selectedObject) {
+        const t1 = touches[touchKeys[0]];
+        const t2 = touches[touchKeys[1]];
+
+        const dist = Math.hypot(t2.x - t1.x, t2.y - t1.y);
+        const angle = Math.atan2(t2.y - t1.y, t2.x - t1.x);
+
+        if (lastTouchDist > 0) {
+            const scaleFactor = dist / lastTouchDist;
+            selectedObject.scale.multiplyScalar(scaleFactor);
+            // Clamp?
+            selectedObject.scale.max(new THREE.Vector3(20, 20, 20));
+            selectedObject.scale.min(new THREE.Vector3(0.01, 0.01, 0.01));
+        }
+
+        const angleDelta = angle - lastTouchAngle;
+        selectedObject.rotation.y += angleDelta;
+
+        lastTouchDist = dist;
+        lastTouchAngle = angle;
+        updateTransformInfo();
+        debouncedSave();
+    }
+}
+
+function onTouchEnd(event) {
+    if (currentMode !== 'generic') return;
+    event.preventDefault();
+
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        delete touches[event.changedTouches[i].identifier];
+    }
+
+    if (Object.keys(touches).length === 0) {
+        orbitControls.enabled = true;
+        isDragging = false;
+        isTwoFingerGesture = false;
+        dragObject = null;
+    }
+}
+
 
 function updateObjectList() {
     const list = document.getElementById('object-list');
