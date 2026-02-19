@@ -13,7 +13,9 @@ let renderer, scene, camera, orbitControls, transformControls;
 let canvas;
 let loadedModel = null;
 let editableObjects = []; // top-level objects from GLB
-let selectedObject = null;
+let selectedObjects = [];
+let selectionGroup = null;
+let selectedObject = null; // Deprecated, keeping for safety until fully refactored, but logic will use array
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
 
@@ -73,6 +75,10 @@ export function initEditor(canvasEl, callbacks) {
     // Scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1a2e);
+
+    // Selection Group (for multi-object transform)
+    selectionGroup = new THREE.Group();
+    scene.add(selectionGroup);
 
     // Grid
     const grid = new THREE.GridHelper(20, 40, 0x444466, 0x333355);
@@ -270,6 +276,10 @@ function centerForExport(group) {
 export async function exportSceneAsGLB() {
     if (!loadedModel) return null;
 
+    // CRITICAL: Deselect everything so they are detached from selectionGroup 
+    // and re-attached to loadedModel with correct world transforms.
+    updateSelection([]);
+
     // Clone the model so we don't modify the editor's live scene
     const exportClone = loadedModel.clone(true);
     centerForExport(exportClone);
@@ -449,13 +459,15 @@ function onPointerUp(event) {
         let hit = intersects[0].object;
         const editable = findEditableParent(hit);
         if (editable) {
-            selectObject(editable);
+            // Clicked an object -> Single Select
+            updateSelection([editable]);
             return;
         }
     }
 
-    // Clicked empty space — deselect
-    deselectObject();
+    // Clicked empty space -> Select All
+    updateSelection(editableObjects);
+    setStatus("Selected All Objects");
 }
 
 function findEditableParent(obj) {
@@ -493,19 +505,75 @@ function showPivotFeedback(pos) {
     setTimeout(() => scene.remove(mesh), 500);
 }
 
-function selectObject(obj) {
-    selectedObject = obj;
-    transformControls.attach(obj);
+export function updateSelection(objects) {
+    // 1. Detach current selection (if any) back to loadedModel
+    if (selectedObjects.length > 0) {
+        // We must iterate backwards or copy array because attach modifies the children array of the group
+        const currentChildren = [...selectionGroup.children];
+        currentChildren.forEach(child => {
+            if (loadedModel) loadedModel.attach(child);
+            else scene.attach(child);
+        });
+        transformControls.detach();
+    }
+
+    // 2. Update state
+    selectedObjects = objects || [];
+    selectedObject = selectedObjects.length > 0 ? selectedObjects[0] : null; // Legacy support
+
+    // 3. If no new selection, update UI and return
+    if (selectedObjects.length === 0) {
+        updateObjectList();
+        updateTransformInfo();
+        return;
+    }
+
+    // 4. Calculate Group Pivot
+    // Logic: Average X and Z, Minimum Y (Floor)
+    let avgX = 0, avgZ = 0, minY = Infinity;
+
+    selectedObjects.forEach(obj => {
+        // Get world position
+        const worldPos = new THREE.Vector3();
+        obj.getWorldPosition(worldPos);
+
+        avgX += worldPos.x;
+        avgZ += worldPos.z;
+        if (worldPos.y < minY) minY = worldPos.y;
+    });
+
+    avgX /= selectedObjects.length;
+    avgZ /= selectedObjects.length;
+
+    if (minY === Infinity) minY = 0;
+
+    // 5. Position Selection Group
+    selectionGroup.position.set(avgX, minY, avgZ);
+    selectionGroup.rotation.set(0, 0, 0);
+    selectionGroup.scale.set(1, 1, 1);
+    selectionGroup.updateMatrixWorld();
+
+    // 6. Attach objects to group
+    selectedObjects.forEach(obj => {
+        selectionGroup.attach(obj);
+    });
+
+    // 7. Attach Controls
+    transformControls.attach(selectionGroup);
+
+    // 8. Update UI
     updateObjectList();
     updateTransformInfo();
-    setStatus(`Selected: ${obj.userData._editorOriginalName}`);
+    setStatus(`Selected ${selectedObjects.length} object(s)`);
+}
+
+function selectObject(obj) {
+    // Single select wrapper
+    updateSelection([obj]);
 }
 
 function deselectObject() {
-    selectedObject = null;
-    transformControls.detach();
-    updateObjectList();
-    updateTransformInfo();
+    updateSelection([]);
 }
 
 function setTransformMode(mode) {
@@ -522,7 +590,7 @@ function setTransformMode(mode) {
         transformControls.detach();
     } else {
         transformControls.setMode(mode);
-        if (selectedObject) transformControls.attach(selectedObject);
+        if (selectedObjects.length > 0) transformControls.attach(selectionGroup);
     }
 
     if (mode === 'generic') {
@@ -553,43 +621,97 @@ function toggleSpace() {
 }
 
 function cloneSelected() {
-    if (!selectedObject || !loadedModel) return;
+    if (selectedObjects.length === 0 || !loadedModel) return;
 
-    const clone = selectedObject.clone(true);
-    clone.userData._editorIndex = editableObjects.length;
-    clone.userData._editorOriginalName = selectedObject.userData._editorOriginalName + '_clone';
-    clone.userData._isCloned = true;
-    clone.userData._sourceIndex = selectedObject.userData._isCloned
-        ? selectedObject.userData._sourceIndex
-        : selectedObject.userData._editorIndex;
-    clone.name = clone.userData._editorOriginalName;
+    const newClones = [];
 
-    // Offset slightly
-    clone.position.x += 0.5;
+    // We need to be careful cloning while they are attached to selectionGroup.
+    // Cloning an object that is child of selectionGroup will clone it in that local space.
+    // Ideally, we want to clone the original state. 
+    // BUT, the user might have transformed the group.
 
-    loadedModel.add(clone);
-    editableObjects.push(clone);
-    selectObject(clone);
+    // Simplest approach: Deselect (apply transforms), Clone, Select New Clones.
+    // This ensures transforms are baked into objects before cloning.
+
+    // Save current selection to re-select if needed (though we select clones usually)
+    const currentSelection = [...selectedObjects];
+
+    // Temporarily deselect to bake transforms to world/parent space
+    updateSelection([]);
+
+    currentSelection.forEach(obj => {
+        const clone = obj.clone(true);
+        clone.userData._editorIndex = editableObjects.length;
+        clone.userData._editorOriginalName = obj.userData._editorOriginalName + '_clone';
+        clone.userData._isCloned = true;
+        clone.userData._sourceIndex = obj.userData._isCloned
+            ? obj.userData._sourceIndex
+            : obj.userData._editorIndex;
+        clone.name = clone.userData._editorOriginalName;
+
+        // Offset slightly so it's visible? Or keep same place?
+        // editor.js existing logic offset x by 0.5.
+        clone.position.x += 0.5;
+
+        loadedModel.add(clone);
+        editableObjects.push(clone);
+        newClones.push(clone);
+    });
+
+    // Select the new clones
+    updateSelection(newClones);
     saveScene();
-    setStatus(`Cloned: ${clone.userData._editorOriginalName}`);
+    setStatus(`Cloned ${newClones.length} objects`);
 }
 
 function deleteSelected() {
-    if (!selectedObject) return;
-    if (!selectedObject.userData._isCloned) {
+    if (selectedObjects.length === 0) return;
+
+    // Filter out non-clones? Or just delete what we can?
+    // "Only clones can be deleted" rule in existing code.
+    const toDelete = selectedObjects.filter(obj => obj.userData._isCloned);
+
+    if (toDelete.length === 0) {
         setStatus('Cannot delete original objects. Only clones can be deleted.');
         return;
     }
 
-    const name = selectedObject.userData._editorOriginalName;
+    if (toDelete.length < selectedObjects.length) {
+        setStatus('Some objects were not deleted (originals).');
+    }
+
+    // Detach from controls
     transformControls.detach();
-    loadedModel.remove(selectedObject);
-    editableObjects = editableObjects.filter(o => o !== selectedObject);
-    selectedObject = null;
-    updateObjectList();
-    updateTransformInfo();
+
+    // We need to remove them from Scene/Group. 
+    // Check parent. If they are in selectionGroup, remove from there.
+    toDelete.forEach(obj => {
+        if (obj.parent) obj.parent.remove(obj);
+        // Also remove from editableObjects
+        const idx = editableObjects.indexOf(obj);
+        if (idx > -1) editableObjects.splice(idx, 1);
+    });
+
+    // Update selection state
+    // Remove deleted ones from selectedObjects array
+    selectedObjects = selectedObjects.filter(obj => !toDelete.includes(obj));
+
+    // If we still have objects selected, re-run updateSelection to recalculate pivot
+    const remaining = [...selectedObjects];
+    // Force update (pass empty first to reset, then remaining)
+    // Actually updateSelection handles "detach current", but "current" is broken now if we removed children directly.
+    // Safer to just clear selectionGroup manually if needed, but updateSelection logic tries to attach children back to loadedModel.
+    // Since we removed toDelete items, they are gone. stored `selectedObjects` still has them until we filtered above.
+
+    // Reset selection group
+    selectionGroup.clear(); // Remove visual helpers if any (none currently), children are gone or detached
+    transformControls.detach();
+
+    // Call updateSelection with remaining
+    updateSelection(remaining);
+
     saveScene();
-    setStatus(`Deleted: ${name}`);
+    setStatus(`Deleted ${toDelete.length} objects`);
 }
 
 function onKeyDown(e) {
@@ -650,33 +772,69 @@ function onTouchStart(event) {
 
         if (intersects.length > 0) {
             // Hit an object -> Start Drag
-            isDragging = true;
-            dragObject = findEditableParent(intersects[0].object);
+            // If the hit object is NOT in current selection, select it (single select)
+            const hitObj = findEditableParent(intersects[0].object);
+            if (hitObj && !selectedObjects.includes(hitObj)) {
+                updateSelection([hitObj]);
+            }
 
-            if (dragObject) {
-                selectObject(dragObject);
+            // Allow dragging if we have a selection
+            if (selectedObjects.length > 0) {
+                isDragging = true;
+                dragObject = selectionGroup; // Drag the group!
+
                 orbitControls.enabled = false;
 
                 // Init drag plane at object height (or ground)
-                // We use a horizontal plane passing through the hit point
                 const hitPoint = intersects[0].point;
                 dragPlane.constant = -hitPoint.y;
 
                 // Offset
                 dragOffset.subVectors(dragObject.position, hitPoint);
-                dragOffset.y = 0; // We only drag in XZ plane effectively if we project to plane
+                dragOffset.y = 0;
             }
         } else {
-            // Hit background -> Orbit
+            // Hit background -> Select All? Or just Orbit?
+            // "Clicking outside of any objects, selects all objects" - User request.
+            // But this is touch START. If we just want to orbit, we shouldn't change selection immediately?
+            // User said: "Select the tool, click anywhere else... selects all objects."
+            // In touch interaction, tapping background usually means deselect or select all. 
+            // Let's implement Tap vs Drag distinction for background too?
+            // For now, let's keep Orbit on background drag, but maybe Select All on Tap?
+            // existing code: "Hit background -> Orbit ... deselectObject()".
+            // Let's change to Select All on tap? 
+            // Actually, existing code deselects immediately on background touch start. 
+            // Let's change this to "Select All" logic, but maybe we should only do it on explicit tap (TouchEnd without move)?
+            // The user request says "click anywhere else ... selects all objects". 
+            // In `onPointerUp` (mouse), we did this.
+            // For touch, if we touch background, we probably want to rotate camera (Orbit). 
+            // If we select all immediately, highlighting might change, but camera rotation should still work.
+
+            // Let's try: Touch background -> Select All, enable orbit.
+            // updateSelection(editableObjects); 
+            // orbitControls.enabled = true;
+            // ... strict reading of "click anywhere else" -> Tap.
+            // If I just want to rotate the view, I don't necessarily want to select everything instantly.
+            // But `onPointerUp` handles the "Click" vs "Drag" distinction.
+            // For `onTouchStart`, we usually prepare for gesture.
+            // `onPointerUp` (which covers touch too usually?) handles the click logic.
+            // `onTouchStart` here handles the *Generic Tool* specific logic.
+
+            // Let's stick to existing pattern: If background hit, we let Orbit handle it. 
+            // But we should probably NOT deselect immediately if we are just rotating view?
+            // The prompt says "Select the tool, click anywhere else ... selects all objects".
+            // If I am in Generic tool, and I drag background, do I select all?
+            // Let's assume yes, consistent with "Background click = Select All".
+
             isDragging = false;
             orbitControls.enabled = true;
-            deselectObject();
+            // Select All if nothing selected? Or always?
+            // If I click background, I select all.
+            // updateSelection(editableObjects); 
         }
     } else if (touchKeys.length === 2) {
         // Two fingers -> Scale/Rotate selected object OR Orbit if no object selected?
-        // Logic: If we are interacting, disable orbit.
-
-        if (selectedObject) {
+        if (selectedObjects.length > 0) {
             orbitControls.enabled = false;
             isTwoFingerGesture = true;
 
@@ -719,10 +877,11 @@ function onTouchMove(event) {
             dragObject.position.x = hit.x + dragOffset.x;
             dragObject.position.z = hit.z + dragOffset.z;
             // Keep Y same?
+            dragObject.updateMatrixWorld(); // Update group
             updateTransformInfo();
             debouncedSave();
         }
-    } else if (touchKeys.length === 2 && isTwoFingerGesture && selectedObject) {
+    } else if (touchKeys.length === 2 && isTwoFingerGesture && selectedObjects.length > 0) {
         const t1 = touches[touchKeys[0]];
         const t2 = touches[touchKeys[1]];
 
@@ -731,14 +890,14 @@ function onTouchMove(event) {
 
         if (lastTouchDist > 0) {
             const scaleFactor = dist / lastTouchDist;
-            selectedObject.scale.multiplyScalar(scaleFactor);
+            selectionGroup.scale.multiplyScalar(scaleFactor);
             // Clamp?
-            selectedObject.scale.max(new THREE.Vector3(20, 20, 20));
-            selectedObject.scale.min(new THREE.Vector3(0.01, 0.01, 0.01));
+            selectionGroup.scale.max(new THREE.Vector3(20, 20, 20));
+            selectionGroup.scale.min(new THREE.Vector3(0.01, 0.01, 0.01));
         }
 
         const angleDelta = angle - lastTouchAngle;
-        selectedObject.rotation.y += angleDelta;
+        selectionGroup.rotation.y += angleDelta;
 
         lastTouchDist = dist;
         lastTouchAngle = angle;
@@ -770,29 +929,41 @@ function updateObjectList() {
 
     editableObjects.forEach(obj => {
         const div = document.createElement('div');
-        div.className = 'object-item' + (obj === selectedObject ? ' selected' : '');
+        const isSelected = selectedObjects.includes(obj);
+        div.className = 'object-item' + (isSelected ? ' selected' : '');
         div.innerHTML = `
             <span class="obj-icon">◆</span>
             <span class="obj-name">${obj.userData._editorOriginalName}</span>
             ${obj.userData._isCloned ? '<span class="obj-cloned">clone</span>' : ''}
         `;
-        div.addEventListener('click', () => selectObject(obj));
+        div.addEventListener('click', (e) => {
+            // Check for ctrl/shift for multi-select toggle? 
+            // For now, adhere to "click an object -> only that object"
+            // If we want multiple, we can implement Ctrl+Click here later.
+            // User request: "Clicking one object selects that".
+            selectObject(obj);
+        });
         list.appendChild(div);
     });
 }
-
 function updateTransformInfo() {
     const info = document.getElementById('transform-info');
-    if (!selectedObject) {
+    if (selectedObjects.length === 0) {
         info.textContent = 'No selection';
         return;
     }
-    const p = selectedObject.position;
-    const r = selectedObject.rotation;
-    const s = selectedObject.scale;
+
+    // If multiple, show Group info
+    const target = selectedObjects.length > 1 ? selectionGroup : selectedObjects[0];
+    const name = selectedObjects.length > 1 ? `Group (${selectedObjects.length} objects)` : target.userData._editorOriginalName;
+
+    const p = target.position;
+    const r = target.rotation;
+    const s = target.scale;
     const deg = (v) => (v * 180 / Math.PI).toFixed(1);
+
     info.innerHTML = `
-<b>${selectedObject.userData._editorOriginalName}</b>
+<b>${name}</b>
 Pos: ${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)}
 Rot: ${deg(r.x)}°, ${deg(r.y)}°, ${deg(r.z)}°
 Scl: ${s.x.toFixed(3)}, ${s.y.toFixed(3)}, ${s.z.toFixed(3)}
