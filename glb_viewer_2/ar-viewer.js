@@ -749,14 +749,9 @@ function setupARToolbar() {
     currentTool = 'placement';
     updateToolbarUI();
 
-    // Create debug overlay (hidden by default, can be re-enabled for debugging)
-    if (!debugEl) {
-        debugEl = document.createElement('div');
-        debugEl.id = 'ar-debug-status';
-        debugEl.style.cssText = 'position:fixed;top:40px;left:10px;right:10px;color:#0f0;background:rgba(0,0,0,0.7);padding:6px 10px;font:12px monospace;z-index:99999;pointer-events:none;border-radius:4px;display:none;';
-        const overlay = document.getElementById('ar-overlay');
-        if (overlay) overlay.appendChild(debugEl);
-    }
+    updateToolbarUI();
+
+    debugEl = document.getElementById('ar-debug-console');
 
     // Bind buttons
     const buttons = toolbarEl.querySelectorAll('.tool-btn');
@@ -789,73 +784,11 @@ function setupARToolbar() {
     if (cloneBtn) cloneBtn.onclick = () => cloneSelectedAR();
     if (deleteBtn) deleteBtn.onclick = () => deleteSelectedAR();
 
-    // Drag handle logic
-    if (toolbarHandleEl && objectPanel) {
-        let isDraggingRaw = false;
-        let startY = 0;
-        let startHeight = 0;
-        const MIN_HEIGHT = 40;
-        const DEFAULT_HEIGHT = 180;
-
-        const onPointerDown = (e) => {
-            isDraggingRaw = true;
-            startY = e.touches ? e.touches[0].clientY : e.clientY;
-            startHeight = objectPanel.offsetHeight;
-            objectPanel.style.transition = 'none';
-            toolbarHandleEl.classList.add('dragging');
-            e.stopPropagation();
-            e.preventDefault();
-        };
-
-        toolbarHandleEl.addEventListener('touchstart', onPointerDown, { passive: false });
-        toolbarHandleEl.addEventListener('mousedown', onPointerDown);
-
-        const onPointerMove = (e) => {
-            if (!isDraggingRaw) return;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            const delta = startY - clientY; // Dragging up (smaller Y) increases height
-
-            let newHeight = startHeight + delta;
-            const maxHeight = window.innerHeight * 0.8; // Max 80% of screen
-
-            newHeight = Math.max(0, Math.min(newHeight, maxHeight));
-
-            objectPanel.style.height = newHeight + 'px';
-
-            if (newHeight < MIN_HEIGHT) {
-                objectPanel.classList.add('collapsed');
-            } else {
-                objectPanel.classList.remove('collapsed');
-            }
-        };
-
-        document.addEventListener('touchmove', onPointerMove, { passive: false });
-        document.addEventListener('mousemove', onPointerMove);
-
-        const onPointerUp = () => {
-            if (isDraggingRaw) {
-                isDraggingRaw = false;
-                objectPanel.style.transition = '';
-                toolbarHandleEl.classList.remove('dragging');
-                if (objectPanel.offsetHeight < MIN_HEIGHT) {
-                    objectPanel.style.height = '0px';
-                    objectPanel.classList.add('collapsed');
-                }
-            }
-        };
-
-        document.addEventListener('touchend', onPointerUp);
-        document.addEventListener('mouseup', onPointerUp);
-
-        // Double click to toggle full/min
-        toolbarHandleEl.addEventListener('dblclick', () => {
-            if (objectPanel.classList.contains('collapsed') || objectPanel.offsetHeight < MIN_HEIGHT) {
-                objectPanel.style.height = DEFAULT_HEIGHT + 'px';
-                objectPanel.classList.remove('collapsed');
-            } else {
-                objectPanel.style.height = '0px';
-                objectPanel.classList.add('collapsed');
-            }
+    // Listen to changes in Transform Control
+    if (transformControl) {
+        transformControl.addEventListener('objectChange', () => {
+            updateARTransformInfo();
+            debouncedARSave();
         });
     }
 }
@@ -923,6 +856,11 @@ function arDebugStatus(msg) {
     if (debugEl) debugEl.textContent = msg;
 }
 
+export function updateARStatus(msg) {
+    if (debugEl) {
+        debugEl.textContent = msg + '\n' + debugEl.textContent;
+    }
+}
 // ---- Pivot Logic ----
 
 function setPivot(obj, targetWorldPos) {

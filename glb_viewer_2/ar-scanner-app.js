@@ -12,6 +12,14 @@ let renderer, scene, camera;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let onExitScanner = null;
+let scannerDebugEl = null;
+
+export function updateScannerStatus(msg) {
+    if (!scannerDebugEl) scannerDebugEl = document.getElementById('scanner-debug-console');
+    if (scannerDebugEl) {
+        scannerDebugEl.textContent = msg + '\n' + scannerDebugEl.textContent;
+    }
+}
 
 // ---- Scanning State ----
 let isScanning = false;
@@ -36,25 +44,30 @@ function gridKey(x, y, z) {
 }
 
 function isTooClose(pos) {
-    const gx = Math.floor(pos.x / GRID_CELL);
-    const gy = Math.floor(pos.y / GRID_CELL);
-    const gz = Math.floor(pos.z / GRID_CELL);
+    try {
+        const gx = Math.floor(pos.x / GRID_CELL);
+        const gy = Math.floor(pos.y / GRID_CELL);
+        const gz = Math.floor(pos.z / GRID_CELL);
 
-    // Instead of allocating 27 strings per call, use a string builder pattern or direct lookup
-    for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-            for (let dz = -1; dz <= 1; dz++) {
-                const key = `${gx + dx},${gy + dy},${gz + dz}`;
-                const cell = spatialGrid[key];
-                if (cell) {
-                    for (const idx of cell) {
-                        if (splatPositions[idx].distanceToSquared(pos) < MIN_DIST_SQ) return true;
+        // Instead of allocating 27 strings per call, use a string builder pattern or direct lookup
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const key = `${gx + dx},${gy + dy},${gz + dz}`;
+                    const cell = spatialGrid[key];
+                    if (cell) {
+                        for (const idx of cell) {
+                            if (splatPositions[idx].distanceToSquared(pos) < MIN_DIST_SQ) return true;
+                        }
                     }
                 }
             }
         }
+        return false;
+    } catch (e) {
+        updateScannerStatus(`isTooClose err: ${e.message}`);
+        return false;
     }
-    return false;
 }
 
 function addToGrid(pos, index) {
@@ -72,26 +85,31 @@ function rebuildGrid() {
 
 // ---- Add Splat ----
 function addSplat(matrix) {
-    if (numSplats >= MAX_SPLATS) return false;
+    try {
+        if (numSplats >= MAX_SPLATS) return false;
 
-    _tmpPos.setFromMatrixPosition(matrix);
-    if (isTooClose(_tmpPos)) return false;
+        _tmpPos.setFromMatrixPosition(matrix);
+        if (isTooClose(_tmpPos)) return false;
 
-    // Must store a cloned instance, otherwise we overwrite the global _tmpPos
-    const pos = _tmpPos.clone();
+        // Must store a cloned instance, otherwise we overwrite the global _tmpPos
+        const pos = _tmpPos.clone();
 
-    // Store data
-    splatPositions[numSplats] = pos;
-    splatMatricesData[numSplats] = matrix.elements.slice();
-    addToGrid(pos, numSplats);
+        // Store data
+        splatPositions[numSplats] = pos;
+        splatMatricesData[numSplats] = matrix.elements.slice();
+        addToGrid(pos, numSplats);
 
-    // Update InstancedMesh
-    splatMesh.setMatrixAt(numSplats, matrix);
-    numSplats++;
-    splatMesh.count = numSplats;
-    // We defer instanceMatrix.needsUpdate to onXRFrame to prevent 40+ GPU syncs per frame
+        // Update InstancedMesh
+        splatMesh.setMatrixAt(numSplats, matrix);
+        numSplats++;
+        splatMesh.count = numSplats;
+        // We defer instanceMatrix.needsUpdate to onXRFrame to prevent 40+ GPU syncs per frame
 
-    return true;
+        return true;
+    } catch (e) {
+        updateScannerStatus(`addSplat err: ${e.message}`);
+        return false;
+    }
 }
 
 // ---- Public API ----
@@ -270,187 +288,198 @@ const _tmpMatrix = new THREE.Matrix4();
 // ---- XR Render Loop ----
 
 function onXRFrame(timestamp, frame) {
-    if (!frame) return;
-    const session = renderer.xr.getSession();
-    const referenceSpace = renderer.xr.getReferenceSpace();
+    try {
+        if (!frame) return;
+        const session = renderer.xr.getSession();
+        const referenceSpace = renderer.xr.getReferenceSpace();
 
-    // ---- Process WebXR Depth Map (if available) ----
-    // This allows scanning actual object surfaces instead of just flat planes
-    let depthProcessed = false;
-    if (isScanning) {
-        const viewerPose = frame.getViewerPose(referenceSpace);
-        if (viewerPose && viewerPose.views.length > 0) {
-            const view = viewerPose.views[0];
-            const depthInfo = frame.getDepthInformation(view);
-            if (depthInfo) {
-                depthProcessed = true;
+        // ---- Process WebXR Depth Map (if available) ----
+        // This allows scanning actual object surfaces instead of just flat planes
+        let depthProcessed = false;
+        if (isScanning) {
+            const viewerPose = frame.getViewerPose(referenceSpace);
+            if (viewerPose && viewerPose.views.length > 0) {
+                const view = viewerPose.views[0];
+                const depthInfo = frame.getDepthInformation(view);
+                if (depthInfo) {
+                    depthProcessed = true;
 
-                // Pre-calculate matrices for this frame
-                _camMatrix.fromArray(view.transform.matrix);
-                _invProj.fromArray(view.projectionMatrix).invert();
-                _camPos.setFromMatrixPosition(_camMatrix);
+                    // Pre-calculate matrices for this frame
+                    _camMatrix.fromArray(view.transform.matrix);
+                    _invProj.fromArray(view.projectionMatrix).invert();
+                    _camPos.setFromMatrixPosition(_camMatrix);
 
-                // Update cursor using depth at the center of the screen
-                const centerX = Math.floor(depthInfo.width / 2);
-                const centerY = Math.floor(depthInfo.height / 2);
-                const centerDepth = depthInfo.getDepthInMeters(centerX, centerY);
+                    // Update cursor using depth at the center of the screen
+                    const centerX = Math.floor(depthInfo.width / 2);
+                    const centerY = Math.floor(depthInfo.height / 2);
+                    const centerDepth = depthInfo.getDepthInMeters(centerX, centerY);
 
-                if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
-                    _viewPos.set(0, 0, -1).applyMatrix4(_invProj);
-                    const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
-                    _viewPos.multiplyScalar(centerDepth / rayLength);
-                    _viewPos.applyMatrix4(_camMatrix);
+                    if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
+                        _viewPos.set(0, 0, -1).applyMatrix4(_invProj);
+                        const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
+                        _viewPos.multiplyScalar(centerDepth / rayLength);
+                        _viewPos.applyMatrix4(_camMatrix);
 
-                    _dummyObj.position.copy(_viewPos);
-                    _dummyObj.lookAt(_camPos);
-                    cursorMesh.matrix.copy(_dummyObj.matrix);
-                    cursorMesh.visible = true;
-                }
+                        _dummyObj.position.copy(_viewPos);
+                        _dummyObj.lookAt(_camPos);
+                        cursorMesh.matrix.copy(_dummyObj.matrix);
+                        cursorMesh.visible = true;
+                    }
 
-                if (isScanning) {
-                    // Randomly sample a very small number of points per frame to avoid freeze
-                    // e.g., 20 points per frame is enough if scanning continuously
-                    const numSamples = 30;
+                    if (isScanning) {
+                        // Randomly sample a very small number of points per frame to avoid freeze
+                        // e.g., 20 points per frame is enough if scanning continuously
+                        const numSamples = 30;
 
-                    for (let i = 0; i < numSamples; i++) {
-                        const x = Math.floor(Math.random() * depthInfo.width);
-                        const y = Math.floor(Math.random() * depthInfo.height);
+                        for (let i = 0; i < numSamples; i++) {
+                            const x = Math.floor(Math.random() * depthInfo.width);
+                            const y = Math.floor(Math.random() * depthInfo.height);
 
-                        const depthInMeters = depthInfo.getDepthInMeters(x, y);
+                            const depthInMeters = depthInfo.getDepthInMeters(x, y);
 
-                        // Ignore points too close or too far
-                        if (depthInMeters > 0.1 && depthInMeters < 3.0) {
-                            // Convert normalized device coords (-1 to 1) to view space
-                            const ndcX = (x / depthInfo.width) * 2 - 1;
-                            const ndcY = -(y / depthInfo.height) * 2 + 1;
+                            // Ignore points too close or too far
+                            if (depthInMeters > 0.1 && depthInMeters < 3.0) {
+                                // Convert normalized device coords (-1 to 1) to view space
+                                const ndcX = (x / depthInfo.width) * 2 - 1;
+                                const ndcY = -(y / depthInfo.height) * 2 + 1;
 
-                            // Unproject point using the view's inverse projection matrix
-                            _viewPos.set(ndcX, ndcY, -1).applyMatrix4(_invProj);
+                                // Unproject point using the view's inverse projection matrix
+                                _viewPos.set(ndcX, ndcY, -1).applyMatrix4(_invProj);
 
-                            // Scale to actual depth
-                            const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
-                            _viewPos.multiplyScalar(depthInMeters / rayLength);
+                                // Scale to actual depth
+                                const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
+                                _viewPos.multiplyScalar(depthInMeters / rayLength);
 
-                            // Convert to world space
-                            _viewPos.applyMatrix4(_camMatrix);
+                                // Convert to world space
+                                _viewPos.applyMatrix4(_camMatrix);
 
-                            // Create splat matrix (position is viewPos, looking at camera)
-                            _dummyObj.position.copy(_viewPos);
-                            _dummyObj.lookAt(_camPos);
+                                // Create splat matrix (position is viewPos, looking at camera)
+                                _dummyObj.position.copy(_viewPos);
+                                _dummyObj.lookAt(_camPos);
 
-                            _splatMatrix.copy(_dummyObj.matrix);
-                            addSplat(_splatMatrix);
+                                _splatMatrix.copy(_dummyObj.matrix);
+                                addSplat(_splatMatrix);
+                            }
+                        }
+
+                        if (scanSessions.length > 0) {
+                            scanSessions[scanSessions.length - 1].endIndex = numSplats;
                         }
                     }
-
-                    if (scanSessions.length > 0) {
-                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
-                    }
                 }
             }
         }
-    }
 
-    // Request hit-test source once
-    if (!hitTestSourceRequested) {
-        session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
-            session.requestHitTestSource({
-                space: viewerRefSpace,
-                entityTypes: ['point', 'plane', 'mesh']
-            }).then((source) => {
-                hitTestSource = source;
+        // Request hit-test source once
+        if (!hitTestSourceRequested) {
+            session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
+                session.requestHitTestSource({
+                    space: viewerRefSpace,
+                    entityTypes: ['point', 'plane', 'mesh']
+                }).then((source) => {
+                    hitTestSource = source;
+                });
             });
-        });
-        hitTestSourceRequested = true;
-    }
+            hitTestSourceRequested = true;
+        }
 
-    // Process hit-test results every frame
-    if (hitTestSource) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
-        if (hitTestResults.length > 0) {
-            const hit = hitTestResults[0];
-            const pose = hit.getPose(referenceSpace);
-            if (pose) {
-                const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+        // Process hit-test results every frame
+        if (hitTestSource) {
+            const hitTestResults = frame.getHitTestResults(hitTestSource);
+            if (hitTestResults.length > 0) {
+                const hit = hitTestResults[0];
+                const pose = hit.getPose(referenceSpace);
+                if (pose) {
+                    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
 
-                // Update cursor position with hit-test only if depth wasn't processed
-                // Depth processing already positions the cursor more accurately
-                if (cursorMesh && !depthProcessed) {
-                    cursorMesh.matrix.copy(matrix);
-                    cursorMesh.visible = true;
-                }
-
-                // Accumulate splats when scanning (fallback if no depth/mesh available)
-                if (isScanning && !depthProcessed) {
-                    // Add the exact hit point
-                    addSplat(matrix);
-
-                    // Add nearby points along the surface for faster coverage
-                    // Use more samples with wider radius for better object capture
-                    for (let i = 0; i < 8; i++) {
-                        const angle = (i / 8) * Math.PI * 2;
-                        const radius = SPLAT_SIZE * (2 + Math.random() * 3);
-                        const offset = new THREE.Matrix4().makeTranslation(
-                            Math.cos(angle) * radius,
-                            (Math.random() - 0.5) * SPLAT_SIZE * 2, // slight Y variation to capture curved surfaces
-                            Math.sin(angle) * radius
-                        );
-                        addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
+                    // Update cursor position with hit-test only if depth wasn't processed
+                    // Depth processing already positions the cursor more accurately
+                    if (cursorMesh && !depthProcessed) {
+                        cursorMesh.matrix.copy(matrix);
+                        cursorMesh.visible = true;
                     }
 
-                    // Update session end index
-                    if (scanSessions.length > 0) {
-                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
+                    // Accumulate splats when scanning (fallback if no depth/mesh available)
+                    if (isScanning && !depthProcessed) {
+                        // Add the exact hit point
+                        addSplat(matrix);
+
+                        // Add nearby points along the surface for faster coverage
+                        // Use more samples with wider radius for better object capture
+                        for (let i = 0; i < 8; i++) {
+                            const angle = (i / 8) * Math.PI * 2;
+                            const radius = SPLAT_SIZE * (2 + Math.random() * 3);
+                            const offset = new THREE.Matrix4().makeTranslation(
+                                Math.cos(angle) * radius,
+                                (Math.random() - 0.5) * SPLAT_SIZE * 2, // slight Y variation to capture curved surfaces
+                                Math.sin(angle) * radius
+                            );
+                            addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
+                        }
+
+                        // Update session end index
+                        if (scanSessions.length > 0) {
+                            scanSessions[scanSessions.length - 1].endIndex = numSplats;
+                        }
                     }
                 }
+            } else {
+                // No surface — hide cursor
+                if (cursorMesh) cursorMesh.visible = false;
             }
-        } else {
-            // No surface — hide cursor
-            if (cursorMesh) cursorMesh.visible = false;
         }
-    }
 
-    // ---- Process detected meshes (captures object geometry beyond flat planes) ----
-    if (isScanning && frame.detectedMeshes) {
-        let meshesProcessed = 0;
-        for (const mesh of frame.detectedMeshes.values()) {
-            if (meshesProcessed > 3) break; // Don't process too many meshes per frame to prevent freeze
+        // ---- Process detected meshes (captures object geometry beyond flat planes) ----
+        if (isScanning && frame.detectedMeshes) {
+            let meshesProcessed = 0;
+            for (const mesh of frame.detectedMeshes.values()) {
+                if (meshesProcessed > 3) break; // Don't process too many meshes per frame to prevent freeze
 
-            const meshPose = frame.getPose(mesh.meshSpace, referenceSpace);
-            if (!meshPose) continue;
+                const meshPose = frame.getPose(mesh.meshSpace, referenceSpace);
+                if (!meshPose) continue;
 
-            _camMatrix.fromArray(meshPose.transform.matrix); // reuse existing global matrix
-            const vertices = mesh.vertices;
-            if (!vertices || vertices.length === 0) continue;
+                _camMatrix.fromArray(meshPose.transform.matrix); // reuse existing global matrix
+                const vertices = mesh.vertices;
+                if (!vertices || vertices.length === 0) continue;
 
-            // Sample vertices randomly instead of iterating sequentially
-            // Pick max 10 random vertices per mesh per frame
-            const numSamples = Math.min(10, Math.floor(vertices.length / 3));
-            for (let i = 0; i < numSamples; i++) {
-                const vi = Math.floor(Math.random() * (vertices.length / 3));
-                const vx = vertices[vi * 3];
-                const vy = vertices[vi * 3 + 1];
-                const vz = vertices[vi * 3 + 2];
+                // Sample vertices randomly instead of iterating sequentially
+                // Pick max 10 random vertices per mesh per frame
+                const numSamples = Math.min(10, Math.floor(vertices.length / 3));
+                for (let i = 0; i < numSamples; i++) {
+                    const vi = Math.floor(Math.random() * (vertices.length / 3));
+                    const vx = vertices[vi * 3];
+                    const vy = vertices[vi * 3 + 1];
+                    const vz = vertices[vi * 3 + 2];
 
-                _tmpMatrix.makeTranslation(vx, vy, vz);
-                _splatMatrix.copy(_camMatrix).multiply(_tmpMatrix);
+                    _tmpMatrix.makeTranslation(vx, vy, vz);
+                    _splatMatrix.copy(_camMatrix).multiply(_tmpMatrix);
 
-                addSplat(_splatMatrix);
+                    addSplat(_splatMatrix);
+                }
+                meshesProcessed++;
             }
-            meshesProcessed++;
+
+            if (scanSessions.length > 0) {
+                scanSessions[scanSessions.length - 1].endIndex = numSplats;
+            }
         }
 
-        if (scanSessions.length > 0) {
-            scanSessions[scanSessions.length - 1].endIndex = numSplats;
+        // Update GPU buffer only ONCE per frame
+        if (isScanning && splatMesh) {
+            splatMesh.instanceMatrix.needsUpdate = true;
+        }
+
+        renderer.render(scene, camera);
+
+    } catch (e) {
+        updateScannerStatus(`XRFrame err: ${e.message} ${e.stack}`);
+        // disable scanning if it crashes the loop
+        if (isScanning) {
+            isScanning = false;
+            const scanBtn = document.getElementById('scanner-scan-btn');
+            if (scanBtn) scanBtn.classList.remove('scanning');
         }
     }
-
-    // Update GPU buffer only ONCE per frame
-    if (isScanning && splatMesh) {
-        splatMesh.instanceMatrix.needsUpdate = true;
-    }
-
-    renderer.render(scene, camera);
 }
 
 // ---- Session Management ----
