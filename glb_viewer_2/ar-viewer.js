@@ -44,6 +44,9 @@ let dragOffset = new THREE.Vector3(); // offset between model and initial touch 
 // Callbacks
 let onExitAR = null;
 
+// Debug overlay
+let debugEl = null;
+
 /**
  * Start an AR session and load/display the given model URL.
  * @param {string} modelUrl — URL or blob URL of the GLB to display
@@ -395,6 +398,7 @@ function onTouchStart(event) {
         });
 
         const intersects = raycaster.intersectObjects(interactable, false);
+        arDebugStatus(`SELECT tap: ${interactable.length} meshes, ${intersects.length} hits, sel=${selectedObjects.length}`);
 
         if (intersects.length > 0) {
             // Find root editable
@@ -702,6 +706,15 @@ function setupARToolbar() {
     currentTool = 'placement';
     updateToolbarUI();
 
+    // Create debug overlay
+    if (!debugEl) {
+        debugEl = document.createElement('div');
+        debugEl.id = 'ar-debug-status';
+        debugEl.style.cssText = 'position:fixed;top:40px;left:10px;right:10px;color:#0f0;background:rgba(0,0,0,0.7);padding:6px 10px;font:12px monospace;z-index:99999;pointer-events:none;border-radius:4px;';
+        const overlay = document.getElementById('ar-overlay');
+        if (overlay) overlay.appendChild(debugEl);
+    }
+
     // Bind buttons
     const buttons = toolbarEl.querySelectorAll('.tool-btn');
     buttons.forEach(btn => {
@@ -849,6 +862,12 @@ function updateToolState() {
     if (typeof arScanner !== 'undefined' && arScanner) {
         arScanner.setVisible(currentTool === 'scanner');
     }
+
+    arDebugStatus(`Tool: ${currentTool} | sel: ${selectedObjects.length}/${editableObjects.length} | placed: ${modelPlaced} | box: ${selectionBoxHelper?.visible}`);
+}
+
+function arDebugStatus(msg) {
+    if (debugEl) debugEl.textContent = msg;
 }
 
 // ---- Pivot Logic ----
