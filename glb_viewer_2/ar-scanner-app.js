@@ -27,6 +27,8 @@ let spatialGrid = {};           // { "gx,gy,gz": [index, ...] }
 
 // ---- Cursor ----
 let cursorMesh = null;          // Black circle at hit-test position
+// Global re-usable objects
+const _tmpPos = new THREE.Vector3();
 
 // ---- Spatial Grid Helpers ----
 function gridKey(x, y, z) {
@@ -37,10 +39,13 @@ function isTooClose(pos) {
     const gx = Math.floor(pos.x / GRID_CELL);
     const gy = Math.floor(pos.y / GRID_CELL);
     const gz = Math.floor(pos.z / GRID_CELL);
+
+    // Instead of allocating 27 strings per call, use a string builder pattern or direct lookup
     for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
             for (let dz = -1; dz <= 1; dz++) {
-                const cell = spatialGrid[`${gx + dx},${gy + dy},${gz + dz}`];
+                const key = `${gx + dx},${gy + dy},${gz + dz}`;
+                const cell = spatialGrid[key];
                 if (cell) {
                     for (const idx of cell) {
                         if (splatPositions[idx].distanceToSquared(pos) < MIN_DIST_SQ) return true;
@@ -69,8 +74,11 @@ function rebuildGrid() {
 function addSplat(matrix) {
     if (numSplats >= MAX_SPLATS) return false;
 
-    const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
-    if (isTooClose(pos)) return false;
+    _tmpPos.setFromMatrixPosition(matrix);
+    if (isTooClose(_tmpPos)) return false;
+
+    // Must store a cloned instance, otherwise we overwrite the global _tmpPos
+    const pos = _tmpPos.clone();
 
     // Store data
     splatPositions[numSplats] = pos;
@@ -81,7 +89,7 @@ function addSplat(matrix) {
     splatMesh.setMatrixAt(numSplats, matrix);
     numSplats++;
     splatMesh.count = numSplats;
-    splatMesh.instanceMatrix.needsUpdate = true;
+    // We defer instanceMatrix.needsUpdate to onXRFrame to prevent 40+ GPU syncs per frame
 
     return true;
 }
@@ -437,6 +445,10 @@ function onXRFrame(timestamp, frame) {
         }
     }
 
+    // Update GPU buffer only ONCE per frame
+    if (isScanning && splatMesh) {
+        splatMesh.instanceMatrix.needsUpdate = true;
+    }
 
     renderer.render(scene, camera);
 }
