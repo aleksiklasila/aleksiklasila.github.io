@@ -285,6 +285,28 @@ const _dummyObj = new THREE.Object3D();
 const _splatMatrix = new THREE.Matrix4();
 const _tmpMatrix = new THREE.Matrix4();
 
+function getSafeDepth(depthInfo, x, y) {
+    if (!depthInfo || depthInfo.width <= 0 || depthInfo.height <= 0) return 0;
+
+    // Mathematically clamp to the exact pixel bounds reported by the object
+    const cx = Math.max(0, Math.min(Math.floor(x), depthInfo.width - 1));
+    const cy = Math.max(0, Math.min(Math.floor(y), depthInfo.height - 1));
+
+    try {
+        // Normal call
+        return depthInfo.getDepthInMeters(cx, cy);
+    } catch (e) {
+        try {
+            // Some implementations have swapped X/Y bugs under the hood
+            return depthInfo.getDepthInMeters(cy, cx);
+        } catch (e2) {
+            // If both fail, the depth map is completely invalid, so return 0 to skip this point
+            // This prevents the application from freezing!
+            return 0;
+        }
+    }
+}
+
 // ---- XR Render Loop ----
 
 function onXRFrame(timestamp, frame) {
@@ -310,9 +332,9 @@ function onXRFrame(timestamp, frame) {
                     _camPos.setFromMatrixPosition(_camMatrix);
 
                     // Update cursor using depth at the center of the screen
-                    const centerX = Math.min(Math.floor(depthInfo.width / 2), depthInfo.width - 1);
-                    const centerY = Math.min(Math.floor(depthInfo.height / 2), depthInfo.height - 1);
-                    const centerDepth = depthInfo.getDepthInMeters(centerX, centerY);
+                    const centerX = Math.floor(depthInfo.width / 2);
+                    const centerY = Math.floor(depthInfo.height / 2);
+                    const centerDepth = getSafeDepth(depthInfo, centerX, centerY);
 
                     if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
                         _viewPos.set(0, 0, -1).applyMatrix4(_invProj);
@@ -332,10 +354,10 @@ function onXRFrame(timestamp, frame) {
                         const numSamples = 30;
 
                         for (let i = 0; i < numSamples; i++) {
-                            const x = Math.min(Math.floor(Math.random() * depthInfo.width), depthInfo.width - 1);
-                            const y = Math.min(Math.floor(Math.random() * depthInfo.height), depthInfo.height - 1);
+                            const x = Math.floor(Math.random() * depthInfo.width);
+                            const y = Math.floor(Math.random() * depthInfo.height);
 
-                            const depthInMeters = depthInfo.getDepthInMeters(x, y);
+                            const depthInMeters = getSafeDepth(depthInfo, x, y);
 
                             // Ignore points too close or too far
                             if (depthInMeters > 0.1 && depthInMeters < 3.0) {
