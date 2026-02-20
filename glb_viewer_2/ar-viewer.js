@@ -128,7 +128,8 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         renderer.setAnimationLoop(onXRFrame);
 
         // Touch bindings for placement and interaction
-        renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
+        // NOTE: Only bind to containerEl (the DOM overlay root), NOT renderer.domElement.
+        // Binding both causes onTouchStart to fire twice and interferes with TransformControls.
         containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
         containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
         containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
@@ -289,6 +290,11 @@ function onXRFrame(timestamp, frame) {
         }
     }
 
+    // Update helpers each frame so they follow moving objects
+    if (selectionBoxHelper && selectionBoxHelper.visible) {
+        selectionBoxHelper.update();
+    }
+
     renderer.render(scene, camera);
 }
 
@@ -333,11 +339,15 @@ function onTouchStart(event) {
 
             // Set initial tool
             updateToolState();
+            // Auto-select all objects so tools work immediately
+            updateSelection(editableObjects);
         }
 
         // If currentTool is 'placement', we consider it placed once hits are found in onXRFrame
         if (currentTool === 'placement') {
             modelPlaced = true;
+            // Auto-select all objects so tools work immediately
+            updateSelection(editableObjects);
         }
 
         return;
