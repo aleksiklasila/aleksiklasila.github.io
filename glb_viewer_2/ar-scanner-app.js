@@ -310,8 +310,8 @@ function onXRFrame(timestamp, frame) {
                     _camPos.setFromMatrixPosition(_camMatrix);
 
                     // Update cursor using depth at the center of the screen
-                    const centerX = Math.floor(depthInfo.width / 2);
-                    const centerY = Math.floor(depthInfo.height / 2);
+                    const centerX = Math.min(Math.floor(depthInfo.width / 2), depthInfo.width - 1);
+                    const centerY = Math.min(Math.floor(depthInfo.height / 2), depthInfo.height - 1);
                     const centerDepth = depthInfo.getDepthInMeters(centerX, centerY);
 
                     if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
@@ -332,8 +332,8 @@ function onXRFrame(timestamp, frame) {
                         const numSamples = 30;
 
                         for (let i = 0; i < numSamples; i++) {
-                            const x = Math.floor(Math.random() * depthInfo.width);
-                            const y = Math.floor(Math.random() * depthInfo.height);
+                            const x = Math.min(Math.floor(Math.random() * depthInfo.width), depthInfo.width - 1);
+                            const y = Math.min(Math.floor(Math.random() * depthInfo.height), depthInfo.height - 1);
 
                             const depthInMeters = depthInfo.getDepthInMeters(x, y);
 
