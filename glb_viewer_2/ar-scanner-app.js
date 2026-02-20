@@ -191,11 +191,7 @@ export async function startScannerSession(containerEl, callbacks) {
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay', 'mesh-detection', 'depth-sensing'],
-            depthSensing: {
-                usagePreference: ['cpu-optimized', 'gpu-optimized'],
-                dataFormatPreference: ['luminance-alpha', 'float32']
-            },
+            optionalFeatures: ['dom-overlay', 'mesh-detection'],
             domOverlay: { root: containerEl }
         });
 
@@ -315,83 +311,6 @@ function onXRFrame(timestamp, frame) {
         const session = renderer.xr.getSession();
         const referenceSpace = renderer.xr.getReferenceSpace();
 
-        // ---- Process WebXR Depth Map (if available) ----
-        // This allows scanning actual object surfaces instead of just flat planes
-        let depthProcessed = false;
-        if (isScanning) {
-            const viewerPose = frame.getViewerPose(referenceSpace);
-            if (viewerPose && viewerPose.views.length > 0) {
-                const view = viewerPose.views[0];
-                const depthInfo = frame.getDepthInformation(view);
-                if (depthInfo) {
-                    depthProcessed = true;
-
-                    // Pre-calculate matrices for this frame
-                    _camMatrix.fromArray(view.transform.matrix);
-                    _invProj.fromArray(view.projectionMatrix).invert();
-                    _camPos.setFromMatrixPosition(_camMatrix);
-
-                    // Update cursor using depth at the center of the screen
-                    const centerX = Math.floor(depthInfo.width / 2);
-                    const centerY = Math.floor(depthInfo.height / 2);
-                    const centerDepth = getSafeDepth(depthInfo, centerX, centerY);
-
-                    if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
-                        _viewPos.set(0, 0, -1).applyMatrix4(_invProj);
-                        const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
-                        _viewPos.multiplyScalar(centerDepth / rayLength);
-                        _viewPos.applyMatrix4(_camMatrix);
-
-                        _dummyObj.position.copy(_viewPos);
-                        _dummyObj.lookAt(_camPos);
-                        cursorMesh.matrix.copy(_dummyObj.matrix);
-                        cursorMesh.visible = true;
-                    }
-
-                    if (isScanning) {
-                        // Randomly sample a very small number of points per frame to avoid freeze
-                        // e.g., 20 points per frame is enough if scanning continuously
-                        const numSamples = 30;
-
-                        for (let i = 0; i < numSamples; i++) {
-                            const x = Math.floor(Math.random() * depthInfo.width);
-                            const y = Math.floor(Math.random() * depthInfo.height);
-
-                            const depthInMeters = getSafeDepth(depthInfo, x, y);
-
-                            // Ignore points too close or too far
-                            if (depthInMeters > 0.1 && depthInMeters < 3.0) {
-                                // Convert normalized device coords (-1 to 1) to view space
-                                const ndcX = (x / depthInfo.width) * 2 - 1;
-                                const ndcY = -(y / depthInfo.height) * 2 + 1;
-
-                                // Unproject point using the view's inverse projection matrix
-                                _viewPos.set(ndcX, ndcY, -1).applyMatrix4(_invProj);
-
-                                // Scale to actual depth
-                                const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
-                                _viewPos.multiplyScalar(depthInMeters / rayLength);
-
-                                // Convert to world space
-                                _viewPos.applyMatrix4(_camMatrix);
-
-                                // Create splat matrix (position is viewPos, looking at camera)
-                                _dummyObj.position.copy(_viewPos);
-                                _dummyObj.lookAt(_camPos);
-
-                                _splatMatrix.copy(_dummyObj.matrix);
-                                addSplat(_splatMatrix);
-                            }
-                        }
-
-                        if (scanSessions.length > 0) {
-                            scanSessions[scanSessions.length - 1].endIndex = numSplats;
-                        }
-                    }
-                }
-            }
-        }
-
         // Request hit-test source once
         if (!hitTestSourceRequested) {
             session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
@@ -414,15 +333,14 @@ function onXRFrame(timestamp, frame) {
                 if (pose) {
                     const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
 
-                    // Update cursor position with hit-test only if depth wasn't processed
-                    // Depth processing already positions the cursor more accurately
-                    if (cursorMesh && !depthProcessed) {
+                    // Update cursor position with hit-test
+                    if (cursorMesh) {
                         cursorMesh.matrix.copy(matrix);
                         cursorMesh.visible = true;
                     }
 
-                    // Accumulate splats when scanning (fallback if no depth/mesh available)
-                    if (isScanning && !depthProcessed) {
+                    // Accumulate splats when scanning
+                    if (isScanning) {
                         // Add the exact hit point
                         addSplat(matrix);
 
@@ -431,10 +349,12 @@ function onXRFrame(timestamp, frame) {
                         for (let i = 0; i < 8; i++) {
                             const angle = (i / 8) * Math.PI * 2;
                             const radius = SPLAT_SIZE * (2 + Math.random() * 3);
+                            // WebXR hit poses have the Y-axis as the surface normal. 
+                            // Translating along X and Z keeps the point exactly ON the surface.
                             const offset = new THREE.Matrix4().makeTranslation(
-                                Math.cos(angle) * radius,
-                                (Math.random() - 0.5) * SPLAT_SIZE * 2, // slight Y variation to capture curved surfaces
-                                Math.sin(angle) * radius
+                                Math.cos(angle) * radius, // X (tangent)
+                                0,                        // Y (normal) -> exactly 0 so it doesn't float
+                                Math.sin(angle) * radius  // Z (tangent)
                             );
                             addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
                         }
