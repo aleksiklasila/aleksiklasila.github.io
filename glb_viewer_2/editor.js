@@ -65,7 +65,7 @@ export function initEditor(canvasEl, callbacks) {
     canvas = canvasEl;
     onSceneChanged = callbacks.onSceneChanged;
     onRequestViewScene = callbacks.onRequestViewScene;
-    statusEl = document.getElementById('editor-status');
+    statusEl = document.getElementById('editor-debug-console');
 
     // Renderer
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -1116,7 +1116,7 @@ function shareLink() {
 }
 
 function setStatus(msg) {
-    if (statusEl) statusEl.textContent = msg;
+    if (statusEl) statusEl.textContent = msg + '\n' + statusEl.textContent;
 }
 
 // ---- Static helpers (for use without full editor init) ----

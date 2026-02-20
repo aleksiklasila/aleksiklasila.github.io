@@ -330,6 +330,22 @@ model-viewer {
     background: var(--accent-hover);
 }
 
+/* --- Debug Console --- */
+.debug-console {
+    font-family: monospace;
+    font-size: 11px;
+    color: #e0e0e0;
+    max-height: 80px;
+    overflow-y: auto;
+    padding: 8px;
+    margin-top: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    border-top: 1px solid var(--border);
+    word-break: break-all;
+    white-space: pre-wrap;
+    user-select: text;
+}
+
 .btn-accent {
     background: #28a745;
 }
