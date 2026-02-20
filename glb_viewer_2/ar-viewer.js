@@ -356,6 +356,10 @@ function onTouchStart(event) {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
+        // Force update all world matrices before raycasting — in XR mode,
+        // mesh descendants' matrixWorld can be stale after re-parenting
+        scene.updateMatrixWorld(true);
+
         // Raycast against editableObjects (they may be in selectionGroup, not arModel directly)
         const intersects = raycaster.intersectObjects(editableObjects, true);
 
@@ -396,6 +400,9 @@ function onTouchStart(event) {
                 if (child.isMesh) interactable.push(child);
             });
         });
+
+        // Force update all world matrices before raycasting
+        scene.updateMatrixWorld(true);
 
         const intersects = raycaster.intersectObjects(interactable, false);
         arDebugStatus(`SELECT tap: ${interactable.length} meshes, ${intersects.length} hits, sel=${selectedObjects.length}`);
