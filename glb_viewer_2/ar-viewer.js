@@ -676,7 +676,13 @@ function updateSelection(objects) {
     }
 
     if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
-        transformControl.attach(selectionGroup);
+        if (selectedObjects.length < editableObjects.length && selectionGroup) {
+            // Subset — gizmo on selectionGroup for individual transforms
+            transformControl.attach(selectionGroup);
+        } else if (arModel) {
+            // All selected — gizmo on arModel for whole-model transforms
+            transformControl.attach(arModel);
+        }
     } else {
         transformControl.detach();
     }
@@ -823,9 +829,11 @@ function updateToolState() {
         transformControl.detach();
     } else if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
         transformControl.setMode(currentTool);
-        // Attach gizmo to arModel directly — proven to work in AR
-        // (attaching to nested selectionGroup causes gizmo rendering issues)
-        if (arModel) {
+        if (selectedObjects.length > 0 && selectedObjects.length < editableObjects.length && selectionGroup) {
+            // Subset selected — attach to selectionGroup for individual object transforms
+            transformControl.attach(selectionGroup);
+        } else if (arModel) {
+            // All selected (or none) — attach to arModel for whole-model transforms
             transformControl.attach(arModel);
         }
     }
