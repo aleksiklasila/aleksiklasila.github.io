@@ -100,18 +100,50 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     reticle.visible = false;
     scene.add(reticle);
 
-    // --- Custom Geometry Scanner ---
-    arScanner = new ARScanner(scene);
-
     // --- Transform Controls ---
     transformControl = new TransformControls(camera, containerEl);
     transformControl.addEventListener('dragging-changed', function (event) {
         // Disable custom touch logic when gizmo is dragging
-        // We handle this check in touch handlers
     });
     scene.add(transformControl);
 
-    // --- Load model ---
+    // --- Request XR session IMMEDIATELY to avoid dropping transient user activation ---
+    let session;
+    try {
+        session = await navigator.xr.requestSession('immersive-ar', {
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay', 'light-estimation'],
+            domOverlay: { root: containerEl }
+        });
+
+        renderer.xr.setReferenceSpaceType('local');
+        await renderer.xr.setSession(session);
+
+        session.addEventListener('end', () => {
+            cleanup();
+            if (onExitAR) onExitAR();
+        });
+
+        // Start render loop (shows camera feed immediately)
+        renderer.setAnimationLoop(onXRFrame);
+
+        // Touch bindings for placement and interaction
+        renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
+        containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
+        containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
+        containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
+
+        modelPlaced = false;
+        hitTestSourceRequested = false;
+        hitTestSource = null;
+    } catch (err) {
+        console.error('Failed to start AR session:', err);
+        alert('Failed to start AR session: ' + err.message);
+        cleanup();
+        return false;
+    }
+
+    // --- Load model asynchronously WHILE in AR session ---
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
@@ -148,7 +180,7 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
             child.userData._editorOriginalName = child.name || `Object_${editableObjects.length}`;
             child.userData._isCloned = false;
             editableObjects.push(child);
-            // AUTO-PIVOT: Re-pivot to bottom center (d031a0d5: Step 96)
+            // AUTO-PIVOT: Re-pivot to bottom center
             rePivotToBBoxCenter(child);
         });
 
@@ -165,55 +197,10 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     } catch (err) {
         console.error('Failed to load AR model:', err);
         alert('Failed to load model for AR: ' + err.message);
-        cleanup();
-        return false;
+        // Do not return false, session is already running. Just warn user.
     }
 
-    // --- Request XR session ---
-    try {
-        const session = await navigator.xr.requestSession('immersive-ar', {
-            requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay', 'light-estimation'],
-            domOverlay: { root: containerEl }
-        });
-
-        renderer.xr.setReferenceSpaceType('local');
-        await renderer.xr.setSession(session);
-
-        session.addEventListener('end', () => {
-            cleanup();
-            if (onExitAR) onExitAR();
-        });
-
-        // Start render loop
-        renderer.setAnimationLoop(onXRFrame);
-
-        // Touch events on the session's overlay or canvas
-        renderer.domElement.addEventListener('touchstart', onTouchStart, { passive: false });
-        // renderer.domElement.addEventListener('touchmove', onTouchMove, { passive: false }); // Handled by container
-        // renderer.domElement.addEventListener('touchend', onTouchEnd, { passive: false }); // Handled by container
-
-        // Also on the container for dom-overlay (Primary Interaction Surface)
-        // Note: TransformControls attaches to renderer.domElement (canvas).
-        // Since we have a DOM overlay, we rely on standard event bubbling or direct attachment.
-        // TransformControls internally adds listeners to domElement.
-        // We need to ensure our custom listeners don't conflict.
-
-        containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
-        containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
-        containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
-
-        modelPlaced = false;
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-
-        return true;
-    } catch (err) {
-        console.error('Failed to start AR session:', err);
-        alert('Failed to start AR session: ' + err.message);
-        cleanup();
-        return false;
-    }
+    return true;
 }
 
 /**

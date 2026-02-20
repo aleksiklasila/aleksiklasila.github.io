@@ -140,6 +140,24 @@ button:hover {
     background-color: #218838;
 }
 
+/* ===== AR Overlay ===== */
+.ar-overlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5000;
+    pointer-events: none;
+    /* WebXR DOM Overlay needs pointer-events transparent mostly */
+}
+
+.ar-overlay>* {
+    pointer-events: auto;
+    /* Buttons and toolbar are clickable */
+}
+
 /* ===== Standard Viewer ===== */
 model-viewer {
     width: 100%;
