@@ -805,6 +805,15 @@ function updateToolbarUI() {
 function updateToolState() {
     if (!transformControl) return;
 
+    // When switching away from placement, ensure model is considered "placed"
+    // The model is already visible & positioned by onXRFrame auto-placement.
+    // Without this, the !modelPlaced guard blocks all custom touch handlers.
+    if (currentTool !== 'placement' && !modelPlaced && arModel && arModel.visible) {
+        modelPlaced = true;
+        // Set drag plane from arModel's current position
+        dragPlane.constant = -arModel.position.y;
+    }
+
     // Auto-select all objects for bounding box if none selected
     if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
         updateSelection(editableObjects);
