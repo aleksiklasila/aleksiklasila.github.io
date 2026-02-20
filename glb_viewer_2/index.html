@@ -43,11 +43,11 @@
     <div id="editor-screen" class="screen">
         <div id="editor-main">
             <canvas id="editor-canvas"></canvas>
-            <div id="bottom-panel-wrapper">
+            <div id="bottom-panel-wrapper" class="bottom-panel-wrapper">
                 <div id="panel-drag-handle" class="panel-drag-handle">
                     <div class="handle-bar"></div>
                 </div>
-                <div id="editor-toolbar">
+                <div id="editor-toolbar" class="toolbar-container">
                     <div class="toolbar-center">
                         <button class="back-btn tool-btn" id="btn-back" data-target="input-screen">←</button>
                         <button class="tool-btn active" id="btn-none" title="View Only (V)"
@@ -69,7 +69,7 @@
                         <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗</button>
                     </div>
                 </div>
-                <div id="object-panel">
+                <div id="object-panel" class="object-panel">
                     <div class="panel-header">Objects</div>
                     <div id="object-list"></div>
                     <div class="panel-actions">
@@ -101,21 +101,27 @@
     <!-- AR Overlay (custom Three.js WebXR) -->
     <div id="ar-overlay" class="ar-overlay">
         <!-- AR Toolbar -->
-        <div id="ar-toolbar-container">
-            <div id="ar-toolbar-drag-handle">
+        <div id="ar-toolbar-container" class="bottom-panel-wrapper">
+            <div id="ar-toolbar-drag-handle" class="panel-drag-handle">
                 <div class="handle-bar"></div>
             </div>
-            <div id="ar-toolbar">
-                <button class="ar-tool-btn" data-mode="placement" title="Place Object">🎯</button>
-                <button class="ar-tool-btn" data-mode="select" title="Select Object">🖱️</button>
-                <button class="ar-tool-btn" data-mode="cursor" title="Set Pivot (Cursor)">📍</button>
-                <button class="ar-tool-btn" data-mode="generic" title="Generic (Touch)">👆</button>
-                <div class="ar-toolbar-sep"></div>
-                <button class="ar-tool-btn" data-mode="translate" title="Move">✢</button>
-                <button class="ar-tool-btn" data-mode="rotate" title="Rotate">↻</button>
-                <button class="ar-tool-btn" data-mode="scale" title="Scale">⤢</button>
-                <div class="ar-toolbar-sep"></div>
-                <button class="ar-tool-btn danger" id="ar-exit-btn" title="Exit AR">✕</button>
+            <div id="ar-toolbar" class="toolbar-container">
+                <div class="toolbar-center">
+                    <button class="tool-btn" data-mode="placement" title="Place Object">🎯</button>
+                    <button class="tool-btn" data-mode="select" title="Select Object">🖱️</button>
+                    <button class="tool-btn" data-mode="cursor" title="Set Pivot (Cursor)">📍</button>
+                    <button class="tool-btn" data-mode="generic" title="Generic (Touch)">👆</button>
+                    <div class="toolbar-sep"></div>
+                    <button class="tool-btn" data-mode="translate" title="Move">✢</button>
+                    <button class="tool-btn" data-mode="rotate" title="Rotate">↻</button>
+                    <button class="tool-btn" data-mode="scale" title="Scale">⤢</button>
+                    <div class="toolbar-sep"></div>
+                    <button class="tool-btn btn-danger" id="ar-exit-btn" title="Exit AR"
+                        style="color: white; border: none;">✕</button>
+                </div>
+            </div>
+            <div id="ar-object-panel" class="object-panel collapsed" style="height: 0px;">
+                <!-- Expandable area for future AR options -->
             </div>
         </div>
     </div>

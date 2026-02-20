@@ -167,7 +167,7 @@ model-viewer {
     color: var(--text-main);
 }
 
-#editor-toolbar {
+.toolbar-container {
     height: 50px;
     min-height: 50px;
     background: transparent;
@@ -235,7 +235,7 @@ model-viewer {
 }
 
 /* Override back-btn specific styles when inside the editor toolbar */
-#editor-toolbar .back-btn {
+.toolbar-container .back-btn {
     position: static;
     z-index: auto;
     background-color: transparent;
@@ -246,7 +246,7 @@ model-viewer {
     /* Reinforce tool-btn styling if needed */
 }
 
-#editor-toolbar .back-btn:hover {
+.toolbar-container .back-btn:hover {
     background: #333;
 }
 
@@ -312,7 +312,7 @@ model-viewer {
 }
 
 /* Bottom Panel Wrapper (overlay) */
-#bottom-panel-wrapper {
+.bottom-panel-wrapper {
     position: absolute;
     bottom: 0;
     left: 0;
@@ -323,12 +323,12 @@ model-viewer {
     pointer-events: none;
 }
 
-#bottom-panel-wrapper>* {
+.bottom-panel-wrapper>* {
     pointer-events: auto;
 }
 
 /* Object Panel (Bottom) */
-#object-panel {
+.object-panel {
     background: var(--panel-bg);
     border-top: 1px solid var(--border);
     display: flex;
@@ -339,7 +339,7 @@ model-viewer {
     transition: height 0.25s ease;
 }
 
-#object-panel.collapsed {
+.object-panel.collapsed {
     height: 0;
     border-top: none;
 }
@@ -520,106 +520,8 @@ model-viewer {
     background: #777;
 }
 
-/* ===== AR Toolbar ===== */
-/* ===== AR Toolbar ===== */
-#ar-toolbar-container {
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 100%;
-    max-width: 450px;
-    height: 100px;
-    /* Default height for one row */
-    min-height: 24px;
-    /* Handle only */
-    max-height: 80vh;
-    background: rgba(30, 30, 30, 0.9);
-    backdrop-filter: blur(10px);
-    border-radius: 12px 12px 0 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    flex-direction: column;
+/* ===== AR Toolbar Overrides (if any needed in future) ===== */
+#ar-overlay .bottom-panel-wrapper {
     z-index: 10000;
-    pointer-events: auto;
-    overflow: hidden;
-    transition: height 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-#ar-toolbar-container.dragging {
-    transition: none;
-}
-
-#ar-toolbar-container.collapsed {
-    height: 24px !important;
-}
-
-#ar-toolbar-drag-handle {
-    height: 24px;
-    width: 100%;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    cursor: ns-resize;
-}
-
-#ar-toolbar-drag-handle .handle-bar {
-    width: 40px;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.3);
-    border-radius: 2px;
-}
-
-#ar-toolbar {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 10px 10px 20px 10px;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.ar-tool-btn {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: white;
-    font-size: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s;
-    outline: none;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.ar-tool-btn.active {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
-    box-shadow: 0 0 10px rgba(0, 123, 255, 0.5);
-    transform: scale(1.05);
-}
-
-.ar-tool-btn:active {
-    transform: scale(0.95);
-}
-
-.ar-tool-btn.danger {
-    background: rgba(255, 59, 48, 0.2);
-    border-color: rgba(255, 59, 48, 0.5);
-    color: #ff3b30;
-}
-
-.ar-tool-btn.danger:active {
-    background: #ff3b30;
-    color: white;
-}
-
-.ar-toolbar-sep {
-    width: 1px;
-    height: 30px;
-    background: rgba(255, 255, 255, 0.2);
+    /* Ensure it stays above AR canvas */
 }

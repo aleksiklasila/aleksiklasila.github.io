@@ -686,16 +686,17 @@ function updateSelection(objects) {
 function setupARToolbar() {
     toolbarEl = document.getElementById('ar-toolbar');
     toolbarHandleEl = document.getElementById('ar-toolbar-drag-handle');
-    const container = document.getElementById('ar-toolbar-container');
+    const container = document.getElementById('ar-overlay');
+    const objectPanel = document.getElementById('ar-object-panel');
 
-    if (!toolbarEl || !container) return; // Should exist in HTML
+    if (!toolbarEl || !objectPanel) return; // Should exist in HTML
 
     // Reset UI state
     currentTool = 'placement';
     updateToolbarUI();
 
     // Bind buttons
-    const buttons = toolbarEl.querySelectorAll('.ar-tool-btn');
+    const buttons = toolbarEl.querySelectorAll('.tool-btn');
     buttons.forEach(btn => {
         btn.onclick = (e) => {
             e.stopPropagation();
@@ -716,16 +717,19 @@ function setupARToolbar() {
     });
 
     // Drag handle logic
-    if (toolbarHandleEl) {
+    if (toolbarHandleEl && objectPanel) {
         let isDraggingRaw = false;
         let startY = 0;
         let startHeight = 0;
+        const MIN_HEIGHT = 40;
+        const DEFAULT_HEIGHT = 180;
 
         const onPointerDown = (e) => {
             isDraggingRaw = true;
             startY = e.touches ? e.touches[0].clientY : e.clientY;
-            startHeight = container.offsetHeight;
-            container.classList.add('dragging');
+            startHeight = objectPanel.offsetHeight;
+            objectPanel.style.transition = 'none';
+            toolbarHandleEl.classList.add('dragging');
             e.stopPropagation();
             e.preventDefault();
         };
@@ -739,17 +743,16 @@ function setupARToolbar() {
             const delta = startY - clientY; // Dragging up (smaller Y) increases height
 
             let newHeight = startHeight + delta;
+            const maxHeight = window.innerHeight * 0.8; // Max 80% of screen
 
-            // Constrain
-            if (newHeight < 24) newHeight = 24;
-            if (newHeight > window.innerHeight * 0.8) newHeight = window.innerHeight * 0.8;
+            newHeight = Math.max(0, Math.min(newHeight, maxHeight));
 
-            container.style.height = newHeight + 'px';
+            objectPanel.style.height = newHeight + 'px';
 
-            if (newHeight <= 30) {
-                container.classList.add('collapsed');
+            if (newHeight < MIN_HEIGHT) {
+                objectPanel.classList.add('collapsed');
             } else {
-                container.classList.remove('collapsed');
+                objectPanel.classList.remove('collapsed');
             }
         };
 
@@ -759,8 +762,12 @@ function setupARToolbar() {
         const onPointerUp = () => {
             if (isDraggingRaw) {
                 isDraggingRaw = false;
-                container.classList.remove('dragging');
-                // Optional: snap to nearest row? For now free resize is fine.
+                objectPanel.style.transition = '';
+                toolbarHandleEl.classList.remove('dragging');
+                if (objectPanel.offsetHeight < MIN_HEIGHT) {
+                    objectPanel.style.height = '0px';
+                    objectPanel.classList.add('collapsed');
+                }
             }
         };
 
@@ -769,12 +776,12 @@ function setupARToolbar() {
 
         // Double click to toggle full/min
         toolbarHandleEl.addEventListener('dblclick', () => {
-            if (container.offsetHeight < 100) {
-                container.style.height = '100px';
-                container.classList.remove('collapsed');
+            if (objectPanel.classList.contains('collapsed') || objectPanel.offsetHeight < MIN_HEIGHT) {
+                objectPanel.style.height = DEFAULT_HEIGHT + 'px';
+                objectPanel.classList.remove('collapsed');
             } else {
-                container.style.height = '24px';
-                container.classList.add('collapsed');
+                objectPanel.style.height = '0px';
+                objectPanel.classList.add('collapsed');
             }
         });
     }
@@ -782,7 +789,7 @@ function setupARToolbar() {
 
 function updateToolbarUI() {
     if (!toolbarEl) return;
-    const buttons = toolbarEl.querySelectorAll('.ar-tool-btn');
+    const buttons = toolbarEl.querySelectorAll('.tool-btn');
     buttons.forEach(btn => {
         if (btn.dataset.mode === currentTool) {
             btn.classList.add('active');
