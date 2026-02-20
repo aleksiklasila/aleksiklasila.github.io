@@ -47,6 +47,10 @@ let onExitAR = null;
 // Debug overlay
 let debugEl = null;
 
+// Undo stack — each entry is a snapshot of all editable objects' transforms
+let arUndoStack = [];
+const AR_MAX_UNDO = 50;
+
 /**
  * Start an AR session and load/display the given model URL.
  * @param {string} modelUrl — URL or blob URL of the GLB to display
@@ -697,6 +701,8 @@ function updateSelection(objects) {
     } else {
         transformControl.detach();
     }
+
+    updateARObjectList();
 }
 
 // ---- Toolbar Logic ----
@@ -713,11 +719,11 @@ function setupARToolbar() {
     currentTool = 'placement';
     updateToolbarUI();
 
-    // Create debug overlay
+    // Create debug overlay (hidden by default, can be re-enabled for debugging)
     if (!debugEl) {
         debugEl = document.createElement('div');
         debugEl.id = 'ar-debug-status';
-        debugEl.style.cssText = 'position:fixed;top:40px;left:10px;right:10px;color:#0f0;background:rgba(0,0,0,0.7);padding:6px 10px;font:12px monospace;z-index:99999;pointer-events:none;border-radius:4px;';
+        debugEl.style.cssText = 'position:fixed;top:40px;left:10px;right:10px;color:#0f0;background:rgba(0,0,0,0.7);padding:6px 10px;font:12px monospace;z-index:99999;pointer-events:none;border-radius:4px;display:none;';
         const overlay = document.getElementById('ar-overlay');
         if (overlay) overlay.appendChild(debugEl);
     }
@@ -727,8 +733,8 @@ function setupARToolbar() {
     buttons.forEach(btn => {
         btn.onclick = (e) => {
             e.stopPropagation();
-            if (btn.id === 'ar-exit-btn') {
-                endARSession();
+            if (btn.id === 'ar-undo-btn') {
+                undoAR();
                 return;
             }
             const mode = btn.dataset.mode;
@@ -738,10 +744,20 @@ function setupARToolbar() {
                 updateToolState();
             }
         };
-        // Fix for touch devices mostly needing touchstart if click is simulated poorly? 
-        // Usually click works fine on buttons even with touchstart prevented on parent if we didn't stop propagation excessively.
-        // We added logic in onTouchStart to return if target is button.
     });
+
+    // Push undo state when gizmo drag starts
+    if (transformControl) {
+        transformControl.addEventListener('mouseDown', () => {
+            pushARUndoState();
+        });
+    }
+
+    // Bind clone/delete buttons
+    const cloneBtn = document.getElementById('ar-btn-clone');
+    const deleteBtn = document.getElementById('ar-btn-delete');
+    if (cloneBtn) cloneBtn.onclick = () => cloneSelectedAR();
+    if (deleteBtn) deleteBtn.onclick = () => deleteSelectedAR();
 
     // Drag handle logic
     if (toolbarHandleEl && objectPanel) {
@@ -950,4 +966,156 @@ function applySceneState(sceneData) {
             if (entry.scale) obj.scale.fromArray(entry.scale);
         }
     });
+}
+
+// ---- Object List for AR ----
+
+function updateARObjectList() {
+    const list = document.getElementById('ar-object-list');
+    const infoEl = document.getElementById('ar-transform-info');
+    if (!list) return;
+    list.innerHTML = '';
+
+    editableObjects.forEach(obj => {
+        const div = document.createElement('div');
+        const isSelected = selectedObjects.includes(obj);
+        div.className = 'object-item' + (isSelected ? ' selected' : '');
+        div.innerHTML = `
+            <span class="obj-icon">◆</span>
+            <span class="obj-name">${obj.userData._editorOriginalName || obj.name || 'Object'}</span>
+            ${obj.userData._isCloned ? '<span class="obj-cloned">clone</span>' : ''}
+        `;
+        div.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Toggle selection
+            const isSelected = selectedObjects.includes(obj);
+            if (isSelected) {
+                updateSelection(selectedObjects.filter(o => o !== obj));
+            } else {
+                updateSelection([...selectedObjects, obj]);
+            }
+        });
+        list.appendChild(div);
+    });
+
+    // Update select count info
+    if (infoEl) {
+        if (selectedObjects.length > 0) {
+            infoEl.textContent = `Selected ${selectedObjects.length} of ${editableObjects.length} object(s)`;
+        } else {
+            infoEl.textContent = '';
+        }
+    }
+}
+
+// ---- Clone/Delete for AR ----
+
+function cloneSelectedAR() {
+    if (selectedObjects.length === 0 || !arModel) return;
+    pushARUndoState();
+
+    const glbRoot = arModel.children.find(c => c !== selectionGroup);
+    if (!glbRoot) return;
+
+    const currentSelection = [...selectedObjects];
+    updateSelection([]);
+
+    const newClones = [];
+    currentSelection.forEach(obj => {
+        const clone = obj.clone(true);
+        clone.userData._editorIndex = editableObjects.length;
+        clone.userData._editorOriginalName = obj.userData._editorOriginalName + '_clone';
+        clone.userData._isCloned = true;
+        clone.userData._sourceIndex = obj.userData._isCloned
+            ? obj.userData._sourceIndex
+            : obj.userData._editorIndex;
+        clone.name = clone.userData._editorOriginalName;
+        clone.position.x += 0.1;
+
+        glbRoot.add(clone);
+        editableObjects.push(clone);
+        newClones.push(clone);
+    });
+
+    updateSelection(newClones);
+    arDebugStatus(`Cloned ${newClones.length} objects`);
+}
+
+function deleteSelectedAR() {
+    if (selectedObjects.length === 0) return;
+    pushARUndoState();
+
+    const toDelete = selectedObjects.filter(obj => obj.userData._isCloned);
+    if (toDelete.length === 0) {
+        arDebugStatus('Cannot delete original objects');
+        return;
+    }
+
+    transformControl.detach();
+
+    toDelete.forEach(obj => {
+        if (obj.parent) obj.parent.remove(obj);
+        const idx = editableObjects.indexOf(obj);
+        if (idx > -1) editableObjects.splice(idx, 1);
+    });
+
+    selectedObjects = selectedObjects.filter(obj => !toDelete.includes(obj));
+    const remaining = [...selectedObjects];
+    selectionGroup.clear();
+    transformControl.detach();
+    updateSelection(remaining);
+    arDebugStatus(`Deleted ${toDelete.length} objects`);
+}
+
+// ---- Undo Logic for AR ----
+
+function pushARUndoState() {
+    const currentSel = [...selectedObjects];
+    updateSelection([]);
+
+    const snapshot = editableObjects.map(obj => ({
+        ref: obj,
+        position: obj.position.toArray(),
+        rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+        scale: obj.scale.toArray(),
+        isCloned: !!obj.userData._isCloned,
+        parent: obj.parent,
+    }));
+    arUndoStack.push(snapshot);
+    if (arUndoStack.length > AR_MAX_UNDO) arUndoStack.shift();
+
+    updateSelection(currentSel);
+}
+
+function undoAR() {
+    if (arUndoStack.length === 0) {
+        arDebugStatus('Nothing to undo');
+        return;
+    }
+
+    const snapshot = arUndoStack.pop();
+    updateSelection([]);
+    transformControl.detach();
+
+    const snapshotRefs = new Set(snapshot.map(s => s.ref));
+    const toRemove = editableObjects.filter(obj => !snapshotRefs.has(obj));
+    toRemove.forEach(obj => {
+        if (obj.parent) obj.parent.remove(obj);
+    });
+
+    editableObjects = [];
+    const glbRoot = arModel ? arModel.children.find(c => c !== selectionGroup) : null;
+    snapshot.forEach(entry => {
+        const obj = entry.ref;
+        obj.position.fromArray(entry.position);
+        obj.rotation.set(entry.rotation[0], entry.rotation[1], entry.rotation[2]);
+        obj.scale.fromArray(entry.scale);
+        if (!obj.parent && glbRoot) {
+            glbRoot.add(obj);
+        }
+        editableObjects.push(obj);
+    });
+
+    updateARObjectList();
+    arDebugStatus('Undo applied');
 }
