@@ -240,14 +240,13 @@ async function launchAR(modelUrl) {
 
     const supported = await isARSupported();
     if (supported) {
-        showScreen('editor-screen'); // Keep editor canvas paused in bg so when we return it's there
-        pauseEditor();
+        showScreen(''); // Close the normal viewer
         arOverlay.style.display = 'block';
 
         const success = await startARSession(modelUrl, arOverlay, {
             onExit: () => {
                 arOverlay.style.display = 'none';
-                switchMode('editor'); // automatically switch tabs back to editor
+                if (state.config.mode === 'ar') switchMode('editor'); // automatically switch tabs back to editor
             },
             sceneData: state.config?.scene
         });
@@ -285,11 +284,12 @@ async function launchScanner() {
         return;
     }
 
+    showScreen(''); // Close the normal viewer
     arScannerOverlay.style.display = 'block';
     const success = await startScannerSession(arScannerOverlay, {
         onExit: () => {
             arScannerOverlay.style.display = 'none';
-            switchMode('editor');
+            if (state.config.mode === 'scanner') switchMode('editor');
         }
     });
 

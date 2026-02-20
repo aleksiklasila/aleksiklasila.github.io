@@ -146,7 +146,6 @@ export function initEditor(canvasEl, callbacks) {
     document.getElementById('btn-space').addEventListener('click', toggleSpace);
     document.getElementById('btn-clone').addEventListener('click', cloneSelected);
     document.getElementById('btn-delete').addEventListener('click', deleteSelected);
-    document.getElementById('btn-open-viewer').addEventListener('click', openInViewer);
     document.getElementById('btn-share').addEventListener('click', shareLink);
 
     // Start render loop
@@ -1034,19 +1033,7 @@ function saveScene() {
     }
 }
 
-async function openInViewer() {
-    if (!loadedModel) return;
-    setStatus('Exporting scene to GLB...');
-    try {
-        const blobUrl = await exportSceneAsGLB();
-        if (onRequestViewScene) {
-            onRequestViewScene(blobUrl);
-        }
-    } catch (err) {
-        console.error('Export failed:', err);
-        setStatus('Export error: ' + err.message);
-    }
-}
+
 
 function shareLink() {
     const url = window.location.href;
