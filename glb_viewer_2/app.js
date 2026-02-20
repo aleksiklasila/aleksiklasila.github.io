@@ -243,14 +243,18 @@ async function launchAR(modelUrl) {
         showScreen(''); // Close the normal viewer
         arOverlay.style.display = 'block';
 
+        // Move top nav bar INTO the AR overlay so it's visible during WebXR DOM Overlay
+        arOverlay.appendChild(topNavBar);
+
         const success = await startARSession(modelUrl, arOverlay, {
             onExit: () => {
+                // Move top nav bar back to body
+                document.body.insertBefore(topNavBar, document.body.firstChild);
                 arOverlay.style.display = 'none';
-                if (state.config.mode === 'ar') switchMode('editor'); // automatically switch tabs back to editor
+                if (state.config.mode === 'ar') switchMode('editor');
             },
             sceneData: state.config?.scene,
             onSceneChanged: (sceneState) => {
-                // Sync AR edits to URL (same as editor)
                 if (!state.config) state.config = {};
                 state.config.scene = sceneState;
                 updateUrlConfig(state.config);
@@ -258,12 +262,12 @@ async function launchAR(modelUrl) {
         });
 
         if (!success) {
+            // Move nav bar back on failure
+            document.body.insertBefore(topNavBar, document.body.firstChild);
             arOverlay.style.display = 'none';
-            // Fallback
             launchFallbackAR(modelUrl);
         }
     } else {
-        // Fallback
         launchFallbackAR(modelUrl);
     }
 }
@@ -292,14 +296,21 @@ async function launchScanner() {
 
     showScreen(''); // Close the normal viewer
     arScannerOverlay.style.display = 'block';
+
+    // Move top nav bar INTO the scanner overlay so it's visible during WebXR DOM Overlay
+    arScannerOverlay.appendChild(topNavBar);
+
     const success = await startScannerSession(arScannerOverlay, {
         onExit: () => {
+            // Move top nav bar back to body
+            document.body.insertBefore(topNavBar, document.body.firstChild);
             arScannerOverlay.style.display = 'none';
             if (state.config.mode === 'scanner') switchMode('editor');
         }
     });
 
     if (!success) {
+        document.body.insertBefore(topNavBar, document.body.firstChild);
         arScannerOverlay.style.display = 'none';
         switchMode('editor');
     }
