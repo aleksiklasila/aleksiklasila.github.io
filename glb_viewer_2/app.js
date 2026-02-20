@@ -199,6 +199,7 @@ async function switchMode(mode, initialLoad = false) {
     if (mode === 'editor') {
         startEditor(state.config.model, state.config.scene);
     } else if (mode === 'ar') {
+        // Must wait for editor to initialize/load if we are pulling a scene
         launchAR(state.config.model);
     } else if (mode === 'scanner') {
         launchScanner();
@@ -247,7 +248,8 @@ async function launchAR(modelUrl) {
             onExit: () => {
                 arOverlay.style.display = 'none';
                 switchMode('editor'); // automatically switch tabs back to editor
-            }
+            },
+            sceneData: state.config?.scene
         });
 
         if (!success) {
