@@ -15,7 +15,8 @@
 // ============================================================
 
 import { initEditor, loadModel, applySceneState, getSceneState, exportSceneAsGLB, loadAndComposeGLB, pauseEditor, resumeEditor } from './editor.js';
-import { startARSession, isARSupported } from './ar-viewer.js';
+import { startARSession, isARSupported, endARSession } from './ar-viewer.js';
+import { startScannerSession, isScannerSupported, endScannerSession, exportScanAsGLB } from './ar-scanner-app.js';
 
 // --- URL Compression Helpers ---
 
@@ -78,12 +79,24 @@ const screens = {
 };
 
 const inputUrl = document.getElementById('model-url-input');
-const btnLoad = document.getElementById('load-btn');
-const btnEdit = document.getElementById('edit-btn');
-const btnEditFromViewer = document.getElementById('btn-edit-from-viewer');
-const btnARLaunch = document.getElementById('ar-launch-btn');
+const btnStartEditor = document.getElementById('btn-start-editor');
+const btnStartAR = document.getElementById('btn-start-ar');
+const btnStartScanner = document.getElementById('btn-start-scanner');
+
+const topNavBar = document.getElementById('top-nav-bar');
+const navTabs = {
+    editor: document.getElementById('nav-tab-editor'),
+    ar: document.getElementById('nav-tab-ar'),
+    scanner: document.getElementById('nav-tab-scanner')
+};
+const btnExportGLB = document.getElementById('btn-export-glb');
+
 const arOverlay = document.getElementById('ar-overlay');
-const btnsBack = document.querySelectorAll('.back-btn');
+const arScannerOverlay = document.getElementById('ar-scanner-overlay');
+
+// We use model-viewer purely as a fallback for AR
+const standardViewerScreen = document.getElementById('standard-viewer-screen');
+const objModelViewer = document.getElementById('main-model-viewer');
 
 // --- Initialization ---
 
@@ -108,76 +121,90 @@ async function init() {
 
     // 3. Route based on config
     if (state.config && state.config.model) {
-        if (state.config.mode === 'editor') {
-            // Editor mode
-            await startEditor(state.config.model, state.config.scene);
-        } else if (state.config.scene && state.config.scene.length > 0) {
-            // Viewer with scene composition
-            await composeAndView(state.config.model, state.config.scene);
-        } else {
-            // Plain viewer
-            loadStandardViewer(state.config.model);
-            showScreen('standard-viewer-screen');
-        }
+        if (!state.config.mode) state.config.mode = 'editor';
+        switchMode(state.config.mode, true);
     } else {
         showScreen('input-screen');
     }
 
     // 4. Event Listeners
-    btnLoad.addEventListener('click', () => handleUrlInput('viewer'));
-    btnEdit.addEventListener('click', () => handleUrlInput('editor'));
+    btnStartEditor.addEventListener('click', () => handleUrlInput('editor'));
+    btnStartAR.addEventListener('click', () => handleUrlInput('ar'));
+    btnStartScanner.addEventListener('click', () => handleUrlInput('scanner'));
+
     inputUrl.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') handleUrlInput('viewer');
+        if (e.key === 'Enter') handleUrlInput('editor');
     });
 
-    btnEditFromViewer.addEventListener('click', () => {
-        if (state.config && state.config.model) {
-            state.config.mode = 'editor';
-            updateUrlConfig(state.config);
-            startEditor(state.config.model, state.config.scene);
-        }
+    Object.keys(navTabs).forEach(mode => {
+        navTabs[mode].addEventListener('click', () => switchMode(mode));
     });
 
-    btnsBack.forEach(btn => {
-        btn.addEventListener('click', () => {
-            showScreen('input-screen');
-            state.config = null;
-            // Clear URL
-            const url = new URL(window.location);
-            url.searchParams.delete('d');
-            url.searchParams.delete('model');
-            url.searchParams.delete('mode');
-            url.searchParams.delete('scene');
-            window.history.pushState({}, '', url);
+    if (btnExportGLB) {
+        btnExportGLB.addEventListener('click', async () => {
+            // Let editor or scanner handle export logic depending on mode
+            if (state.config.mode === 'editor' || state.config.mode === 'ar') {
+                // AR Viewer and Editor use the same scene/glb structure, we'll just export editor's since they are synced (or AR Viewer could have its own)
+                const url = await exportSceneAsGLB();
+                if (url) {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'scene.glb';
+                    a.click();
+                }
+            } else if (state.config.mode === 'scanner') {
+                const url = await exportScanAsGLB();
+                if (url) {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'scan.glb';
+                    a.click();
+                }
+            }
         });
-    });
-
-    // AR launch button
-    btnARLaunch.addEventListener('click', launchAR);
-
-    // Check AR support and show/hide the AR button
-    isARSupported().then(supported => {
-        btnARLaunch.style.display = supported ? '' : 'none';
-    });
+    }
 }
 
 async function handleUrlInput(mode) {
     const url = inputUrl.value.trim();
-    if (!url) {
+    if (!url && mode !== 'scanner') { // Scanner doesn't strictly need a model, but editor does
         alert('Please enter a valid URL');
         return;
     }
 
-    state.config = { model: url };
+    if (!state.config) state.config = {};
+    if (url) state.config.model = url;
+
+    updateUrlConfig(state.config);
+
+    switchMode(mode);
+}
+
+async function switchMode(mode, initialLoad = false) {
+    // End active XR sessions when switching away
+    if (state.config.mode !== mode && !initialLoad) {
+        if (state.config.mode === 'ar') endARSession();
+        if (state.config.mode === 'scanner') endScannerSession();
+    }
+
+    state.config.mode = mode;
+    updateUrlConfig(state.config);
+
+    // Update Top Tabs
+    Object.values(navTabs).forEach(t => t.classList.remove('active'));
+    if (navTabs[mode]) navTabs[mode].classList.add('active');
+
+    topNavBar.classList.add('visible');
 
     if (mode === 'editor') {
-        state.config.mode = 'editor';
-        updateUrlConfig(state.config);
-        await startEditor(url);
+        startEditor(state.config.model, state.config.scene);
+    } else if (mode === 'ar') {
+        launchAR(state.config.model);
+    } else if (mode === 'scanner') {
+        launchScanner();
     } else {
-        updateUrlConfig(state.config);
-        loadStandardViewer(url);
-        showScreen('standard-viewer-screen');
+        topNavBar.classList.remove('visible');
+        showScreen('input-screen');
     }
 }
 
@@ -201,44 +228,72 @@ function showScreen(screenId) {
     }
 }
 
-// --- Standard Viewer ---
-
-function loadStandardViewer(url) {
-    const viewer = document.getElementById('main-model-viewer');
-    if (url && viewer.src !== url) {
-        viewer.src = url;
-    }
-}
-
 // --- AR Viewer ---
 
-async function launchAR() {
-    // Get the current model URL from model-viewer (could be regular URL or blob URL)
-    const viewer = document.getElementById('main-model-viewer');
-    const modelUrl = viewer.src || (state.config && state.config.model);
-
+async function launchAR(modelUrl) {
     if (!modelUrl) {
         alert('No model loaded to view in AR.');
+        switchMode('editor');
         return;
     }
 
-    // Pause model-viewer to free GPU (hide stops its internal render loop)
-    viewer.style.display = 'none';
+    const supported = await isARSupported();
+    if (supported) {
+        showScreen('editor-screen'); // Keep editor canvas paused in bg so when we return it's there
+        pauseEditor();
+        arOverlay.style.display = 'block';
 
-    // Show overlay
-    arOverlay.style.display = 'block';
+        const success = await startARSession(modelUrl, arOverlay, {
+            onExit: () => {
+                arOverlay.style.display = 'none';
+                switchMode('editor'); // automatically switch tabs back to editor
+            }
+        });
 
-    const success = await startARSession(modelUrl, arOverlay, {
-        onExit: () => {
+        if (!success) {
             arOverlay.style.display = 'none';
-            // Resume model-viewer
-            viewer.style.display = '';
+            // Fallback
+            launchFallbackAR(modelUrl);
+        }
+    } else {
+        // Fallback
+        launchFallbackAR(modelUrl);
+    }
+}
+
+async function launchFallbackAR(modelUrl) {
+    if (objModelViewer.src !== modelUrl) objModelViewer.src = modelUrl;
+    standardViewerScreen.classList.add('active'); // show screen manually
+    // Automatically trigger model-viewer's AR
+    try {
+        await objModelViewer.activateAR();
+    } catch (err) {
+        alert("AR is completely unsupported here.");
+        switchMode('editor');
+    }
+}
+
+// --- AR Scanner ---
+
+async function launchScanner() {
+    const supported = await isScannerSupported();
+    if (!supported) {
+        alert("AR Scanner is not supported on your device. WebXR Immersive AR is required.");
+        switchMode('editor');
+        return;
+    }
+
+    arScannerOverlay.style.display = 'block';
+    const success = await startScannerSession(arScannerOverlay, {
+        onExit: () => {
+            arScannerOverlay.style.display = 'none';
+            switchMode('editor');
         }
     });
 
     if (!success) {
-        arOverlay.style.display = 'none';
-        viewer.style.display = '';
+        arScannerOverlay.style.display = 'none';
+        switchMode('editor');
     }
 }
 

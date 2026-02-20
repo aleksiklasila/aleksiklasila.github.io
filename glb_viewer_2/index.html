@@ -25,6 +25,14 @@
 </head>
 
 <body>
+    <!-- TOP NAVIGATION BAR -->
+    <div id="top-nav-bar" class="top-nav">
+        <button id="nav-tab-editor" class="nav-tab" data-target="editor">🖥️ Normal Viewer</button>
+        <button id="nav-tab-ar" class="nav-tab" data-target="ar">👓 AR Viewer</button>
+        <button id="nav-tab-scanner" class="nav-tab" data-target="scanner">📡 AR Scanner</button>
+        <div style="flex-grow: 1;"></div>
+        <button id="btn-export-glb" class="btn btn-accent" title="Export GLB">💾 Export GLB</button>
+    </div>
 
     <!-- STATE 1: Model Input (Shown if no ?model= parameter) -->
     <div id="input-screen" class="screen active">
@@ -33,8 +41,9 @@
             <p>Enter a URL to a .glb or .gltf file to view it.</p>
             <input type="text" id="model-url-input" placeholder="https://example.com/model.glb">
             <div class="input-buttons">
-                <button id="load-btn">View Model</button>
-                <button id="edit-btn" class="btn-editor">Edit Scene</button>
+                <button id="btn-start-editor" class="btn-editor">Normal Viewer</button>
+                <button id="btn-start-ar">AR Viewer</button>
+                <button id="btn-start-scanner" style="background-color: #6f42c1;">AR Scanner</button>
             </div>
         </div>
     </div>
@@ -111,7 +120,6 @@
                     <button class="tool-btn" data-mode="select" title="Select Object">🖱️</button>
                     <button class="tool-btn" data-mode="cursor" title="Set Pivot (Cursor)">📍</button>
                     <button class="tool-btn" data-mode="generic" title="Generic (Touch)">👆</button>
-                    <button class="tool-btn" data-mode="scanner" title="Scanner (Show Planes)">📡</button>
                     <div class="toolbar-sep"></div>
                     <button class="tool-btn" data-mode="translate" title="Move">✢</button>
                     <button class="tool-btn" data-mode="rotate" title="Rotate">↻</button>
@@ -123,6 +131,18 @@
             </div>
             <div id="ar-object-panel" class="object-panel collapsed" style="height: 0px;">
                 <!-- Expandable area for future AR options -->
+            </div>
+        </div>
+    </div>
+
+    <!-- AR Scanner Overlay (custom Three.js WebXR) -->
+    <div id="ar-scanner-overlay" class="ar-overlay">
+        <div class="bottom-panel-wrapper">
+            <div class="toolbar-container"
+                style="justify-content: center; background: rgba(30,30,30,0.85); border-top: 1px solid var(--border);">
+                <div style="color: white; font-size: 14px; margin-right: 16px;">Scan your environment...</div>
+                <button class="tool-btn btn-danger" id="ar-scanner-exit-btn" title="Exit Scanner"
+                    style="color: white; border: none;">✕</button>
             </div>
         </div>
     </div>

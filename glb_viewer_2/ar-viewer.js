@@ -10,7 +10,6 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { ARScanner } from './ar-scanner.js';
 
 let renderer, scene, camera;
 let arModel = null;
@@ -21,9 +20,6 @@ let reticle = null;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 let modelPlaced = false;
-
-// Scanner Tool
-let arScanner = null;
 
 // Gizmo Controls
 let transformControl = null;
@@ -271,10 +267,6 @@ function onXRFrame(timestamp, frame) {
                 if (pose) {
                     reticle.visible = (currentTool === 'placement' && !modelPlaced);
                     reticle.matrix.fromArray(pose.transform.matrix);
-
-                    if (currentTool === 'scanner' && arScanner) {
-                        arScanner.addHit(pose.transform.matrix);
-                    }
 
                     // Auto-placement logic for 'placement' tool
                     if (currentTool === 'placement' && arModel) {
@@ -584,11 +576,6 @@ function cleanup() {
     hitTestSourceRequested = false;
     arModel = null;
     touches = {};
-
-    if (arScanner) {
-        arScanner.reset();
-        arScanner = null;
-    }
 
     if (transformControl) {
         transformControl.dispose();
