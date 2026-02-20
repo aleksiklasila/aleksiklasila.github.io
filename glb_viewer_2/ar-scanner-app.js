@@ -250,6 +250,14 @@ function undoLastScan() {
     rebuildGrid();
 }
 
+// Global re-usable objects for depth processing to avoid GC freeze
+const _viewPos = new THREE.Vector3();
+const _camPos = new THREE.Vector3();
+const _invProj = new THREE.Matrix4();
+const _camMatrix = new THREE.Matrix4();
+const _dummyObj = new THREE.Object3D();
+const _splatMatrix = new THREE.Matrix4();
+
 // ---- XR Render Loop ----
 
 function onXRFrame(timestamp, frame) {
@@ -268,15 +276,37 @@ function onXRFrame(timestamp, frame) {
             if (depthInfo) {
                 depthProcessed = true;
 
-                // Sample the depth map to create splats
-                // We don't sample every pixel (too dense), just a grid
-                const step = Math.max(1, Math.floor(Math.min(depthInfo.width, depthInfo.height) / 30));
+                // Pre-calculate matrices for this frame
+                _camMatrix.fromArray(view.transform.matrix);
+                _invProj.fromArray(view.projectionMatrix).invert();
+                _camPos.setFromMatrixPosition(_camMatrix);
 
-                // Camera world transform
-                const camMatrix = new THREE.Matrix4().fromArray(view.transform.matrix);
+                // Update cursor using depth at the center of the screen
+                const centerX = Math.floor(depthInfo.width / 2);
+                const centerY = Math.floor(depthInfo.height / 2);
+                const centerDepth = depthInfo.getDepthInMeters(centerX, centerY);
 
-                for (let x = 0; x < depthInfo.width; x += step) {
-                    for (let y = 0; y < depthInfo.height; y += step) {
+                if (cursorMesh && centerDepth > 0.1 && centerDepth < 5.0) {
+                    _viewPos.set(0, 0, -1).applyMatrix4(_invProj);
+                    const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
+                    _viewPos.multiplyScalar(centerDepth / rayLength);
+                    _viewPos.applyMatrix4(_camMatrix);
+
+                    _dummyObj.position.copy(_viewPos);
+                    _dummyObj.lookAt(_camPos);
+                    cursorMesh.matrix.copy(_dummyObj.matrix);
+                    cursorMesh.visible = true;
+                }
+
+                if (isScanning) {
+                    // Randomly sample a very small number of points per frame to avoid freeze
+                    // e.g., 20 points per frame is enough if scanning continuously
+                    const numSamples = 30;
+
+                    for (let i = 0; i < numSamples; i++) {
+                        const x = Math.floor(Math.random() * depthInfo.width);
+                        const y = Math.floor(Math.random() * depthInfo.height);
+
                         const depthInMeters = depthInfo.getDepthInMeters(x, y);
 
                         // Ignore points too close or too far
@@ -286,41 +316,27 @@ function onXRFrame(timestamp, frame) {
                             const ndcY = -(y / depthInfo.height) * 2 + 1;
 
                             // Unproject point using the view's inverse projection matrix
-                            const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
-                            const viewPos = new THREE.Vector3(ndcX, ndcY, -1).applyMatrix4(invProj);
+                            _viewPos.set(ndcX, ndcY, -1).applyMatrix4(_invProj);
 
-                            // Scale to actual depth 
-                            // The unprojected point is at z=-1 (in view space). 
-                            // True distance from camera origin is depthInMeters.
-                            // The ray length to z=-1 plane is sqrt(x^2 + y^2 + 1).
-                            const rayLength = Math.sqrt(viewPos.x * viewPos.x + viewPos.y * viewPos.y + 1);
-                            viewPos.multiplyScalar(depthInMeters / rayLength);
+                            // Scale to actual depth
+                            const rayLength = Math.sqrt(_viewPos.x * _viewPos.x + _viewPos.y * _viewPos.y + 1);
+                            _viewPos.multiplyScalar(depthInMeters / rayLength);
 
                             // Convert to world space
-                            viewPos.applyMatrix4(camMatrix);
+                            _viewPos.applyMatrix4(_camMatrix);
 
-                            // Calculate normal pointing towards camera
-                            const normal = new THREE.Vector3().subVectors(
-                                new THREE.Vector3().setFromMatrixPosition(camMatrix),
-                                viewPos
-                            ).normalize();
+                            // Create splat matrix (position is viewPos, looking at camera)
+                            _dummyObj.position.copy(_viewPos);
+                            _dummyObj.lookAt(_camPos);
 
-                            // Create splat matrix
-                            const splatMatrix = new THREE.Matrix4();
-                            // lookAt matrix (position is viewPos, looking at camera)
-                            const dummyObj = new THREE.Object3D();
-                            dummyObj.position.copy(viewPos);
-                            dummyObj.lookAt(new THREE.Vector3().setFromMatrixPosition(camMatrix));
-
-                            splatMatrix.copy(dummyObj.matrix);
-
-                            addSplat(splatMatrix);
+                            _splatMatrix.copy(_dummyObj.matrix);
+                            addSplat(_splatMatrix);
                         }
                     }
-                }
 
-                if (scanSessions.length > 0) {
-                    scanSessions[scanSessions.length - 1].endIndex = numSplats;
+                    if (scanSessions.length > 0) {
+                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
+                    }
                 }
             }
         }
@@ -345,8 +361,9 @@ function onXRFrame(timestamp, frame) {
             if (pose) {
                 const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
 
-                // Update cursor position (always visible when surface detected)
-                if (cursorMesh) {
+                // Update cursor position with hit-test only if depth wasn't processed
+                // Depth processing already positions the cursor more accurately
+                if (cursorMesh && !depthProcessed) {
                     cursorMesh.matrix.copy(matrix);
                     cursorMesh.visible = true;
                 }
