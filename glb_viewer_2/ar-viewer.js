@@ -165,9 +165,10 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         container.name = '__arContainer';
         container.add(arModel);
 
-        // Selection Group
+        // Selection Group — inside container so it moves with placement
         selectionGroup = new THREE.Group();
-        scene.add(selectionGroup);
+        selectionGroup.name = '__selectionGroup';
+        container.add(selectionGroup);
 
         // Highlight Helper
         selectionBoxHelper = new THREE.BoxHelper(selectionGroup, 0xffff00);
@@ -273,12 +274,7 @@ function onXRFrame(timestamp, frame) {
                         reticle.matrix.decompose(reticlePos, reticleQuat, reticleScale);
 
                         arModel.position.copy(reticlePos);
-                        // We do NOT copy rotation, as user might want to rotate manualy.
-                        // But we should ensure model is visible.
                         arModel.visible = true;
-
-                        // If this is the very first placement, maybe align to surface? 
-                        // For now, keep Y up or whatever GLB default is.
 
                         // Update floor plane for gestures (if they switch to generic later)
                         dragPlane.constant = -reticlePos.y;
@@ -339,15 +335,11 @@ function onTouchStart(event) {
 
             // Set initial tool
             updateToolState();
-            // Auto-select all objects so tools work immediately
-            updateSelection(editableObjects);
         }
 
         // If currentTool is 'placement', we consider it placed once hits are found in onXRFrame
         if (currentTool === 'placement') {
             modelPlaced = true;
-            // Auto-select all objects so tools work immediately
-            updateSelection(editableObjects);
         }
 
         return;
@@ -361,14 +353,14 @@ function onTouchStart(event) {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
-        // Intersect recursive
-        const intersects = raycaster.intersectObjects(arModel.children, true);
+        // Raycast against editableObjects (they may be in selectionGroup, not arModel directly)
+        const intersects = raycaster.intersectObjects(editableObjects, true);
 
         if (intersects.length > 0) {
             const hit = intersects[0];
             const hitPoint = hit.point;
 
-            // Re-pivot logic
+            // Re-pivot logic — detach children, move container, re-attach
             const children = [...arModel.children];
             children.forEach(child => {
                 scene.attach(child);
@@ -463,11 +455,14 @@ function onTouchStart(event) {
         const ndcY = -(t.y / window.innerHeight) * 2 + 1;
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
         const hitPoint = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && selectionGroup) {
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && selectionGroup && arModel) {
+            // Convert selectionGroup world position to compute offset
+            const sgWorld = new THREE.Vector3();
+            selectionGroup.getWorldPosition(sgWorld);
             dragOffset.set(
-                selectionGroup.position.x - hitPoint.x,
+                sgWorld.x - hitPoint.x,
                 0,
-                selectionGroup.position.z - hitPoint.z
+                sgWorld.z - hitPoint.z
             );
         } else {
             dragOffset.set(0, 0, 0);
@@ -540,16 +535,18 @@ function onTouchMove(event) {
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
         const intersection = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, intersection)) {
-            // Apply to group
-            // We need to maintain offset
-            const newPos = new THREE.Vector3(
+        if (dragRaycaster.ray.intersectPlane(dragPlane, intersection) && arModel) {
+            // intersection is in world space. Convert target to world, then back to local.
+            const targetWorld = new THREE.Vector3(
                 intersection.x + dragOffset.x,
-                selectionGroup.position.y, // Maintain Y
+                0,
                 intersection.z + dragOffset.z
             );
-            selectionGroup.position.x = newPos.x;
-            selectionGroup.position.z = newPos.z;
+            // Convert to arModel local space
+            arModel.updateMatrixWorld();
+            const targetLocal = arModel.worldToLocal(targetWorld);
+            selectionGroup.position.x = targetLocal.x;
+            selectionGroup.position.z = targetLocal.z;
             selectionGroup.updateMatrixWorld();
         }
     }
@@ -626,18 +623,14 @@ export async function endARSession() {
 function updateSelection(objects) {
     if (!selectionGroup || !arModel) return;
 
-    // The 'arModel' variable is actually the Container Group now (see startARSession).
-    // The actual GLB model is a child of it.
-    // Let's find the original model root to re-attach objects to.
-    // We added: container.add(arModel_original); container.add(selectionGroup);
-    // So arModel (container) . children[0] is likely the original GLB root? 
-    // Wait, earlier code: `arModel = gltf.scene; ... container.add(arModel); ... arModel = container;`
-    // So `arModel` (global) is the container.
-    // The GLB root is `arModel.children.find(c => c !== selectionGroup)`.
+    // arModel is the container (__arContainer). Its children are:
+    //   [0] = gltf.scene (the GLB root with editable objects)
+    //   [1] = selectionGroup
+    // Find the GLB root (first child that isn't selectionGroup)
+    const glbRoot = arModel.children.find(c => c !== selectionGroup);
 
-    // 1. Detach current
+    // 1. Detach current selection back to glbRoot
     if (selectedObjects.length > 0) {
-        const glbRoot = arModel.children[0]; // The original gltf scene
         const currentChildren = [...selectionGroup.children];
         currentChildren.forEach(child => {
             if (glbRoot) glbRoot.attach(child);
@@ -654,7 +647,7 @@ function updateSelection(objects) {
         return;
     }
 
-    // 4. Calculate Pivot (Avg X/Z, Min Y)
+    // 4. Calculate Pivot in world space (Avg X/Z, Min Y)
     let avgX = 0, avgZ = 0, minY = Infinity;
 
     selectedObjects.forEach(obj => {
@@ -669,13 +662,18 @@ function updateSelection(objects) {
     avgZ /= selectedObjects.length;
     if (minY === Infinity) minY = 0;
 
-    // 5. Position Group
-    selectionGroup.position.set(avgX, minY, avgZ);
+    // 5. Position Group — convert world pivot to arModel-local coordinates
+    //    since selectionGroup is now inside arModel (the container)
+    const worldPivot = new THREE.Vector3(avgX, minY, avgZ);
+    arModel.updateMatrixWorld();
+    const localPivot = arModel.worldToLocal(worldPivot);
+
+    selectionGroup.position.copy(localPivot);
     selectionGroup.rotation.set(0, 0, 0);
     selectionGroup.scale.set(1, 1, 1);
     selectionGroup.updateMatrixWorld();
 
-    // 6. Attach
+    // 6. Attach (preserves world transforms)
     selectedObjects.forEach(obj => {
         selectionGroup.attach(obj);
     });
@@ -815,13 +813,28 @@ function updateToolbarUI() {
 }
 
 function updateToolState() {
-    if (!transformControl || !selectionGroup) return;
+    if (!transformControl) return;
 
-    if (currentTool === 'generic' || currentTool === 'placement' || currentTool === 'select') {
+    if (currentTool === 'placement') {
+        // Placement moves arModel container directly.
+        // Detach objects back from selectionGroup so they move with the container.
+        if (selectedObjects.length > 0 && selectionGroup) {
+            updateSelection([]);
+        }
         transformControl.detach();
+    } else if (currentTool === 'generic' || currentTool === 'select') {
+        transformControl.detach();
+        // Auto-select all objects if none selected
+        if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
+            updateSelection(editableObjects);
+        }
     } else if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
+        // Auto-select all objects if none selected
+        if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
+            updateSelection(editableObjects);
+        }
         transformControl.setMode(currentTool);
-        if (selectedObjects.length > 0) {
+        if (selectedObjects.length > 0 && selectionGroup) {
             transformControl.attach(selectionGroup);
         }
     }
