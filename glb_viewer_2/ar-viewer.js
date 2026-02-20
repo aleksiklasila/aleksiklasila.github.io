@@ -464,18 +464,24 @@ function onTouchStart(event) {
         isTwoFingerGesture = false;
         isDragging = true;
 
-        // Compute drag offset: difference between model pos and where the ray hits the floor
+        // Determine transform target: selectionGroup for subset, arModel for all
+        const transformTarget = (selectedObjects.length > 0 && selectedObjects.length < editableObjects.length && selectionGroup)
+            ? selectionGroup : arModel;
+
+        // Compute drag offset: difference between target pos and where the ray hits the floor
         const t = touches[touchKeys[0]];
         const ndcX = (t.x / window.innerWidth) * 2 - 1;
         const ndcY = -(t.y / window.innerHeight) * 2 + 1;
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
         const hitPoint = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && arModel) {
-            // Use arModel position directly (world space, since arModel is child of scene)
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && transformTarget) {
+            // Get world position of transform target
+            const targetWorldPos = new THREE.Vector3();
+            transformTarget.getWorldPosition(targetWorldPos);
             dragOffset.set(
-                arModel.position.x - hitPoint.x,
+                targetWorldPos.x - hitPoint.x,
                 0,
-                arModel.position.z - hitPoint.z
+                targetWorldPos.z - hitPoint.z
             );
         } else {
             dragOffset.set(0, 0, 0);
@@ -506,6 +512,10 @@ function onTouchMove(event) {
 
     if (!arModel) return;
 
+    // Determine transform target: selectionGroup for subset, arModel for all
+    const transformTarget = (selectedObjects.length > 0 && selectedObjects.length < editableObjects.length && selectionGroup)
+        ? selectionGroup : arModel;
+
     if (isTwoFingerGesture && touchKeys.length === 2) {
         // Allow scaling/rotation in both generic and placement modes
         const t1 = touches[touchKeys[0]];
@@ -515,31 +525,31 @@ function onTouchMove(event) {
         const dist = Math.hypot(t2.x - t1.x, t2.y - t1.y);
         const angle = Math.atan2(t2.y - t1.y, t2.x - t1.x);
 
-        // Pinch to scale — operate on arModel directly
+        // Pinch to scale
         if (lastTouchDist > 0) {
             const scaleFactor = dist / lastTouchDist;
-            arModel.scale.multiplyScalar(scaleFactor);
+            transformTarget.scale.multiplyScalar(scaleFactor);
             // Clamp scale
-            const s = arModel.scale.x;
+            const s = transformTarget.scale.x;
             const clamped = Math.max(0.01, Math.min(s, 20));
-            arModel.scale.setScalar(clamped);
+            transformTarget.scale.setScalar(clamped);
         }
 
         // Rotate around Y axis
         const angleDelta = angle - lastTouchAngle;
-        arModel.rotation.y += angleDelta;
+        transformTarget.rotation.y += angleDelta;
 
         lastTouchDist = dist;
         lastTouchAngle = angle;
         lastTouchCenter = { x: (t1.x + t2.x) / 2, y: (t1.y + t2.y) / 2 };
 
-        arModel.updateMatrixWorld();
+        transformTarget.updateMatrixWorld();
 
     } else if (isDragging && touchKeys.length === 1) {
         // Single finger drag — only in generic mode
         if (currentTool === 'placement') return;
 
-        // Single finger drag — move model on the floor plane
+        // Single finger drag — move on the floor plane
         const t = touches[touchKeys[0]];
 
         // Cast ray from touch point onto the floor plane
@@ -549,10 +559,23 @@ function onTouchMove(event) {
 
         const intersection = new THREE.Vector3();
         if (dragRaycaster.ray.intersectPlane(dragPlane, intersection)) {
-            // Move arModel directly (world space)
-            arModel.position.x = intersection.x + dragOffset.x;
-            arModel.position.z = intersection.z + dragOffset.z;
-            arModel.updateMatrixWorld();
+            // Move transform target (world space for arModel, local for selectionGroup)
+            if (transformTarget === arModel) {
+                transformTarget.position.x = intersection.x + dragOffset.x;
+                transformTarget.position.z = intersection.z + dragOffset.z;
+            } else {
+                // selectionGroup is inside arModel, convert to local
+                const worldTarget = new THREE.Vector3(
+                    intersection.x + dragOffset.x,
+                    transformTarget.getWorldPosition(new THREE.Vector3()).y,
+                    intersection.z + dragOffset.z
+                );
+                arModel.updateMatrixWorld();
+                const localPos = arModel.worldToLocal(worldTarget);
+                transformTarget.position.x = localPos.x;
+                transformTarget.position.z = localPos.z;
+            }
+            transformTarget.updateMatrixWorld();
         }
     }
 }
