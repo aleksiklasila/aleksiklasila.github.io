@@ -166,6 +166,10 @@ export async function startScannerSession(containerEl, callbacks) {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
             optionalFeatures: ['dom-overlay', 'mesh-detection', 'depth-sensing'],
+            depthSensing: {
+                usagePreference: ['cpu-optimized', 'gpu-optimized'],
+                dataFormatPreference: ['luminance-alpha', 'float32']
+            },
             domOverlay: { root: containerEl }
         });
 
@@ -253,6 +257,75 @@ function onXRFrame(timestamp, frame) {
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
 
+    // ---- Process WebXR Depth Map (if available) ----
+    // This allows scanning actual object surfaces instead of just flat planes
+    let depthProcessed = false;
+    if (isScanning) {
+        const viewerPose = frame.getViewerPose(referenceSpace);
+        if (viewerPose && viewerPose.views.length > 0) {
+            const view = viewerPose.views[0];
+            const depthInfo = frame.getDepthInformation(view);
+            if (depthInfo) {
+                depthProcessed = true;
+
+                // Sample the depth map to create splats
+                // We don't sample every pixel (too dense), just a grid
+                const step = Math.max(1, Math.floor(Math.min(depthInfo.width, depthInfo.height) / 30));
+
+                // Camera world transform
+                const camMatrix = new THREE.Matrix4().fromArray(view.transform.matrix);
+
+                for (let x = 0; x < depthInfo.width; x += step) {
+                    for (let y = 0; y < depthInfo.height; y += step) {
+                        const depthInMeters = depthInfo.getDepthInMeters(x, y);
+
+                        // Ignore points too close or too far
+                        if (depthInMeters > 0.1 && depthInMeters < 3.0) {
+                            // Convert normalized device coords (-1 to 1) to view space
+                            const ndcX = (x / depthInfo.width) * 2 - 1;
+                            const ndcY = -(y / depthInfo.height) * 2 + 1;
+
+                            // Unproject point using the view's inverse projection matrix
+                            const invProj = new THREE.Matrix4().fromArray(view.projectionMatrix).invert();
+                            const viewPos = new THREE.Vector3(ndcX, ndcY, -1).applyMatrix4(invProj);
+
+                            // Scale to actual depth 
+                            // The unprojected point is at z=-1 (in view space). 
+                            // True distance from camera origin is depthInMeters.
+                            // The ray length to z=-1 plane is sqrt(x^2 + y^2 + 1).
+                            const rayLength = Math.sqrt(viewPos.x * viewPos.x + viewPos.y * viewPos.y + 1);
+                            viewPos.multiplyScalar(depthInMeters / rayLength);
+
+                            // Convert to world space
+                            viewPos.applyMatrix4(camMatrix);
+
+                            // Calculate normal pointing towards camera
+                            const normal = new THREE.Vector3().subVectors(
+                                new THREE.Vector3().setFromMatrixPosition(camMatrix),
+                                viewPos
+                            ).normalize();
+
+                            // Create splat matrix
+                            const splatMatrix = new THREE.Matrix4();
+                            // lookAt matrix (position is viewPos, looking at camera)
+                            const dummyObj = new THREE.Object3D();
+                            dummyObj.position.copy(viewPos);
+                            dummyObj.lookAt(new THREE.Vector3().setFromMatrixPosition(camMatrix));
+
+                            splatMatrix.copy(dummyObj.matrix);
+
+                            addSplat(splatMatrix);
+                        }
+                    }
+                }
+
+                if (scanSessions.length > 0) {
+                    scanSessions[scanSessions.length - 1].endIndex = numSplats;
+                }
+            }
+        }
+    }
+
     // Request hit-test source once
     if (!hitTestSourceRequested) {
         session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
@@ -278,8 +351,8 @@ function onXRFrame(timestamp, frame) {
                     cursorMesh.visible = true;
                 }
 
-                // Accumulate splats when scanning
-                if (isScanning) {
+                // Accumulate splats when scanning (fallback if no depth/mesh available)
+                if (isScanning && !depthProcessed) {
                     // Add the exact hit point
                     addSplat(matrix);
 

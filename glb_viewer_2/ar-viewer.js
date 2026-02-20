@@ -320,8 +320,8 @@ function createReticle() {
 // ---- Touch Gesture Handling ----
 
 function onTouchStart(event) {
-    // Check if touching a UI element (toolbar buttons).
-    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+    // Check if touching a UI element (toolbar buttons, nav bar).
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container') || event.target.closest('#top-nav-bar')) {
         return; // Allow UI interaction
     }
 
@@ -496,7 +496,7 @@ function onTouchStart(event) {
 
 function onTouchMove(event) {
     // Check if touching a UI element
-    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container') || event.target.closest('#top-nav-bar')) {
         return;
     }
 
@@ -589,7 +589,7 @@ function onTouchMove(event) {
 
 function onTouchEnd(event) {
     // Check if touching a UI element
-    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container')) {
+    if (event.target.closest('button') || event.target.closest('#ar-toolbar-container') || event.target.closest('#top-nav-bar')) {
         return;
     }
 
