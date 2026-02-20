@@ -1,22 +1,92 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
+// ---- Configuration ----
+const SPLAT_SIZE = 0.025;               // 2.5cm oriented surface quads
+const MIN_DIST_SQ = 0.016 * 0.016;      // 1.6cm min distance squared
+const MAX_SPLATS = 50000;
+const GRID_CELL = 0.02;                  // spatial hash cell size
+
+// ---- Scene State ----
 let renderer, scene, camera;
-let pointCloud, geometry, positions;
-let numPoints = 0;
-const MAX_POINTS = 50000;
 let hitTestSource = null;
 let hitTestSourceRequested = false;
-
-// Callbacks
 let onExitScanner = null;
 
-// Scanning state
+// ---- Scanning State ----
 let isScanning = false;
 let scanSessions = []; // [{startIndex, endIndex}] for undo
 
-// Cursor splat — red wireframe square showing where next point would land
-let cursorSplat = null;
+// ---- Splat Rendering & Data ----
+let splatMesh = null;           // InstancedMesh for scan splats
+let splatGeometry = null;       // Shared PlaneGeometry template
+let numSplats = 0;
+let splatPositions = [];        // Vector3[] for distance checks
+let splatMatricesData = [];     // Float32Array(16)[] for export
+let spatialGrid = {};           // { "gx,gy,gz": [index, ...] }
+
+// ---- Cursor ----
+let cursorMesh = null;          // Black circle at hit-test position
+
+// ---- Spatial Grid Helpers ----
+function gridKey(x, y, z) {
+    return `${Math.floor(x / GRID_CELL)},${Math.floor(y / GRID_CELL)},${Math.floor(z / GRID_CELL)}`;
+}
+
+function isTooClose(pos) {
+    const gx = Math.floor(pos.x / GRID_CELL);
+    const gy = Math.floor(pos.y / GRID_CELL);
+    const gz = Math.floor(pos.z / GRID_CELL);
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dz = -1; dz <= 1; dz++) {
+                const cell = spatialGrid[`${gx + dx},${gy + dy},${gz + dz}`];
+                if (cell) {
+                    for (const idx of cell) {
+                        if (splatPositions[idx].distanceToSquared(pos) < MIN_DIST_SQ) return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function addToGrid(pos, index) {
+    const key = gridKey(pos.x, pos.y, pos.z);
+    if (!spatialGrid[key]) spatialGrid[key] = [];
+    spatialGrid[key].push(index);
+}
+
+function rebuildGrid() {
+    spatialGrid = {};
+    for (let i = 0; i < numSplats; i++) {
+        addToGrid(splatPositions[i], i);
+    }
+}
+
+// ---- Add Splat ----
+function addSplat(matrix) {
+    if (numSplats >= MAX_SPLATS) return false;
+
+    const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
+    if (isTooClose(pos)) return false;
+
+    // Store data
+    splatPositions[numSplats] = pos;
+    splatMatricesData[numSplats] = matrix.elements.slice();
+    addToGrid(pos, numSplats);
+
+    // Update InstancedMesh
+    splatMesh.setMatrixAt(numSplats, matrix);
+    numSplats++;
+    splatMesh.count = numSplats;
+    splatMesh.instanceMatrix.needsUpdate = true;
+
+    return true;
+}
+
+// ---- Public API ----
 
 export async function isScannerSupported() {
     if (!navigator.xr) return false;
@@ -50,35 +120,48 @@ export async function startScannerSession(containerEl, callbacks) {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
 
-    // Point cloud setup
-    geometry = new THREE.BufferGeometry();
-    positions = new Float32Array(MAX_POINTS * 3);
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    // Smaller dots for better visual quality
-    const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.008, sizeAttenuation: true });
-    pointCloud = new THREE.Points(geometry, material);
-    pointCloud.frustumCulled = false;
-    scene.add(pointCloud);
+    // ---- Splat geometry (small surface-oriented quad) ----
+    splatGeometry = new THREE.PlaneGeometry(SPLAT_SIZE, SPLAT_SIZE);
+    splatGeometry.rotateX(-Math.PI / 2); // Normal = +Y (up), lies in XZ
 
-    // Cursor splat — red wireframe square (same size as scanned splats)
-    const cursorSize = 0.15;
-    const cursorPlaneGeo = new THREE.PlaneGeometry(cursorSize, cursorSize);
-    cursorPlaneGeo.rotateX(-Math.PI / 2); // Normal is +Y (up)
-    const cursorEdgesGeo = new THREE.EdgesGeometry(cursorPlaneGeo);
-    const cursorMat = new THREE.LineBasicMaterial({
-        color: 0xff0000,
+    // ---- InstancedMesh for scan splats ----
+    const splatMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.9,
-        depthTest: true
+        opacity: 0.7,
     });
-    cursorSplat = new THREE.LineSegments(cursorEdgesGeo, cursorMat);
-    cursorSplat.matrixAutoUpdate = false;
-    cursorSplat.visible = false;
-    scene.add(cursorSplat);
+    splatMesh = new THREE.InstancedMesh(splatGeometry, splatMaterial, MAX_SPLATS);
+    splatMesh.count = 0;
+    splatMesh.frustumCulled = false;
+    scene.add(splatMesh);
 
-    // Setup scan/undo buttons
+    // ---- Cursor indicator (black filled circle) ----
+    const cursorGeo = new THREE.CircleGeometry(SPLAT_SIZE / 2, 24);
+    cursorGeo.rotateX(-Math.PI / 2);
+    const cursorMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.85,
+    });
+    cursorMesh = new THREE.Mesh(cursorGeo, cursorMat);
+    cursorMesh.matrixAutoUpdate = false;
+    cursorMesh.visible = false;
+    scene.add(cursorMesh);
+
+    // ---- Reset state ----
+    numSplats = 0;
+    splatPositions = [];
+    splatMatricesData = [];
+    spatialGrid = {};
+    isScanning = false;
+    scanSessions = [];
+
+    // ---- Toolbar ----
     setupScannerToolbar();
 
+    // ---- XR Session ----
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
@@ -95,11 +178,8 @@ export async function startScannerSession(containerEl, callbacks) {
         });
 
         renderer.setAnimationLoop(onXRFrame);
-        numPoints = 0;
         hitTestSourceRequested = false;
         hitTestSource = null;
-        isScanning = false;
-        scanSessions = [];
 
         return true;
     } catch (err) {
@@ -110,19 +190,20 @@ export async function startScannerSession(containerEl, callbacks) {
     }
 }
 
+// ---- Toolbar ----
+
 function setupScannerToolbar() {
     const scanBtn = document.getElementById('scanner-scan-btn');
     const undoBtn = document.getElementById('scanner-undo-btn');
 
     if (scanBtn) {
-        // Press and hold to scan
         const startScanning = (e) => {
             e.preventDefault();
             e.stopPropagation();
             isScanning = true;
             scanBtn.classList.add('scanning');
             // Record start index for this scan session
-            scanSessions.push({ startIndex: numPoints, endIndex: numPoints });
+            scanSessions.push({ startIndex: numSplats, endIndex: numSplats });
         };
         const stopScanning = (e) => {
             if (!isScanning) return;
@@ -130,9 +211,9 @@ function setupScannerToolbar() {
             e.stopPropagation();
             isScanning = false;
             scanBtn.classList.remove('scanning');
-            // Update end index for the current session
+            // Update end index
             if (scanSessions.length > 0) {
-                scanSessions[scanSessions.length - 1].endIndex = numPoints;
+                scanSessions[scanSessions.length - 1].endIndex = numSplats;
             }
         };
 
@@ -154,20 +235,25 @@ function undoLastScan() {
     if (scanSessions.length === 0) return;
 
     const session = scanSessions.pop();
-    // Zero out positions from session.startIndex to session.endIndex
-    for (let i = session.startIndex * 3; i < session.endIndex * 3; i++) {
-        positions[i] = 0;
-    }
-    numPoints = session.startIndex;
-    geometry.attributes.position.needsUpdate = true;
-    geometry.setDrawRange(0, numPoints);
+    // Truncate data back to session start
+    numSplats = session.startIndex;
+    splatPositions.length = numSplats;
+    splatMatricesData.length = numSplats;
+    splatMesh.count = numSplats;
+    splatMesh.instanceMatrix.needsUpdate = true;
+
+    // Rebuild spatial grid from remaining points
+    rebuildGrid();
 }
+
+// ---- XR Render Loop ----
 
 function onXRFrame(timestamp, frame) {
     if (!frame) return;
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
 
+    // Request hit-test source once
     if (!hitTestSourceRequested) {
         session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
             session.requestHitTestSource({ space: viewerRefSpace }).then((source) => {
@@ -177,7 +263,7 @@ function onXRFrame(timestamp, frame) {
         hitTestSourceRequested = true;
     }
 
-    // Always update cursor splat + accumulate points from hit test
+    // Process hit-test results every frame
     if (hitTestSource) {
         const hitTestResults = frame.getHitTestResults(hitTestSource);
         if (hitTestResults.length > 0) {
@@ -186,42 +272,43 @@ function onXRFrame(timestamp, frame) {
             if (pose) {
                 const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
 
-                // Update cursor splat position
-                if (cursorSplat) {
-                    cursorSplat.matrix.copy(matrix);
-                    cursorSplat.visible = true;
+                // Update cursor position (always visible when surface detected)
+                if (cursorMesh) {
+                    cursorMesh.matrix.copy(matrix);
+                    cursorMesh.visible = true;
                 }
 
-                // Accumulate points only when scanning
-                if (isScanning && numPoints < MAX_POINTS) {
-                    const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
+                // Accumulate splats when scanning
+                if (isScanning) {
+                    // Add the exact hit point
+                    addSplat(matrix);
 
-                    // Add points with slight noise to mimic density
-                    for (let i = 0; i < 3 && numPoints < MAX_POINTS; i++) {
-                        const idx = numPoints * 3;
-                        positions[idx] = pos.x + (Math.random() - 0.5) * 0.04;
-                        positions[idx + 1] = pos.y;
-                        positions[idx + 2] = pos.z + (Math.random() - 0.5) * 0.04;
-                        numPoints++;
+                    // Add nearby points along the surface for faster coverage
+                    for (let i = 0; i < 3; i++) {
+                        const offset = new THREE.Matrix4().makeTranslation(
+                            (Math.random() - 0.5) * SPLAT_SIZE * 3,
+                            0,
+                            (Math.random() - 0.5) * SPLAT_SIZE * 3
+                        );
+                        addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
                     }
 
-                    geometry.attributes.position.needsUpdate = true;
-                    geometry.setDrawRange(0, numPoints);
-
-                    // Update current session's endIndex
+                    // Update session end index
                     if (scanSessions.length > 0) {
-                        scanSessions[scanSessions.length - 1].endIndex = numPoints;
+                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
                     }
                 }
             }
         } else {
-            // No surface detected — hide cursor
-            if (cursorSplat) cursorSplat.visible = false;
+            // No surface — hide cursor
+            if (cursorMesh) cursorMesh.visible = false;
         }
     }
 
     renderer.render(scene, camera);
 }
+
+// ---- Session Management ----
 
 export async function endScannerSession() {
     const session = renderer?.xr?.getSession();
@@ -230,7 +317,6 @@ export async function endScannerSession() {
             await session.end();
         } catch (e) { }
     }
-    // Let event listener call cleanup
 }
 
 function cleanup() {
@@ -238,7 +324,13 @@ function cleanup() {
     hitTestSourceRequested = false;
     isScanning = false;
     scanSessions = [];
-    cursorSplat = null;
+    numSplats = 0;
+    splatPositions = [];
+    splatMatricesData = [];
+    spatialGrid = {};
+    cursorMesh = null;
+    splatMesh = null;
+    splatGeometry = null;
 
     if (renderer) {
         renderer.setAnimationLoop(null);
@@ -252,17 +344,77 @@ function cleanup() {
     camera = null;
 }
 
+// ---- GLB Export (merged mesh) ----
+
 export async function exportScanAsGLB() {
-    if (numPoints === 0 || !pointCloud) {
+    if (numSplats === 0 || !splatGeometry) {
         alert("No scan data accumulated.");
         return null;
     }
 
+    // Template geometry for each splat (already rotated)
+    const template = splatGeometry;
+    const tPos = template.attributes.position;
+    const tNorm = template.attributes.normal;
+    const tIdx = template.index;
+    const vertsPerSplat = tPos.count;       // 4 for PlaneGeometry
+    const indicesPerSplat = tIdx.count;     // 6 for PlaneGeometry (2 triangles)
+
+    // Allocate merged arrays
+    const totalVerts = numSplats * vertsPerSplat;
+    const totalIndices = numSplats * indicesPerSplat;
+    const mPos = new Float32Array(totalVerts * 3);
+    const mNorm = new Float32Array(totalVerts * 3);
+    const mIdx = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices);
+
+    const mat4 = new THREE.Matrix4();
+    const normalMat = new THREE.Matrix3();
+    const v = new THREE.Vector3();
+    const n = new THREE.Vector3();
+
+    for (let s = 0; s < numSplats; s++) {
+        mat4.fromArray(splatMatricesData[s]);
+        normalMat.getNormalMatrix(mat4);
+
+        const vOff = s * vertsPerSplat;
+
+        // Transform vertices and normals
+        for (let vi = 0; vi < vertsPerSplat; vi++) {
+            v.fromArray(tPos.array, vi * 3).applyMatrix4(mat4);
+            mPos[(vOff + vi) * 3] = v.x;
+            mPos[(vOff + vi) * 3 + 1] = v.y;
+            mPos[(vOff + vi) * 3 + 2] = v.z;
+
+            n.fromArray(tNorm.array, vi * 3).applyMatrix3(normalMat).normalize();
+            mNorm[(vOff + vi) * 3] = n.x;
+            mNorm[(vOff + vi) * 3 + 1] = n.y;
+            mNorm[(vOff + vi) * 3 + 2] = n.z;
+        }
+
+        // Copy indices (offset by vertex count)
+        const iOff = s * indicesPerSplat;
+        for (let ii = 0; ii < indicesPerSplat; ii++) {
+            mIdx[iOff + ii] = tIdx.array[ii] + vOff;
+        }
+    }
+
+    // Build merged geometry
+    const mergedGeo = new THREE.BufferGeometry();
+    mergedGeo.setAttribute('position', new THREE.BufferAttribute(mPos, 3));
+    mergedGeo.setAttribute('normal', new THREE.BufferAttribute(mNorm, 3));
+    mergedGeo.setIndex(new THREE.BufferAttribute(mIdx, 1));
+
+    const mesh = new THREE.Mesh(mergedGeo, new THREE.MeshStandardMaterial({
+        color: 0xcccccc,
+        side: THREE.DoubleSide,
+        roughness: 0.7,
+        metalness: 0.1
+    }));
+
     return new Promise((resolve, reject) => {
         const exporter = new GLTFExporter();
-        // Export just the point cloud mesh
         exporter.parse(
-            pointCloud,
+            mesh,
             (buffer) => {
                 const blob = new Blob([buffer], { type: 'model/gltf-binary' });
                 resolve(URL.createObjectURL(blob));
