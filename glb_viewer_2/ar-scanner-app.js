@@ -257,6 +257,7 @@ const _invProj = new THREE.Matrix4();
 const _camMatrix = new THREE.Matrix4();
 const _dummyObj = new THREE.Object3D();
 const _splatMatrix = new THREE.Matrix4();
+const _tmpMatrix = new THREE.Matrix4();
 
 // ---- XR Render Loop ----
 
@@ -345,7 +346,10 @@ function onXRFrame(timestamp, frame) {
     // Request hit-test source once
     if (!hitTestSourceRequested) {
         session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
-            session.requestHitTestSource({ space: viewerRefSpace }).then((source) => {
+            session.requestHitTestSource({
+                space: viewerRefSpace,
+                entityTypes: ['point', 'plane', 'mesh']
+            }).then((source) => {
                 hitTestSource = source;
             });
         });
@@ -400,32 +404,36 @@ function onXRFrame(timestamp, frame) {
 
     // ---- Process detected meshes (captures object geometry beyond flat planes) ----
     if (isScanning && frame.detectedMeshes) {
+        let meshesProcessed = 0;
         for (const mesh of frame.detectedMeshes.values()) {
+            if (meshesProcessed > 3) break; // Don't process too many meshes per frame to prevent freeze
+
             const meshPose = frame.getPose(mesh.meshSpace, referenceSpace);
             if (!meshPose) continue;
 
-            const meshMatrix = new THREE.Matrix4().fromArray(meshPose.transform.matrix);
+            _camMatrix.fromArray(meshPose.transform.matrix); // reuse existing global matrix
             const vertices = mesh.vertices;
-            const normals = mesh.normals;
+            if (!vertices || vertices.length === 0) continue;
 
-            // Sample vertices from the detected mesh
-            // Skip some vertices to avoid overwhelming with splats
-            const step = Math.max(1, Math.floor(vertices.length / (3 * 20))); // ~20 samples per mesh
-            for (let vi = 0; vi < vertices.length / 3; vi += step) {
+            // Sample vertices randomly instead of iterating sequentially
+            // Pick max 10 random vertices per mesh per frame
+            const numSamples = Math.min(10, Math.floor(vertices.length / 3));
+            for (let i = 0; i < numSamples; i++) {
+                const vi = Math.floor(Math.random() * (vertices.length / 3));
                 const vx = vertices[vi * 3];
                 const vy = vertices[vi * 3 + 1];
                 const vz = vertices[vi * 3 + 2];
 
-                const splatMatrix = new THREE.Matrix4()
-                    .copy(meshMatrix)
-                    .multiply(new THREE.Matrix4().makeTranslation(vx, vy, vz));
+                _tmpMatrix.makeTranslation(vx, vy, vz);
+                _splatMatrix.copy(_camMatrix).multiply(_tmpMatrix);
 
-                addSplat(splatMatrix);
+                addSplat(_splatMatrix);
             }
+            meshesProcessed++;
+        }
 
-            if (scanSessions.length > 0) {
-                scanSessions[scanSessions.length - 1].endIndex = numSplats;
-            }
+        if (scanSessions.length > 0) {
+            scanSessions[scanSessions.length - 1].endIndex = numSplats;
         }
     }
 
