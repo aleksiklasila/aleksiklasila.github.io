@@ -166,12 +166,12 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
 
         // Selection Group
         selectionGroup = new THREE.Group();
-        container.add(selectionGroup);
+        scene.add(selectionGroup);
 
         // Highlight Helper
         selectionBoxHelper = new THREE.BoxHelper(selectionGroup, 0xffff00);
         selectionBoxHelper.visible = false;
-        container.add(selectionBoxHelper);
+        scene.add(selectionBoxHelper);
 
         // Populate editable objects (top level children of GLB)
         editableObjects = [];
@@ -311,7 +311,9 @@ function onTouchStart(event) {
         return; // Allow UI interaction
     }
 
-    event.preventDefault();
+    if (currentTool !== 'translate' && currentTool !== 'rotate' && currentTool !== 'scale') {
+        event.preventDefault();
+    }
 
     if (!modelPlaced) {
         // Place model at reticle position on first tap
@@ -625,7 +627,7 @@ function updateSelection(objects) {
 
     // 1. Detach current
     if (selectedObjects.length > 0) {
-        const glbRoot = arModel.children.find(c => c !== selectionGroup); // The original gltf scene
+        const glbRoot = arModel.children[0]; // The original gltf scene
         const currentChildren = [...selectionGroup.children];
         currentChildren.forEach(child => {
             if (glbRoot) glbRoot.attach(child);
