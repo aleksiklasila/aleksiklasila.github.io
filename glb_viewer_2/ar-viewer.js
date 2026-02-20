@@ -21,6 +21,11 @@ let hitTestSource = null;
 let hitTestSourceRequested = false;
 let modelPlaced = false;
 
+// Plane Tracking
+let planes = new Map();
+let planesGroup = new THREE.Group();
+planesGroup.visible = false;
+
 // Gizmo Controls
 let transformControl = null;
 let currentTool = 'placement'; // Default to placement
@@ -99,6 +104,9 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     reticle.visible = false;
     scene.add(reticle);
 
+    // --- Planes (Scanner tool) ---
+    scene.add(planesGroup);
+
     // --- Transform Controls ---
     transformControl = new TransformControls(camera, containerEl);
     transformControl.addEventListener('dragging-changed', function (event) {
@@ -160,7 +168,7 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
     // --- Request XR session ---
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
-            requiredFeatures: ['hit-test'],
+            requiredFeatures: ['hit-test', 'plane-detection'],
             optionalFeatures: ['dom-overlay', 'light-estimation'],
             domOverlay: { root: containerEl }
         });
@@ -223,6 +231,55 @@ function onXRFrame(timestamp, frame) {
 
     const session = renderer.xr.getSession();
     const referenceSpace = renderer.xr.getReferenceSpace();
+
+    // Plane detection logic (Scanner)
+    if (frame.detectedPlanes) {
+        // Remove deleted planes
+        for (const xrPlane of frame.deletedPlanes) {
+            if (planes.has(xrPlane)) {
+                const mesh = planes.get(xrPlane);
+                planesGroup.remove(mesh);
+                mesh.geometry.dispose();
+                planes.delete(xrPlane);
+            }
+        }
+
+        // Add or update detected planes
+        for (const xrPlane of frame.detectedPlanes) {
+            let mesh = planes.get(xrPlane);
+
+            if (!mesh) {
+                // Create a wireframe mesh for new planes
+                const geometry = new THREE.BufferGeometry();
+                const material = new THREE.LineBasicMaterial({
+                    color: 0x00ff00,
+                    linewidth: 2,
+                    depthTest: false,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                mesh = new THREE.LineLoop(geometry, material);
+                planes.set(xrPlane, mesh);
+                planesGroup.add(mesh);
+            }
+
+            // Update geometry from plane polygon
+            if (xrPlane.polygon && xrPlane.polygon.length > 0) {
+                const points = [];
+                for (const point of xrPlane.polygon) {
+                    points.push(new THREE.Vector3(point.x, point.y, point.z));
+                }
+                mesh.geometry.setFromPoints(points);
+            }
+
+            // Update pose
+            const pose = frame.getPose(xrPlane.planeSpace, referenceSpace);
+            if (pose) {
+                mesh.matrix.fromArray(pose.transform.matrix);
+                mesh.matrixAutoUpdate = false;
+            }
+        }
+    }
 
     // Fix for TransformControls raycasting:
     // Sync the main camera's matrices with the XR camera used by the renderer.
@@ -818,6 +875,11 @@ function updateToolState() {
         const visibleModes = ['select', 'translate', 'rotate', 'scale', 'generic'];
         selectionBoxHelper.visible = visibleModes.includes(currentTool) && selectedObjects.length > 0;
         if (selectionBoxHelper.visible) selectionBoxHelper.update();
+    }
+
+    // Scanner Visibility
+    if (planesGroup) {
+        planesGroup.visible = (currentTool === 'scanner');
     }
 }
 
