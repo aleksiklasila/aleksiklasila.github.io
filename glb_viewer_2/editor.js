@@ -44,6 +44,10 @@ let editorActive = false;
 let pointerDownPos = null;
 const CLICK_THRESHOLD = 5; // pixels
 
+// Undo stack — each entry is a snapshot of all editable objects' transforms
+let undoStack = [];
+const MAX_UNDO = 50;
+
 // ---- Public API ----
 
 export function pauseEditor() {
@@ -119,6 +123,10 @@ export function initEditor(canvasEl, callbacks) {
     transformControls.addEventListener('dragging-changed', (event) => {
         orbitControls.enabled = !event.value;
     });
+    // Push undo state when user starts dragging the gizmo
+    transformControls.addEventListener('mouseDown', () => {
+        pushUndoState();
+    });
     transformControls.addEventListener('objectChange', () => {
         updateTransformInfo();
         debouncedSave();
@@ -147,6 +155,7 @@ export function initEditor(canvasEl, callbacks) {
     document.getElementById('btn-clone').addEventListener('click', cloneSelected);
     document.getElementById('btn-delete').addEventListener('click', deleteSelected);
     document.getElementById('btn-share').addEventListener('click', shareLink);
+    document.getElementById('btn-editor-undo').addEventListener('click', undoEditor);
 
     // Start render loop
     editorActive = true;
@@ -373,6 +382,10 @@ function animate() {
     if (!editorActive) return;
     requestAnimationFrame(animate);
     orbitControls.update();
+    // Update bounding box helper every frame so it follows moving objects
+    if (selectionBoxHelper && selectionBoxHelper.visible) {
+        selectionBoxHelper.update();
+    }
     renderer.render(scene, camera);
 }
 
@@ -673,6 +686,7 @@ function toggleSpace() {
 
 function cloneSelected() {
     if (selectedObjects.length === 0 || !loadedModel) return;
+    pushUndoState();
 
     const newClones = [];
 
@@ -717,6 +731,7 @@ function cloneSelected() {
 
 function deleteSelected() {
     if (selectedObjects.length === 0) return;
+    pushUndoState();
 
     // Filter out non-clones? Or just delete what we can?
     // "Only clones can be deleted" rule in existing code.
@@ -783,6 +798,12 @@ function onKeyDown(e) {
             if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
                 cloneSelected();
+            }
+            break;
+        case 'z':
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                undoEditor();
             }
             break;
         case 'f':
@@ -1032,6 +1053,67 @@ function saveScene() {
         const state = getSceneState();
         onSceneChanged(state);
     }
+}
+
+// ---- Undo Logic ----
+
+function pushUndoState() {
+    // Snapshot all editable objects' transforms + which are clones
+    // Must deselect first to bake transforms back to loadedModel space
+    const currentSel = [...selectedObjects];
+    updateSelection([]);
+
+    const snapshot = editableObjects.map(obj => ({
+        ref: obj,
+        position: obj.position.toArray(),
+        rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+        scale: obj.scale.toArray(),
+        isCloned: !!obj.userData._isCloned,
+        parent: obj.parent,
+    }));
+    undoStack.push(snapshot);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+
+    // Re-select
+    updateSelection(currentSel);
+}
+
+function undoEditor() {
+    if (undoStack.length === 0) {
+        setStatus('Nothing to undo');
+        return;
+    }
+
+    const snapshot = undoStack.pop();
+
+    // Deselect to detach from selectionGroup
+    updateSelection([]);
+    transformControls.detach();
+
+    // Remove any objects that didn't exist in the snapshot
+    const snapshotRefs = new Set(snapshot.map(s => s.ref));
+    const toRemove = editableObjects.filter(obj => !snapshotRefs.has(obj));
+    toRemove.forEach(obj => {
+        if (obj.parent) obj.parent.remove(obj);
+    });
+
+    // Restore transforms and re-add any objects that were removed since snapshot
+    editableObjects = [];
+    snapshot.forEach(entry => {
+        const obj = entry.ref;
+        obj.position.fromArray(entry.position);
+        obj.rotation.set(entry.rotation[0], entry.rotation[1], entry.rotation[2]);
+        obj.scale.fromArray(entry.scale);
+        // Re-add to loadedModel if somehow removed
+        if (!obj.parent && loadedModel) {
+            loadedModel.add(obj);
+        }
+        editableObjects.push(obj);
+    });
+
+    updateObjectList();
+    saveScene();
+    setStatus('Undo applied');
 }
 
 

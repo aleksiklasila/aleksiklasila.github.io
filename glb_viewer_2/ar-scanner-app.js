@@ -11,9 +11,9 @@ let hitTestSourceRequested = false;
 // Callbacks
 let onExitScanner = null;
 
-// UI
-let exportBtn = null;
-let exitBtn = null;
+// Scanning state
+let isScanning = false;
+let scanSessions = []; // [{startIndex, endIndex}] for undo
 
 export async function isScannerSupported() {
     if (!navigator.xr) return false;
@@ -51,30 +51,14 @@ export async function startScannerSession(containerEl, callbacks) {
     geometry = new THREE.BufferGeometry();
     positions = new Float32Array(MAX_POINTS * 3);
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    // Use slightly larger points for visibility
-    const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.02, sizeAttenuation: true });
+    // Smaller dots for better visual quality
+    const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.008, sizeAttenuation: true });
     pointCloud = new THREE.Points(geometry, material);
-    pointCloud.frustumCulled = false; // Important since we dynamically update bounds
+    pointCloud.frustumCulled = false;
     scene.add(pointCloud);
 
-    // Toolbar logic (Export specific to Scanner)
-    exportBtn = document.getElementById('btn-export-glb');
-    exitBtn = document.getElementById('ar-scanner-exit-btn');
-    if (exportBtn) {
-        exportBtn.onclick = async () => {
-            const url = await exportScanAsGLB();
-            if (url) {
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'environment_scan.glb';
-                a.click();
-            }
-        };
-    }
-    if (exitBtn) {
-        // Just trigger session end
-        exitBtn.onclick = () => endScannerSession();
-    }
+    // Setup scan/undo buttons
+    setupScannerToolbar();
 
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
@@ -95,6 +79,8 @@ export async function startScannerSession(containerEl, callbacks) {
         numPoints = 0;
         hitTestSourceRequested = false;
         hitTestSource = null;
+        isScanning = false;
+        scanSessions = [];
 
         return true;
     } catch (err) {
@@ -103,6 +89,59 @@ export async function startScannerSession(containerEl, callbacks) {
         cleanup();
         return false;
     }
+}
+
+function setupScannerToolbar() {
+    const scanBtn = document.getElementById('scanner-scan-btn');
+    const undoBtn = document.getElementById('scanner-undo-btn');
+
+    if (scanBtn) {
+        // Press and hold to scan
+        const startScanning = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            isScanning = true;
+            scanBtn.classList.add('scanning');
+            // Record start index for this scan session
+            scanSessions.push({ startIndex: numPoints, endIndex: numPoints });
+        };
+        const stopScanning = (e) => {
+            if (!isScanning) return;
+            e.preventDefault();
+            e.stopPropagation();
+            isScanning = false;
+            scanBtn.classList.remove('scanning');
+            // Update end index for the current session
+            if (scanSessions.length > 0) {
+                scanSessions[scanSessions.length - 1].endIndex = numPoints;
+            }
+        };
+
+        scanBtn.addEventListener('touchstart', startScanning, { passive: false });
+        scanBtn.addEventListener('mousedown', startScanning);
+        document.addEventListener('touchend', stopScanning);
+        document.addEventListener('mouseup', stopScanning);
+    }
+
+    if (undoBtn) {
+        undoBtn.onclick = (e) => {
+            e.stopPropagation();
+            undoLastScan();
+        };
+    }
+}
+
+function undoLastScan() {
+    if (scanSessions.length === 0) return;
+
+    const session = scanSessions.pop();
+    // Zero out positions from session.startIndex to session.endIndex
+    for (let i = session.startIndex * 3; i < session.endIndex * 3; i++) {
+        positions[i] = 0;
+    }
+    numPoints = session.startIndex;
+    geometry.attributes.position.needsUpdate = true;
+    geometry.setDrawRange(0, numPoints);
 }
 
 function onXRFrame(timestamp, frame) {
@@ -119,14 +158,13 @@ function onXRFrame(timestamp, frame) {
         hitTestSourceRequested = true;
     }
 
-    if (hitTestSource && numPoints < MAX_POINTS) {
+    // Only accumulate points when scanning is active
+    if (isScanning && hitTestSource && numPoints < MAX_POINTS) {
         const hitTestResults = frame.getHitTestResults(hitTestSource);
         if (hitTestResults.length > 0) {
             const hit = hitTestResults[0];
             const pose = hit.getPose(referenceSpace);
             if (pose) {
-                // To create splats/denser cluster, we can add a few points around the hit.
-                // For simplicity and performance, we'll store the hit position.
                 const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
                 const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
 
@@ -141,6 +179,11 @@ function onXRFrame(timestamp, frame) {
 
                 geometry.attributes.position.needsUpdate = true;
                 geometry.setDrawRange(0, numPoints);
+
+                // Update current session's endIndex
+                if (scanSessions.length > 0) {
+                    scanSessions[scanSessions.length - 1].endIndex = numPoints;
+                }
             }
         }
     }
@@ -159,10 +202,10 @@ export async function endScannerSession() {
 }
 
 function cleanup() {
-    if (exportBtn) exportBtn.onclick = null;
-    if (exitBtn) exitBtn.onclick = null;
     hitTestSource = null;
     hitTestSourceRequested = false;
+    isScanning = false;
+    scanSessions = [];
 
     if (renderer) {
         renderer.setAnimationLoop(null);

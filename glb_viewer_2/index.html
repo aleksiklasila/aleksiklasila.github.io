@@ -72,6 +72,7 @@
                         <button class="tool-btn" id="btn-scale" title="Scale (R)" data-mode="scale">⤢</button>
                         <div class="toolbar-sep"></div>
                         <button class="tool-btn" id="btn-space" title="Toggle World/Local (Q)">L</button>
+                        <button class="tool-btn" id="btn-editor-undo" title="Undo (Ctrl+Z)">↩️</button>
                     </div>
                     <div class="toolbar-right">
                         <button class="btn btn-share" id="btn-share" title="Copy shareable link">🔗</button>
@@ -124,12 +125,17 @@
                     <button class="tool-btn" data-mode="rotate" title="Rotate">↻</button>
                     <button class="tool-btn" data-mode="scale" title="Scale">⤢</button>
                     <div class="toolbar-sep"></div>
-                    <button class="tool-btn btn-danger" id="ar-exit-btn" title="Exit AR"
-                        style="color: white; border: none;">✕</button>
+                    <button class="tool-btn" id="ar-undo-btn" title="Undo">↩️</button>
                 </div>
             </div>
             <div id="ar-object-panel" class="object-panel collapsed" style="height: 0px;">
-                <!-- Expandable area for future AR options -->
+                <div id="ar-object-list"></div>
+                <div class="panel-actions">
+                    <button class="btn btn-small" id="ar-btn-clone" title="Clone Selected">📋 Clone</button>
+                    <button class="btn btn-small btn-danger" id="ar-btn-delete" title="Delete Selected">🗑️
+                        Delete</button>
+                </div>
+                <div id="ar-transform-info" class="transform-info"></div>
             </div>
         </div>
     </div>
@@ -137,11 +143,12 @@
     <!-- AR Scanner Overlay (custom Three.js WebXR) -->
     <div id="ar-scanner-overlay" class="ar-overlay">
         <div class="bottom-panel-wrapper">
-            <div class="toolbar-container"
-                style="justify-content: center; background: rgba(30,30,30,0.85); border-top: 1px solid var(--border);">
-                <div style="color: white; font-size: 14px; margin-right: 16px;">Scan your environment...</div>
-                <button class="tool-btn btn-danger" id="ar-scanner-exit-btn" title="Exit Scanner"
-                    style="color: white; border: none;">✕</button>
+            <div id="scanner-toolbar" class="toolbar-container"
+                style="background: rgba(30,30,30,0.85); border-top: 1px solid var(--border);">
+                <div class="toolbar-center">
+                    <button class="tool-btn" id="scanner-scan-btn" title="Hold to Scan">📡</button>
+                    <button class="tool-btn" id="scanner-undo-btn" title="Undo Last Scan">↩️</button>
+                </div>
             </div>
         </div>
     </div>

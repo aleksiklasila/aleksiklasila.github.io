@@ -31,7 +31,7 @@ html {
     height: 46px;
     background: rgba(30, 30, 30, 0.85);
     backdrop-filter: blur(8px);
-    z-index: 6000;
+    z-index: 10001;
     align-items: center;
     padding: 0 10px;
     box-sizing: border-box;
@@ -588,4 +588,16 @@ model-viewer {
 #ar-overlay .bottom-panel-wrapper {
     z-index: 10000;
     /* Ensure it stays above AR canvas */
+}
+
+/* ===== Scanner Scan Button Active State ===== */
+#scanner-scan-btn.scanning {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+/* ===== AR Scanner/Viewer bottom panel over AR canvas ===== */
+#ar-scanner-overlay .bottom-panel-wrapper {
+    z-index: 10000;
 }
