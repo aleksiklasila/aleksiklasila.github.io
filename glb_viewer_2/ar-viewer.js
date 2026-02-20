@@ -48,10 +48,11 @@ let onExitAR = null;
  * Start an AR session and load/display the given model URL.
  * @param {string} modelUrl — URL or blob URL of the GLB to display
  * @param {HTMLElement} containerEl — DOM element to use for the AR overlay
- * @param {object} callbacks — { onExit: function }
+ * @param {object} callbacks — { onExit: function, sceneData: Array }
  */
 export async function startARSession(modelUrl, containerEl, callbacks) {
     onExitAR = callbacks?.onExit || null;
+    const sceneData = callbacks?.sceneData || null;
 
     // Check WebXR support
     if (!navigator.xr) {
@@ -143,10 +144,18 @@ export async function startARSession(modelUrl, containerEl, callbacks) {
         // Populate editable objects (top level children of GLB)
         editableObjects = [];
         arModel.children.forEach(child => {
+            child.userData._editorIndex = editableObjects.length;
+            child.userData._editorOriginalName = child.name || `Object_${editableObjects.length}`;
+            child.userData._isCloned = false;
             editableObjects.push(child);
             // AUTO-PIVOT: Re-pivot to bottom center (d031a0d5: Step 96)
             rePivotToBBoxCenter(child);
         });
+
+        // Apply editor modifications if provided
+        if (sceneData) {
+            applySceneState(sceneData);
+        }
 
         container.visible = false; // hidden until placed
         scene.add(container);
@@ -866,4 +875,41 @@ function rePivotToBBoxCenter(obj) {
     const center = box.getCenter(new THREE.Vector3());
     const bottomCenter = new THREE.Vector3(center.x, box.min.y, center.z);
     setPivot(obj, bottomCenter);
+}
+
+
+function applySceneState(sceneData) {
+    if (!sceneData || !Array.isArray(sceneData)) return;
+
+    // Use a flat map to store what original indices refer to which objects
+    const originalObjectsMap = new Map();
+    arModel.children.forEach(child => originalObjectsMap.set(child.userData._editorIndex, child));
+
+    sceneData.forEach(entry => {
+        if (entry.cloned && entry.sourceIndex !== undefined) {
+            // Find source object
+            const source = originalObjectsMap.get(entry.sourceIndex);
+            if (!source) return;
+            const clone = source.clone(true);
+            clone.userData._editorIndex = editableObjects.length;
+            clone.userData._editorOriginalName = entry.name || source.userData._editorOriginalName + '_clone';
+            clone.userData._isCloned = true;
+            clone.userData._sourceIndex = entry.sourceIndex;
+            clone.name = clone.userData._editorOriginalName;
+
+            if (entry.position) clone.position.fromArray(entry.position);
+            if (entry.rotation) clone.rotation.set(entry.rotation[0], entry.rotation[1], entry.rotation[2]);
+            if (entry.scale) clone.scale.fromArray(entry.scale);
+
+            arModel.add(clone);
+            editableObjects.push(clone);
+        } else {
+            // Find original object by index
+            const obj = originalObjectsMap.get(entry.index);
+            if (!obj) return;
+            if (entry.position) obj.position.fromArray(entry.position);
+            if (entry.rotation) obj.rotation.set(entry.rotation[0], entry.rotation[1], entry.rotation[2]);
+            if (entry.scale) obj.scale.fromArray(entry.scale);
+        }
+    });
 }
