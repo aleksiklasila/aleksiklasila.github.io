@@ -165,7 +165,7 @@ export async function startScannerSession(containerEl, callbacks) {
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay'],
+            optionalFeatures: ['dom-overlay', 'mesh-detection', 'depth-sensing'],
             domOverlay: { root: containerEl }
         });
 
@@ -284,11 +284,14 @@ function onXRFrame(timestamp, frame) {
                     addSplat(matrix);
 
                     // Add nearby points along the surface for faster coverage
-                    for (let i = 0; i < 3; i++) {
+                    // Use more samples with wider radius for better object capture
+                    for (let i = 0; i < 8; i++) {
+                        const angle = (i / 8) * Math.PI * 2;
+                        const radius = SPLAT_SIZE * (2 + Math.random() * 3);
                         const offset = new THREE.Matrix4().makeTranslation(
-                            (Math.random() - 0.5) * SPLAT_SIZE * 3,
-                            0,
-                            (Math.random() - 0.5) * SPLAT_SIZE * 3
+                            Math.cos(angle) * radius,
+                            (Math.random() - 0.5) * SPLAT_SIZE * 2, // slight Y variation to capture curved surfaces
+                            Math.sin(angle) * radius
                         );
                         addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
                     }
@@ -304,6 +307,38 @@ function onXRFrame(timestamp, frame) {
             if (cursorMesh) cursorMesh.visible = false;
         }
     }
+
+    // ---- Process detected meshes (captures object geometry beyond flat planes) ----
+    if (isScanning && frame.detectedMeshes) {
+        for (const mesh of frame.detectedMeshes.values()) {
+            const meshPose = frame.getPose(mesh.meshSpace, referenceSpace);
+            if (!meshPose) continue;
+
+            const meshMatrix = new THREE.Matrix4().fromArray(meshPose.transform.matrix);
+            const vertices = mesh.vertices;
+            const normals = mesh.normals;
+
+            // Sample vertices from the detected mesh
+            // Skip some vertices to avoid overwhelming with splats
+            const step = Math.max(1, Math.floor(vertices.length / (3 * 20))); // ~20 samples per mesh
+            for (let vi = 0; vi < vertices.length / 3; vi += step) {
+                const vx = vertices[vi * 3];
+                const vy = vertices[vi * 3 + 1];
+                const vz = vertices[vi * 3 + 2];
+
+                const splatMatrix = new THREE.Matrix4()
+                    .copy(meshMatrix)
+                    .multiply(new THREE.Matrix4().makeTranslation(vx, vy, vz));
+
+                addSplat(splatMatrix);
+            }
+
+            if (scanSessions.length > 0) {
+                scanSessions[scanSessions.length - 1].endIndex = numSplats;
+            }
+        }
+    }
+
 
     renderer.render(scene, camera);
 }

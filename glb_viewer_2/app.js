@@ -15,7 +15,7 @@
 // ============================================================
 
 import { initEditor, loadModel, applySceneState, getSceneState, exportSceneAsGLB, loadAndComposeGLB, pauseEditor, resumeEditor } from './editor.js';
-import { startARSession, isARSupported, endARSession } from './ar-viewer.js';
+import { startARSession, isARSupported, endARSession, getARSceneState } from './ar-viewer.js';
 import { startScannerSession, isScannerSupported, endScannerSession, exportScanAsGLB } from './ar-scanner-app.js';
 
 // --- URL Compression Helpers ---
@@ -248,7 +248,13 @@ async function launchAR(modelUrl) {
                 arOverlay.style.display = 'none';
                 if (state.config.mode === 'ar') switchMode('editor'); // automatically switch tabs back to editor
             },
-            sceneData: state.config?.scene
+            sceneData: state.config?.scene,
+            onSceneChanged: (sceneState) => {
+                // Sync AR edits to URL (same as editor)
+                if (!state.config) state.config = {};
+                state.config.scene = sceneState;
+                updateUrlConfig(state.config);
+            }
         });
 
         if (!success) {

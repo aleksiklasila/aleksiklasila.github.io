@@ -865,44 +865,30 @@ function onTouchStart(event) {
                 dragOffset.subVectors(dragObject.position, hitPoint);
                 dragOffset.y = 0;
             }
+        } else if (selectedObjects.length > 0) {
+            // No hit on object, but selection exists → drag selection by offset (like AR viewer)
+            isDragging = true;
+            dragObject = selectionGroup;
+            orbitControls.enabled = false;
+
+            // Compute offset from floor-plane hit to group position
+            const t2 = touches[touchKeys[0]];
+            const rect2 = canvas.getBoundingClientRect();
+            const m2 = new THREE.Vector2(
+                ((t2.x - rect2.left) / rect2.width) * 2 - 1,
+                -((t2.y - rect2.top) / rect2.height) * 2 + 1
+            );
+            dragRaycaster.setFromCamera(m2, camera);
+            const hitPt = new THREE.Vector3();
+            if (dragRaycaster.ray.intersectPlane(dragPlane, hitPt)) {
+                dragOffset.subVectors(dragObject.position, hitPt);
+                dragOffset.y = 0;
+            } else {
+                dragOffset.set(0, 0, 0);
+            }
         } else {
-            // Hit background -> Select All? Or just Orbit?
-            // "Clicking outside of any objects, selects all objects" - User request.
-            // But this is touch START. If we just want to orbit, we shouldn't change selection immediately?
-            // User said: "Select the tool, click anywhere else... selects all objects."
-            // In touch interaction, tapping background usually means deselect or select all. 
-            // Let's implement Tap vs Drag distinction for background too?
-            // For now, let's keep Orbit on background drag, but maybe Select All on Tap?
-            // existing code: "Hit background -> Orbit ... deselectObject()".
-            // Let's change to Select All on tap? 
-            // Actually, existing code deselects immediately on background touch start. 
-            // Let's change this to "Select All" logic, but maybe we should only do it on explicit tap (TouchEnd without move)?
-            // The user request says "click anywhere else ... selects all objects". 
-            // In `onPointerUp` (mouse), we did this.
-            // For touch, if we touch background, we probably want to rotate camera (Orbit). 
-            // If we select all immediately, highlighting might change, but camera rotation should still work.
-
-            // Let's try: Touch background -> Select All, enable orbit.
-            // updateSelection(editableObjects); 
-            // orbitControls.enabled = true;
-            // ... strict reading of "click anywhere else" -> Tap.
-            // If I just want to rotate the view, I don't necessarily want to select everything instantly.
-            // But `onPointerUp` handles the "Click" vs "Drag" distinction.
-            // For `onTouchStart`, we usually prepare for gesture.
-            // `onPointerUp` (which covers touch too usually?) handles the click logic.
-            // `onTouchStart` here handles the *Generic Tool* specific logic.
-
-            // Let's stick to existing pattern: If background hit, we let Orbit handle it. 
-            // But we should probably NOT deselect immediately if we are just rotating view?
-            // The prompt says "Select the tool, click anywhere else ... selects all objects".
-            // If I am in Generic tool, and I drag background, do I select all?
-            // Let's assume yes, consistent with "Background click = Select All".
-
             isDragging = false;
             orbitControls.enabled = true;
-            // Select All if nothing selected? Or always?
-            // If I click background, I select all.
-            // updateSelection(editableObjects); 
         }
     } else if (touchKeys.length === 2) {
         // Two fingers -> Scale/Rotate selected object OR Orbit if no object selected?
@@ -963,9 +949,10 @@ function onTouchMove(event) {
         if (lastTouchDist > 0) {
             const scaleFactor = dist / lastTouchDist;
             selectionGroup.scale.multiplyScalar(scaleFactor);
-            // Clamp?
-            selectionGroup.scale.max(new THREE.Vector3(20, 20, 20));
-            selectionGroup.scale.min(new THREE.Vector3(0.01, 0.01, 0.01));
+            // Clamp scale uniformly
+            const s = selectionGroup.scale.x;
+            const clamped = Math.max(0.01, Math.min(s, 20));
+            selectionGroup.scale.setScalar(clamped);
         }
 
         const angleDelta = angle - lastTouchAngle;

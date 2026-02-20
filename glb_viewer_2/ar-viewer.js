@@ -43,6 +43,7 @@ let dragOffset = new THREE.Vector3(); // offset between model and initial touch 
 
 // Callbacks
 let onExitAR = null;
+let onARSceneChanged = null;
 
 // Debug overlay
 let debugEl = null;
@@ -50,6 +51,9 @@ let debugEl = null;
 // Undo stack — each entry is a snapshot of all editable objects' transforms
 let arUndoStack = [];
 const AR_MAX_UNDO = 50;
+
+// Debounced save timer
+let arSaveTimeout = null;
 
 /**
  * Start an AR session and load/display the given model URL.
@@ -59,6 +63,7 @@ const AR_MAX_UNDO = 50;
  */
 export async function startARSession(modelUrl, containerEl, callbacks) {
     onExitAR = callbacks?.onExit || null;
+    onARSceneChanged = callbacks?.onSceneChanged || null;
     const sceneData = callbacks?.sceneData || null;
 
     // Check WebXR support
@@ -544,6 +549,7 @@ function onTouchMove(event) {
         lastTouchCenter = { x: (t1.x + t2.x) / 2, y: (t1.y + t2.y) / 2 };
 
         transformTarget.updateMatrixWorld();
+        debouncedARSave();
 
     } else if (isDragging && touchKeys.length === 1) {
         // Single finger drag — only in generic mode
@@ -576,6 +582,7 @@ function onTouchMove(event) {
                 transformTarget.position.z = localPos.z;
             }
             transformTarget.updateMatrixWorld();
+            debouncedARSave();
         }
     }
 }
@@ -1061,6 +1068,7 @@ function cloneSelectedAR() {
     });
 
     updateSelection(newClones);
+    debouncedARSave();
     arDebugStatus(`Cloned ${newClones.length} objects`);
 }
 
@@ -1087,6 +1095,7 @@ function deleteSelectedAR() {
     selectionGroup.clear();
     transformControl.detach();
     updateSelection(remaining);
+    debouncedARSave();
     arDebugStatus(`Deleted ${toDelete.length} objects`);
 }
 
@@ -1140,5 +1149,46 @@ function undoAR() {
     });
 
     updateARObjectList();
+    debouncedARSave();
     arDebugStatus('Undo applied');
+}
+
+// ---- Scene State for URL Sync ----
+
+function debouncedARSave() {
+    clearTimeout(arSaveTimeout);
+    arSaveTimeout = setTimeout(() => saveARScene(), 300);
+}
+
+function saveARScene() {
+    if (onARSceneChanged) {
+        const state = getARSceneState();
+        onARSceneChanged(state);
+    }
+}
+
+export function getARSceneState() {
+    // Must detach selection to get accurate world-space transforms
+    const currentSel = [...selectedObjects];
+    updateSelection([]);
+
+    const state = [];
+    editableObjects.forEach(obj => {
+        const entry = {
+            name: obj.userData._editorOriginalName,
+            index: obj.userData._editorIndex,
+            position: obj.position.toArray().map(v => Math.round(v * 10000) / 10000),
+            rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z].map(v => Math.round(v * 10000) / 10000),
+            scale: obj.scale.toArray().map(v => Math.round(v * 10000) / 10000),
+            cloned: !!obj.userData._isCloned,
+        };
+        if (obj.userData._isCloned) {
+            entry.sourceIndex = obj.userData._sourceIndex;
+        }
+        state.push(entry);
+    });
+
+    // Re-select
+    updateSelection(currentSel);
+    return state;
 }
