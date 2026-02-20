@@ -824,7 +824,7 @@ function updateToolState() {
     }
 
     // Scanner Visibility
-    if (arScanner) {
+    if (typeof arScanner !== 'undefined' && arScanner) {
         arScanner.setVisible(currentTool === 'scanner');
     }
 }
@@ -860,8 +860,9 @@ function setPivot(obj, targetWorldPos) {
 
 function rePivotToBBoxCenter(obj) {
     const box = new THREE.Box3().setFromObject(obj);
-    if (box.isEmpty()) return;
+    if (box.isEmpty()) return; // Prevent NaN errors on empty nodes
     const center = box.getCenter(new THREE.Vector3());
+    // User wants pivot at the bottom of the object centered horizontally
     const bottomCenter = new THREE.Vector3(center.x, box.min.y, center.z);
     setPivot(obj, bottomCenter);
 }
