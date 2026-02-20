@@ -455,14 +455,12 @@ function onTouchStart(event) {
         const ndcY = -(t.y / window.innerHeight) * 2 + 1;
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
         const hitPoint = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && selectionGroup && arModel) {
-            // Convert selectionGroup world position to compute offset
-            const sgWorld = new THREE.Vector3();
-            selectionGroup.getWorldPosition(sgWorld);
+        if (dragRaycaster.ray.intersectPlane(dragPlane, hitPoint) && arModel) {
+            // Use arModel position directly (world space, since arModel is child of scene)
             dragOffset.set(
-                sgWorld.x - hitPoint.x,
+                arModel.position.x - hitPoint.x,
                 0,
-                sgWorld.z - hitPoint.z
+                arModel.position.z - hitPoint.z
             );
         } else {
             dragOffset.set(0, 0, 0);
@@ -491,7 +489,7 @@ function onTouchMove(event) {
 
     const touchKeys = Object.keys(touches);
 
-    if (selectedObjects.length === 0) return; // Should have selection if we are here (drag/gesture)
+    if (!arModel) return;
 
     if (isTwoFingerGesture && touchKeys.length === 2) {
         // Allow scaling/rotation in both generic and placement modes
@@ -502,25 +500,25 @@ function onTouchMove(event) {
         const dist = Math.hypot(t2.x - t1.x, t2.y - t1.y);
         const angle = Math.atan2(t2.y - t1.y, t2.x - t1.x);
 
-        // Pinch to scale
+        // Pinch to scale — operate on arModel directly
         if (lastTouchDist > 0) {
             const scaleFactor = dist / lastTouchDist;
-            selectionGroup.scale.multiplyScalar(scaleFactor);
+            arModel.scale.multiplyScalar(scaleFactor);
             // Clamp scale
-            const s = selectionGroup.scale.x;
+            const s = arModel.scale.x;
             const clamped = Math.max(0.01, Math.min(s, 20));
-            selectionGroup.scale.setScalar(clamped);
+            arModel.scale.setScalar(clamped);
         }
 
         // Rotate around Y axis
         const angleDelta = angle - lastTouchAngle;
-        selectionGroup.rotation.y += angleDelta;
+        arModel.rotation.y += angleDelta;
 
         lastTouchDist = dist;
         lastTouchAngle = angle;
         lastTouchCenter = { x: (t1.x + t2.x) / 2, y: (t1.y + t2.y) / 2 };
 
-        selectionGroup.updateMatrixWorld();
+        arModel.updateMatrixWorld();
 
     } else if (isDragging && touchKeys.length === 1) {
         // Single finger drag — only in generic mode
@@ -535,19 +533,11 @@ function onTouchMove(event) {
         dragRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
         const intersection = new THREE.Vector3();
-        if (dragRaycaster.ray.intersectPlane(dragPlane, intersection) && arModel) {
-            // intersection is in world space. Convert target to world, then back to local.
-            const targetWorld = new THREE.Vector3(
-                intersection.x + dragOffset.x,
-                0,
-                intersection.z + dragOffset.z
-            );
-            // Convert to arModel local space
+        if (dragRaycaster.ray.intersectPlane(dragPlane, intersection)) {
+            // Move arModel directly (world space)
+            arModel.position.x = intersection.x + dragOffset.x;
+            arModel.position.z = intersection.z + dragOffset.z;
             arModel.updateMatrixWorld();
-            const targetLocal = arModel.worldToLocal(targetWorld);
-            selectionGroup.position.x = targetLocal.x;
-            selectionGroup.position.z = targetLocal.z;
-            selectionGroup.updateMatrixWorld();
         }
     }
 }
@@ -815,27 +805,19 @@ function updateToolbarUI() {
 function updateToolState() {
     if (!transformControl) return;
 
-    if (currentTool === 'placement') {
-        // Placement moves arModel container directly.
-        // Detach objects back from selectionGroup so they move with the container.
-        if (selectedObjects.length > 0 && selectionGroup) {
-            updateSelection([]);
-        }
+    // Auto-select all objects for bounding box if none selected
+    if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
+        updateSelection(editableObjects);
+    }
+
+    if (currentTool === 'placement' || currentTool === 'generic' || currentTool === 'select' || currentTool === 'cursor') {
         transformControl.detach();
-    } else if (currentTool === 'generic' || currentTool === 'select') {
-        transformControl.detach();
-        // Auto-select all objects if none selected
-        if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
-            updateSelection(editableObjects);
-        }
     } else if (currentTool === 'translate' || currentTool === 'rotate' || currentTool === 'scale') {
-        // Auto-select all objects if none selected
-        if (selectedObjects.length === 0 && editableObjects.length > 0 && selectionGroup) {
-            updateSelection(editableObjects);
-        }
         transformControl.setMode(currentTool);
-        if (selectedObjects.length > 0 && selectionGroup) {
-            transformControl.attach(selectionGroup);
+        // Attach gizmo to arModel directly — proven to work in AR
+        // (attaching to nested selectionGroup causes gizmo rendering issues)
+        if (arModel) {
+            transformControl.attach(arModel);
         }
     }
 
