@@ -15,6 +15,9 @@ let onExitScanner = null;
 let isScanning = false;
 let scanSessions = []; // [{startIndex, endIndex}] for undo
 
+// Cursor splat — red wireframe square showing where next point would land
+let cursorSplat = null;
+
 export async function isScannerSupported() {
     if (!navigator.xr) return false;
     try {
@@ -56,6 +59,22 @@ export async function startScannerSession(containerEl, callbacks) {
     pointCloud = new THREE.Points(geometry, material);
     pointCloud.frustumCulled = false;
     scene.add(pointCloud);
+
+    // Cursor splat — red wireframe square (same size as scanned splats)
+    const cursorSize = 0.15;
+    const cursorPlaneGeo = new THREE.PlaneGeometry(cursorSize, cursorSize);
+    cursorPlaneGeo.rotateX(-Math.PI / 2); // Normal is +Y (up)
+    const cursorEdgesGeo = new THREE.EdgesGeometry(cursorPlaneGeo);
+    const cursorMat = new THREE.LineBasicMaterial({
+        color: 0xff0000,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: true
+    });
+    cursorSplat = new THREE.LineSegments(cursorEdgesGeo, cursorMat);
+    cursorSplat.matrixAutoUpdate = false;
+    cursorSplat.visible = false;
+    scene.add(cursorSplat);
 
     // Setup scan/undo buttons
     setupScannerToolbar();
@@ -158,33 +177,46 @@ function onXRFrame(timestamp, frame) {
         hitTestSourceRequested = true;
     }
 
-    // Only accumulate points when scanning is active
-    if (isScanning && hitTestSource && numPoints < MAX_POINTS) {
+    // Always update cursor splat + accumulate points from hit test
+    if (hitTestSource) {
         const hitTestResults = frame.getHitTestResults(hitTestSource);
         if (hitTestResults.length > 0) {
             const hit = hitTestResults[0];
             const pose = hit.getPose(referenceSpace);
             if (pose) {
                 const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
 
-                // Add points with slight noise to mimic density
-                for (let i = 0; i < 3 && numPoints < MAX_POINTS; i++) {
-                    const idx = numPoints * 3;
-                    positions[idx] = pos.x + (Math.random() - 0.5) * 0.04;
-                    positions[idx + 1] = pos.y;
-                    positions[idx + 2] = pos.z + (Math.random() - 0.5) * 0.04;
-                    numPoints++;
+                // Update cursor splat position
+                if (cursorSplat) {
+                    cursorSplat.matrix.copy(matrix);
+                    cursorSplat.visible = true;
                 }
 
-                geometry.attributes.position.needsUpdate = true;
-                geometry.setDrawRange(0, numPoints);
+                // Accumulate points only when scanning
+                if (isScanning && numPoints < MAX_POINTS) {
+                    const pos = new THREE.Vector3().setFromMatrixPosition(matrix);
 
-                // Update current session's endIndex
-                if (scanSessions.length > 0) {
-                    scanSessions[scanSessions.length - 1].endIndex = numPoints;
+                    // Add points with slight noise to mimic density
+                    for (let i = 0; i < 3 && numPoints < MAX_POINTS; i++) {
+                        const idx = numPoints * 3;
+                        positions[idx] = pos.x + (Math.random() - 0.5) * 0.04;
+                        positions[idx + 1] = pos.y;
+                        positions[idx + 2] = pos.z + (Math.random() - 0.5) * 0.04;
+                        numPoints++;
+                    }
+
+                    geometry.attributes.position.needsUpdate = true;
+                    geometry.setDrawRange(0, numPoints);
+
+                    // Update current session's endIndex
+                    if (scanSessions.length > 0) {
+                        scanSessions[scanSessions.length - 1].endIndex = numPoints;
+                    }
                 }
             }
+        } else {
+            // No surface detected — hide cursor
+            if (cursorSplat) cursorSplat.visible = false;
         }
     }
 
@@ -206,6 +238,7 @@ function cleanup() {
     hitTestSourceRequested = false;
     isScanning = false;
     scanSessions = [];
+    cursorSplat = null;
 
     if (renderer) {
         renderer.setAnimationLoop(null);
