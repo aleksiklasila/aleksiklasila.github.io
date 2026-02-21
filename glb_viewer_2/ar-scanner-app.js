@@ -3,14 +3,23 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
 
 // ---- Configuration ----
-const SPLAT_SIZE = 0.02;               // 2cm oriented surface quads
-const MIN_DIST_SQ = 0.012 * 0.012;     // 1.2cm min distance squared
 const MAX_SPLATS = 80000;
-const GRID_CELL = 0.015;               // spatial hash cell size
 const DEPTH_INFERENCE_INTERVAL = 4;    // Run depth inference every N frames
-const DEPTH_SAMPLE_STEP = 8;           // Sample every Nth pixel from depth map
 const DEPTH_MIN = 0.1;                 // Ignore depth < 10cm (too close / noise)
 const DEPTH_MAX = 5.0;                 // Ignore depth > 5m (too far / unreliable)
+
+// ---- Distance-adaptive base values (calibrated at REF_DEPTH = 1m) ----
+const REF_DEPTH = 1.0;                 // Reference distance for scaling
+const BASE_SPLAT_SIZE = 0.02;          // 2cm at 1m distance
+const BASE_MIN_DIST = 0.012;           // 1.2cm min distance at 1m
+const BASE_GRID_CELL = 0.015;          // Spatial hash cell at 1m
+const BASE_SAMPLE_STEP = 8;            // Sample step at 1m
+const GRID_CELL = BASE_GRID_CELL;      // Fixed grid cell for spatial hash (lookup accel)
+
+// ---- Depth map edge cropping (skip inaccurate periphery) ----
+const EDGE_CROP_TOP = 0.08;            // Skip top 8%
+const EDGE_CROP_BOTTOM = 0.15;         // Skip bottom 15% (most inaccurate)
+const EDGE_CROP_SIDES = 0.08;          // Skip left/right 8%
 
 // ---- Scene State ----
 let renderer, scene, camera;
@@ -85,20 +94,22 @@ function gridKey(x, y, z) {
     return `${Math.floor(x / GRID_CELL)},${Math.floor(y / GRID_CELL)},${Math.floor(z / GRID_CELL)}`;
 }
 
-function isTooClose(pos) {
+function isTooClose(pos, minDistSq = BASE_MIN_DIST * BASE_MIN_DIST) {
     try {
+        // Check extra neighbor cells when minDistSq is large (far-away points)
+        const checkRadius = Math.max(1, Math.ceil(Math.sqrt(minDistSq) / GRID_CELL));
         const gx = Math.floor(pos.x / GRID_CELL);
         const gy = Math.floor(pos.y / GRID_CELL);
         const gz = Math.floor(pos.z / GRID_CELL);
 
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -checkRadius; dx <= checkRadius; dx++) {
+            for (let dy = -checkRadius; dy <= checkRadius; dy++) {
+                for (let dz = -checkRadius; dz <= checkRadius; dz++) {
                     const key = `${gx + dx},${gy + dy},${gz + dz}`;
                     const cell = spatialGrid[key];
                     if (cell) {
                         for (const idx of cell) {
-                            if (splatPositions[idx].distanceToSquared(pos) < MIN_DIST_SQ) return true;
+                            if (splatPositions[idx].distanceToSquared(pos) < minDistSq) return true;
                         }
                     }
                 }
@@ -125,12 +136,12 @@ function rebuildGrid() {
 }
 
 // ---- Add Splat ----
-function addSplat(matrix) {
+function addSplat(matrix, minDistSq = BASE_MIN_DIST * BASE_MIN_DIST) {
     try {
         if (numSplats >= MAX_SPLATS) return false;
 
         _tmpPos.setFromMatrixPosition(matrix);
-        if (isTooClose(_tmpPos)) return false;
+        if (isTooClose(_tmpPos, minDistSq)) return false;
 
         const pos = _tmpPos.clone();
 
@@ -150,15 +161,17 @@ function addSplat(matrix) {
 }
 
 // ---- Add splat from world position with camera-facing orientation ----
-function addSplatFromWorldPos(worldPos, cameraPose) {
+function addSplatFromWorldPos(worldPos, cameraPose, depthFactor = 1.0) {
     // Create a matrix that places a small quad at worldPos, oriented to face the camera
+    // depthFactor scales size and min-distance based on metric depth / REF_DEPTH
     _dummyObj.position.copy(worldPos);
     // Look at camera position for orientation
     _camPos.setFromMatrixPosition(cameraPose);
     _dummyObj.lookAt(_camPos);
-    _dummyObj.scale.set(1, 1, 1);
+    _dummyObj.scale.set(depthFactor, depthFactor, depthFactor);
     _dummyObj.updateMatrix();
-    return addSplat(_dummyObj.matrix);
+    const scaledMinDistSq = (BASE_MIN_DIST * depthFactor) * (BASE_MIN_DIST * depthFactor);
+    return addSplat(_dummyObj.matrix, scaledMinDistSq);
 }
 
 // ---- Depth Estimation (Depth Anything V2 Base + WebGPU) ----
@@ -362,21 +375,32 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
             return;
         }
 
-        // Unproject
+        // Unproject with distance-adaptive sampling and edge cropping
         const invProjMatrix = new THREE.Matrix4().copy(projMatrixClone).invert();
 
         let pointsAdded = 0;
-        const step = Math.max(2, Math.floor(DEPTH_SAMPLE_STEP * (dw / imageData.width)));
+        const baseStep = Math.max(2, Math.floor(BASE_SAMPLE_STEP * (dw / imageData.width)));
+        // Use a fine step (for close objects) — far-away points are filtered by isTooClose
+        const minStep = Math.max(2, Math.floor(baseStep * 0.4));
         const worldPos = new THREE.Vector3();
         const ndcPos = new THREE.Vector4();
 
-        for (let py = step; py < dh - step; py += step) {
-            for (let px = step; px < dw - step; px += step) {
+        // Edge crop bounds
+        const yStart = Math.max(minStep, Math.floor(dh * EDGE_CROP_TOP));
+        const yEnd = Math.min(dh - minStep, Math.floor(dh * (1 - EDGE_CROP_BOTTOM)));
+        const xStart = Math.max(minStep, Math.floor(dw * EDGE_CROP_SIDES));
+        const xEnd = Math.min(dw - minStep, Math.floor(dw * (1 - EDGE_CROP_SIDES)));
+
+        for (let py = yStart; py < yEnd; py += minStep) {
+            for (let px = xStart; px < xEnd; px += minStep) {
                 const relDepth = depthData[py * dw + px];
                 if (relDepth <= 0) continue;
 
                 const metricDepth = depthScaleFactor / relDepth;
                 if (metricDepth < DEPTH_MIN || metricDepth > DEPTH_MAX) continue;
+
+                // Distance-adaptive: compute depth scaling factor
+                const depthFactor = Math.max(0.25, Math.min(4.0, metricDepth / REF_DEPTH));
 
                 const ndcX = (px / dw) * 2.0 - 1.0;
                 const ndcY = 1.0 - (py / dh) * 2.0;
@@ -391,7 +415,7 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
                 worldPos.set(rayX * t, rayY * t, -metricDepth);
                 worldPos.applyMatrix4(cameraPoseClone);
 
-                if (addSplatFromWorldPos(worldPos, cameraPoseClone)) {
+                if (addSplatFromWorldPos(worldPos, cameraPoseClone, depthFactor)) {
                     pointsAdded++;
                 }
             }
@@ -495,7 +519,7 @@ export async function startScannerSession(containerEl, callbacks) {
     camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
 
     // ---- Splat geometry (small surface-oriented quad) ----
-    splatGeometry = new THREE.PlaneGeometry(SPLAT_SIZE, SPLAT_SIZE);
+    splatGeometry = new THREE.PlaneGeometry(BASE_SPLAT_SIZE, BASE_SPLAT_SIZE);
 
     // ---- InstancedMesh for scan splats ----
     const splatMaterial = new THREE.MeshBasicMaterial({
@@ -510,7 +534,7 @@ export async function startScannerSession(containerEl, callbacks) {
     scene.add(splatMesh);
 
     // ---- Cursor indicator (black filled circle) ----
-    const cursorGeo = new THREE.CircleGeometry(SPLAT_SIZE / 2, 24);
+    const cursorGeo = new THREE.CircleGeometry(BASE_SPLAT_SIZE / 2, 24);
     cursorGeo.rotateX(-Math.PI / 2);
     const cursorMat = new THREE.MeshBasicMaterial({
         color: 0x000000,
@@ -757,34 +781,7 @@ function onXRFrame(timestamp, frame) {
             }
         }
 
-        // Also add hit-test splats when scanning (as supplementary points)
-        if (isScanning && hitTestSource) {
-            const hitTestResults = frame.getHitTestResults(hitTestSource);
-            if (hitTestResults.length > 0) {
-                const hit = hitTestResults[0];
-                const pose = hit.getPose(referenceSpace);
-                if (pose) {
-                    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                    addSplat(matrix);
-
-                    // Add nearby surface points
-                    for (let i = 0; i < 4; i++) {
-                        const angle = (i / 4) * Math.PI * 2;
-                        const radius = SPLAT_SIZE * (1.5 + Math.random() * 2);
-                        const offset = new THREE.Matrix4().makeTranslation(
-                            Math.cos(angle) * radius,
-                            0,
-                            Math.sin(angle) * radius
-                        );
-                        addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
-                    }
-
-                    if (scanSessions.length > 0) {
-                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
-                    }
-                }
-            }
-        }
+        // Legacy hit-test splats removed — scanning is depth-only now
 
         // Update GPU buffer only ONCE per frame
         if (isScanning && splatMesh) {
