@@ -15,7 +15,8 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "@huggingface/transformers": "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3"
             }
         }
     </script>
@@ -143,6 +144,18 @@
 
     <!-- AR Scanner Overlay (custom Three.js WebXR) -->
     <div id="ar-scanner-overlay" class="ar-overlay">
+        <!-- Depth model loading overlay -->
+        <div id="scanner-model-loading" style="display:none; position:absolute; inset:0; z-index:9999;
+            background:rgba(0,0,0,0.85); color:#fff; display:none;
+            flex-direction:column; align-items:center; justify-content:center; gap:12px; font-family:sans-serif;">
+            <div style="font-size:1.3rem; font-weight:600;">Loading Depth Model…</div>
+            <div id="scanner-model-progress" style="font-size:0.95rem; opacity:0.8;">Downloading…</div>
+            <div
+                style="width:60%; max-width:300px; height:6px; background:rgba(255,255,255,0.2); border-radius:3px; overflow:hidden;">
+                <div id="scanner-model-progress-bar"
+                    style="width:0%; height:100%; background:#00e676; border-radius:3px; transition:width 0.2s;"></div>
+            </div>
+        </div>
         <div id="scanner-bottom-wrapper" class="bottom-panel-wrapper">
             <div id="scanner-toolbar-drag-handle" class="panel-drag-handle">
                 <div class="handle-bar"></div>
