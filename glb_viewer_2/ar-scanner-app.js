@@ -1,11 +1,16 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { pipeline, RawImage } from '@huggingface/transformers';
 
 // ---- Configuration ----
-const SPLAT_SIZE = 0.025;               // 2.5cm oriented surface quads
-const MIN_DIST_SQ = 0.016 * 0.016;      // 1.6cm min distance squared
-const MAX_SPLATS = 50000;
-const GRID_CELL = 0.02;                  // spatial hash cell size
+const SPLAT_SIZE = 0.02;               // 2cm oriented surface quads
+const MIN_DIST_SQ = 0.012 * 0.012;     // 1.2cm min distance squared
+const MAX_SPLATS = 80000;
+const GRID_CELL = 0.015;               // spatial hash cell size
+const DEPTH_INFERENCE_INTERVAL = 4;    // Run depth inference every N frames
+const DEPTH_SAMPLE_STEP = 8;           // Sample every Nth pixel from depth map
+const DEPTH_MIN = 0.1;                 // Ignore depth < 10cm (too close / noise)
+const DEPTH_MAX = 5.0;                 // Ignore depth > 5m (too far / unreliable)
 
 // ---- Scene State ----
 let renderer, scene, camera;
@@ -13,6 +18,16 @@ let hitTestSource = null;
 let hitTestSourceRequested = false;
 let onExitScanner = null;
 let scannerDebugEl = null;
+
+// ---- Depth Estimation ----
+let depthEstimator = null;
+let depthModelLoading = false;
+let depthModelReady = false;
+let frameCounter = 0;
+let depthInferenceRunning = false;     // Prevent overlapping inferences
+
+// ---- XR Binding for camera image ----
+let xrGLBinding = null;
 
 export function updateScannerStatus(msg) {
     if (!scannerDebugEl) scannerDebugEl = document.getElementById('scanner-debug-console');
@@ -35,8 +50,16 @@ let spatialGrid = {};           // { "gx,gy,gz": [index, ...] }
 
 // ---- Cursor ----
 let cursorMesh = null;          // Black circle at hit-test position
+
 // Global re-usable objects
 const _tmpPos = new THREE.Vector3();
+const _viewPos = new THREE.Vector3();
+const _camPos = new THREE.Vector3();
+const _invProj = new THREE.Matrix4();
+const _camMatrix = new THREE.Matrix4();
+const _dummyObj = new THREE.Object3D();
+const _splatMatrix = new THREE.Matrix4();
+const _tmpMatrix = new THREE.Matrix4();
 
 // ---- Spatial Grid Helpers ----
 function gridKey(x, y, z) {
@@ -49,7 +72,6 @@ function isTooClose(pos) {
         const gy = Math.floor(pos.y / GRID_CELL);
         const gz = Math.floor(pos.z / GRID_CELL);
 
-        // Instead of allocating 27 strings per call, use a string builder pattern or direct lookup
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dz = -1; dz <= 1; dz++) {
@@ -91,25 +113,251 @@ function addSplat(matrix) {
         _tmpPos.setFromMatrixPosition(matrix);
         if (isTooClose(_tmpPos)) return false;
 
-        // Must store a cloned instance, otherwise we overwrite the global _tmpPos
         const pos = _tmpPos.clone();
 
-        // Store data
         splatPositions[numSplats] = pos;
         splatMatricesData[numSplats] = matrix.elements.slice();
         addToGrid(pos, numSplats);
 
-        // Update InstancedMesh
         splatMesh.setMatrixAt(numSplats, matrix);
         numSplats++;
         splatMesh.count = numSplats;
-        // We defer instanceMatrix.needsUpdate to onXRFrame to prevent 40+ GPU syncs per frame
 
         return true;
     } catch (e) {
         updateScannerStatus(`addSplat err: ${e.message}`);
         return false;
     }
+}
+
+// ---- Add splat from world position with camera-facing orientation ----
+function addSplatFromWorldPos(worldPos, cameraPose) {
+    // Create a matrix that places a small quad at worldPos, oriented to face the camera
+    _dummyObj.position.copy(worldPos);
+    // Look at camera position for orientation
+    _camPos.setFromMatrixPosition(cameraPose);
+    _dummyObj.lookAt(_camPos);
+    _dummyObj.scale.set(1, 1, 1);
+    _dummyObj.updateMatrix();
+    return addSplat(_dummyObj.matrix);
+}
+
+// ---- Depth Estimation Pipeline ----
+
+async function loadDepthModel() {
+    if (depthModelLoading || depthModelReady) return;
+    depthModelLoading = true;
+
+    const loadingEl = document.getElementById('scanner-model-loading');
+    const progressTextEl = document.getElementById('scanner-model-progress');
+    const progressBarEl = document.getElementById('scanner-model-progress-bar');
+
+    if (loadingEl) loadingEl.style.display = 'flex';
+
+    updateScannerStatus('Loading depth estimation model...');
+
+    try {
+        depthEstimator = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', {
+            device: 'webgpu',   // Try WebGPU first, falls back to WASM
+            progress_callback: (progress) => {
+                if (progress.status === 'download' || progress.status === 'progress') {
+                    const pct = progress.progress ? Math.round(progress.progress) : 0;
+                    if (progressTextEl) progressTextEl.textContent = `Downloading model... ${pct}%`;
+                    if (progressBarEl) progressBarEl.style.width = `${pct}%`;
+                } else if (progress.status === 'ready') {
+                    if (progressTextEl) progressTextEl.textContent = 'Model ready!';
+                    if (progressBarEl) progressBarEl.style.width = '100%';
+                }
+            }
+        });
+
+        depthModelReady = true;
+        depthModelLoading = false;
+        updateScannerStatus('Depth model loaded successfully!');
+
+        // Hide loading overlay after short delay
+        setTimeout(() => {
+            if (loadingEl) loadingEl.style.display = 'none';
+        }, 500);
+
+    } catch (err) {
+        updateScannerStatus(`Depth model load error: ${err.message}`);
+        depthModelLoading = false;
+
+        // Try with WASM fallback if WebGPU failed
+        try {
+            updateScannerStatus('Retrying with WASM backend...');
+            if (progressTextEl) progressTextEl.textContent = 'Retrying with WASM...';
+
+            depthEstimator = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', {
+                device: 'wasm',
+                progress_callback: (progress) => {
+                    if (progress.status === 'download' || progress.status === 'progress') {
+                        const pct = progress.progress ? Math.round(progress.progress) : 0;
+                        if (progressTextEl) progressTextEl.textContent = `Downloading... ${pct}%`;
+                        if (progressBarEl) progressBarEl.style.width = `${pct}%`;
+                    }
+                }
+            });
+
+            depthModelReady = true;
+            updateScannerStatus('Depth model loaded (WASM fallback)!');
+            setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 500);
+
+        } catch (err2) {
+            updateScannerStatus(`WASM fallback also failed: ${err2.message}`);
+            if (progressTextEl) progressTextEl.textContent = 'Model load failed - scanning limited';
+            setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 2000);
+        }
+    }
+}
+
+// ---- Frame Capture ----
+
+/**
+ * Capture the current WebGL framebuffer as an ImageData.
+ * We read the rendered camera pass from the WebXR compositor.
+ */
+function captureFrameAsImageData(gl, viewport) {
+    const width = viewport.width;
+    const height = viewport.height;
+    // Downsample capture for faster inference
+    const captureScale = 0.25; // Capture at 25% resolution
+    const cw = Math.floor(width * captureScale);
+    const ch = Math.floor(height * captureScale);
+
+    // Read pixels from current framebuffer
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(viewport.x, viewport.y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    // Downsample by nearest-neighbor
+    const smallPixels = new Uint8ClampedArray(cw * ch * 4);
+    for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+            const sx = Math.floor(x / captureScale);
+            const sy = Math.floor(y / captureScale);
+            // WebGL is bottom-up, flip Y
+            const srcIdx = ((height - 1 - sy) * width + sx) * 4;
+            const dstIdx = (y * cw + x) * 4;
+            smallPixels[dstIdx] = pixels[srcIdx];
+            smallPixels[dstIdx + 1] = pixels[srcIdx + 1];
+            smallPixels[dstIdx + 2] = pixels[srcIdx + 2];
+            smallPixels[dstIdx + 3] = 255;
+        }
+    }
+
+    return { data: smallPixels, width: cw, height: ch };
+}
+
+/**
+ * Run depth inference on captured image and unproject to 3D points.
+ */
+async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpace) {
+    if (!depthModelReady || !depthEstimator || depthInferenceRunning) return;
+    depthInferenceRunning = true;
+
+    const t0 = performance.now();
+
+    try {
+        // Create RawImage from pixel data (RGBA → RGB handled by transformers.js)
+        const rawImage = new RawImage(imageData.data, imageData.width, imageData.height, 4);
+
+        // Run depth estimation
+        const result = await depthEstimator(rawImage);
+        const depthMap = result.depth; // RawImage with depth values
+
+        const t1 = performance.now();
+        const inferenceMs = Math.round(t1 - t0);
+
+        // Get camera projection matrix to unproject pixels
+        const projMatrix = new THREE.Matrix4().fromArray(view.projectionMatrix);
+        const invProjMatrix = new THREE.Matrix4().copy(projMatrix).invert();
+        const cameraWorldMatrix = new THREE.Matrix4().fromArray(cameraPoseMatrix);
+
+        // Depth map dimensions
+        const dw = depthMap.width;
+        const dh = depthMap.height;
+        const depthData = depthMap.data; // Float32Array of depth values
+
+        // Find min/max depth for relative → metric scaling
+        // Depth-Anything outputs relative (inverse) depth - higher value = closer
+        let minDepth = Infinity, maxDepth = -Infinity;
+        for (let i = 0; i < depthData.length; i++) {
+            const d = depthData[i];
+            if (d > 0) {
+                if (d < minDepth) minDepth = d;
+                if (d > maxDepth) maxDepth = d;
+            }
+        }
+
+        // We'll use the depth range to scale relative depth to approximate meters.
+        // With relative depth models, closer objects have higher values.
+        // We invert and scale: metric_depth ≈ scale / relative_depth
+        // The scale factor is calibrated assuming the scene is ~0.5m to ~5m away.
+        // We use a heuristic: map the median depth range to ~2m.
+        const depthRange = maxDepth - minDepth;
+        if (depthRange <= 0) {
+            depthInferenceRunning = false;
+            return;
+        }
+
+        // Approximate metric scale: we assume the camera is looking at a scene
+        // where the median depth is roughly 1.5m. The relative depth model
+        // outputs higher values for closer objects.
+        const scaleEstimate = 2.0; // Approximate metric scale factor
+
+        let pointsAdded = 0;
+        const step = Math.max(2, Math.floor(DEPTH_SAMPLE_STEP * (dw / imageData.width)));
+        const worldPos = new THREE.Vector3();
+        const ndcPos = new THREE.Vector4();
+
+        for (let py = step; py < dh - step; py += step) {
+            for (let px = step; px < dw - step; px += step) {
+                const idx = py * dw + px;
+                const relativeDepth = depthData[idx];
+
+                if (relativeDepth <= 0) continue;
+
+                // Convert relative depth to approximate metric depth
+                // Higher relative depth = closer, so we invert
+                const metricDepth = scaleEstimate * (maxDepth / relativeDepth);
+
+                if (metricDepth < DEPTH_MIN || metricDepth > DEPTH_MAX) continue;
+
+                // Convert pixel coords to NDC [-1, 1]
+                const ndcX = (px / dw) * 2.0 - 1.0;
+                const ndcY = 1.0 - (py / dh) * 2.0; // Flip Y
+
+                // Unproject from NDC + depth to view space
+                ndcPos.set(ndcX, ndcY, -1.0, 1.0);
+                ndcPos.applyMatrix4(invProjMatrix);
+                // ndcPos is now in view/camera space at the near plane
+                // Scale by metric depth
+                const viewDir = new THREE.Vector3(ndcPos.x / ndcPos.w, ndcPos.y / ndcPos.w, ndcPos.z / ndcPos.w).normalize();
+                worldPos.copy(viewDir).multiplyScalar(metricDepth);
+
+                // Transform from camera space to world space
+                worldPos.applyMatrix4(cameraWorldMatrix);
+
+                // Add splat at this position
+                if (addSplatFromWorldPos(worldPos, cameraWorldMatrix)) {
+                    pointsAdded++;
+                }
+            }
+        }
+
+        // Update session end index
+        if (scanSessions.length > 0) {
+            scanSessions[scanSessions.length - 1].endIndex = numSplats;
+        }
+
+        updateScannerStatus(`Depth: ${inferenceMs}ms, +${pointsAdded} pts (total: ${numSplats})`);
+
+    } catch (e) {
+        updateScannerStatus(`Depth inference err: ${e.message}`);
+    }
+
+    depthInferenceRunning = false;
 }
 
 // ---- Public API ----
@@ -148,7 +396,6 @@ export async function startScannerSession(containerEl, callbacks) {
 
     // ---- Splat geometry (small surface-oriented quad) ----
     splatGeometry = new THREE.PlaneGeometry(SPLAT_SIZE, SPLAT_SIZE);
-    splatGeometry.rotateX(-Math.PI / 2); // Normal = +Y (up), lies in XZ
 
     // ---- InstancedMesh for scan splats ----
     const splatMaterial = new THREE.MeshBasicMaterial({
@@ -183,15 +430,20 @@ export async function startScannerSession(containerEl, callbacks) {
     spatialGrid = {};
     isScanning = false;
     scanSessions = [];
+    frameCounter = 0;
+    depthInferenceRunning = false;
 
     // ---- Toolbar ----
     setupScannerToolbar();
+
+    // ---- Start loading depth model in parallel ----
+    loadDepthModel();
 
     // ---- XR Session ----
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay', 'mesh-detection'],
+            optionalFeatures: ['dom-overlay'],
             domOverlay: { root: containerEl }
         });
 
@@ -261,46 +513,13 @@ function undoLastScan() {
     if (scanSessions.length === 0) return;
 
     const session = scanSessions.pop();
-    // Truncate data back to session start
     numSplats = session.startIndex;
     splatPositions.length = numSplats;
     splatMatricesData.length = numSplats;
     splatMesh.count = numSplats;
     splatMesh.instanceMatrix.needsUpdate = true;
 
-    // Rebuild spatial grid from remaining points
     rebuildGrid();
-}
-
-// Global re-usable objects for depth processing to avoid GC freeze
-const _viewPos = new THREE.Vector3();
-const _camPos = new THREE.Vector3();
-const _invProj = new THREE.Matrix4();
-const _camMatrix = new THREE.Matrix4();
-const _dummyObj = new THREE.Object3D();
-const _splatMatrix = new THREE.Matrix4();
-const _tmpMatrix = new THREE.Matrix4();
-
-function getSafeDepth(depthInfo, x, y) {
-    if (!depthInfo || depthInfo.width <= 0 || depthInfo.height <= 0) return 0;
-
-    // Mathematically clamp to the exact pixel bounds reported by the object
-    const cx = Math.max(0, Math.min(Math.floor(x), depthInfo.width - 1));
-    const cy = Math.max(0, Math.min(Math.floor(y), depthInfo.height - 1));
-
-    try {
-        // Normal call
-        return depthInfo.getDepthInMeters(cx, cy);
-    } catch (e) {
-        try {
-            // Some implementations have swapped X/Y bugs under the hood
-            return depthInfo.getDepthInMeters(cy, cx);
-        } catch (e2) {
-            // If both fail, the depth map is completely invalid, so return 0 to skip this point
-            // This prevents the application from freezing!
-            return 0;
-        }
-    }
 }
 
 // ---- XR Render Loop ----
@@ -311,12 +530,12 @@ function onXRFrame(timestamp, frame) {
         const session = renderer.xr.getSession();
         const referenceSpace = renderer.xr.getReferenceSpace();
 
-        // Request hit-test source once
+        // Request hit-test source once (for cursor indicator)
         if (!hitTestSourceRequested) {
             session.requestReferenceSpace('viewer').then((viewerRefSpace) => {
                 session.requestHitTestSource({
                     space: viewerRefSpace,
-                    entityTypes: ['point', 'plane', 'mesh']
+                    entityTypes: ['point', 'plane']
                 }).then((source) => {
                     hitTestSource = source;
                 });
@@ -324,85 +543,74 @@ function onXRFrame(timestamp, frame) {
             hitTestSourceRequested = true;
         }
 
-        // Process hit-test results every frame
+        // Update cursor from hit-test (visual indicator only)
         if (hitTestSource) {
+            const hitTestResults = frame.getHitTestResults(hitTestSource);
+            if (hitTestResults.length > 0) {
+                const hit = hitTestResults[0];
+                const pose = hit.getPose(referenceSpace);
+                if (pose && cursorMesh) {
+                    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+                    cursorMesh.matrix.copy(matrix);
+                    cursorMesh.visible = true;
+                }
+            } else if (cursorMesh) {
+                cursorMesh.visible = false;
+            }
+        }
+
+        // ---- Depth-based scanning ----
+        if (isScanning && depthModelReady) {
+            frameCounter++;
+
+            if (frameCounter % DEPTH_INFERENCE_INTERVAL === 0 && !depthInferenceRunning) {
+                // Get the XR view for camera intrinsics and pose
+                const viewerPose = frame.getViewerPose(referenceSpace);
+                if (viewerPose && viewerPose.views.length > 0) {
+                    const view = viewerPose.views[0];
+                    const cameraPoseMatrix = viewerPose.transform.matrix;
+
+                    // Capture frame from WebGL
+                    const gl = renderer.getContext();
+                    const glLayer = session.renderState.baseLayer;
+                    const viewport = glLayer.getViewport(view);
+
+                    // Bind the XR framebuffer for reading
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+                    const imageData = captureFrameAsImageData(gl, viewport);
+
+                    // Run depth inference asynchronously (doesn't block render loop)
+                    processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpace);
+                }
+            }
+        }
+
+        // Also add hit-test splats when scanning (as supplementary points)
+        if (isScanning && hitTestSource) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
             if (hitTestResults.length > 0) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
                 if (pose) {
                     const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+                    addSplat(matrix);
 
-                    // Update cursor position with hit-test
-                    if (cursorMesh) {
-                        cursorMesh.matrix.copy(matrix);
-                        cursorMesh.visible = true;
+                    // Add nearby surface points
+                    for (let i = 0; i < 4; i++) {
+                        const angle = (i / 4) * Math.PI * 2;
+                        const radius = SPLAT_SIZE * (1.5 + Math.random() * 2);
+                        const offset = new THREE.Matrix4().makeTranslation(
+                            Math.cos(angle) * radius,
+                            0,
+                            Math.sin(angle) * radius
+                        );
+                        addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
                     }
 
-                    // Accumulate splats when scanning
-                    if (isScanning) {
-                        // Add the exact hit point
-                        addSplat(matrix);
-
-                        // Add nearby points along the surface for faster coverage
-                        // Use more samples with wider radius for better object capture
-                        for (let i = 0; i < 8; i++) {
-                            const angle = (i / 8) * Math.PI * 2;
-                            const radius = SPLAT_SIZE * (2 + Math.random() * 3);
-                            // WebXR hit poses have the Y-axis as the surface normal. 
-                            // Translating along X and Z keeps the point exactly ON the surface.
-                            const offset = new THREE.Matrix4().makeTranslation(
-                                Math.cos(angle) * radius, // X (tangent)
-                                0,                        // Y (normal) -> exactly 0 so it doesn't float
-                                Math.sin(angle) * radius  // Z (tangent)
-                            );
-                            addSplat(new THREE.Matrix4().copy(matrix).multiply(offset));
-                        }
-
-                        // Update session end index
-                        if (scanSessions.length > 0) {
-                            scanSessions[scanSessions.length - 1].endIndex = numSplats;
-                        }
+                    if (scanSessions.length > 0) {
+                        scanSessions[scanSessions.length - 1].endIndex = numSplats;
                     }
                 }
-            } else {
-                // No surface — hide cursor
-                if (cursorMesh) cursorMesh.visible = false;
-            }
-        }
-
-        // ---- Process detected meshes (captures object geometry beyond flat planes) ----
-        if (isScanning && frame.detectedMeshes) {
-            let meshesProcessed = 0;
-            for (const mesh of frame.detectedMeshes.values()) {
-                if (meshesProcessed > 3) break; // Don't process too many meshes per frame to prevent freeze
-
-                const meshPose = frame.getPose(mesh.meshSpace, referenceSpace);
-                if (!meshPose) continue;
-
-                _camMatrix.fromArray(meshPose.transform.matrix); // reuse existing global matrix
-                const vertices = mesh.vertices;
-                if (!vertices || vertices.length === 0) continue;
-
-                // Sample vertices randomly instead of iterating sequentially
-                // Pick max 10 random vertices per mesh per frame
-                const numSamples = Math.min(10, Math.floor(vertices.length / 3));
-                for (let i = 0; i < numSamples; i++) {
-                    const vi = Math.floor(Math.random() * (vertices.length / 3));
-                    const vx = vertices[vi * 3];
-                    const vy = vertices[vi * 3 + 1];
-                    const vz = vertices[vi * 3 + 2];
-
-                    _tmpMatrix.makeTranslation(vx, vy, vz);
-                    _splatMatrix.copy(_camMatrix).multiply(_tmpMatrix);
-
-                    addSplat(_splatMatrix);
-                }
-                meshesProcessed++;
-            }
-
-            if (scanSessions.length > 0) {
-                scanSessions[scanSessions.length - 1].endIndex = numSplats;
             }
         }
 
@@ -415,7 +623,6 @@ function onXRFrame(timestamp, frame) {
 
     } catch (e) {
         updateScannerStatus(`XRFrame err: ${e.message} ${e.stack}`);
-        // disable scanning if it crashes the loop
         if (isScanning) {
             isScanning = false;
             const scanBtn = document.getElementById('scanner-scan-btn');
@@ -447,6 +654,9 @@ function cleanup() {
     cursorMesh = null;
     splatMesh = null;
     splatGeometry = null;
+    frameCounter = 0;
+    depthInferenceRunning = false;
+    xrGLBinding = null;
 
     if (renderer) {
         renderer.setAnimationLoop(null);
@@ -468,15 +678,13 @@ export async function exportScanAsGLB() {
         return null;
     }
 
-    // Template geometry for each splat (already rotated)
     const template = splatGeometry;
     const tPos = template.attributes.position;
     const tNorm = template.attributes.normal;
     const tIdx = template.index;
-    const vertsPerSplat = tPos.count;       // 4 for PlaneGeometry
-    const indicesPerSplat = tIdx.count;     // 6 for PlaneGeometry (2 triangles)
+    const vertsPerSplat = tPos.count;
+    const indicesPerSplat = tIdx.count;
 
-    // Allocate merged arrays
     const totalVerts = numSplats * vertsPerSplat;
     const totalIndices = numSplats * indicesPerSplat;
     const mPos = new Float32Array(totalVerts * 3);
@@ -494,7 +702,6 @@ export async function exportScanAsGLB() {
 
         const vOff = s * vertsPerSplat;
 
-        // Transform vertices and normals
         for (let vi = 0; vi < vertsPerSplat; vi++) {
             v.fromArray(tPos.array, vi * 3).applyMatrix4(mat4);
             mPos[(vOff + vi) * 3] = v.x;
@@ -507,14 +714,12 @@ export async function exportScanAsGLB() {
             mNorm[(vOff + vi) * 3 + 2] = n.z;
         }
 
-        // Copy indices (offset by vertex count)
         const iOff = s * indicesPerSplat;
         for (let ii = 0; ii < indicesPerSplat; ii++) {
             mIdx[iOff + ii] = tIdx.array[ii] + vOff;
         }
     }
 
-    // Build merged geometry
     const mergedGeo = new THREE.BufferGeometry();
     mergedGeo.setAttribute('position', new THREE.BufferAttribute(mPos, 3));
     mergedGeo.setAttribute('normal', new THREE.BufferAttribute(mNorm, 3));
