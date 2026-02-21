@@ -26,12 +26,13 @@ let depthModelReady = false;
 let frameCounter = 0;
 let depthInferenceRunning = false;     // Prevent overlapping inferences
 
-// ---- Camera stream for depth estimation ----
-let cameraStream = null;              // MediaStream from getUserMedia
-let cameraVideo = null;               // Hidden <video> element
-let captureCanvas = null;             // Offscreen canvas for frame capture
-let captureCtx = null;                // 2D context of capture canvas
-const CAPTURE_WIDTH = 320;            // Downsampled capture resolution
+// ---- XR Camera Capture (via camera-access feature) ----
+let xrGLBinding = null;               // XRWebGLBinding for getCameraImage
+let captureFBO = null;                // Framebuffer for camera texture
+let captureSmallFBO = null;           // Small framebuffer for downsampled read
+let captureSmallTex = null;           // Small texture attached to captureSmallFBO
+let cameraAccessAvailable = false;
+const CAPTURE_WIDTH = 320;
 const CAPTURE_HEIGHT = 240;
 
 export function updateScannerStatus(msg) {
@@ -206,70 +207,85 @@ async function loadDepthModel() {
     setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 2000);
 }
 
-// ---- Camera Stream (getUserMedia) ----
+// ---- XR Camera Capture ----
 
 /**
- * Start a back-camera video stream for depth inference.
- * The stream runs independently from WebXR and provides real camera imagery.
+ * Initialize WebGL resources for capturing the XR camera texture.
+ * Must be called after the WebGL context is available.
  */
-async function startCameraStream() {
+function initCameraCapture(gl) {
+    // FBO to attach the camera texture for reading
+    captureFBO = gl.createFramebuffer();
+
+    // Small FBO + texture for downsampled capture
+    captureSmallTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, captureSmallTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, CAPTURE_WIDTH, CAPTURE_HEIGHT, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    captureSmallFBO = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, captureSmallFBO);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, captureSmallTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+/**
+ * Capture a frame from the XR camera using getCameraImage.
+ * Uses blitFramebuffer to downsample efficiently.
+ */
+function captureXRCameraFrame(gl, view) {
+    if (!xrGLBinding || !view.camera) return null;
+
     try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: 'environment',
-                width: { ideal: 640 },
-                height: { ideal: 480 }
-            },
-            audio: false
-        });
+        const cameraTexture = xrGLBinding.getCameraImage(view.camera);
+        if (!cameraTexture) return null;
 
-        cameraVideo = document.createElement('video');
-        cameraVideo.srcObject = cameraStream;
-        cameraVideo.setAttribute('playsinline', '');
-        cameraVideo.setAttribute('autoplay', '');
-        cameraVideo.muted = true;
-        cameraVideo.style.display = 'none';
-        document.body.appendChild(cameraVideo);
-        await cameraVideo.play();
+        const camW = view.camera.width;
+        const camH = view.camera.height;
 
-        // Create offscreen canvas for frame capture
-        captureCanvas = document.createElement('canvas');
-        captureCanvas.width = CAPTURE_WIDTH;
-        captureCanvas.height = CAPTURE_HEIGHT;
-        captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
+        // Attach camera texture to source FBO
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, captureFBO);
+        gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cameraTexture, 0);
 
-        updateScannerStatus('Camera stream started for depth estimation');
+        // Blit (downsample) to small FBO
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, captureSmallFBO);
+        gl.blitFramebuffer(
+            0, 0, camW, camH,
+            0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT,
+            gl.COLOR_BUFFER_BIT, gl.LINEAR
+        );
+
+        // Read pixels from small FBO
+        gl.bindFramebuffer(gl.FRAMEBUFFER, captureSmallFBO);
+        const pixels = new Uint8Array(CAPTURE_WIDTH * CAPTURE_HEIGHT * 4);
+        gl.readPixels(0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+        // Unbind
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        // Flip Y (WebGL is bottom-up)
+        const flipped = new Uint8ClampedArray(CAPTURE_WIDTH * CAPTURE_HEIGHT * 4);
+        for (let y = 0; y < CAPTURE_HEIGHT; y++) {
+            const srcRow = (CAPTURE_HEIGHT - 1 - y) * CAPTURE_WIDTH * 4;
+            const dstRow = y * CAPTURE_WIDTH * 4;
+            flipped.set(pixels.subarray(srcRow, srcRow + CAPTURE_WIDTH * 4), dstRow);
+        }
+
+        return { data: flipped, width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT };
     } catch (e) {
-        updateScannerStatus(`Camera stream error: ${e.message}`);
-        cameraStream = null;
-        cameraVideo = null;
+        updateScannerStatus(`Camera capture err: ${e.message}`);
+        return null;
     }
 }
 
-function stopCameraStream() {
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(t => t.stop());
-        cameraStream = null;
-    }
-    if (cameraVideo) {
-        cameraVideo.pause();
-        if (cameraVideo.parentElement) cameraVideo.parentElement.removeChild(cameraVideo);
-        cameraVideo = null;
-    }
-    captureCanvas = null;
-    captureCtx = null;
-}
-
-/**
- * Capture a frame from the live camera video stream.
- * Returns pixel data suitable for the depth estimation pipeline.
- */
-function captureVideoFrame() {
-    if (!cameraVideo || !captureCtx || cameraVideo.readyState < 2) return null;
-
-    captureCtx.drawImage(cameraVideo, 0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
-    const imageData = captureCtx.getImageData(0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
-    return { data: new Uint8ClampedArray(imageData.data), width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT };
+function cleanupCameraCapture(gl) {
+    if (captureFBO) { gl.deleteFramebuffer(captureFBO); captureFBO = null; }
+    if (captureSmallFBO) { gl.deleteFramebuffer(captureSmallFBO); captureSmallFBO = null; }
+    if (captureSmallTex) { gl.deleteTexture(captureSmallTex); captureSmallTex = null; }
+    xrGLBinding = null;
+    cameraAccessAvailable = false;
 }
 
 /**
@@ -459,20 +475,31 @@ export async function startScannerSession(containerEl, callbacks) {
     // ---- Toolbar ----
     setupScannerToolbar();
 
-    // ---- Start loading depth model and camera stream in parallel ----
+    // ---- Start loading depth model in parallel ----
     loadDepthModel();
-    startCameraStream();
 
     // ---- XR Session ----
     try {
         const session = await navigator.xr.requestSession('immersive-ar', {
             requiredFeatures: ['hit-test'],
-            optionalFeatures: ['dom-overlay'],
+            optionalFeatures: ['dom-overlay', 'camera-access'],
             domOverlay: { root: containerEl }
         });
 
         renderer.xr.setReferenceSpaceType('local');
         await renderer.xr.setSession(session);
+
+        // Create XRWebGLBinding for camera access
+        const gl = renderer.getContext();
+        try {
+            xrGLBinding = new XRWebGLBinding(session, gl);
+            initCameraCapture(gl);
+            cameraAccessAvailable = true;
+            updateScannerStatus('XR camera access initialized');
+        } catch (e) {
+            updateScannerStatus(`Camera access not available: ${e.message}`);
+            cameraAccessAvailable = false;
+        }
 
         session.addEventListener('end', () => {
             cleanup();
@@ -594,8 +621,9 @@ function onXRFrame(timestamp, frame) {
                     const view = viewerPose.views[0];
                     const cameraPoseMatrix = viewerPose.transform.matrix;
 
-                    // Capture frame from live camera video stream
-                    const imageData = captureVideoFrame();
+                    // Capture frame from XR camera
+                    const gl = renderer.getContext();
+                    const imageData = cameraAccessAvailable ? captureXRCameraFrame(gl, view) : null;
                     if (imageData) {
                         // Run depth inference asynchronously (doesn't block render loop)
                         processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpace);
@@ -676,8 +704,11 @@ function cleanup() {
     frameCounter = 0;
     depthInferenceRunning = false;
 
-    // Stop camera stream
-    stopCameraStream();
+    // Clean up XR camera capture resources
+    if (renderer) {
+        const gl = renderer.getContext();
+        if (gl) cleanupCameraCapture(gl);
+    }
 
     if (renderer) {
         renderer.setAnimationLoop(null);
