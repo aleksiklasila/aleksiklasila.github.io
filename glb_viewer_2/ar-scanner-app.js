@@ -410,13 +410,19 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
                 const ndcX = (px / dw) * 2.0 - 1.0;
                 const ndcY = 1.0 - (py / dh) * 2.0; // Flip Y
 
-                // Unproject: NDC → view-space ray direction
+                // Unproject: NDC → view-space ray (un-normalized)
                 ndcPos.set(ndcX, ndcY, -1.0, 1.0);
                 ndcPos.applyMatrix4(invProjMatrix);
-                viewDir.set(ndcPos.x / ndcPos.w, ndcPos.y / ndcPos.w, ndcPos.z / ndcPos.w).normalize();
+                const rayX = ndcPos.x / ndcPos.w;
+                const rayY = ndcPos.y / ndcPos.w;
+                const rayZ = ndcPos.z / ndcPos.w;
 
-                // Scale ray by metric depth → camera-space position
-                worldPos.copy(viewDir).multiplyScalar(metricDepth);
+                // Depth models output Z-depth (perpendicular distance from camera
+                // plane), NOT ray distance. Scale the ray so that its Z-component
+                // equals -metricDepth. Camera looks along -Z in view space.
+                // t = -metricDepth / rayZ  (rayZ is negative, so t is positive)
+                const t = -metricDepth / rayZ;
+                worldPos.set(rayX * t, rayY * t, -metricDepth);
 
                 // Camera space → World space
                 worldPos.applyMatrix4(cameraPoseClone);
