@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { pipeline, env, RawImage } from '@huggingface/transformers';
+import { AutoModelForDepthEstimation, AutoProcessor, env, RawImage } from '@huggingface/transformers';
 
 // ---- Configuration ----
 const SPLAT_SIZE = 0.02;               // 2cm oriented surface quads
@@ -33,7 +33,8 @@ let debugDepthCtx = null;
 let lastDepthMapData = null;           // Store last depth map for debug rendering
 
 // ---- Depth Estimation ----
-let depthEstimator = null;
+let depthModel = null;
+let depthProcessor = null;
 let depthModelLoading = false;
 let depthModelReady = false;
 let frameCounter = 0;
@@ -161,7 +162,7 @@ function addSplatFromWorldPos(worldPos, cameraPose) {
     return addSplat(_dummyObj.matrix);
 }
 
-// ---- Depth Estimation Pipeline ----
+// ---- Depth Estimation Pipeline (Apple DepthPro) ----
 
 async function loadDepthModel() {
     if (depthModelLoading || depthModelReady) return;
@@ -173,16 +174,16 @@ async function loadDepthModel() {
 
     if (loadingEl) loadingEl.style.display = 'flex';
 
-    updateScannerStatus('Loading depth estimation model...');
+    updateScannerStatus('Loading DepthPro model (q4 quantized)...');
 
     // Configure ONNX Runtime WASM paths for CDN usage
     env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
 
-    // Progress callback shared across attempts
+    // Progress callback
     const progressCb = (progress) => {
         if (progress.status === 'download' || progress.status === 'progress') {
             const pct = progress.progress ? Math.round(progress.progress) : 0;
-            if (progressTextEl) progressTextEl.textContent = `Downloading model... ${pct}%`;
+            if (progressTextEl) progressTextEl.textContent = `Downloading DepthPro... ${pct}%`;
             if (progressBarEl) progressBarEl.style.width = `${pct}%`;
         } else if (progress.status === 'ready') {
             if (progressTextEl) progressTextEl.textContent = 'Model ready!';
@@ -190,21 +191,26 @@ async function loadDepthModel() {
         }
     };
 
-    // Try backends in order: wasm (most compatible), then webgpu
+    // Try backends in order: wasm (most compatible during XR), then webgpu
     const backends = ['wasm', 'webgpu'];
     for (const backend of backends) {
         try {
-            updateScannerStatus(`Trying ${backend} backend...`);
-            if (progressTextEl) progressTextEl.textContent = `Loading (${backend})...`;
+            updateScannerStatus(`Trying ${backend} backend for DepthPro...`);
+            if (progressTextEl) progressTextEl.textContent = `Loading DepthPro (${backend})...`;
 
-            depthEstimator = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', {
+            // DepthPro uses AutoModelForDepthEstimation + AutoProcessor
+            depthModel = await AutoModelForDepthEstimation.from_pretrained('onnx-community/DepthPro-ONNX', {
+                dtype: 'q4',
                 device: backend,
                 progress_callback: progressCb,
             });
+            depthProcessor = await AutoProcessor.from_pretrained('onnx-community/DepthPro-ONNX');
 
             depthModelReady = true;
             depthModelLoading = false;
-            updateScannerStatus(`Depth model loaded (${backend})!`);
+            // DepthPro outputs metric depth — calibration is optional
+            depthScaleFactor = 1.0;
+            updateScannerStatus(`DepthPro loaded (${backend}, q4)! Outputs metric depth (m).`);
             setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 500);
             return; // Success!
 
@@ -313,11 +319,11 @@ function cleanupCameraCapture(gl) {
 
 /**
  * Run depth inference on captured image and unproject to 3D points.
- * IMPORTANT: projMatrixClone and cameraPoseClone must be CLONED matrices,
- * not live references that may be overwritten by the XR runtime.
+ * Uses Apple DepthPro which outputs metric depth (meters) directly.
+ * IMPORTANT: projMatrixClone and cameraPoseClone must be CLONED matrices.
  */
 async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
-    if (!depthModelReady || !depthEstimator || depthInferenceRunning) return;
+    if (!depthModelReady || !depthModel || !depthProcessor || depthInferenceRunning) return;
     depthInferenceRunning = true;
 
     const t0 = performance.now();
@@ -326,17 +332,21 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
         // Create RawImage from pixel data
         const rawImage = new RawImage(imageData.data, imageData.width, imageData.height, 4);
 
-        // Run depth estimation
-        const result = await depthEstimator(rawImage);
-        const depthMap = result.depth; // RawImage with depth values
+        // Preprocess with DepthPro's processor
+        const inputs = await depthProcessor(rawImage);
+
+        // Run DepthPro inference
+        const { predicted_depth } = await depthModel(inputs);
 
         const t1 = performance.now();
         const inferenceMs = Math.round(t1 - t0);
 
-        // Depth map dimensions
-        const dw = depthMap.width;
-        const dh = depthMap.height;
-        const depthData = depthMap.data; // Float32Array of relative depth values
+        // DepthPro outputs metric depth in meters directly
+        // predicted_depth is a Tensor with shape [1, H, W] or [H, W]
+        const depthData = predicted_depth.data; // Float32Array
+        const depthDims = predicted_depth.dims;
+        const dh = depthDims[depthDims.length - 2];
+        const dw = depthDims[depthDims.length - 1];
 
         // Store for debug rendering
         lastDepthMapData = { data: depthData, width: dw, height: dh };
@@ -346,42 +356,17 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
             renderDebugDepthMap(depthData, dw, dh);
         }
 
-        // Find min/max relative depth
-        let minRel = Infinity, maxRel = -Infinity;
-        for (let i = 0; i < depthData.length; i++) {
-            const d = depthData[i];
-            if (d > 0) {
-                if (d < minRel) minRel = d;
-                if (d > maxRel) maxRel = d;
-            }
-        }
-
-        const relRange = maxRel - minRel;
-        if (relRange <= 0) {
-            depthInferenceRunning = false;
-            return;
-        }
-
-        // Handle calibration request
+        // Handle optional calibration (fine-tuning metric depth with hit-test)
         if (pendingCalibration && lastHitTestDepth > 0.05) {
-            // Get the relative depth at the center of the depth map (where cursor is)
             const cx = Math.floor(dw / 2);
             const cy = Math.floor(dh / 2);
-            const centerRelDepth = depthData[cy * dw + cx];
-            if (centerRelDepth > 0) {
-                // scale = hitTestDepth * centerRelativeDepth
-                // so that: metricDepth = scale / relativeDepth
-                depthScaleFactor = lastHitTestDepth * centerRelDepth;
-                updateScannerStatus(`Calibrated! scale=${depthScaleFactor.toFixed(3)}, hitDist=${lastHitTestDepth.toFixed(2)}m`);
+            const centerMetric = depthData[cy * dw + cx];
+            if (centerMetric > 0.01) {
+                // Compute correction factor: hitTestDepth / modelDepth
+                depthScaleFactor = lastHitTestDepth / centerMetric;
+                updateScannerStatus(`Fine-tuned! correction=${depthScaleFactor.toFixed(3)}, hitDist=${lastHitTestDepth.toFixed(2)}m, modelDist=${centerMetric.toFixed(2)}m`);
             }
             pendingCalibration = false;
-        }
-
-        // If not calibrated, skip depth-based splatting
-        if (depthScaleFactor <= 0) {
-            updateScannerStatus(`Depth: ${inferenceMs}ms (uncalibrated - tap 🎯 to calibrate)`);
-            depthInferenceRunning = false;
-            return;
         }
 
         // Unproject using cloned matrices
@@ -391,24 +376,23 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
         const step = Math.max(2, Math.floor(DEPTH_SAMPLE_STEP * (dw / imageData.width)));
         const worldPos = new THREE.Vector3();
         const ndcPos = new THREE.Vector4();
-        const viewDir = new THREE.Vector3();
 
         for (let py = step; py < dh - step; py += step) {
             for (let px = step; px < dw - step; px += step) {
                 const idx = py * dw + px;
-                const relativeDepth = depthData[idx];
+                const rawDepth = depthData[idx];
 
-                if (relativeDepth <= 0) continue;
+                if (rawDepth <= 0) continue;
 
-                // Convert relative to metric using calibrated scale
-                // Depth-Anything: higher values = closer, so metric = scale / relative
-                const metricDepth = depthScaleFactor / relativeDepth;
+                // DepthPro outputs metric depth in meters
+                // Apply optional calibration correction factor
+                const metricDepth = rawDepth * depthScaleFactor;
 
                 if (metricDepth < DEPTH_MIN || metricDepth > DEPTH_MAX) continue;
 
                 // Convert pixel coords to NDC [-1, 1]
                 const ndcX = (px / dw) * 2.0 - 1.0;
-                const ndcY = 1.0 - (py / dh) * 2.0; // Flip Y
+                const ndcY = 1.0 - (py / dh) * 2.0;
 
                 // Unproject: NDC → view-space ray (un-normalized)
                 ndcPos.set(ndcX, ndcY, -1.0, 1.0);
@@ -417,10 +401,7 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
                 const rayY = ndcPos.y / ndcPos.w;
                 const rayZ = ndcPos.z / ndcPos.w;
 
-                // Depth models output Z-depth (perpendicular distance from camera
-                // plane), NOT ray distance. Scale the ray so that its Z-component
-                // equals -metricDepth. Camera looks along -Z in view space.
-                // t = -metricDepth / rayZ  (rayZ is negative, so t is positive)
+                // Z-depth unprojection: scale ray so Z = -metricDepth
                 const t = -metricDepth / rayZ;
                 worldPos.set(rayX * t, rayY * t, -metricDepth);
 
@@ -438,7 +419,7 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
             scanSessions[scanSessions.length - 1].endIndex = numSplats;
         }
 
-        updateScannerStatus(`Depth: ${inferenceMs}ms, +${pointsAdded} pts, scale=${depthScaleFactor.toFixed(2)} (total: ${numSplats})`);
+        updateScannerStatus(`DepthPro: ${inferenceMs}ms, +${pointsAdded} pts, corr=${depthScaleFactor.toFixed(2)} (total: ${numSplats})`);
 
     } catch (e) {
         updateScannerStatus(`Depth inference err: ${e.message}`);
