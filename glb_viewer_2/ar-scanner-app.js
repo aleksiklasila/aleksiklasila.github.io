@@ -19,6 +19,19 @@ let hitTestSourceRequested = false;
 let onExitScanner = null;
 let scannerDebugEl = null;
 
+// ---- Calibration State ----
+let depthScaleFactor = 0;              // 0 = uncalibrated, positive = calibrated
+let lastHitTestDepth = 0;              // Distance from camera to hit-test point
+let lastHitTestPos = new THREE.Vector3();
+let lastCameraPos = new THREE.Vector3();
+let pendingCalibration = false;        // True when user clicked calibrate
+
+// ---- Debug Depth Viewer ----
+let debugDepthVisible = false;
+let debugDepthCanvas = null;
+let debugDepthCtx = null;
+let lastDepthMapData = null;           // Store last depth map for debug rendering
+
 // ---- Depth Estimation ----
 let depthEstimator = null;
 let depthModelLoading = false;
@@ -290,15 +303,17 @@ function cleanupCameraCapture(gl) {
 
 /**
  * Run depth inference on captured image and unproject to 3D points.
+ * IMPORTANT: projMatrixClone and cameraPoseClone must be CLONED matrices,
+ * not live references that may be overwritten by the XR runtime.
  */
-async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpace) {
+async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
     if (!depthModelReady || !depthEstimator || depthInferenceRunning) return;
     depthInferenceRunning = true;
 
     const t0 = performance.now();
 
     try {
-        // Create RawImage from pixel data (RGBA → RGB handled by transformers.js)
+        // Create RawImage from pixel data
         const rawImage = new RawImage(imageData.data, imageData.width, imageData.height, 4);
 
         // Run depth estimation
@@ -308,47 +323,65 @@ async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpa
         const t1 = performance.now();
         const inferenceMs = Math.round(t1 - t0);
 
-        // Get camera projection matrix to unproject pixels
-        const projMatrix = new THREE.Matrix4().fromArray(view.projectionMatrix);
-        const invProjMatrix = new THREE.Matrix4().copy(projMatrix).invert();
-        const cameraWorldMatrix = new THREE.Matrix4().fromArray(cameraPoseMatrix);
-
         // Depth map dimensions
         const dw = depthMap.width;
         const dh = depthMap.height;
-        const depthData = depthMap.data; // Float32Array of depth values
+        const depthData = depthMap.data; // Float32Array of relative depth values
 
-        // Find min/max depth for relative → metric scaling
-        // Depth-Anything outputs relative (inverse) depth - higher value = closer
-        let minDepth = Infinity, maxDepth = -Infinity;
+        // Store for debug rendering
+        lastDepthMapData = { data: depthData, width: dw, height: dh };
+
+        // Render debug depth map if visible
+        if (debugDepthVisible) {
+            renderDebugDepthMap(depthData, dw, dh);
+        }
+
+        // Find min/max relative depth
+        let minRel = Infinity, maxRel = -Infinity;
         for (let i = 0; i < depthData.length; i++) {
             const d = depthData[i];
             if (d > 0) {
-                if (d < minDepth) minDepth = d;
-                if (d > maxDepth) maxDepth = d;
+                if (d < minRel) minRel = d;
+                if (d > maxRel) maxRel = d;
             }
         }
 
-        // We'll use the depth range to scale relative depth to approximate meters.
-        // With relative depth models, closer objects have higher values.
-        // We invert and scale: metric_depth ≈ scale / relative_depth
-        // The scale factor is calibrated assuming the scene is ~0.5m to ~5m away.
-        // We use a heuristic: map the median depth range to ~2m.
-        const depthRange = maxDepth - minDepth;
-        if (depthRange <= 0) {
+        const relRange = maxRel - minRel;
+        if (relRange <= 0) {
             depthInferenceRunning = false;
             return;
         }
 
-        // Approximate metric scale: we assume the camera is looking at a scene
-        // where the median depth is roughly 1.5m. The relative depth model
-        // outputs higher values for closer objects.
-        const scaleEstimate = 2.0; // Approximate metric scale factor
+        // Handle calibration request
+        if (pendingCalibration && lastHitTestDepth > 0.05) {
+            // Get the relative depth at the center of the depth map (where cursor is)
+            const cx = Math.floor(dw / 2);
+            const cy = Math.floor(dh / 2);
+            const centerRelDepth = depthData[cy * dw + cx];
+            if (centerRelDepth > 0) {
+                // scale = hitTestDepth * centerRelativeDepth
+                // so that: metricDepth = scale / relativeDepth
+                depthScaleFactor = lastHitTestDepth * centerRelDepth;
+                updateScannerStatus(`Calibrated! scale=${depthScaleFactor.toFixed(3)}, hitDist=${lastHitTestDepth.toFixed(2)}m`);
+            }
+            pendingCalibration = false;
+        }
+
+        // If not calibrated, skip depth-based splatting
+        if (depthScaleFactor <= 0) {
+            updateScannerStatus(`Depth: ${inferenceMs}ms (uncalibrated - tap 🎯 to calibrate)`);
+            depthInferenceRunning = false;
+            return;
+        }
+
+        // Unproject using cloned matrices
+        const invProjMatrix = new THREE.Matrix4().copy(projMatrixClone).invert();
 
         let pointsAdded = 0;
         const step = Math.max(2, Math.floor(DEPTH_SAMPLE_STEP * (dw / imageData.width)));
         const worldPos = new THREE.Vector3();
         const ndcPos = new THREE.Vector4();
+        const viewDir = new THREE.Vector3();
 
         for (let py = step; py < dh - step; py += step) {
             for (let px = step; px < dw - step; px += step) {
@@ -357,9 +390,9 @@ async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpa
 
                 if (relativeDepth <= 0) continue;
 
-                // Convert relative depth to approximate metric depth
-                // Higher relative depth = closer, so we invert
-                const metricDepth = scaleEstimate * (maxDepth / relativeDepth);
+                // Convert relative to metric using calibrated scale
+                // Depth-Anything: higher values = closer, so metric = scale / relative
+                const metricDepth = depthScaleFactor / relativeDepth;
 
                 if (metricDepth < DEPTH_MIN || metricDepth > DEPTH_MAX) continue;
 
@@ -367,19 +400,18 @@ async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpa
                 const ndcX = (px / dw) * 2.0 - 1.0;
                 const ndcY = 1.0 - (py / dh) * 2.0; // Flip Y
 
-                // Unproject from NDC + depth to view space
+                // Unproject: NDC → view-space ray direction
                 ndcPos.set(ndcX, ndcY, -1.0, 1.0);
                 ndcPos.applyMatrix4(invProjMatrix);
-                // ndcPos is now in view/camera space at the near plane
-                // Scale by metric depth
-                const viewDir = new THREE.Vector3(ndcPos.x / ndcPos.w, ndcPos.y / ndcPos.w, ndcPos.z / ndcPos.w).normalize();
+                viewDir.set(ndcPos.x / ndcPos.w, ndcPos.y / ndcPos.w, ndcPos.z / ndcPos.w).normalize();
+
+                // Scale ray by metric depth → camera-space position
                 worldPos.copy(viewDir).multiplyScalar(metricDepth);
 
-                // Transform from camera space to world space
-                worldPos.applyMatrix4(cameraWorldMatrix);
+                // Camera space → World space
+                worldPos.applyMatrix4(cameraPoseClone);
 
-                // Add splat at this position
-                if (addSplatFromWorldPos(worldPos, cameraWorldMatrix)) {
+                if (addSplatFromWorldPos(worldPos, cameraPoseClone)) {
                     pointsAdded++;
                 }
             }
@@ -390,13 +422,63 @@ async function processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpa
             scanSessions[scanSessions.length - 1].endIndex = numSplats;
         }
 
-        updateScannerStatus(`Depth: ${inferenceMs}ms, +${pointsAdded} pts (total: ${numSplats})`);
+        updateScannerStatus(`Depth: ${inferenceMs}ms, +${pointsAdded} pts, scale=${depthScaleFactor.toFixed(2)} (total: ${numSplats})`);
 
     } catch (e) {
         updateScannerStatus(`Depth inference err: ${e.message}`);
     }
 
     depthInferenceRunning = false;
+}
+
+// ---- Debug Depth Map Rendering ----
+
+function renderDebugDepthMap(depthData, dw, dh) {
+    if (!debugDepthCanvas) {
+        debugDepthCanvas = document.getElementById('scanner-depth-canvas');
+        if (debugDepthCanvas) debugDepthCtx = debugDepthCanvas.getContext('2d');
+    }
+    if (!debugDepthCtx) return;
+
+    const cw = debugDepthCanvas.width;
+    const ch = debugDepthCanvas.height;
+    const imgData = debugDepthCtx.createImageData(cw, ch);
+
+    // Find min/max for normalization
+    let minD = Infinity, maxD = -Infinity;
+    for (let i = 0; i < depthData.length; i++) {
+        if (depthData[i] > 0) {
+            if (depthData[i] < minD) minD = depthData[i];
+            if (depthData[i] > maxD) maxD = depthData[i];
+        }
+    }
+    const range = maxD - minD || 1;
+
+    for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+            const sx = Math.floor(x * dw / cw);
+            const sy = Math.floor(y * dh / ch);
+            const d = depthData[sy * dw + sx];
+            // Map depth to color: closer (higher) = warm, farther (lower) = cool
+            const norm = (d - minD) / range; // 0..1, higher = closer
+            const r = Math.floor(norm * 255);
+            const g = Math.floor((1 - Math.abs(norm - 0.5) * 2) * 200);
+            const b = Math.floor((1 - norm) * 255);
+            const pi = (y * cw + x) * 4;
+            imgData.data[pi] = r;
+            imgData.data[pi + 1] = g;
+            imgData.data[pi + 2] = b;
+            imgData.data[pi + 3] = 255;
+        }
+    }
+
+    debugDepthCtx.putImageData(imgData, 0, 0);
+
+    // Show info
+    const infoEl = document.getElementById('scanner-depth-info');
+    if (infoEl) {
+        infoEl.textContent = `Depth range: ${minD.toFixed(1)}-${maxD.toFixed(1)} | Scale: ${depthScaleFactor > 0 ? depthScaleFactor.toFixed(2) : 'uncalibrated'}`;
+    }
 }
 
 // ---- Public API ----
@@ -471,6 +553,13 @@ export async function startScannerSession(containerEl, callbacks) {
     scanSessions = [];
     frameCounter = 0;
     depthInferenceRunning = false;
+    depthScaleFactor = 0;
+    lastHitTestDepth = 0;
+    pendingCalibration = false;
+    debugDepthVisible = false;
+    debugDepthCanvas = null;
+    debugDepthCtx = null;
+    lastDepthMapData = null;
 
     // ---- Toolbar ----
     setupScannerToolbar();
@@ -558,6 +647,42 @@ function setupScannerToolbar() {
             undoLastScan();
         };
     }
+
+    // ---- Calibrate button ----
+    const calibrateBtn = document.getElementById('scanner-calibrate-btn');
+    if (calibrateBtn) {
+        calibrateBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (lastHitTestDepth > 0.05) {
+                pendingCalibration = true;
+                updateScannerStatus('Calibration pending... waiting for next depth frame');
+                calibrateBtn.classList.add('scanning');
+                setTimeout(() => calibrateBtn.classList.remove('scanning'), 1500);
+            } else {
+                updateScannerStatus('Point camera at a surface first (cursor must be visible)');
+            }
+        };
+    }
+
+    // ---- Debug depth view toggle ----
+    const debugBtn = document.getElementById('scanner-debug-btn');
+    if (debugBtn) {
+        debugBtn.onclick = (e) => {
+            e.stopPropagation();
+            debugDepthVisible = !debugDepthVisible;
+            debugBtn.classList.toggle('active', debugDepthVisible);
+            const debugPanel = document.getElementById('scanner-depth-debug');
+            if (debugPanel) debugPanel.style.display = debugDepthVisible ? 'block' : 'none';
+            // Expand the scanner panel so the debug view is visible
+            if (debugDepthVisible) {
+                const panel = document.getElementById('scanner-object-panel');
+                if (panel) {
+                    panel.style.height = '320px';
+                    panel.classList.remove('collapsed');
+                }
+            }
+        };
+    }
 }
 
 function undoLastScan() {
@@ -594,16 +719,30 @@ function onXRFrame(timestamp, frame) {
             hitTestSourceRequested = true;
         }
 
-        // Update cursor from hit-test (visual indicator only)
+        // Update cursor from hit-test and track depth for calibration
         if (hitTestSource) {
             const hitTestResults = frame.getHitTestResults(hitTestSource);
             if (hitTestResults.length > 0) {
                 const hit = hitTestResults[0];
                 const pose = hit.getPose(referenceSpace);
-                if (pose && cursorMesh) {
+                if (pose) {
                     const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-                    cursorMesh.matrix.copy(matrix);
-                    cursorMesh.visible = true;
+                    if (cursorMesh) {
+                        cursorMesh.matrix.copy(matrix);
+                        cursorMesh.visible = true;
+                    }
+
+                    // Track hit-test depth for calibration
+                    const viewerPose = frame.getViewerPose(referenceSpace);
+                    if (viewerPose) {
+                        lastHitTestPos.setFromMatrixPosition(matrix);
+                        lastCameraPos.set(
+                            viewerPose.transform.position.x,
+                            viewerPose.transform.position.y,
+                            viewerPose.transform.position.z
+                        );
+                        lastHitTestDepth = lastCameraPos.distanceTo(lastHitTestPos);
+                    }
                 }
             } else if (cursorMesh) {
                 cursorMesh.visible = false;
@@ -611,22 +750,26 @@ function onXRFrame(timestamp, frame) {
         }
 
         // ---- Depth-based scanning ----
-        if (isScanning && depthModelReady) {
+        // Run depth inference when scanning, or when debug view is visible (for visualization)
+        if (depthModelReady && (isScanning || debugDepthVisible || pendingCalibration)) {
             frameCounter++;
 
             if (frameCounter % DEPTH_INFERENCE_INTERVAL === 0 && !depthInferenceRunning) {
-                // Get the XR view for camera intrinsics and pose
                 const viewerPose = frame.getViewerPose(referenceSpace);
                 if (viewerPose && viewerPose.views.length > 0) {
                     const view = viewerPose.views[0];
-                    const cameraPoseMatrix = viewerPose.transform.matrix;
+
+                    // CRITICAL: Clone matrices NOW before the async call.
+                    // viewerPose.transform.matrix and view.projectionMatrix are live references
+                    // that get overwritten by the XR runtime on the next frame.
+                    const projMatrixClone = new THREE.Matrix4().fromArray(view.projectionMatrix);
+                    const cameraPoseClone = new THREE.Matrix4().fromArray(viewerPose.transform.matrix);
 
                     // Capture frame from XR camera
                     const gl = renderer.getContext();
                     const imageData = cameraAccessAvailable ? captureXRCameraFrame(gl, view) : null;
                     if (imageData) {
-                        // Run depth inference asynchronously (doesn't block render loop)
-                        processDepthFrame(imageData, view, cameraPoseMatrix, referenceSpace);
+                        processDepthFrame(imageData, projMatrixClone, cameraPoseClone);
                     }
                 }
             }
