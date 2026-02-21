@@ -166,9 +166,18 @@
                 <div class="toolbar-center">
                     <button class="tool-btn" id="scanner-scan-btn" title="Hold to Scan">📡</button>
                     <button class="tool-btn" id="scanner-undo-btn" title="Undo Last Scan">↩️</button>
+                    <div class="toolbar-sep"></div>
+                    <button class="tool-btn" id="scanner-calibrate-btn" title="Calibrate depth from cursor">🎯</button>
+                    <button class="tool-btn" id="scanner-debug-btn" title="Toggle depth debug view">🖼️</button>
                 </div>
             </div>
             <div id="scanner-object-panel" class="object-panel collapsed" style="height: 0px;">
+                <div id="scanner-depth-debug" style="display:none; padding:8px; text-align:center;">
+                    <canvas id="scanner-depth-canvas" width="320" height="240"
+                        style="width:100%; max-width:320px; border-radius:6px; border:1px solid rgba(255,255,255,0.2);"></canvas>
+                    <div id="scanner-depth-info" style="color:#aaa; font-size:0.8rem; margin-top:4px;">Depth preview
+                    </div>
+                </div>
                 <div id="scanner-debug-console" class="debug-console">Scanner Ready</div>
             </div>
         </div>
