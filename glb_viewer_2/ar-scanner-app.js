@@ -227,6 +227,9 @@ async function loadDepthModel() {
  * Must be called after the WebGL context is available.
  */
 function initCameraCapture(gl) {
+    // Save current framebuffer
+    const prevFB = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+
     // FBO to attach the camera texture for reading
     captureFBO = gl.createFramebuffer();
 
@@ -240,7 +243,9 @@ function initCameraCapture(gl) {
     captureSmallFBO = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, captureSmallFBO);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, captureSmallTex, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    // Restore previous framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFB);
     gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
@@ -252,6 +257,11 @@ function captureXRCameraFrame(gl, view) {
     if (!xrGLBinding || !view.camera) return null;
 
     try {
+        // Save the current framebuffer binding (the XR framebuffer)
+        // We MUST restore this afterward — binding to null would break
+        // Three.js's internal state tracking and cause dual-layer rendering.
+        const prevFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+
         const cameraTexture = xrGLBinding.getCameraImage(view.camera);
         if (!cameraTexture) return null;
 
@@ -275,8 +285,8 @@ function captureXRCameraFrame(gl, view) {
         const pixels = new Uint8Array(CAPTURE_WIDTH * CAPTURE_HEIGHT * 4);
         gl.readPixels(0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-        // Unbind
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // Restore the XR framebuffer (NOT null!)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
 
         // Flip Y (WebGL is bottom-up)
         const flipped = new Uint8ClampedArray(CAPTURE_WIDTH * CAPTURE_HEIGHT * 4);
