@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { pipeline, RawImage } from '@huggingface/transformers';
+import { pipeline, env, RawImage } from '@huggingface/transformers';
 
 // ---- Configuration ----
 const SPLAT_SIZE = 0.02;               // 2cm oriented surface quads
@@ -161,60 +161,49 @@ async function loadDepthModel() {
 
     updateScannerStatus('Loading depth estimation model...');
 
-    try {
-        depthEstimator = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', {
-            device: 'webgpu',   // Try WebGPU first, falls back to WASM
-            progress_callback: (progress) => {
-                if (progress.status === 'download' || progress.status === 'progress') {
-                    const pct = progress.progress ? Math.round(progress.progress) : 0;
-                    if (progressTextEl) progressTextEl.textContent = `Downloading model... ${pct}%`;
-                    if (progressBarEl) progressBarEl.style.width = `${pct}%`;
-                } else if (progress.status === 'ready') {
-                    if (progressTextEl) progressTextEl.textContent = 'Model ready!';
-                    if (progressBarEl) progressBarEl.style.width = '100%';
-                }
-            }
-        });
+    // Configure ONNX Runtime WASM paths for CDN usage
+    env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
 
-        depthModelReady = true;
-        depthModelLoading = false;
-        updateScannerStatus('Depth model loaded successfully!');
+    // Progress callback shared across attempts
+    const progressCb = (progress) => {
+        if (progress.status === 'download' || progress.status === 'progress') {
+            const pct = progress.progress ? Math.round(progress.progress) : 0;
+            if (progressTextEl) progressTextEl.textContent = `Downloading model... ${pct}%`;
+            if (progressBarEl) progressBarEl.style.width = `${pct}%`;
+        } else if (progress.status === 'ready') {
+            if (progressTextEl) progressTextEl.textContent = 'Model ready!';
+            if (progressBarEl) progressBarEl.style.width = '100%';
+        }
+    };
 
-        // Hide loading overlay after short delay
-        setTimeout(() => {
-            if (loadingEl) loadingEl.style.display = 'none';
-        }, 500);
-
-    } catch (err) {
-        updateScannerStatus(`Depth model load error: ${err.message}`);
-        depthModelLoading = false;
-
-        // Try with WASM fallback if WebGPU failed
+    // Try backends in order: wasm (most compatible), then webgpu
+    const backends = ['wasm', 'webgpu'];
+    for (const backend of backends) {
         try {
-            updateScannerStatus('Retrying with WASM backend...');
-            if (progressTextEl) progressTextEl.textContent = 'Retrying with WASM...';
+            updateScannerStatus(`Trying ${backend} backend...`);
+            if (progressTextEl) progressTextEl.textContent = `Loading (${backend})...`;
 
             depthEstimator = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', {
-                device: 'wasm',
-                progress_callback: (progress) => {
-                    if (progress.status === 'download' || progress.status === 'progress') {
-                        const pct = progress.progress ? Math.round(progress.progress) : 0;
-                        if (progressTextEl) progressTextEl.textContent = `Downloading... ${pct}%`;
-                        if (progressBarEl) progressBarEl.style.width = `${pct}%`;
-                    }
-                }
+                device: backend,
+                progress_callback: progressCb,
             });
 
             depthModelReady = true;
-            updateScannerStatus('Depth model loaded (WASM fallback)!');
+            depthModelLoading = false;
+            updateScannerStatus(`Depth model loaded (${backend})!`);
             setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 500);
+            return; // Success!
 
-        } catch (err2) {
-            updateScannerStatus(`WASM fallback also failed: ${err2.message}`);
-            if (progressTextEl) progressTextEl.textContent = 'Model load failed - scanning limited';
-            setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 2000);
+        } catch (err) {
+            updateScannerStatus(`${backend} backend failed: ${err.message}`);
         }
     }
+
+    // All backends failed
+    depthModelLoading = false;
+    updateScannerStatus('All depth backends failed - scanning limited to hit-test only');
+    if (progressTextEl) progressTextEl.textContent = 'Model load failed - using hit-test only';
+    setTimeout(() => { if (loadingEl) loadingEl.style.display = 'none'; }, 2000);
 }
 
 // ---- Camera Stream (getUserMedia) ----
