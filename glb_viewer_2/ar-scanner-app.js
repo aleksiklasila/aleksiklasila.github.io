@@ -344,7 +344,7 @@ async function processDepthFrame(imageData, projMatrixClone, cameraPoseClone) {
             renderDebugDepthMap(depthData, dw, dh);
         }
 
-        // Calibration (required for relative depth)
+        // Calibration (manual via 🎯 button)
         if (pendingCalibration && lastHitTestDepth > 0.05) {
             const cx = Math.floor(dw / 2);
             const cy = Math.floor(dh / 2);
@@ -740,10 +740,12 @@ function onXRFrame(timestamp, frame) {
                     const view = viewerPose.views[0];
 
                     // CRITICAL: Clone matrices NOW before the async call.
-                    // viewerPose.transform.matrix and view.projectionMatrix are live references
-                    // that get overwritten by the XR runtime on the next frame.
+                    // view.projectionMatrix projects from VIEW space to clip space,
+                    // so we must use view.transform.matrix (view→world), NOT
+                    // viewerPose.transform.matrix (viewer→world). These differ
+                    // by the camera offset from device center.
                     const projMatrixClone = new THREE.Matrix4().fromArray(view.projectionMatrix);
-                    const cameraPoseClone = new THREE.Matrix4().fromArray(viewerPose.transform.matrix);
+                    const cameraPoseClone = new THREE.Matrix4().fromArray(view.transform.matrix);
 
                     // Capture frame from XR camera
                     const gl = renderer.getContext();
