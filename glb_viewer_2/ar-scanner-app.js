@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { pipeline, env, RawImage } from '@huggingface/transformers';
+import { SignalScanner } from './signal-scanner.js';
 
 // ---- Configuration ----
 const MAX_SPLATS = 80000;
@@ -27,6 +28,10 @@ let hitTestSource = null;
 let hitTestSourceRequested = false;
 let onExitScanner = null;
 let scannerDebugEl = null;
+
+// ---- Signal Scanner State ----
+let signalScanner = null;
+let isSignalScannerActive = false;
 
 // ---- Calibration State ----
 let depthScaleFactor = 0;              // 0 = uncalibrated, positive = calibrated
@@ -547,6 +552,10 @@ export async function startScannerSession(containerEl, callbacks) {
     cursorMesh.visible = false;
     scene.add(cursorMesh);
 
+    // ---- Signal Scanner ----
+    const labelsContainer = document.getElementById('signal-labels-container');
+    signalScanner = new SignalScanner(scene, camera, labelsContainer);
+
     // ---- Reset state ----
     numSplats = 0;
     splatPositions = [];
@@ -563,6 +572,7 @@ export async function startScannerSession(containerEl, callbacks) {
     debugDepthCanvas = null;
     debugDepthCtx = null;
     lastDepthMapData = null;
+    isSignalScannerActive = false;
 
     // ---- Toolbar ----
     setupScannerToolbar();
@@ -617,6 +627,7 @@ export async function startScannerSession(containerEl, callbacks) {
 function setupScannerToolbar() {
     const scanBtn = document.getElementById('scanner-scan-btn');
     const undoBtn = document.getElementById('scanner-undo-btn');
+    const signalBtn = document.getElementById('scanner-signal-btn');
 
     if (scanBtn) {
         const startScanning = (e) => {
@@ -643,6 +654,18 @@ function setupScannerToolbar() {
         scanBtn.addEventListener('mousedown', startScanning);
         document.addEventListener('touchend', stopScanning);
         document.addEventListener('mouseup', stopScanning);
+    }
+
+    if (signalBtn) {
+        signalBtn.onclick = (e) => {
+            e.stopPropagation();
+            isSignalScannerActive = !isSignalScannerActive;
+            signalBtn.classList.toggle('active', isSignalScannerActive);
+            if (signalScanner) {
+                signalScanner.setActive(isSignalScannerActive);
+            }
+            updateScannerStatus(`Signal Scanner: ${isSignalScannerActive ? 'ON' : 'OFF'}`);
+        };
     }
 
     if (undoBtn) {
@@ -788,6 +811,10 @@ function onXRFrame(timestamp, frame) {
             splatMesh.instanceMatrix.needsUpdate = true;
         }
 
+        if (signalScanner) {
+            signalScanner.update(performance.now(), camera);
+        }
+
         renderer.render(scene, camera);
 
     } catch (e) {
@@ -831,6 +858,12 @@ function cleanup() {
         const gl = renderer.getContext();
         if (gl) cleanupCameraCapture(gl);
     }
+
+    if (signalScanner) {
+        signalScanner.cleanup();
+        signalScanner = null;
+    }
+    isSignalScannerActive = false;
 
     if (renderer) {
         renderer.setAnimationLoop(null);
