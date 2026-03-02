@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reverse Froggers 2.0</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="ui-layer">
+            <div id="main-menu" class="screen active">
+                <h1>FROGGER<br><span>STRIKES BACK</span></h1>
+                <p>The frog runs automatically.</p>
+                <div class="controls-info">
+                    <p><b>[A] / [D]</b> or <b>[Arrows]</b> to Switch Lanes</p>
+                    <p><b>[SPACEBAR]</b> to shoot your Tongue at traps and enemies!</p>
+                </div>
+                <div class="warning">Grab cars, flip switches, and grapple to survive!</div>
+                <button id="start-btn">PLAY NOW</button>
+            </div>
+            <div id="hud" class="screen">
+                <div class="score-container">SCORE: <span id="scoreVal">0</span></div>
+            </div>
+            <div id="game-over" class="screen">
+                <h2>GAME OVER</h2>
+                <p>SCORE: <span id="finalScoreVal">0</span></p>
+                <p id="death-reason">You let the frog die!</p>
+                <button id="restart-btn">TRY AGAIN</button>
+            </div>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>
