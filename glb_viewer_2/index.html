@@ -5,6 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal GLB Viewer</title>
+
+    <!-- PWA Manifest & Theme -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1e1e1e">
+
     <link rel="stylesheet" href="style.css">
 
     <!-- Pako for deflate/inflate compression -->
@@ -281,6 +286,15 @@
         initDragPanel('panel-drag-handle', 'object-panel', 'editor-main');
         initDragPanel('ar-toolbar-drag-handle', 'ar-object-panel', 'ar-overlay');
         initDragPanel('scanner-toolbar-drag-handle', 'scanner-object-panel', 'ar-scanner-overlay');
+
+        // PWA Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((reg) => console.log('SW registered:', reg.scope))
+                    .catch((err) => console.error('SW registration failed:', err));
+            });
+        }
     </script>
 
     <script type="module" src="app.js"></script>

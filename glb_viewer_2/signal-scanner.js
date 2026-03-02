@@ -3,7 +3,6 @@ import * as THREE from 'three';
 // Path loss exponent for free space
 const PATH_LOSS_EXPONENT = 2.0;
 // Reference RSSI at 1 meter (depends on device/transmitter, standard approximation)
-const TX_POWER_WIFI = -45; // Simulated Wi-Fi
 const TX_POWER_BLE = -59;  // Standard BLE reference
 
 export class SignalScanner {
@@ -23,50 +22,55 @@ export class SignalScanner {
         this.minSamplesForTriangulation = 5; // Need at least 5 samples to estimate properly
         this.maxSamplesPerSource = 50;
 
-        // Mock Wi-Fi for testing
-        this.mockWifiActive = true;
-        this.mockWifiSources = [
-            { id: "mock-wifi-1", name: "Guest Wi-Fi", position: new THREE.Vector3(2, 1, -3), txPower: TX_POWER_WIFI },
-            { id: "mock-wifi-2", name: "Office Network", position: new THREE.Vector3(-3, 0.5, -2), txPower: TX_POWER_WIFI }
-        ];
-
         this.lastSampleTime = 0;
-        this.sampleIntervalMs = 500; // Collect mock samples twice a second
+        this.sampleIntervalMs = 500; // Collect samples twice a second
 
         // Setup Bluetooth scanning if supported
         this.initBluetooth();
     }
 
     async initBluetooth() {
-        if (navigator.bluetooth && navigator.bluetooth.requestLEScan) {
-            try {
-                // Requires chrome://flags/#enable-experimental-web-platform-features
-                const scan = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true });
-                navigator.bluetooth.addEventListener('advertisementreceived', (event) => {
-                    if (this.isActive) {
-                        this.addSample(
-                            event.device.id,
-                            event.device.name || "Unknown BLE Device",
-                            event.rssi,
-                            TX_POWER_BLE,
-                            this.camera.position.clone()
-                        );
-                    }
-                });
-                console.log("BLE Scan started.");
-            } catch (err) {
-                console.warn("BLE scanning not available. Using mock Wi-Fi only.", err);
-            }
-        }
+        // Web Bluetooth requires a user gesture. We wait for the first setActive(true) call.
+        // We will initialize it there.
     }
 
     // Toggle scanning (called from UI)
-    setActive(active) {
+    async setActive(active) {
         this.isActive = active;
         this.markersGroup.visible = active;
         for (const source of this.sources.values()) {
             if (source.labelElement) {
                 source.labelElement.style.display = active ? 'block' : 'none';
+            }
+        }
+
+        if (active && !this.bluetoothInitialized) {
+            this.bluetoothInitialized = true;
+            if (navigator.bluetooth && navigator.bluetooth.requestLEScan) {
+                try {
+                    // Requires chrome://flags/#enable-experimental-web-platform-features
+                    // MUST be called from a user gesture (like the button click)
+                    const scan = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true });
+                    navigator.bluetooth.addEventListener('advertisementreceived', (event) => {
+                        if (this.isActive) {
+                            this.addSample(
+                                event.device.id,
+                                event.device.name || "Unknown BLE Device",
+                                event.rssi,
+                                TX_POWER_BLE,
+                                this.camera.position.clone()
+                            );
+                        }
+                    });
+                    console.log("BLE Scan started successfully.");
+                    if (window.updateScannerStatus) window.updateScannerStatus("BLE Scan started.");
+                } catch (err) {
+                    console.warn("BLE scanning not available or permission denied.", err);
+                    if (window.updateScannerStatus) window.updateScannerStatus(`BLE Scan error: ${err.message}`);
+                }
+            } else {
+                console.warn("navigator.bluetooth.requestLEScan is not available.");
+                if (window.updateScannerStatus) window.updateScannerStatus("BLE Scanning not supported without flags.");
             }
         }
     }
@@ -213,27 +217,6 @@ export class SignalScanner {
 
     update(time, camera) {
         if (!this.isActive) return;
-
-        // Generate mock Wi-Fi samples periodically
-        if (this.mockWifiActive && time - this.lastSampleTime > this.sampleIntervalMs) {
-            this.lastSampleTime = time;
-            for (const mockSrc of this.mockWifiSources) {
-                // Add some noise to the RSSI based on true distance
-                const trueDist = camera.position.distanceTo(mockSrc.position);
-                // Math.pow(10, (txPower - rssi) / 20) = distance => rssi = txPower - 20 * log10(distance)
-                const idealRssi = mockSrc.txPower - 10 * PATH_LOSS_EXPONENT * Math.log10(Math.max(0.1, trueDist));
-                // Add +/- 5 dBm noise
-                const noisyRssi = idealRssi + (Math.random() * 10 - 5);
-
-                this.addSample(
-                    mockSrc.id,
-                    mockSrc.name,
-                    noisyRssi,
-                    mockSrc.txPower,
-                    camera.position
-                );
-            }
-        }
 
         // Update 2D labels position on screen
         const halfWidth = window.innerWidth / 2;
