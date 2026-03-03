@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="Ice Fishing Survival — A 2D survival game where you fish through ice, build fires, and survive the frozen wilderness.">
+    <title>Ice Fishing Survival</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="title-screen">
+        <div class="title-content">
+            <h1>🎣 ICE FISHING</h1>
+            <h2>S U R V I V A L</h2>
+            <div class="title-divider"></div>
+            <p class="subtitle">Survive the frozen wilderness</p>
+            <div class="controls-info">
+                <div class="control-row"><span class="key">A</span><span class="key">D</span> Move</div>
+                <div class="control-row"><span class="key">SCROLL</span> Switch Items</div>
+                <div class="control-row"><span class="key">CLICK</span> Use Item</div>
+                <div class="control-row"><span class="key">E</span> Inventory</div>
+                <div class="control-row"><span class="key">F</span> Eat / Drink Snow</div>
+                <div class="control-row"><span class="key">W</span><span class="key">S</span> Fishing Depth</div>
+            </div>
+            <button id="start-btn" onclick="Game.init();">
+                START GAME
+            </button>
+        </div>
+    </div>
+
+    <!-- Load scripts in dependency order -->
+    <script src="assets.js"></script>
+    <script src="perlin.js"></script>
+    <script src="world.js"></script>
+    <script src="voxels.js"></script>
+    <script src="lighting.js"></script>
+    <script src="inventory.js"></script>
+    <script src="fishing.js"></script>
+    <script src="survival.js"></script>
+    <script src="player.js"></script>
+    <script src="game.js"></script>
+</body>
+
+</html>
