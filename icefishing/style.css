@@ -1,0 +1,180 @@
+/* style.css — Ice Fishing Survival */
+@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0e1a;
+    font-family: 'VT323', monospace;
+    cursor: crosshair;
+    user-select: none;
+}
+
+#game {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: auto;
+}
+
+/* Title Screen */
+#title-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(180deg, #0a1628 0%, #1a3050 40%, #2a4a6a 70%, #d4e8f0 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.title-content {
+    text-align: center;
+    animation: slideUp 0.8s ease-out;
+}
+
+.title-content h1 {
+    font-family: 'VT323', monospace;
+    font-size: 72px;
+    color: #b0d4f0;
+    text-shadow:
+        0 0 20px rgba(100, 180, 255, 0.4),
+        0 4px 8px rgba(0, 0, 0, 0.5);
+    letter-spacing: 8px;
+    margin-bottom: 0;
+}
+
+.title-content h2 {
+    font-family: 'VT323', monospace;
+    font-size: 28px;
+    color: #6a9ac0;
+    letter-spacing: 16px;
+    margin-bottom: 20px;
+}
+
+.title-divider {
+    width: 200px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #5a8ab0, transparent);
+    margin: 15px auto;
+}
+
+.subtitle {
+    font-size: 18px;
+    color: #8aaac4;
+    margin-bottom: 30px;
+    letter-spacing: 2px;
+}
+
+.controls-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 30px;
+    font-size: 16px;
+    color: #7a9ab0;
+}
+
+.control-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.key {
+    display: inline-block;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 14px;
+    color: #a0c0d0;
+    min-width: 28px;
+}
+
+#start-btn {
+    font-family: 'VT323', monospace;
+    font-size: 24px;
+    color: #b0d4f0;
+    background: rgba(40, 80, 120, 0.6);
+    border: 2px solid rgba(100, 180, 255, 0.3);
+    border-radius: 8px;
+    padding: 12px 40px;
+    cursor: pointer;
+    letter-spacing: 4px;
+    transition: all 0.3s ease;
+}
+
+#start-btn:hover {
+    background: rgba(60, 120, 180, 0.7);
+    border-color: rgba(150, 210, 255, 0.6);
+    box-shadow: 0 0 25px rgba(100, 180, 255, 0.3);
+    transform: scale(1.05);
+}
+
+#start-btn:active {
+    transform: scale(0.98);
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Snow animation on title */
+#title-screen::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image:
+        radial-gradient(circle, rgba(255, 255, 255, 0.6) 1px, transparent 1px),
+        radial-gradient(circle, rgba(255, 255, 255, 0.4) 1px, transparent 1px),
+        radial-gradient(circle, rgba(255, 255, 255, 0.3) 1px, transparent 1px);
+    background-size: 100px 120px, 150px 180px, 200px 250px;
+    animation: snowfall 8s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes snowfall {
+    0% {
+        background-position: 0 0, 50px 30px, 100px 60px;
+    }
+
+    100% {
+        background-position: 50px 120px, 100px 210px, 50px 310px;
+    }
+}
