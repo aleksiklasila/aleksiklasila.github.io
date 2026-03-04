@@ -92,7 +92,7 @@ const Player = {
         this.animTimer += dt;
         if (this.animTimer > 0.15) {
             this.animTimer = 0;
-            this.animFrame = (this.animFrame + 1) % 4;
+            this.animFrame = (this.animFrame + 1) % 6; // up to 6 frames for the 3x2 grid
         }
 
         // Drain stats
@@ -180,10 +180,18 @@ const Player = {
         ctx.scale(this.facing, 1);
 
         const bobY = this.state === 'walking' ? Math.sin(this.animFrame * Math.PI / 2) * 3 : 0;
-        const img = Assets.get('player');
+        const imgName = this.state === 'walking' ? 'player_walk' : 'player_idle';
+        const img = Assets.get(imgName);
         if (img) {
+            // Player sprites are 6 frames in a 3x2 grid (3 cols, 2 rows)
+            const frameWidth = img.width / 3;
+            const frameHeight = img.height / 2;
+            const animFrame = this.animFrame % 6; // up to 6 frames now
+            const col = animFrame % 3;
+            const row = Math.floor(animFrame / 3);
             // Draw sprite (approx 32x48 scale)
-            ctx.drawImage(img, -16, -44 - bobY, 32, 48);
+            // Shift X so the sprite center is aligned, Shift Y to align feet
+            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -56 - bobY, 40, 56);
         }
 
         // Held item rendering

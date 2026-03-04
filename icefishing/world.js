@@ -225,15 +225,22 @@ const World = {
     },
 
     renderCampfire(ctx, x, y, fire) {
-        const img = Assets.get('campfire_on');
+        const img = Assets.get('campfire_anim');
         const t = Date.now() / 100, fl = Math.sin(t) * 3;
         const glow = ctx.createRadialGradient(x, y - 15, 5, x, y - 15, 60);
         glow.addColorStop(0, `rgba(255,150,30,${0.4 + fl * 0.05})`);
         glow.addColorStop(1, 'rgba(255,100,0,0)');
         ctx.fillStyle = glow; ctx.fillRect(x - 70, y - 80, 140, 100);
         if (img) {
-            ctx.drawImage(img, x - 24, y - 48, 48, 48);
+            // Campfire has 6 frames in a 3x2 grid (3 cols, 2 rows)
+            const frameWidth = img.width / 3;
+            const frameHeight = img.height / 2;
+            const animFrame = Math.floor(Date.now() / 150) % 6;
+            const col = animFrame % 3;
+            const row = Math.floor(animFrame / 3);
+            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -24, -48, 48, 48);
         } else {
+            console.warn("Campfire image not found in assets!");
             ctx.fillStyle = '#4a2a10'; ctx.fillRect(x - 12, y - 4, 24, 4);
             ctx.fillStyle = '#ff6600'; ctx.beginPath();
             ctx.moveTo(x - 8, y - 5); ctx.quadraticCurveTo(x, y - 30 + fl, x + 8, y - 5); ctx.fill();
