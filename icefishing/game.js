@@ -78,6 +78,11 @@ const Game = {
                 if (Shop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
             }
 
+            // Click Repair Shop UI
+            if (RepairShop.isOpen) {
+                if (RepairShop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
+            }
+
             // Click Inventory UI
             if (Inventory.isOpen) {
                 if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
@@ -94,8 +99,18 @@ const Game = {
                 }
             }
 
+            // Click on Repair Shop Building in World
+            if (!this.gameOver && !Fishing.active && World.repairShop) {
+                const sx = World.repairShop.x - this.camera.x + this.width / 2;
+                const sy = (this.height * 0.6) - World.repairShop.surfaceY - 128;
+                if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
+                    RepairShop.toggle();
+                    return;
+                }
+            }
+
             // Only use item if not clicking on UI and shop/inventory isn't open
-            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !Inventory.isOpen) {
+            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen) {
                 Survival.useItem(Player.x);
             }
         });
@@ -113,6 +128,10 @@ const Game = {
                 droppedInUI = Shop.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
 
+            if (!droppedInUI && RepairShop.isOpen) {
+                droppedInUI = RepairShop.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
+
             if (!droppedInUI && Inventory.isOpen) {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
@@ -125,6 +144,10 @@ const Game = {
                     Inventory.hotbar[Inventory.dragSource.idx] = Inventory.dragItem;
                 } else if (Inventory.dragSource.type === 'shop') {
                     Shop.sellSlot = Inventory.dragItem;
+                } else if (Inventory.dragSource.type === 'repair_shop') {
+                    RepairShop.repairSlot = Inventory.dragItem;
+                } else if (Inventory.dragSource.type === 'shop_buy') {
+                    // Do nothing, item returns to shop (not bought)
                 }
                 Inventory.dragItem = null;
                 Inventory.dragSource = null;
@@ -188,14 +211,20 @@ const Game = {
 
         if (this.keysJustPressed['KeyE'] && !Fishing.active) Inventory.toggle();
 
-        // If shop is open or inventory is open, handle them.
-        if (Shop.isOpen) {
+        // If shop or repair shop is open, handle them.
+        if (Shop.isOpen || RepairShop.isOpen) {
             // Close with W, A, S, or D
             if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
-                Shop.close();
-            } else if (Math.abs(Player.x - World.shop.x) >= 100) {
+                if (Shop.isOpen) Shop.close();
+                if (RepairShop.isOpen) RepairShop.close();
+            } else {
                 // Check if player walked away
-                Shop.close();
+                if (Shop.isOpen && Math.abs(Player.x - World.shop.x) >= 100) {
+                    Shop.close();
+                }
+                if (RepairShop.isOpen && Math.abs(Player.x - World.repairShop.x) >= 100) {
+                    RepairShop.close();
+                }
             }
         }
 
@@ -205,7 +234,7 @@ const Game = {
             }
         }
 
-        if (Inventory.isOpen || Shop.isOpen) return;
+        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen) return;
 
         // Item use is now handled by left-click (in setupInputs)
 
@@ -286,17 +315,18 @@ const Game = {
         // 7. Survival overlays (night tint is now handled by lighting ambient)
         Survival.renderOverlays(ctx, this.width, this.height);
 
-        // 8. HUD
-        this.renderHUD(ctx);
-
-        // 9. UI Screens (Shop / Inventory)
-        if (Shop.isOpen || Inventory.isOpen) {
+        // 8. UI Screens (Shop / Repair Shop / Inventory)
+        if (Shop.isOpen || RepairShop.isOpen || Inventory.isOpen) {
             ctx.fillStyle = 'rgba(0,0,0,0.8)';
             ctx.fillRect(0, 0, this.width, this.height);
         }
 
         Shop.render(ctx, this.width, this.height);
+        RepairShop.render(ctx, this.width, this.height);
         Inventory.render(ctx, this.width, this.height);
+
+        // 9. HUD
+        this.renderHUD(ctx);
 
         // Render dragged item
         if (Inventory.dragItem) {

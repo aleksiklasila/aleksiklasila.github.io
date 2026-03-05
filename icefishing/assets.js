@@ -7,6 +7,7 @@ const Assets = {
         { name: 'tree', src: 'assets/tree.png' },
         { name: 'campfire_anim', src: 'assets/campfire_anim.png' },
         { name: 'shop', src: 'assets/shop.png' },
+        { name: 'repair_shop', src: 'assets/repair_shop.png' },
         { name: 'fishing_hole', src: 'assets/fishing_hole.png' },
         { name: 'axe', src: 'assets/item_axe.png' },
         { name: 'fishing_rod', src: 'assets/item_fishing_rod.png' },
