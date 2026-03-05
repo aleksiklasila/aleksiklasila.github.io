@@ -54,21 +54,80 @@ const Game = {
             e.preventDefault();
         });
         window.addEventListener('wheel', e => {
-            Inventory.scrollSlot(e.deltaY > 0 ? 1 : -1);
+            if (!Fishing.active) {
+                Inventory.scrollSlot(e.deltaY > 0 ? 1 : -1);
+            }
         });
 
-        this.canvas.addEventListener('click', e => {
+        this.canvas.addEventListener('mousemove', e => {
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouseX = e.clientX - rect.left;
+            this.mouseY = e.clientY - rect.top;
+        });
+
+        this.canvas.addEventListener('mousedown', e => {
+            // Only handle left click
+            if (e.button !== 0) return;
+
             const rect = this.canvas.getBoundingClientRect();
             this.mouseX = e.clientX - rect.left;
             this.mouseY = e.clientY - rect.top;
 
-            if (Inventory.isOpen) {
-                Inventory.handleClick(this.mouseX, this.mouseY, this.width, this.height);
-                return;
+            // Click Shop UI
+            if (Shop.isOpen) {
+                if (Shop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
             }
 
-            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0) {
+            // Click Inventory UI
+            if (Inventory.isOpen) {
+                if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
+            }
+
+            // Click on Shop Building in World
+            if (!this.gameOver && !Fishing.active && World.shop) {
+                const sx = World.shop.x - this.camera.x + this.width / 2;
+                const sy = (this.height * 0.6) - World.shop.surfaceY - 128;
+                // Shop image is 128x128
+                if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
+                    Shop.toggle();
+                    return;
+                }
+            }
+
+            // Only use item if not clicking on UI and shop/inventory isn't open
+            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !Inventory.isOpen) {
                 Survival.useItem(Player.x);
+            }
+        });
+
+        this.canvas.addEventListener('mouseup', e => {
+            if (e.button !== 0) return;
+
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouseX = e.clientX - rect.left;
+            this.mouseY = e.clientY - rect.top;
+
+            let droppedInUI = false;
+
+            if (Shop.isOpen) {
+                droppedInUI = Shop.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
+
+            if (!droppedInUI && Inventory.isOpen) {
+                droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
+
+            // If we didn't drop it in a valid slot, return it to source
+            if (!droppedInUI && Inventory.dragItem && Inventory.dragSource) {
+                if (Inventory.dragSource.type === 'bag') {
+                    Inventory.bag[Inventory.dragSource.idx] = Inventory.dragItem;
+                } else if (Inventory.dragSource.type === 'hotbar') {
+                    Inventory.hotbar[Inventory.dragSource.idx] = Inventory.dragItem;
+                } else if (Inventory.dragSource.type === 'shop') {
+                    Shop.sellSlot = Inventory.dragItem;
+                }
+                Inventory.dragItem = null;
+                Inventory.dragSource = null;
             }
         });
 
@@ -128,7 +187,25 @@ const Game = {
         }
 
         if (this.keysJustPressed['KeyE'] && !Fishing.active) Inventory.toggle();
-        if (Inventory.isOpen) return;
+
+        // If shop is open or inventory is open, handle them.
+        if (Shop.isOpen) {
+            // Close with W, A, S, or D
+            if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
+                Shop.close();
+            } else if (Math.abs(Player.x - World.shop.x) >= 100) {
+                // Check if player walked away
+                Shop.close();
+            }
+        }
+
+        if (Inventory.isOpen) {
+            if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
+                Inventory.isOpen = false;
+            }
+        }
+
+        if (Inventory.isOpen || Shop.isOpen) return;
 
         // Item use is now handled by left-click (in setupInputs)
 
@@ -211,7 +288,21 @@ const Game = {
 
         // 8. HUD
         this.renderHUD(ctx);
+
+        // 9. UI Screens (Shop / Inventory)
+        if (Shop.isOpen || Inventory.isOpen) {
+            ctx.fillStyle = 'rgba(0,0,0,0.8)';
+            ctx.fillRect(0, 0, this.width, this.height);
+        }
+
+        Shop.render(ctx, this.width, this.height);
         Inventory.render(ctx, this.width, this.height);
+
+        // Render dragged item
+        if (Inventory.dragItem) {
+            Inventory.renderItemIcon(ctx, Inventory.dragItem, this.mouseX - 20, this.mouseY - 20, 40);
+        }
+
         this.renderMessage(ctx);
 
         if (this.gameOver) this.renderGameOver(ctx);
@@ -271,27 +362,48 @@ const Game = {
                 ctx.fillStyle = `rgba(255,0,0,${Math.sin(Date.now() / 200) * 0.3 + 0.3})`;
                 ctx.fillRect(bx, y, barW, barH);
             }
-            ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = 1; ctx.strokeRect(bx, y, barW, barH);
-            ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.fillText(`${Math.round(val)}`, bx + barW + 5, y + 11);
+            if (stat.key === 'warmth') {
+                // Map 0-100 warmth to 34.0C - 37.0C
+                const bodyTemp = 34.0 + (val / 100) * 3.0;
+                ctx.fillText(`${bodyTemp.toFixed(1)}°C`, bx + barW + 5, y + 11);
+            } else {
+                ctx.fillText(`${Math.round(val)}`, bx + barW + 5, y + 11);
+            }
             y += gap;
         }
 
         y += 5;
-        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(startX - 5, y - 2, 120, 20);
+        // Adjust for wider time + temp box
+        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(startX - 5, y - 2, 175, 40);
         const hours = Math.floor(Survival.timeOfDay * 24);
         const mins = Math.floor((Survival.timeOfDay * 24 - hours) * 60);
         ctx.fillStyle = Survival.isNight ? '#8888cc' : '#ffffaa';
         ctx.font = '12px monospace';
         ctx.fillText(`Day ${Survival.dayCount}  ${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`, startX, y + 14);
 
+        ctx.fillStyle = '#ffaa44';
+        const cTemp = Survival.currentTemp.toFixed(1);
+        const fTemp = Survival.feelsLikeTemp.toFixed(1);
+        ctx.fillText(`Temp: ${cTemp}°C`, startX, y + 28);
+        ctx.fillStyle = '#ccccff';
+        ctx.fillText(`(Feels: ${fTemp}°C)`, startX + 90, y + 28);
+
+        y += 38;
+
         if (Survival.stormActive) {
             ctx.fillStyle = 'rgba(200,0,0,0.7)'; ctx.font = 'bold 12px monospace';
-            ctx.fillText('⚠ STORM', startX, y + 32);
+            ctx.fillText('⚠ STORM', startX, y + 12);
+            y += 16;
         }
         if (World.isPlayerInTent(Player.x)) {
             ctx.fillStyle = 'rgba(60,120,60,0.7)'; ctx.font = 'bold 11px monospace';
-            ctx.fillText('🏕 IN TENT', startX, y + 48);
+            ctx.fillText('🏕 IN TENT', startX, y + 12);
+            y += 16;
         }
+
+        ctx.fillStyle = 'rgba(255,215,0,0.8)';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText(`💵 $${Player.money}`, startX, y + 15);
 
         const selectedItem = Inventory.getSelectedItem();
         if (selectedItem) {
@@ -322,10 +434,13 @@ const Game = {
         const alpha = Math.min(1, this.messageTimer);
         ctx.fillStyle = `rgba(0,0,0,${alpha * 0.6})`;
         const textW = ctx.measureText(this.messageText).width + 40;
-        const mx = this.width / 2 - textW / 2, my = this.height * 0.25;
+        const mx = this.width - textW - 20;
+        const my = 20;
         ctx.fillRect(mx, my, textW, 30);
-        ctx.fillStyle = `rgba(255,255,255,${alpha})`; ctx.font = '14px monospace'; ctx.textAlign = 'center';
-        ctx.fillText(this.messageText, this.width / 2, my + 20);
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(this.messageText, mx + textW / 2, my + 20);
         ctx.textAlign = 'left';
     },
 

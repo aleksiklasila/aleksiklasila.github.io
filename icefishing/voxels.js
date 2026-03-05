@@ -41,7 +41,7 @@ const Voxels = {
 
             const surfaceWorldY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
             const isWaterArea = (col.type === 'ice' || col.type === 'water');
-            const lakebedWorldY = isWaterArea ? this.getLakebedWorldY(worldX) : -9999;
+            const lakebedWorldY = isWaterArea ? col.surfaceY : -9999;
 
             for (let vy = 0; vy < this.GRID_H; vy++) {
                 const worldY = this.TOP_Y - vy * this.SIZE;
@@ -72,12 +72,6 @@ const Voxels = {
                 this.grid[vy * this.GRID_W + vx] = type;
             }
         }
-    },
-
-    getLakebedWorldY(worldX) {
-        const nx = worldX / 3200;
-        const noise = Perlin.fbm(nx, 500, 3, 2.0, 0.5);
-        return -(35 + (noise + 1) * 70); // roughly -35 to -175
     },
 
     get(vx, vy) {
