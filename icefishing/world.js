@@ -2,12 +2,12 @@
 const World = {
     TILE_SIZE: 40,
     WORLD_WIDTH: 800,
-    WATER_DEPTH: 200,  // screen pixels of water depth below ice
     columns: [],
     trees: [],
     fishingHoles: [],
     campfires: [],
     tents: [],
+    shop: null,
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -45,6 +45,19 @@ const World = {
                 }
             }
         }
+
+        // Place the shop relatively close to spawn
+        let spawnCol = Math.floor(this.WORLD_WIDTH / 2);
+        for (let i = spawnCol; i < this.WORLD_WIDTH; i++) {
+            if (this.columns[i].type === 'ground' && this.columns[i].height > 0.1) {
+                // Place shop a bit further than the spawn point so the player doesn't spawn exactly inside it
+                this.shop = {
+                    x: (i + 5) * this.TILE_SIZE,
+                    surfaceY: this.columns[i + 5].surfaceY
+                };
+                break;
+            }
+        }
     },
 
     getSurfaceY(worldX) {
@@ -64,11 +77,17 @@ const World = {
         return this.columns[col];
     },
 
+    getWaterDepth(worldX) {
+        const col = this.getColumnAt(worldX);
+        if (!col || (col.type !== 'water' && col.type !== 'ice')) return 100; // default for non-water
+        return -col.surfaceY;
+    },
+
     addFishingHole(worldX) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type !== 'ice') return false;
         for (const h of this.fishingHoles) {
-            if (Math.abs(h.x - worldX) < this.TILE_SIZE * 2) return false;
+            if (Math.abs(h.x - worldX) < this.TILE_SIZE) return false;
         }
         this.fishingHoles.push({ x: worldX, col: Math.round(worldX / this.TILE_SIZE), surfaceY: 0 });
         return true;
@@ -82,20 +101,24 @@ const World = {
         return fire;
     },
 
-    addTent(worldX) {
+    addTent(worldX, durability = 5) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
         for (const t of this.tents) {
             if (Math.abs(t.x - worldX) < this.TILE_SIZE * 3) return false;
         }
         const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
-        this.tents.push({ x: worldX, surfaceY });
+        this.tents.push({ x: worldX, surfaceY, durability });
         return true;
     },
 
     removeTentNear(worldX) {
         for (let i = 0; i < this.tents.length; i++) {
-            if (Math.abs(this.tents[i].x - worldX) < 50) { this.tents.splice(i, 1); return true; }
+            if (Math.abs(this.tents[i].x - worldX) < 50) {
+                const dur = this.tents[i].durability !== undefined ? this.tents[i].durability : 5;
+                this.tents.splice(i, 1);
+                return dur;
+            }
         }
         return false;
     },
@@ -138,6 +161,23 @@ const World = {
                 ctx.fillStyle = '#1a3a5c';
                 ctx.beginPath(); ctx.ellipse(sx, baseY, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
                 ctx.strokeStyle = '#8ac'; ctx.lineWidth = 2; ctx.stroke();
+            }
+        }
+
+        // Shop
+        if (this.shop) {
+            const sx = this.shop.x - camera.x + canvasW / 2;
+            if (sx > -200 && sx < canvasW + 200) {
+                const img = Assets.get('shop');
+                if (img) {
+                    // Draw the shop so it sits on the ground
+                    ctx.drawImage(img, sx - 64, baseY - this.shop.surfaceY - 128, 128, 128);
+                } else {
+                    ctx.fillStyle = '#6e4c30';
+                    ctx.fillRect(sx - 60, baseY - this.shop.surfaceY - 100, 120, 100);
+                    ctx.fillStyle = '#8f6e4a';
+                    ctx.fillRect(sx - 20, baseY - this.shop.surfaceY - 40, 40, 40);
+                }
             }
         }
 
@@ -238,7 +278,7 @@ const World = {
             const animFrame = Math.floor(Date.now() / 150) % 6;
             const col = animFrame % 3;
             const row = Math.floor(animFrame / 3);
-            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -24, -48, 48, 48);
+            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, x - 24, y - 48, 48, 48);
         } else {
             console.warn("Campfire image not found in assets!");
             ctx.fillStyle = '#4a2a10'; ctx.fillRect(x - 12, y - 4, 24, 4);
@@ -247,6 +287,23 @@ const World = {
         }
         ctx.fillStyle = '#ffdd44';
         for (let i = 0; i < 3; i++) ctx.fillRect(x + Math.sin(t + i * 2) * 6, y - 20 - Math.abs(Math.sin(t * 1.5 + i)) * 15, 2, 2);
+
+        // Render fuel/durability bar above campfire
+        const pct = fire.fuel / 100;
+        const barW = 24;
+        const barH = 4;
+        const bx = x - barW / 2;
+        const by = y - 55; // above campfire
+
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(bx, by, barW, barH);
+
+        ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
+        ctx.fillRect(bx, by, barW * pct, barH);
+
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, barW, barH);
     },
 
     update(dt) {

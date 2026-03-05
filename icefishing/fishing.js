@@ -129,8 +129,8 @@ const Fishing = {
 
         if (!this.active) return;
 
-        // Cancel with Escape or E
-        if (keysJustPressed['Escape'] || keysJustPressed['KeyE']) {
+        // Cancel with E
+        if (keysJustPressed['KeyE']) {
             this.stopFishing();
             return;
         }
@@ -141,11 +141,19 @@ const Fishing = {
         }
 
         // Control bait depth with W/S
+        const waterDepthPx = Math.max(10, World.getWaterDepth(this.hole.x));
+        const rodSpeedPxSec = 60; // constant speed in pixels per second
+        const pctPerSec = (rodSpeedPxSec / waterDepthPx) * 100;
+
         if (keys['KeyW']) {
-            this.baitDepth = Math.max(5, this.baitDepth - 40 * dt);
+            this.baitDepth -= pctPerSec * dt;
+            if (this.baitDepth <= 0) {
+                this.stopFishing();
+                return;
+            }
         }
         if (keys['KeyS']) {
-            this.baitDepth = Math.min(this.maxDepth, this.baitDepth + 40 * dt);
+            this.baitDepth = Math.min(this.maxDepth, this.baitDepth + pctPerSec * dt);
         }
 
         // Check collision between bait and fish
@@ -216,7 +224,7 @@ const Fishing = {
             const fish = this.worldFish[i];
 
             const dx = fish.x - baitWorldX;
-            const dy = (fish.y - baitDepthNorm) * World.WATER_DEPTH;
+            const dy = (fish.y - baitDepthNorm) * World.getWaterDepth(fish.x);
             const dist = Math.sqrt(dx * dx + dy * dy);
 
             if (dist < this.BITE_RADIUS) {
@@ -241,14 +249,17 @@ const Fishing = {
     updateReeling(dt, keys) {
         this.escapeTimer -= dt;
 
+        const hookDepthPx = Math.max(10, this.hookedDepth * World.getWaterDepth(this.hole.x));
+
         if (keys['KeyW']) {
-            const reelSpeed = 50 - this.fishResistance * 0.6;
-            const speed = Math.max(5, reelSpeed);
-            this.reelProgress += speed * dt;
-            this.baitDepth = Math.max(0, this.baitDepth - speed * 0.8 * dt);
+            const reelSpeedPxSec = 100 - this.fishResistance * 1.2;
+            const speedPx = Math.max(10, reelSpeedPxSec);
+            const progressSpeed = (speedPx / hookDepthPx) * 100;
+            this.reelProgress += progressSpeed * dt;
         } else {
-            this.reelProgress -= this.fishResistance * 0.3 * dt;
-            this.baitDepth = Math.min(this.maxDepth, this.baitDepth + this.fishResistance * 0.1 * dt);
+            const fallSpeedPxSec = this.fishResistance * 0.6;
+            const progressSpeed = (fallSpeedPxSec / hookDepthPx) * 100;
+            this.reelProgress -= progressSpeed * dt;
         }
 
         if (Math.random() < 0.02) {
@@ -256,15 +267,18 @@ const Fishing = {
         }
 
         this.reelProgress = Math.max(0, Math.min(100, this.reelProgress));
+        this.baitDepth = this.hookedDepth * this.maxDepth * (1 - this.reelProgress / 100);
 
         if (this.reelProgress >= 100) {
             Game.showMessage(`Caught a ${this.hookedFish.type.name}!`, 2.5);
             Inventory.addItem(this.hookedFish.type.item, 1);
+            Inventory.damageSelectedItem(1);
             this.stopFishing();
         }
 
         if (this.reelProgress <= -10 || this.escapeTimer <= 0) {
             Game.showMessage('The fish got away!', 2);
+            Inventory.damageSelectedItem(1);
             this.stopFishing();
         }
     },
@@ -278,7 +292,7 @@ const Fishing = {
             const fishSX = fish.x - camera.x + canvasW / 2;
             if (fishSX < -50 || fishSX > canvasW + 50) continue;
 
-            const fishSY = baseY + 6 + fish.y * World.WATER_DEPTH;
+            const fishSY = baseY + 6 + fish.y * World.getWaterDepth(fish.x);
             this.renderFish(ctx, fishSX, fishSY, fish);
         }
 
@@ -286,7 +300,7 @@ const Fishing = {
         if (this.hooked && this.hookedFish && this.hole) {
             const holeSX = this.hole.x - camera.x + canvasW / 2;
             const currentDepth = this.hookedDepth * (1 - this.reelProgress / 100);
-            const hookedY = baseY + 6 + currentDepth * World.WATER_DEPTH;
+            const hookedY = baseY + 6 + currentDepth * World.getWaterDepth(this.hole.x);
             const wobble = Math.sin(Date.now() / 100) * 8;
             this.renderFish(ctx, holeSX + wobble, hookedY, this.hookedFish, true);
         }
@@ -296,7 +310,7 @@ const Fishing = {
 
         const holeSX = this.hole.x - camera.x + canvasW / 2;
         const iceScreenY = baseY;
-        const baitScreenY = iceScreenY + 6 + (this.baitDepth / this.maxDepth) * World.WATER_DEPTH;
+        const baitScreenY = iceScreenY + 6 + (this.baitDepth / this.maxDepth) * World.getWaterDepth(this.hole.x);
 
         // Fishing line
         ctx.strokeStyle = '#aaa';
@@ -306,23 +320,25 @@ const Fishing = {
         ctx.lineTo(holeSX, baitScreenY);
         ctx.stroke();
 
-        // Bait (hide when hooked — attached to fish)
-        if (!this.hooked) {
-            ctx.fillStyle = '#d4956a';
-            ctx.beginPath();
-            ctx.arc(holeSX, baitScreenY, 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = '#ccc';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(holeSX, baitScreenY + 4, 3, 0, Math.PI);
-            ctx.stroke();
-        }
+        // Bait (always show hook, even when hooked)
+        ctx.fillStyle = '#d4956a';
+        ctx.beginPath();
+        ctx.arc(holeSX, baitScreenY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ccc';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(holeSX, baitScreenY + 4, 3, 0, Math.PI);
+        ctx.stroke();
 
         // Depth indicator
+        const waterDepthPx = World.getWaterDepth(this.hole.x);
+        const actualDepthPx = (this.baitDepth / this.maxDepth) * waterDepthPx;
+        const actualDepthMeters = (actualDepthPx / 20).toFixed(1);
+
         ctx.fillStyle = 'rgba(150,200,255,0.7)';
         ctx.font = '10px monospace';
-        ctx.fillText(`${Math.round(this.baitDepth)}m`, holeSX + 10, baitScreenY);
+        ctx.fillText(`${actualDepthMeters}m`, holeSX + 10, baitScreenY);
 
         // Reeling progress bar
         if (this.hooked) {
@@ -352,7 +368,7 @@ const Fishing = {
             ctx.fillStyle = 'rgba(150,180,200,0.5)';
             ctx.font = '10px monospace';
             ctx.textAlign = 'center';
-            ctx.fillText('W/S depth  ESC cancel', holeSX, iceScreenY - 15);
+            ctx.fillText('W/S depth  E cancel', holeSX, iceScreenY - 15);
             ctx.textAlign = 'left';
         }
     },

@@ -19,6 +19,8 @@ const Player = {
         sleep: 90
     },
 
+    money: 0,
+
     // Rates per second
     drainRates: {
         warmth: 1.2,
@@ -39,6 +41,7 @@ const Player = {
         this.x = worldX;
         this.y = World.getSurfaceY(worldX);
         this.stats = { warmth: 80, hunger: 70, thirst: 70, sleep: 90 };
+        this.money = 0;
         this.isDead = false;
         this.state = 'idle';
     },
@@ -65,22 +68,37 @@ const Player = {
 
         // Movement (A/D only - W/S are used for fishing depth when fishing)
         let moving = false;
-        if (keys['KeyA'] || keys['ArrowLeft']) {
-            this.vx = -this.speed;
-            this.facing = -1;
-            moving = true;
-        } else if (keys['KeyD'] || keys['ArrowRight']) {
-            this.vx = this.speed;
-            this.facing = 1;
-            moving = true;
+
+        // Force sleep state if exhausted
+        if (this.stats.sleep <= 0) {
+            this.state = 'sleeping';
+        } else if (this.state === 'sleeping' && this.stats.sleep < 5) {
+            // keep sleeping
         } else {
-            this.vx = 0;
+            let currentSpeed = this.speed;
+            if (this.stats.sleep < 25) {
+                currentSpeed *= 0.5; // Slow down 50% when sleepy
+            }
+
+            if (keys['KeyA'] || keys['ArrowLeft']) {
+                this.vx = -currentSpeed;
+                this.facing = -1;
+                moving = true;
+            } else if (keys['KeyD'] || keys['ArrowRight']) {
+                this.vx = currentSpeed;
+                this.facing = 1;
+                moving = true;
+            } else {
+                this.vx = 0;
+            }
+
+            this.state = moving ? 'walking' : 'idle';
         }
 
-        this.state = moving ? 'walking' : 'idle';
-
         // Apply movement
-        this.x += this.vx * dt;
+        if (this.state !== 'sleeping') {
+            this.x += this.vx * dt;
+        }
         // Clamp to world
         this.x = Math.max(40, Math.min((World.WORLD_WIDTH - 1) * World.TILE_SIZE, this.x));
 
@@ -106,40 +124,54 @@ const Player = {
         const isNight = Survival.isNight;
         const isInTent = World.isPlayerInTent(this.x);
 
-        // Warmth drain
-        let warmthDrain = this.drainRates.warmth;
-        if (isOnIce) warmthDrain *= 1.5;
-        if (isInStorm && !isInTent) warmthDrain *= 2.5;
-        if (isNight) warmthDrain *= 1.8;
+        // Warmth drain based on Temperature
+        const feelsLike = Survival.feelsLikeTemp;
+        let warmthMultiplier = 0;
 
-        // Tent reduces warmth drain significantly
-        if (isInTent) {
-            warmthDrain *= 0.3; // 70% reduction
+        // If it's warm enough (e.g. above 0C), warmly recover or stay neutral
+        if (feelsLike > 0) {
+            this.stats.warmth = Math.min(100, this.stats.warmth + feelsLike * 0.1 * dt);
+        } else {
+            // Drain based on how cold it is below 0
+            warmthMultiplier = Math.abs(feelsLike) * 0.15; // e.g. -10C = 1.5x drain
+            if (isOnIce) warmthMultiplier *= 1.5;
+            if (isInTent) warmthMultiplier *= 0.3; // 70% reduction
+
+            let warmthDrain = this.drainRates.warmth * warmthMultiplier;
+
+            // Apply drain if not recovering from fire
+            let nearFire = false;
+            for (const fire of World.campfires) {
+                if (fire.lit && Math.abs(fire.x - this.x) < 80) nearFire = true;
+            }
+            if (!nearFire) {
+                this.stats.warmth -= warmthDrain * dt;
+            }
         }
 
-        // Check if near campfire
-        let nearFire = false;
+        // Check if near campfire to recover
+        let nearFireRec = false;
         for (const fire of World.campfires) {
             if (fire.lit && Math.abs(fire.x - this.x) < 80) {
-                nearFire = true;
+                nearFireRec = true;
                 break;
             }
         }
-        if (nearFire) {
+        if (nearFireRec) {
             this.stats.warmth = Math.min(100, this.stats.warmth + dt * 8);
             this.stats.sleep = Math.min(100, this.stats.sleep + dt * 1);
         } else if (isInTent) {
-            // Tent gives mild warmth recovery and sleep recovery
-            this.stats.warmth = Math.min(100, this.stats.warmth + dt * 2);
+            // Tent gives minor sleep recovery
             this.stats.sleep = Math.min(100, this.stats.sleep + dt * 3);
-        } else {
-            this.stats.warmth -= warmthDrain * dt;
         }
 
         this.stats.hunger -= this.drainRates.hunger * dt;
         this.stats.thirst -= this.drainRates.thirst * dt;
-        if (!isInTent) {
+        if (!isInTent && this.state !== 'sleeping') {
             this.stats.sleep -= this.drainRates.sleep * dt;
+        } else if (this.state === 'sleeping') {
+            // Force sleep recovery
+            this.stats.sleep += dt * 5;
         }
 
         // Clamp
@@ -150,13 +182,13 @@ const Player = {
         // Death check
         for (const [key, val] of Object.entries(this.stats)) {
             if (val <= 0) {
+                if (key === 'sleep') continue; // Sleep exhaustion is handled via 'sleeping' state
                 this.isDead = true;
                 this.state = 'dying';
                 const causes = {
                     warmth: 'Froze to death',
                     hunger: 'Starved to death',
-                    thirst: 'Died of dehydration',
-                    sleep: 'Died of exhaustion'
+                    thirst: 'Died of dehydration'
                 };
                 this.deathCause = causes[key];
                 break;
@@ -180,7 +212,11 @@ const Player = {
         ctx.scale(this.facing, 1);
 
         const bobY = this.state === 'walking' ? Math.sin(this.animFrame * Math.PI / 2) * 3 : 0;
-        const imgName = this.state === 'walking' ? 'player_walk' : 'player_idle';
+        let imgName = this.state === 'walking' ? 'player_walk' : 'player_idle';
+        if (this.state === 'sleeping' || this.state === 'dying') {
+            imgName = 'player_idle';
+        }
+
         const img = Assets.get(imgName);
         if (img) {
             // Player sprites are 6 frames in a 3x2 grid (3 cols, 2 rows)
@@ -189,17 +225,31 @@ const Player = {
             const animFrame = this.animFrame % 6; // up to 6 frames now
             const col = animFrame % 3;
             const row = Math.floor(animFrame / 3);
-            // Draw sprite (approx 32x48 scale)
-            // Shift X so the sprite center is aligned, Shift Y to align feet
-            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -56 - bobY, 40, 56);
+
+            if (this.state === 'sleeping' || this.state === 'dying') {
+                ctx.save();
+                ctx.translate(0, -20);
+                // Rotate 90 degrees to lay down
+                ctx.rotate(Math.PI / 2);
+                ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -28, 40, 56);
+                ctx.restore();
+                if (this.state === 'sleeping') {
+                    const zBob = Math.sin(Date.now() / 300) * 5;
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 16px monospace';
+                    ctx.fillText('Zzz...', 10, -40 + zBob);
+                }
+            } else {
+                // Draw sprite (approx 32x48 scale)
+                // Shift X so the sprite center is aligned, Shift Y to align feet
+                ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -56 - bobY, 40, 56);
+            }
         }
 
         // Held item rendering
-        if (this.state !== 'fishing') {
-            const item = Inventory.getSelectedItem();
-            if (item) {
-                this.renderHeldItem(ctx, item, bobY);
-            }
+        const item = Inventory.getSelectedItem();
+        if (item) {
+            this.renderHeldItem(ctx, item, bobY);
         }
 
         ctx.restore();
@@ -207,7 +257,7 @@ const Player = {
 
     renderHeldItem(ctx, item, bobY) {
         ctx.save();
-        ctx.translate(10, -14 - bobY);
+        ctx.translate(10, -24 - bobY);
 
         let assetName = item.id;
         if (assetName === 'firewood') assetName = 'wood';
@@ -231,6 +281,16 @@ const Player = {
                     ctx.lineTo(22, 4);
                     ctx.lineTo(16, 8);
                     ctx.lineTo(16, -6);
+                    ctx.fill();
+                    break;
+                case 'scoop':
+                    // Handle
+                    ctx.fillStyle = '#8B6914';
+                    ctx.fillRect(0, -5, 15, 3);
+                    // Bowl
+                    ctx.fillStyle = '#999';
+                    ctx.beginPath();
+                    ctx.arc(15, -3.5, 6, 0, Math.PI);
                     ctx.fill();
                     break;
                 case 'fishing_rod':

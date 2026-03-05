@@ -15,6 +15,11 @@ const Survival = {
 
     isNight: false,
 
+    currentTemp: 0,
+    feelsLikeTemp: 0,
+
+    cookingTimer: 0,
+
     messages: [],
 
     init() {
@@ -25,6 +30,8 @@ const Survival = {
         this.stormCooldown = 45 + Math.random() * 30;
         this.snowParticles = [];
         this.initSnowParticles();
+        this.updateTemperatures();
+        this.cookingTimer = 0;
     },
 
     initSnowParticles() {
@@ -68,6 +75,29 @@ const Survival = {
 
         // Update snow particles
         this.updateSnow(dt);
+
+        // Update Tempearture
+        this.updateTemperatures();
+
+        // Handle auto-cooking fish
+        this.updateCooking(dt);
+    },
+
+    updateTemperatures() {
+        // Base temp goes from -15C at night to +5C at noon
+        // timeOfDay: 0=midnight, 0.5=noon, 1=midnight
+        // Use a cosine wave: cos(0) = 1 (midnight -> lowest temp), cos(PI) = -1 (noon -> highest temp)
+        const dayCycleTemp = -5 - Math.cos(this.timeOfDay * Math.PI * 2) * 10;
+
+        let stormDrop = 0;
+        if (this.stormActive) {
+            stormDrop = this.stormIntensity * 15; // Drops up to 15 degrees in heavy storm
+        }
+
+        this.currentTemp = dayCycleTemp;
+
+        // Feels like accounts for wind/storm
+        this.feelsLikeTemp = this.currentTemp - stormDrop;
     },
 
     startStorm() {
@@ -106,35 +136,58 @@ const Survival = {
         }
     },
 
-    // Try to chop a tree
-    chopTree(playerX) {
+    // Use axe to chop trees or pick up tents
+    useAxe(playerX) {
         if (!Inventory.hasItem('axe')) {
             Game.showMessage('You need an axe!', 1.5);
             return;
         }
 
         // Find nearest alive tree
-        let nearest = null;
-        let nearestDist = Infinity;
+        let nearestTree = null;
+        let nearestTreeDist = Infinity;
         for (const tree of World.trees) {
             if (!tree.alive) continue;
             const d = Math.abs(tree.x - playerX);
-            if (d < nearestDist && d < 60) {
-                nearestDist = d;
-                nearest = tree;
+            if (d < nearestTreeDist && d < 60) {
+                nearestTreeDist = d;
+                nearestTree = tree;
             }
         }
 
-        if (!nearest) {
-            Game.showMessage('No tree nearby.', 1);
-            return;
+        // Find nearest tent
+        let nearestTentDist = Infinity;
+        for (const tent of World.tents) {
+            const d = Math.abs(tent.x - playerX);
+            if (d < nearestTentDist && d < 50) {
+                nearestTentDist = d;
+            }
         }
 
-        Player.startAction(1.5, 'chopping', () => {
-            nearest.alive = false;
-            Inventory.addItem('firewood', 2 + (Math.random() * 2) | 0);
-            Game.showMessage('Got firewood!', 1.5);
-        });
+        // Decide what to hit
+        if (nearestTreeDist < Infinity && nearestTreeDist <= nearestTentDist) {
+            Player.startAction(1.5, 'chopping', () => {
+                nearestTree.alive = false;
+                Inventory.addItem('firewood', 2 + (Math.random() * 2) | 0);
+                Inventory.damageSelectedItem(1);
+                Game.showMessage('Got firewood!', 1.5);
+            });
+        } else if (nearestTentDist < Infinity) {
+            Player.startAction(1.5, 'chopping', () => {
+                const removedTentDurability = World.removeTentNear(playerX);
+                if (removedTentDurability !== false) {
+                    Inventory.damageSelectedItem(1); // damage the axe
+                    if (removedTentDurability <= 0) {
+                        Game.showMessage('The tent fell apart as you picked it up!', 2);
+                    } else {
+                        Inventory.addItem('tent', 1, removedTentDurability);
+                        Game.showMessage('Picked up tent.', 1.5);
+                    }
+                }
+            });
+        } else {
+            Game.showMessage('Nothing to chop or pick up nearby.', 1);
+        }
     },
 
     // Make a fire
@@ -158,40 +211,57 @@ const Survival = {
             Inventory.removeItem('firewood', 2);
             const fire = World.addCampfire(playerX);
             if (fire) {
+                Inventory.damageSelectedItem(1);
                 Game.showMessage('Fire started!', 2);
             }
         });
     },
 
-    // Cook fish near fire
-    cookFish(playerX) {
+    // Cook fish automatically over time when held near fire
+    updateCooking(dt) {
+        if (!Player || Player.isDead) return;
+
+        const item = Inventory.getSelectedItem();
+        let isHoldingRawFish = false;
+        let fishType = null;
+
+        if (item) {
+            if (item.id === 'raw_fish' || item.id === 'raw_fish_large') {
+                isHoldingRawFish = true;
+                fishType = item.id;
+            }
+        }
+
+        if (!isHoldingRawFish) {
+            this.cookingTimer = 0;
+            return;
+        }
+
         // Check near fire
         let nearFire = false;
         for (const fire of World.campfires) {
-            if (fire.lit && Math.abs(fire.x - playerX) < 80) {
+            if (fire.lit && Math.abs(fire.x - Player.x) < 80) {
                 nearFire = true;
                 break;
             }
         }
-        if (!nearFire) {
-            Game.showMessage('Need to be near a fire!', 1.5);
-            return;
-        }
 
-        if (Inventory.hasItem('raw_fish')) {
-            Player.startAction(1.5, 'idle', () => {
-                Inventory.removeItem('raw_fish', 1);
-                Inventory.addItem('cooked_fish', 1);
-                Game.showMessage('Cooked a fish!', 1.5);
-            });
-        } else if (Inventory.hasItem('raw_fish_large')) {
-            Player.startAction(2, 'idle', () => {
-                Inventory.removeItem('raw_fish_large', 1);
-                Inventory.addItem('cooked_fish_large', 1);
-                Game.showMessage('Cooked a large fish!', 1.5);
-            });
+        if (nearFire) {
+            this.cookingTimer += dt;
+            if (this.cookingTimer >= 2.0) { // cook time 2 seconds
+                this.cookingTimer = 0;
+
+                Inventory.removeItem(fishType, 1);
+                if (fishType === 'raw_fish') {
+                    Inventory.addItem('cooked_fish', 1);
+                    Game.showMessage('Cooked a fish!', 1.5);
+                } else {
+                    Inventory.addItem('cooked_fish_large', 1);
+                    Game.showMessage('Cooked a large fish!', 1.5);
+                }
+            }
         } else {
-            Game.showMessage('No raw fish to cook!', 1.5);
+            this.cookingTimer = 0;
         }
     },
 
@@ -207,6 +277,7 @@ const Survival = {
                     Player.startAction(2.5, 'chopping', () => {
                         if (World.addFishingHole(playerX)) {
                             Voxels.drillHole(playerX);
+                            Inventory.damageSelectedItem(1);
                             Game.showMessage('Made a fishing hole!', 2);
                         } else {
                             Game.showMessage('Too close to another hole!', 1.5);
@@ -237,8 +308,30 @@ const Survival = {
                 break;
             }
 
+            case 'scoop': {
+                let nearestHole = null;
+                let nearestDist = Infinity;
+                for (const hole of World.fishingHoles) {
+                    const d = Math.abs(hole.x - playerX);
+                    if (d < nearestDist && d < 50) {
+                        nearestDist = d;
+                        nearestHole = hole;
+                    }
+                }
+                if (nearestHole) {
+                    Player.startAction(1.5, 'chopping', () => {
+                        Player.stats.thirst = Math.min(100, Player.stats.thirst + 40);
+                        Inventory.damageSelectedItem(1);
+                        Game.showMessage('Drank water from the hole! (+40 thirst)', 2);
+                    });
+                } else {
+                    Game.showMessage('No fishing hole nearby to drink from!', 1.5);
+                }
+                break;
+            }
+
             case 'axe':
-                this.chopTree(playerX);
+                this.useAxe(playerX);
                 break;
 
             case 'flint_steel':
@@ -288,18 +381,19 @@ const Survival = {
                 break;
 
             case 'tent': {
-                // Check if near an existing tent — pick it up
-                if (World.removeTentNear(playerX)) {
-                    Inventory.addItem('tent', 1);
-                    Game.showMessage('Picked up tent.', 1.5);
-                } else {
-                    // Place tent
-                    if (World.addTent(playerX)) {
-                        Inventory.removeItem('tent', 1);
-                        Game.showMessage('Pitched tent! Stand inside for shelter.', 2);
+                // Place tent
+                const tentItem = Inventory.getSelectedItem();
+                const currentDurability = tentItem.durability !== undefined ? tentItem.durability : 5;
+
+                if (World.addTent(playerX, currentDurability - 1)) {
+                    Inventory.removeItem('tent', 1);
+                    if (currentDurability - 1 <= 0) {
+                        Game.showMessage('Pitched tent! (It looks very fragile...)', 2);
                     } else {
-                        Game.showMessage('Too close to another tent!', 1.5);
+                        Game.showMessage('Pitched tent! Stand inside for shelter.', 2);
                     }
+                } else {
+                    Game.showMessage('Too close to another tent!', 1.5);
                 }
                 break;
             }
