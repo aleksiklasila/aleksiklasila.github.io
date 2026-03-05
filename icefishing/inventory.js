@@ -182,6 +182,8 @@ const Inventory = {
         let startY = (canvasH - totalH) / 2;
         if (Shop.isOpen) {
             startY = Shop.ui.y + Shop.ui.h + 20;
+        } else if (RepairShop.isOpen) {
+            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
         }
 
         // Check bag slots
@@ -232,6 +234,8 @@ const Inventory = {
         let startY = (canvasH - totalH) / 2;
         if (Shop.isOpen) {
             startY = Shop.ui.y + Shop.ui.h + 20;
+        } else if (RepairShop.isOpen) {
+            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
         }
 
         // Check bag slots
@@ -241,6 +245,23 @@ const Inventory = {
                 const sy = startY + 30 + row * (slotSize + gap);
                 if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= sy && mouseY < sy + slotSize) {
                     const idx = row * bagCols + col;
+
+                    // Shop Buy Check
+                    if (this.dragSource && this.dragSource.type === 'shop_buy') {
+                        if (this.bag[idx] && (!this.dragItem.stackable || this.bag[idx].id !== this.dragItem.id || this.bag[idx].count >= this.bag[idx].maxStack)) {
+                            Game.showMessage("Cannot place item there!", 1.5);
+                            return true;
+                        }
+                        const def = Inventory.ITEMS[this.dragItem.id];
+                        if (Player.money < def.price) {
+                            Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
+                            return true;
+                        }
+                        Player.money -= def.price;
+                        Shop.saleItems[this.dragSource.index] = null;
+                        Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                        this.dragSource = null;
+                    }
 
                     // Same item stacking logic
                     if (this.bag[idx] && this.bag[idx].id === this.dragItem.id && this.dragItem.stackable) {
@@ -276,6 +297,23 @@ const Inventory = {
         for (let i = 0; i < this.HOTBAR_SIZE; i++) {
             const sx = startX + i * (slotSize + gap);
             if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= hotbarY && mouseY < hotbarY + slotSize) {
+
+                // Shop Buy Check
+                if (this.dragSource && this.dragSource.type === 'shop_buy') {
+                    if (this.hotbar[i] && (!this.dragItem.stackable || this.hotbar[i].id !== this.dragItem.id || this.hotbar[i].count >= this.hotbar[i].maxStack)) {
+                        Game.showMessage("Cannot place item there!", 1.5);
+                        return true;
+                    }
+                    const def = Inventory.ITEMS[this.dragItem.id];
+                    if (Player.money < def.price) {
+                        Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
+                        return true;
+                    }
+                    Player.money -= def.price;
+                    Shop.saleItems[this.dragSource.index] = null;
+                    Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                    this.dragSource = null;
+                }
 
                 // Same item stacking logic
                 if (this.hotbar[i] && this.hotbar[i].id === this.dragItem.id && this.dragItem.stackable) {
@@ -357,7 +395,12 @@ const Inventory = {
         const totalW = bagCols * (slotSize + gap);
         const totalH = (bagRows + 1) * (slotSize + gap) + 60;
         const startX = (canvasW - totalW) / 2;
-        const startY = Shop.isOpen ? Shop.ui.y + Shop.ui.h + 20 : (canvasH - totalH) / 2;
+        let startY = (canvasH - totalH) / 2;
+        if (Shop.isOpen) {
+            startY = Shop.ui.y + Shop.ui.h + 20;
+        } else if (RepairShop.isOpen) {
+            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
+        }
 
         // Inventory Panel
         ctx.fillStyle = '#141e32'; // Solid color, no transparency

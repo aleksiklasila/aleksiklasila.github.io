@@ -106,7 +106,14 @@ const Shop = {
         for (let i = 0; i < this.ui.buyItemBounds.length; i++) {
             const b = this.ui.buyItemBounds[i];
             if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
-                this.buyItem(b.itemId);
+                if (!b.itemId || Inventory.dragItem) return false;
+
+                const def = Inventory.ITEMS[b.itemId];
+                let item = { ...def, count: 1 };
+                if (def.maxDurability) item.durability = def.maxDurability;
+
+                Inventory.dragItem = item;
+                Inventory.dragSource = { type: 'shop_buy', index: b.index };
                 return true;
             }
         }
@@ -172,22 +179,6 @@ const Shop = {
         this.sellSlot = null;
     },
 
-    buyItem(itemId) {
-        const def = Inventory.ITEMS[itemId];
-        if (!def || !def.price) return;
-
-        if (Player.money >= def.price) {
-            if (Inventory.addItem(itemId, 1)) {
-                Player.money -= def.price;
-                Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
-            } else {
-                Game.showMessage('Inventory full!', 1.5);
-            }
-        } else {
-            Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-        }
-    },
-
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
@@ -233,8 +224,6 @@ const Shop = {
         this.ui.buyItemBounds = [];
         for (let i = 0; i < this.saleItems.length; i++) {
             const itemId = this.saleItems[i];
-            const def = Inventory.ITEMS[itemId];
-            if (!def) continue;
 
             const sx = x + 15 + i * (slotSize + gap);
             const sy = y + 70;
@@ -246,18 +235,34 @@ const Shop = {
             ctx.lineWidth = 1;
             ctx.strokeRect(sx, sy, slotSize, slotSize);
 
-            // Icon
-            Inventory.renderItemIcon(ctx, { id: itemId, stackable: false }, sx + 6, sy + 6, slotSize - 12);
+            if (!itemId) {
+                ctx.fillStyle = '#888';
+                ctx.font = 'bold 12px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('SOLD', sx + slotSize / 2, sy + slotSize / 2 + 4);
+                ctx.textAlign = 'left';
+            } else {
+                const def = Inventory.ITEMS[itemId];
+                if (!def) continue;
 
-            // Interaction bounds
-            this.ui.buyItemBounds.push({ x: sx, y: sy, w: slotSize, h: slotSize, itemId: itemId });
+                // Icon
+                Inventory.renderItemIcon(ctx, { id: itemId, stackable: false }, sx + 6, sy + 6, slotSize - 12);
 
-            // Price tag
-            ctx.fillStyle = '#ffaa44';
-            ctx.font = '10px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(`$${def.price}`, sx + slotSize / 2, sy + slotSize + 12);
-            ctx.textAlign = 'left';
+                if (Player.money < def.price) {
+                    ctx.fillStyle = 'rgba(255,0,0,0.3)';
+                    ctx.fillRect(sx, sy, slotSize, slotSize);
+                }
+
+                // Interaction bounds
+                this.ui.buyItemBounds.push({ x: sx, y: sy, w: slotSize, h: slotSize, itemId: itemId, index: i });
+
+                // Price tag
+                ctx.fillStyle = Player.money >= def.price ? '#ffaa44' : '#ff4444';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`$${def.price}`, sx + slotSize / 2, sy + slotSize + 12);
+                ctx.textAlign = 'left';
+            }
         }
 
         // Draw Sell Area (Right side)

@@ -8,6 +8,7 @@ const World = {
     campfires: [],
     tents: [],
     shop: null,
+    repairShop: null,
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -54,6 +55,14 @@ const World = {
                 this.shop = {
                     x: (i + 5) * this.TILE_SIZE,
                     surfaceY: this.columns[i + 5].surfaceY
+                };
+
+                // Place repair shop slightly further
+                // Need to make sure we don't index out of bounds, but i+15 is generally safe near spawn
+                let repairIdx = Math.min(i + 15, this.WORLD_WIDTH - 1);
+                this.repairShop = {
+                    x: repairIdx * this.TILE_SIZE,
+                    surfaceY: this.columns[repairIdx].surfaceY
                 };
                 break;
             }
@@ -177,6 +186,23 @@ const World = {
                     ctx.fillRect(sx - 60, baseY - this.shop.surfaceY - 100, 120, 100);
                     ctx.fillStyle = '#8f6e4a';
                     ctx.fillRect(sx - 20, baseY - this.shop.surfaceY - 40, 40, 40);
+                }
+            }
+        }
+
+        // Repair Shop
+        if (this.repairShop) {
+            const sx = this.repairShop.x - camera.x + canvasW / 2;
+            if (sx > -200 && sx < canvasW + 200) {
+                const img = Assets.get('repair_shop');
+                if (img) {
+                    // Draw the repair shop so it sits on the ground
+                    ctx.drawImage(img, sx - 64, baseY - this.repairShop.surfaceY - 128, 128, 128);
+                } else {
+                    ctx.fillStyle = '#4a6e30';
+                    ctx.fillRect(sx - 60, baseY - this.repairShop.surfaceY - 100, 120, 100);
+                    ctx.fillStyle = '#6a8f4a';
+                    ctx.fillRect(sx - 20, baseY - this.repairShop.surfaceY - 40, 40, 40);
                 }
             }
         }
