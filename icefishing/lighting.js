@@ -4,10 +4,11 @@
 const Lighting = {
     canvas: null,
     gl: null,
-    // Three programs: raycast, dilate, accumulate
+    // Four programs: raycast, dilate, accumulate, smooth
     raycastProgram: null,
     dilateProgram: null,
     accumulateProgram: null,
+    smoothProgram: null,
     voxelTexture: null,
     quadBuffer: null,
     // FBO for passes
@@ -15,6 +16,8 @@ const Lighting = {
     fboTexture1: null,
     fbo2: null,
     fboTexture2: null,
+    fbo3: null,
+    fboTexture3: null,
 
     lights: [],
     MAX_LIGHTS: 8,
@@ -33,6 +36,7 @@ const Lighting = {
     _uniforms1: {},
     _uniforms2: {},
     _uniforms3: {},
+    _uniforms4: {},
     _fallback: false,
 
     init() {
@@ -320,6 +324,32 @@ const Lighting = {
         }
     `,
 
+    // Pass 4: Box-blur smoothing
+    _fragPass4: `
+        precision mediump float;
+        uniform sampler2D u_pass3;
+        uniform vec2 u_screenSize;
+        uniform float u_blurRadius;
+
+        void main() {
+            vec2 texelSize = 1.0 / u_screenSize;
+            vec2 uv = gl_FragCoord.xy / u_screenSize;
+            int r = int(u_blurRadius);
+            vec3 sum = vec3(0.0);
+            float count = 0.0;
+            for (int y = -7; y <= 7; y++) {
+                if (y < -r || y > r) continue;
+                for (int x = -7; x <= 7; x++) {
+                    if (x < -r || x > r) continue;
+                    vec2 offset = vec2(float(x), float(y)) * texelSize;
+                    sum += texture2D(u_pass3, uv + offset).rgb;
+                    count += 1.0;
+                }
+            }
+            gl_FragColor = vec4(sum / count, 1.0);
+        }
+    `,
+
     // ========== SETUP ==========
 
     _compilePrograms() {
@@ -357,6 +387,13 @@ const Lighting = {
             this._uniforms3[`lr${i}`] = gl.getUniformLocation(this.accumulateProgram, `u_lightRadius[${i}]`);
             this._uniforms3[`li${i}`] = gl.getUniformLocation(this.accumulateProgram, `u_lightIntensity[${i}]`);
         }
+
+        // Pass 4 program (Smooth)
+        this.smoothProgram = this._linkProgram(this._vertSrc, this._fragPass4);
+        gl.useProgram(this.smoothProgram);
+        this._uniforms4['u_pass3'] = gl.getUniformLocation(this.smoothProgram, 'u_pass3');
+        this._uniforms4['u_screenSize'] = gl.getUniformLocation(this.smoothProgram, 'u_screenSize');
+        this._uniforms4['u_blurRadius'] = gl.getUniformLocation(this.smoothProgram, 'u_blurRadius');
     },
 
     _linkProgram(vSrc, fSrc) {
@@ -409,6 +446,7 @@ const Lighting = {
 
         if (this.fbo1) { gl.deleteFramebuffer(this.fbo1); gl.deleteTexture(this.fboTexture1); }
         if (this.fbo2) { gl.deleteFramebuffer(this.fbo2); gl.deleteTexture(this.fboTexture2); }
+        if (this.fbo3) { gl.deleteFramebuffer(this.fbo3); gl.deleteTexture(this.fboTexture3); }
 
         this.fboTexture1 = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.fboTexture1);
@@ -434,7 +472,19 @@ const Lighting = {
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo2);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTexture2, 0);
 
-        // WebGL canvas backbuffer acts as Pass 3
+        this.fboTexture3 = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.fboTexture3);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        this.fbo3 = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo3);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTexture3, 0);
+
+        // WebGL canvas backbuffer acts as Pass 4
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     },
 
@@ -524,8 +574,8 @@ const Lighting = {
 
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-        // ---- Pass 3: Accumulate Lights to Screen backbuffer ----
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // ---- Pass 3: Accumulate Lights to FBO3 ----
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo3);
         gl.viewport(0, 0, canvasW, canvasH);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -567,6 +617,23 @@ const Lighting = {
             gl.uniform1f(this._uniforms3[`lr${i}`], l.radius);
             gl.uniform1f(this._uniforms3[`li${i}`], l.intensity);
         }
+
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        // ---- Pass 4: Smooth (box blur) to Screen backbuffer ----
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvasW, canvasH);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.useProgram(this.smoothProgram);
+        this._bindQuad(this.smoothProgram);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.fboTexture3);
+        gl.uniform1i(this._uniforms4['u_pass3'], 0);
+        gl.uniform2f(this._uniforms4['u_screenSize'], canvasW, canvasH);
+        gl.uniform1f(this._uniforms4['u_blurRadius'], 2.0); // 5x5 box blur (radius=2)
 
         gl.drawArrays(gl.TRIANGLES, 0, 6);
     },
