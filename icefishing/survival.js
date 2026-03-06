@@ -23,7 +23,7 @@ const Survival = {
     messages: [],
 
     init() {
-        this.timeOfDay = 0.3; // Start in morning
+        this.timeOfDay = 0.25; // Start in morning
         this.dayCount = 1;
         this.stormActive = false;
         this.stormTimer = 0;

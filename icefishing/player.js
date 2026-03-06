@@ -24,8 +24,8 @@ const Player = {
     // Rates per second
     drainRates: {
         warmth: 1.2,
-        hunger: 0.6,
-        thirst: 0.8,
+        hunger: 0.2,
+        thirst: 0.2,
         sleep: 0.4
     },
 
@@ -41,7 +41,7 @@ const Player = {
         this.x = worldX;
         this.y = World.getSurfaceY(worldX);
         this.stats = { warmth: 80, hunger: 70, thirst: 70, sleep: 90 };
-        this.money = 0;
+        this.money = 100;
         this.isDead = false;
         this.state = 'idle';
     },
