@@ -265,20 +265,33 @@ const Player = {
         }
 
         // Held item rendering
-        const item = Inventory.getSelectedItem();
-        if (item) {
-            this.renderHeldItem(ctx, item, bobY);
+        const mainHandItem = Inventory.getSelectedItem();
+        if (mainHandItem) {
+            this.renderHeldItem(ctx, mainHandItem, bobY, false);
+        }
+
+        // Second hand rendering
+        const offHandItem = Inventory.secondHand;
+        if (offHandItem) {
+            this.renderHeldItem(ctx, offHandItem, bobY, true);
         }
 
         ctx.restore();
     },
 
-    renderHeldItem(ctx, item, bobY) {
+    renderHeldItem(ctx, item, bobY, isOffhand = false) {
         ctx.save();
-        ctx.translate(10, -24 - bobY);
+
+        if (isOffhand) {
+            // Render on the left
+            ctx.translate(-5, -24 - bobY);
+        } else {
+            ctx.translate(10, -24 - bobY);
+        }
 
         let assetName = item.id;
         if (assetName === 'firewood') assetName = 'wood';
+        if (item.id === 'torch' && item.lit !== true) assetName = 'torch_off';
 
         const img = Assets.get(assetName);
         if (img) {

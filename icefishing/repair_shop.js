@@ -50,7 +50,7 @@ const RepairShop = {
         }
     },
 
-    handleMouseDown(mouseX, mouseY, canvasW, canvasH) {
+    handleMouseDown(mouseX, mouseY, canvasW, canvasH, shiftKey = false, ctrlKey = false, button = 0) {
         if (!this.isOpen) return false;
 
         // Check if clicked the Repair button
@@ -67,6 +67,12 @@ const RepairShop = {
             const b = this.ui.repairSlotBounds;
             if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
                 if (this.repairSlot) {
+                    if (button === 2) {
+                        const item = this.repairSlot;
+                        this.repairSlot = null;
+                        Inventory.moveToSecondHand(item);
+                        return true;
+                    }
                     // Pick up item from repair slot
                     Inventory.dragItem = this.repairSlot;
                     Inventory.dragSource = { type: 'repair_shop' };
@@ -118,7 +124,7 @@ const RepairShop = {
         }
 
         const salePrice = Math.floor(def.price * 0.75);
-        let repairCost = Math.floor(salePrice / 4);
+        let repairCost = Math.floor(salePrice / 8);
         if (repairCost <= 0) repairCost = 1; // Minimum cost of $1
 
         if (Player.money >= repairCost) {
@@ -201,7 +207,7 @@ const RepairShop = {
 
             if (def.maxDurability && this.repairSlot.durability < def.maxDurability) {
                 const salePrice = Math.floor(def.price * 0.75);
-                let repairCost = Math.floor(salePrice / 4);
+                let repairCost = Math.floor(salePrice / 8);
                 if (repairCost <= 0) repairCost = 1;
 
                 this.ui.repairButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };

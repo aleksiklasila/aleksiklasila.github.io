@@ -82,7 +82,6 @@ const Survival = {
         // Handle auto-cooking fish
         this.updateCooking(dt);
 
-        // Drain carried torch fuel
         this.updateCarriedTorch(dt);
     },
 
@@ -165,52 +164,7 @@ const Survival = {
             }
         }
 
-        // Find nearest tent
-        let nearestTentDist = Infinity;
-        for (const tent of World.tents) {
-            const d = Math.abs(tent.x - playerX);
-            if (d < nearestTentDist && d < 50) {
-                nearestTentDist = d;
-            }
-        }
-
-        // Find nearest torch
-        let nearestTorchDist = Infinity;
-        if (World.torches) {
-            for (const torch of World.torches) {
-                const d = Math.abs(torch.x - playerX);
-                if (d < nearestTorchDist && d < 40) {
-                    nearestTorchDist = d;
-                }
-            }
-        }
-
-        // Decide what to hit
-        const minDist = Math.min(nearestTreeDist, nearestTentDist, nearestTorchDist);
-
-        if (minDist === nearestTorchDist && nearestTorchDist < Infinity) {
-            Player.startAction(1.0, 'chopping', () => {
-                const remainingFuel = World.removeTorchNear(playerX);
-                if (remainingFuel !== false) {
-                    Inventory.damageSelectedItem(1); // damage the axe
-                    Inventory.addItem('torch', 1, remainingFuel);
-                    Game.showMessage('Picked up torch.', 1.5);
-                }
-            });
-        } else if (minDist === nearestTentDist && nearestTentDist < Infinity) {
-            Player.startAction(1.5, 'chopping', () => {
-                const removedTentDurability = World.removeTentNear(playerX);
-                if (removedTentDurability !== false) {
-                    Inventory.damageSelectedItem(1); // damage the axe
-                    if (removedTentDurability <= 0) {
-                        Game.showMessage('The tent fell apart as you picked it up!', 2);
-                    } else {
-                        Inventory.addItem('tent', 1, removedTentDurability);
-                        Game.showMessage('Picked up tent.', 1.5);
-                    }
-                }
-            });
-        } else if (minDist === nearestTreeDist && nearestTreeDist < Infinity) {
+        if (nearestTreeDist < Infinity) {
             Player.startAction(1.5, 'chopping', () => {
                 nearestTree.alive = false;
                 Inventory.addItem('firewood', 2 + (Math.random() * 2) | 0);
@@ -218,7 +172,7 @@ const Survival = {
                 Game.showMessage('Got firewood!', 1.5);
             });
         } else {
-            Game.showMessage('Nothing to chop or pick up nearby.', 1);
+            Game.showMessage('Nothing to chop nearby.', 1);
         }
     },
 
@@ -228,24 +182,43 @@ const Survival = {
             Game.showMessage('You need flint & steel!', 1.5);
             return;
         }
-        if (!Inventory.hasItem('firewood', 2)) {
-            Game.showMessage('Need at least 2 firewood!', 1.5);
-            return;
-        }
 
-        const col = World.getColumnAt(playerX);
-        if (!col || col.type === 'water') {
-            Game.showMessage("Can't make fire here!", 1.5);
-            return;
-        }
+        // Find nearest unlit campfire or ground torch
+        let target = null;
+        let nearestDist = Infinity;
 
-        Player.startAction(2, 'chopping', () => {
-            Inventory.removeItem('firewood', 2);
-            const fire = World.addCampfire(playerX);
-            if (fire) {
-                Inventory.damageSelectedItem(1);
-                Game.showMessage('Fire started!', 2);
+        for (const fire of World.campfires) {
+            if (!fire.lit) {
+                const d = Math.abs(fire.x - playerX);
+                if (d < nearestDist && d < 60) {
+                    nearestDist = d;
+                    target = fire;
+                }
             }
+        }
+
+        if (World.torches) {
+            for (const torch of World.torches) {
+                if (!torch.lit) {
+                    const d = Math.abs(torch.x - playerX);
+                    if (d < nearestDist && d < 60) {
+                        nearestDist = d;
+                        target = torch;
+                    }
+                }
+            }
+        }
+
+        if (!target) {
+            Game.showMessage("No unlit campfire or torch nearby!", 1.5);
+            return;
+        }
+
+        Player.startAction(1.5, 'chopping', () => {
+            target.lit = true;
+            target.fuel = 100;
+            Inventory.damageSelectedItem(1);
+            Game.showMessage('Fire started!', 2);
         });
     },
 
@@ -305,16 +278,39 @@ const Survival = {
         }
     },
 
-    // Drain held torch durability over time
+    // Drain ANY lit torch in the inventory
     updateCarriedTorch(dt) {
-        const item = Inventory.getSelectedItem();
-        if (item && item.id === 'torch' && item.durability > 0) {
-            item.durability -= dt * 0.8; // Same rate as ground torch/campfire
-            if (item.durability <= 0) {
-                item.durability = 0;
-                Inventory.hotbar[Inventory.selectedSlot] = null;
-                Game.showMessage('Your torch burned out!', 2);
+        let burnoutSlot = null;
+        let isHotbar = false;
+
+        for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+            const item = Inventory.hotbar[i];
+            if (item && item.id === 'torch' && item.lit) {
+                item.durability -= dt * 0.8;
+                if (item.durability <= 0) {
+                    item.durability = 0;
+                    burnoutSlot = i;
+                    isHotbar = true;
+                }
             }
+        }
+
+        for (let i = 0; i < Inventory.BAG_SIZE; i++) {
+            const item = Inventory.bag[i];
+            if (item && item.id === 'torch' && item.lit) {
+                item.durability -= dt * 0.8;
+                if (item.durability <= 0) {
+                    item.durability = 0;
+                    burnoutSlot = i;
+                    isHotbar = false;
+                }
+            }
+        }
+
+        if (burnoutSlot !== null) {
+            if (isHotbar) Inventory.hotbar[burnoutSlot] = null;
+            else Inventory.bag[burnoutSlot] = null;
+            Game.showMessage('A lit torch in your inventory burned out!', 2);
         }
     },
 
@@ -388,6 +384,10 @@ const Survival = {
                 break;
             }
 
+            case 'hammer':
+                Crafting.toggle();
+                break;
+
             case 'axe':
                 this.useAxe(playerX);
                 break;
@@ -430,7 +430,7 @@ const Survival = {
                 for (const fire of World.campfires) {
                     if (fire.lit && Math.abs(fire.x - playerX) < 80) {
                         Inventory.removeItem('firewood', 1);
-                        fire.fuel = Math.min(100, fire.fuel + 40);
+                        fire.fuel = 100; // Fully restore
                         Game.showMessage('Added fuel to fire.', 1.5);
                         return;
                     }
@@ -461,38 +461,22 @@ const Survival = {
                 break;
 
             case 'torch': {
-                // Check if near a ground torch to pick up
-                let nearTorch = false;
-                if (World.torches) {
-                    for (const torch of World.torches) {
-                        if (torch.lit && Math.abs(torch.x - playerX) < 50) {
-                            nearTorch = true;
-                            break;
-                        }
-                    }
-                }
-                if (nearTorch) {
-                    // Pick up the ground torch
-                    const remainingFuel = World.removeTorchNear(playerX);
-                    if (remainingFuel !== false) {
-                        // The current torch in hand is consumed to pick up ground torch
-                        // Update the held torch's durability to the ground torch's fuel
-                        const heldTorch = Inventory.getSelectedItem();
-                        if (heldTorch) {
-                            heldTorch.durability = Math.min(100, heldTorch.durability + remainingFuel);
-                        }
-                        Game.showMessage('Picked up torch. Fuel restored!', 1.5);
-                    }
+                // Determine if we are lighting or placing
+                const torchItem = Inventory.getSelectedItem();
+
+                // If it's lit, can we extinguish it? Use flint/steel context maybe?
+                // For now, placing it is just standard action
+                const fuel = torchItem.durability !== undefined ? torchItem.durability : 100;
+                const isLit = !!torchItem.lit;
+
+                if (World.addTorch(playerX, fuel, isLit)) {
+                    // Do not clear the item entirely if it stacked? 
+                    // Torches shouldn't stack, but `removeItem` is safer.
+                    // Wait, `selectedSlot` logic is currently `Inventory.hotbar[Inventory.selectedSlot] = null;`
+                    Inventory.hotbar[Inventory.selectedSlot] = null;
+                    Game.showMessage('Placed torch on the ground.', 1.5);
                 } else {
-                    // Place the torch on the ground
-                    const torchItem = Inventory.getSelectedItem();
-                    const fuel = torchItem.durability || 100;
-                    if (World.addTorch(playerX, fuel)) {
-                        Inventory.hotbar[Inventory.selectedSlot] = null;
-                        Game.showMessage('Placed torch on the ground.', 1.5);
-                    } else {
-                        Game.showMessage("Can't place torch here!", 1.5);
-                    }
+                    Game.showMessage("Can't place torch here!", 1.5);
                 }
                 break;
             }

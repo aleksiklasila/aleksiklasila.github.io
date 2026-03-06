@@ -60,6 +60,10 @@ const Game = {
             }
         });
 
+        this.canvas.addEventListener('contextmenu', e => {
+            e.preventDefault();
+        });
+
         this.canvas.addEventListener('mousemove', e => {
             const rect = this.canvas.getBoundingClientRect();
             this.mouseX = e.clientX - rect.left;
@@ -67,8 +71,8 @@ const Game = {
         });
 
         this.canvas.addEventListener('mousedown', e => {
-            // Only handle left click
-            if (e.button !== 0) return;
+            // Only handle left and right clicks
+            if (e.button !== 0 && e.button !== 2) return;
 
             const rect = this.canvas.getBoundingClientRect();
             this.mouseX = e.clientX - rect.left;
@@ -76,21 +80,30 @@ const Game = {
 
             // Click Shop UI
             if (Shop.isOpen) {
-                if (Shop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
+                if (Shop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
             }
 
             // Click Repair Shop UI
             if (RepairShop.isOpen) {
-                if (RepairShop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
+                if (RepairShop.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
+            }
+
+            // Click Crafting UI
+            if (Crafting.isOpen) {
+                if (Crafting.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.button)) return;
             }
 
             // Click Inventory UI
             if (Inventory.isOpen) {
-                if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height)) return;
+                if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
+            }
+            // Always check hotbar clicks (even if inventory is closed)
+            else {
+                if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
             }
 
             // Click on Shop Building in World
-            if (!this.gameOver && !Fishing.active && World.shop) {
+            if (!this.gameOver && !Fishing.active && World.shop && e.button === 0) {
                 const sx = World.shop.x - this.camera.x + this.width / 2;
                 const sy = (this.height * 0.6) - World.shop.surfaceY - 128;
                 // Shop image is 128x128
@@ -101,7 +114,7 @@ const Game = {
             }
 
             // Click on Repair Shop Building in World
-            if (!this.gameOver && !Fishing.active && World.repairShop) {
+            if (!this.gameOver && !Fishing.active && World.repairShop && e.button === 0) {
                 const sx = World.repairShop.x - this.camera.x + this.width / 2;
                 const sy = (this.height * 0.6) - World.repairShop.surfaceY - 128;
                 if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
@@ -110,9 +123,75 @@ const Game = {
                 }
             }
 
-            // Only use item if not clicking on UI and shop/inventory isn't open
-            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen) {
-                Survival.useItem(Player.x);
+            // Handle clicking world items (Tents and Torches) to pick them up
+            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen && !Crafting.isOpen) {
+                const worldX = this.mouseX + this.camera.x - this.width / 2;
+
+                // Check if worldX is close enough to Player to pick up (e.g. within 60px)
+                if (Math.abs(Player.x - worldX) < 100) {
+                    // Check Tents
+                    for (let i = 0; i < World.tents.length; i++) {
+                        const tent = World.tents[i];
+                        if (Math.abs(tent.x - worldX) < 40) {
+                            const removedTentDurability = World.removeTentNear(worldX);
+                            if (removedTentDurability !== false) {
+                                if (removedTentDurability <= 0) {
+                                    Game.showMessage('The tent fell apart as you picked it up!', 2);
+                                } else {
+                                    const tentItem = { ...Inventory.ITEMS['tent'], count: 1, durability: removedTentDurability };
+                                    if (e.button === 2) {
+                                        Inventory.moveToSecondHand(tentItem);
+                                    } else {
+                                        Inventory.addItem('tent', 1, removedTentDurability);
+                                    }
+                                    Game.showMessage('Picked up tent.', 1.5);
+                                }
+                            }
+                            return; // Stop after picking something up
+                        }
+                    }
+
+                    // Check Torches
+                    if (World.torches) {
+                        for (let i = 0; i < World.torches.length; i++) {
+                            const torch = World.torches[i];
+                            if (Math.abs(torch.x - worldX) < 30) {
+                                const torchData = World.removeTorchNear(worldX);
+                                if (torchData !== false) {
+                                    const torchItem = { ...Inventory.ITEMS['torch'], count: 1, durability: torchData.fuel, lit: !!torchData.lit };
+                                    if (e.button === 2) {
+                                        Inventory.moveToSecondHand(torchItem);
+                                    } else {
+                                        Inventory.addItem('torch', 1, torchData.fuel);
+                                        // Update newly added lit torch
+                                        if (torchItem.lit) {
+                                            let found = false;
+                                            for (let j = Inventory.HOTBAR_SIZE - 1; j >= 0 && !found; j--) {
+                                                if (Inventory.hotbar[j] && Inventory.hotbar[j].id === 'torch' && Inventory.hotbar[j].durability === torchData.fuel) {
+                                                    Inventory.hotbar[j].lit = true;
+                                                    found = true;
+                                                }
+                                            }
+                                            for (let j = Inventory.BAG_SIZE - 1; j >= 0 && !found; j--) {
+                                                if (Inventory.bag[j] && Inventory.bag[j].id === 'torch' && Inventory.bag[j].durability === torchData.fuel) {
+                                                    Inventory.bag[j].lit = true;
+                                                    found = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Game.showMessage('Picked up torch.', 1.5);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // If no item picked up, try using the selected item
+                if (e.button === 0) {
+                    Survival.useItem(Player.x);
+                }
             }
         });
 
@@ -136,20 +215,82 @@ const Game = {
             if (!droppedInUI && Inventory.isOpen) {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
+            if (!droppedInUI && !Inventory.isOpen) {
+                droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
 
             // If we didn't drop it in a valid slot, return it to source
             if (!droppedInUI && Inventory.dragItem && Inventory.dragSource) {
-                if (Inventory.dragSource.type === 'bag') {
-                    Inventory.bag[Inventory.dragSource.idx] = Inventory.dragItem;
-                } else if (Inventory.dragSource.type === 'hotbar') {
-                    Inventory.hotbar[Inventory.dragSource.idx] = Inventory.dragItem;
-                } else if (Inventory.dragSource.type === 'shop') {
-                    Shop.sellSlot = Inventory.dragItem;
-                } else if (Inventory.dragSource.type === 'repair_shop') {
-                    RepairShop.repairSlot = Inventory.dragItem;
-                } else if (Inventory.dragSource.type === 'shop_buy') {
+                const src = Inventory.dragSource;
+
+                const returnToContainer = (container, idx, item) => {
+                    // Try to put it back exactly where it came from
+                    if (!container[idx]) {
+                        container[idx] = item;
+                        return;
+                    }
+                    // Try to stack it if it was a split or same item
+                    if (item.stackable && container[idx].id === item.id && container[idx].count + item.count <= item.maxStack) {
+                        container[idx].count += item.count;
+                        return;
+                    }
+                    // If slot is occupied by something else, find first empty slot in bag
+                    for (let i = 0; i < Inventory.BAG_SIZE; i++) {
+                        if (!Inventory.bag[i]) {
+                            Inventory.bag[i] = item;
+                            return;
+                        }
+                    }
+                    // Or first empty slot in hotbar
+                    for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+                        if (!Inventory.hotbar[i]) {
+                            Inventory.hotbar[i] = item;
+                            return;
+                        }
+                    }
+                    // Fallback to overwrite if completely full (should never happen in this scenario)
+                    container[idx] = item;
+                };
+
+                const returnToSingleSlot = (getSlot, setSlot, item) => {
+                    const currentItem = getSlot();
+                    if (!currentItem) {
+                        setSlot(item);
+                        return;
+                    }
+                    if (item.stackable && currentItem.id === item.id && currentItem.count + item.count <= item.maxStack) {
+                        currentItem.count += item.count;
+                        return;
+                    }
+                    // Find first empty slot in bag
+                    for (let i = 0; i < Inventory.BAG_SIZE; i++) {
+                        if (!Inventory.bag[i]) {
+                            Inventory.bag[i] = item;
+                            return;
+                        }
+                    }
+                    // Or first empty slot in hotbar
+                    for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+                        if (!Inventory.hotbar[i]) {
+                            Inventory.hotbar[i] = item;
+                            return;
+                        }
+                    }
+                    setSlot(item);
+                };
+
+                if (src.type === 'bag' || src.type === 'bag_split') {
+                    returnToContainer(Inventory.bag, src.idx, Inventory.dragItem);
+                } else if (src.type === 'hotbar' || src.type === 'hotbar_split') {
+                    returnToContainer(Inventory.hotbar, src.idx, Inventory.dragItem);
+                } else if (src.type === 'shop' || src.type === 'shop_split') {
+                    returnToSingleSlot(() => Shop.sellSlot, (val) => Shop.sellSlot = val, Inventory.dragItem);
+                } else if (src.type === 'repair_shop') {
+                    returnToSingleSlot(() => RepairShop.repairSlot, (val) => RepairShop.repairSlot = val, Inventory.dragItem);
+                } else if (src.type === 'shop_buy') {
                     // Do nothing, item returns to shop (not bought)
                 }
+
                 Inventory.dragItem = null;
                 Inventory.dragSource = null;
             }
@@ -174,7 +315,15 @@ const Game = {
         World.generate();
         Voxels.generate();
         Inventory.init();
-        Inventory.addItem('torch', 1); // Starter torch
+        Shop.init();
+        RepairShop.init();
+        Crafting.init();
+
+        // Add starter unlit torch to hotbar
+        const starterTorch = Inventory.createItem('torch', 1);
+        starterTorch.lit = false;
+        Inventory.hotbar[7] = starterTorch;
+
         Survival.init();
         Fishing.init();
         Fishing.generateWorldFish();
@@ -232,13 +381,14 @@ const Game = {
             }
         }
 
-        if (Inventory.isOpen) {
+        if (Inventory.isOpen || Crafting.isOpen) {
             if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
                 Inventory.isOpen = false;
+                Crafting.isOpen = false;
             }
         }
 
-        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen) return;
+        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen) return;
 
         // Item use is now handled by left-click (in setupInputs)
 
@@ -308,8 +458,8 @@ const Game = {
         // 7. Survival overlays (night tint is now handled by lighting ambient)
         Survival.renderOverlays(ctx, this.width, this.height);
 
-        // 8. UI Screens (Shop / Repair Shop / Inventory)
-        if (Shop.isOpen || RepairShop.isOpen || Inventory.isOpen) {
+        // 8. UI Screens (Shop / Repair Shop / Inventory / Crafting)
+        if (Shop.isOpen || RepairShop.isOpen || Inventory.isOpen || Crafting.isOpen) {
             ctx.fillStyle = 'rgba(0,0,0,0.8)';
             ctx.fillRect(0, 0, this.width, this.height);
         }
@@ -317,6 +467,7 @@ const Game = {
         Shop.render(ctx, this.width, this.height);
         RepairShop.render(ctx, this.width, this.height);
         Inventory.render(ctx, this.width, this.height);
+        Crafting.render(ctx, this.width, this.height);
 
         // 9. HUD
         this.renderHUD(ctx);
@@ -378,7 +529,7 @@ const Game = {
 
         // --- Carried torch light ---
         const heldItem = Inventory.getSelectedItem();
-        if (heldItem && heldItem.id === 'torch' && heldItem.durability > 0) {
+        if (heldItem && heldItem.id === 'torch' && heldItem.lit && heldItem.durability > 0) {
             Lighting.addLight(playerSX, playerSY - 10, 300, 1.0, 0.7, 0.3, 0.8);
         }
     },
