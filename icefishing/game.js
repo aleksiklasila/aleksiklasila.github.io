@@ -349,11 +349,11 @@ const Game = {
         if (Survival.stormActive) sunIntensity *= 0.4;
         Lighting.setSunDir(sunDirX, sunDirY, sunIntensity);
 
-        // --- Player vision (light index 0) — constant radius ---
+        // --- Player vision ---
         const playerSX = Player.x - this.camera.x + this.width / 2;
         const playerSY = baseY - Player.y - 25;
         const visionRadius = Survival.stormActive ? 350 : 600;
-        Lighting.addLight(playerSX, playerSY, visionRadius, 1.0, 1.0, 1.0, 1.0);
+        Lighting.setPlayerVision(playerSX, playerSY, visionRadius);
 
         // --- Campfire lights (culled to on-screen) ---
         for (const fire of World.campfires) {

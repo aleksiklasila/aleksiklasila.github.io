@@ -134,9 +134,11 @@ const Lighting = {
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
             }
         }
+
     `,
 
     // Pass 2: Dilate visibility
+    // Pass 2: Dilate visibility (proper radius-based)
     _fragPass2: `
         precision mediump float;
         uniform sampler2D u_pass1;
@@ -145,7 +147,6 @@ const Lighting = {
 
         void main() {
             vec2 uv = gl_FragCoord.xy / u_screenSize;
-            float dist = u_expandPixels / u_screenSize.x;
             
             vec4 c = texture2D(u_pass1, uv);
             if (c.r > 0.5) {
@@ -153,158 +154,26 @@ const Lighting = {
                 return;
             }
 
-            float v = 0.0;
-            // Simple 5-sample cross for expansion (could use a loop for better radius)
-            v = max(v, texture2D(u_pass1, uv + vec2(dist, 0.0)).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(-dist, 0.0)).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(0.0, dist * (u_screenSize.x/u_screenSize.y))).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(0.0, -dist * (u_screenSize.x/u_screenSize.y))).r);
-
-            if (v > 0.5) {
-                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-            } else {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-            }
-        }
-    `,
-
-    // Pass 3: Light Accumulation
-    _fragPass3: `
-        precision mediump float;
-        uniform sampler2D u_pass2;
-        uniform sampler2D u_voxels;
-        uniform vec2 u_chunkSize, u_chunkStartVx, u_screenSize;
-        uniform float u_voxelSize, u_baseY, u_topY, u_cameraX;
-        
-        #define MAX_LIGHTS 8
-        uniform vec2 u_lightScreenPos[MAX_LIGHTS];
-        uniform vec3 u_lightColor[MAX_LIGHTS];
-        uniform float u_lightRadius[MAX_LIGHTS];
-        uniform float u_lightIntensity[MAX_LIGHTS];
-        uniform int u_numLights;
-        
-        uniform vec2 u_sunDir;
-        uniform float u_sunIntensity;
-        
-        const float SHADOW_BRIGHTNESS = 0.05;
-
-        bool isSolid(vec2 vc) {
-            vec2 local = floor(vc) - u_chunkStartVx;
-            if (local.y < 0.0) return false;
-            if (local.y >= u_chunkSize.y) return true;
-            if (local.x < 0.0 || local.x >= u_chunkSize.x) return false;
-            return texture2D(u_voxels, (local + 0.5) / u_chunkSize).r > 0.5;
-        }
-
-        vec2 s2v(vec2 sp) {
-            return vec2(
-                (sp.x + u_cameraX - u_screenSize.x * 0.5) / u_voxelSize,
-                (u_topY - (u_baseY - sp.y)) / u_voxelSize
-            );
-        }
-
-        bool traceRay(vec2 sv, vec2 ev) {
-            vec2 dir = ev - sv;
-            float dist = length(dir);
-            if (dist < 1.0) return false;
-            dir /= dist;
-            vec2 sd = sign(dir);
-            vec2 td = abs(vec2(1.0) / max(abs(dir), vec2(0.0001)));
-            vec2 cur = floor(sv);
-            vec2 ec = floor(ev);
-            vec2 tm;
-            tm.x = (sd.x > 0.0 ? cur.x + 1.0 - sv.x : sv.x - cur.x) * td.x;
-            tm.y = (sd.y > 0.0 ? cur.y + 1.0 - sv.y : sv.y - cur.y) * td.y;
-            for (int i = 0; i < 400; i++) {
-                if (cur.x == ec.x && cur.y == ec.y) break;
-                if (isSolid(cur)) return true;
-                if (tm.x < tm.y) { cur.x += sd.x; tm.x += td.x; }
-                else { cur.y += sd.y; tm.y += td.y; }
-            }
-            return false;
-        }
-
-        void main() {
-            vec2 uv = gl_FragCoord.xy / u_screenSize;
-            vec4 vis = texture2D(u_pass2, uv);
+            // Radius in pixels
+            float radius = u_expandPixels;
+            vec2 texelSize = 1.0 / u_screenSize;
             
-            // If pixel is entirely outside expanded visibility, it's black.
-            if (vis.r < 0.5) {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                return;
-            }
-
-            vec2 sp = gl_FragCoord.xy;
-            sp.y = u_screenSize.y - sp.y;
-            vec2 tv = s2v(sp);
-
-            vec3 light = vec3(0.0);
-
-            // Sun
-            if (u_sunIntensity > 0.01) {
-                vec2 sunEnd = tv + u_sunDir * 200.0;
-                if (!traceRay(tv, sunEnd)) {
-                    light += vec3(1.0, 0.98, 0.92) * u_sunIntensity;
+            // Loop bounding box
+            int r = int(radius);
+            for (int y = -30; y <= 30; y++) {
+                if (y < -r || y > r) continue;
+                for (int x = -30; x <= 30; x++) {
+                    if (x < -r || x > r) continue;
+                    
+                    // Circular check
+                    if (length(vec2(float(x), float(y))) <= radius) {
+                        vec2 offsetUV = uv + vec2(float(x), float(y)) * texelSize;
+                        if (texture2D(u_pass1, offsetUV).r > 0.5) {
+                            gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                            return;
+                        }
+                    }
                 }
-            }
-
-            // Other lights
-            for (int i = 0; i < MAX_LIGHTS; i++) {
-                if (i >= u_numLights) break;
-                float d = length(sp - u_lightScreenPos[i]);
-                float r = u_lightRadius[i];
-                if (d > r) continue;
-                vec2 lv = s2v(u_lightScreenPos[i]);
-                // Trace from light to pixel
-                if (!traceRay(lv, tv)) {
-                    float a = 1.0 - d / r; a *= a;
-                    // Lights are very bright near center
-                    light += u_lightColor[i] * u_lightIntensity[i] * a * a * 2.5; 
-                }
-            }
-
-            float lum = max(light.r, max(light.g, light.b));
-            if (lum < 0.01) {
-                // Expanded visibility but unlit -> shadow
-                gl_FragColor = vec4(SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, 1.0);
-            } else {
-                light = clamp(light, 0.0, 1.0);
-                light = max(light, vec3(SHADOW_BRIGHTNESS));
-                // To keep the edge slightly dimmer, we could multiply by vis.r if it had a gradient,
-                // but for now it's binary, so just return light with full alpha.
-                gl_FragColor = vec4(light, 1.0);
-            }
-        }
-    `,
-
-    // Pass 2: Dilate visibility
-    _fragPass2: `
-        precision mediump float;
-        uniform sampler2D u_pass1;
-        uniform vec2 u_screenSize;
-        uniform float u_expandPixels;
-
-        void main() {
-            vec2 uv = gl_FragCoord.xy / u_screenSize;
-            float dist = u_expandPixels / u_screenSize.x;
-            
-            vec4 c = texture2D(u_pass1, uv);
-            if (c.r > 0.5) {
-                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-                return;
-            }
-
-            float v = 0.0;
-            // Simple 5-sample cross for expansion (could use a loop for better radius)
-            v = max(v, texture2D(u_pass1, uv + vec2(dist, 0.0)).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(-dist, 0.0)).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(0.0, dist * (u_screenSize.x/u_screenSize.y))).r);
-            v = max(v, texture2D(u_pass1, uv + vec2(0.0, -dist * (u_screenSize.x/u_screenSize.y))).r);
-
-            if (v > 0.5) {
-                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-            } else {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
             }
         }
     `,
@@ -344,25 +213,60 @@ const Lighting = {
             );
         }
 
-        bool traceRay(vec2 sv, vec2 ev) {
-            vec2 dir = ev - sv;
+        // Traces ray from light source to target pixel and returns remaining light intensity
+        float traceRayLossy(vec2 targetPixel, vec2 lightPos, float baseIntensity) {
+            vec2 dir = targetPixel - lightPos;
             float dist = length(dir);
-            if (dist < 1.0) return false;
+            if (dist < 1.0) return baseIntensity;
+            
             dir /= dist;
             vec2 sd = sign(dir);
             vec2 td = abs(vec2(1.0) / max(abs(dir), vec2(0.0001)));
-            vec2 cur = floor(sv);
-            vec2 ec = floor(ev);
+            
+            vec2 cur = floor(lightPos);
+            vec2 ec = floor(targetPixel);
             vec2 tm;
-            tm.x = (sd.x > 0.0 ? cur.x + 1.0 - sv.x : sv.x - cur.x) * td.x;
-            tm.y = (sd.y > 0.0 ? cur.y + 1.0 - sv.y : sv.y - cur.y) * td.y;
+            tm.x = (sd.x > 0.0 ? cur.x + 1.0 - lightPos.x : lightPos.x - cur.x) * td.x;
+            tm.y = (sd.y > 0.0 ? cur.y + 1.0 - lightPos.y : lightPos.y - cur.y) * td.y;
+            
+            // Fix axis-aligned infinite DDA loops
+            if (abs(dir.x) < 0.0001) tm.x = 999999.0;
+            if (abs(dir.y) < 0.0001) tm.y = 999999.0;
+            
+            float intensity = baseIntensity;
+            float lossPerSolid = 1.2; // 1 solid block heavily attenuates light, stopping it dead on the 2nd block
+            
+            int is_ignore_original = 5;
+            int is_ignore = is_ignore_original;
             for (int i = 0; i < 400; i++) {
                 if (cur.x == ec.x && cur.y == ec.y) break;
-                if (isSolid(cur)) return true;
-                if (tm.x < tm.y) { cur.x += sd.x; tm.x += td.x; }
-                else { cur.y += sd.y; tm.y += td.y; }
+                
+                if (isSolid(cur)) {
+                    if (is_ignore == 0) {
+                        intensity -= lossPerSolid;
+                    }
+                    if (intensity <= 0.0) return 0.0;
+                    is_ignore -= 1;
+                } else {
+                    if (is_ignore <= is_ignore_original - 2) {
+                        intensity -= lossPerSolid; // * (is_ignore_original - is_ignore)
+                        is_ignore_original = is_ignore;
+                        if (intensity <= 0.0) return 0.0;
+                    } else {
+                        is_ignore = is_ignore_original;
+                    }
+                }
+                
+                if (tm.x < tm.y) { 
+                    cur.x += sd.x; 
+                    tm.x += td.x; 
+                } else { 
+                    cur.y += sd.y; 
+                    tm.y += td.y; 
+                }
             }
-            return false;
+            
+            return intensity;
         }
 
         void main() {
@@ -379,13 +283,18 @@ const Lighting = {
             sp.y = u_screenSize.y - sp.y;
             vec2 tv = s2v(sp);
 
-            vec3 light = vec3(0.0);
+            vec3 light = vec3(SHADOW_BRIGHTNESS);
 
             // Sun
             if (u_sunIntensity > 0.01) {
-                vec2 sunEnd = tv + u_sunDir * 200.0;
-                if (!traceRay(tv, sunEnd)) {
-                    light += vec3(1.0, 0.98, 0.92) * u_sunIntensity;
+                vec2 sunEnd = tv + u_sunDir * 200.0; 
+                
+                // Trace from target pixel UP to the sun
+                float sunBase = u_sunIntensity * 1.35;
+                float trans = traceRayLossy(tv, sunEnd, sunBase);
+                
+                if (trans > 0.0) {
+                    light += vec3(1.0, 0.98, 0.92) * (trans / 1.35); 
                 }
             }
 
@@ -395,25 +304,24 @@ const Lighting = {
                 float d = length(sp - u_lightScreenPos[i]);
                 float r = u_lightRadius[i];
                 if (d > r) continue;
+                
                 vec2 lv = s2v(u_lightScreenPos[i]);
-                // Trace from light to pixel
-                if (!traceRay(lv, tv)) {
-                    float a = 1.0 - d / r; a *= a;
-                    // Lights are very bright near center
-                    light += u_lightColor[i] * u_lightIntensity[i] * a * a * 2.5; 
+                
+                // Distance attenuation (quadratic falloff)
+                float atten = 1.0 - (d / r);
+                atten *= atten;
+                
+                float baseStrength = u_lightIntensity[i] * 1.0;
+
+                // Trace from target pixel TO the light
+                float trans = traceRayLossy(tv, lv, baseStrength);
+                
+                if (trans > 0.0) {
+                    light += u_lightColor[i] * (trans / baseStrength) * u_lightIntensity[i] * atten * 2.5; 
                 }
             }
 
-            float lum = max(light.r, max(light.g, light.b));
-            if (lum < 0.01) {
-                // Expanded visibility but unlit -> shadow
-                gl_FragColor = vec4(SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, 1.0);
-            } else {
-                light = clamp(light, 0.0, 1.0);
-                light = max(light, vec3(SHADOW_BRIGHTNESS));
-                // Multiply shadow back in edges
-                gl_FragColor = vec4(light, 1.0);
-            }
+            gl_FragColor = vec4(light, 1.0);
         }
     `,
 
@@ -545,6 +453,12 @@ const Lighting = {
         this.sunIntensity = intensity;
     },
 
+    setPlayerVision(screenX, screenY, radius) {
+        this.playerVisionX = screenX;
+        this.playerVisionY = screenY;
+        this.playerVisionRadius = radius;
+    },
+
     addLight(screenX, screenY, radius, r, g, b, intensity) {
         if (this.lights.length >= this.MAX_LIGHTS) return;
         this.lights.push({ screenX, screenY, radius, r, g, b, intensity });
@@ -586,12 +500,11 @@ const Lighting = {
         gl.uniform1f(this._uniforms1['u_topY'], Voxels.TOP_Y);
         gl.uniform1f(this._uniforms1['u_cameraX'], alignedCamX);
 
-        // Player vision is always lights[0] in game.js
-        if (this.lights.length > 0) {
-            const pLight = this.lights[0];
-            const ox = pLight.screenX + (camera.x - alignedCamX);
-            gl.uniform2f(this._uniforms1['u_playerScreenPos'], ox, pLight.screenY);
-            gl.uniform1f(this._uniforms1['u_playerVisionRadius'], pLight.radius);
+        // Player vision is distinct from actual emitted lights now
+        if (this.playerVisionRadius > 0) {
+            const ox = this.playerVisionX + (camera.x - alignedCamX);
+            gl.uniform2f(this._uniforms1['u_playerScreenPos'], ox, this.playerVisionY);
+            gl.uniform1f(this._uniforms1['u_playerVisionRadius'], this.playerVisionRadius);
         } else {
             gl.uniform2f(this._uniforms1['u_playerScreenPos'], canvasW / 2, canvasH / 2);
             gl.uniform1f(this._uniforms1['u_playerVisionRadius'], 600.0);
@@ -684,6 +597,7 @@ const Lighting = {
         const solidityData = Voxels.getSolidityChunk(startVx, startVy, this._chunkW, this._chunkH);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.voxelTexture);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE,
             this._chunkW, this._chunkH, 0,
             gl.LUMINANCE, gl.UNSIGNED_BYTE, solidityData);
