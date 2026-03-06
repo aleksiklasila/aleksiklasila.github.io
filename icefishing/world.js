@@ -7,6 +7,7 @@ const World = {
     fishingHoles: [],
     campfires: [],
     tents: [],
+    torches: [],
     shop: null,
     repairShop: null,
 
@@ -17,13 +18,19 @@ const World = {
         this.fishingHoles = [];
         this.campfires = [];
         this.tents = [];
+        this.torches = [];
+
+        const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
         for (let x = 0; x < this.WORLD_WIDTH; x++) {
             const nx = x / 80;
             const elevation = Perlin.fbm(nx, 0, 5, 2.0, 0.5) * 1.2;
             const detail = Perlin.fbm(nx, 10, 3, 2.0, 0.4) * 0.3;
-            const height = elevation + detail;
             const current = Math.abs(Perlin.fbm(nx, 50, 3, 2.5, 0.6));
+
+            // Scale terrain amplitude with distance from center (continuous)
+            const terrainMult = Difficulty.getTerrainMultiplier(x, centerCol);
+            const height = (elevation + detail) * terrainMult;
 
             let type;
             if (height > 0.02) type = 'ground';
@@ -104,10 +111,31 @@ const World = {
 
     addCampfire(worldX) {
         const col = this.getColumnAt(worldX);
-        if (!col || (col.type !== 'ground' && col.type !== 'shore')) return false;
-        const fire = { x: worldX, surfaceY: col.surfaceY, fuel: 100, lit: true };
+        if (!col || col.type === 'water') return false;
+        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        const fire = { x: worldX, surfaceY, fuel: 100, lit: true };
         this.campfires.push(fire);
         return fire;
+    },
+
+    addTorch(worldX, fuel = 100) {
+        const col = this.getColumnAt(worldX);
+        if (!col || col.type === 'water') return false;
+        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        const torch = { x: worldX, surfaceY, fuel, lit: true };
+        this.torches.push(torch);
+        return torch;
+    },
+
+    removeTorchNear(worldX) {
+        for (let i = 0; i < this.torches.length; i++) {
+            if (Math.abs(this.torches[i].x - worldX) < 50) {
+                const fuel = this.torches[i].fuel;
+                this.torches.splice(i, 1);
+                return fuel;
+            }
+        }
+        return false;
     },
 
     addTent(worldX, durability = 5) {
@@ -231,6 +259,14 @@ const World = {
             if (sx < -50 || sx > canvasW + 50) continue;
             this.renderCampfire(ctx, sx, baseY - fire.surfaceY, fire);
         }
+
+        // Ground torches
+        for (const torch of this.torches) {
+            if (!torch.lit) continue;
+            const sx = torch.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            this.renderTorch(ctx, sx, baseY - torch.surfaceY, torch);
+        }
     },
 
     renderMountains(ctx, camera, canvasW, canvasH, baseY, dayMix) {
@@ -332,10 +368,53 @@ const World = {
         ctx.strokeRect(bx, by, barW, barH);
     },
 
+    renderTorch(ctx, x, y, torch) {
+        const t = Date.now() / 100, fl = Math.sin(t + x) * 2;
+        // Glow
+        const glow = ctx.createRadialGradient(x, y - 20, 3, x, y - 20, 35);
+        glow.addColorStop(0, `rgba(255,160,40,${0.3 + fl * 0.03})`);
+        glow.addColorStop(1, 'rgba(255,100,0,0)');
+        ctx.fillStyle = glow; ctx.fillRect(x - 40, y - 55, 80, 60);
+
+        // Stick
+        ctx.fillStyle = '#6a4a2a';
+        ctx.fillRect(x - 2, y - 28, 4, 28);
+
+        // Flame
+        ctx.fillStyle = '#ff8800';
+        ctx.beginPath();
+        ctx.moveTo(x - 4, y - 28);
+        ctx.quadraticCurveTo(x, y - 42 + fl, x + 4, y - 28);
+        ctx.fill();
+        ctx.fillStyle = '#ffcc44';
+        ctx.beginPath();
+        ctx.moveTo(x - 2, y - 28);
+        ctx.quadraticCurveTo(x, y - 36 + fl * 0.5, x + 2, y - 28);
+        ctx.fill();
+
+        // Fuel bar
+        const pct = torch.fuel / 100;
+        const barW = 18;
+        const barH = 3;
+        const bx = x - barW / 2;
+        const by = y - 48;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(bx, by, barW, barH);
+        ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
+        ctx.fillRect(bx, by, barW * pct, barH);
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx, by, barW, barH);
+    },
+
     update(dt) {
         for (let i = this.campfires.length - 1; i >= 0; i--) {
             const f = this.campfires[i];
             if (f.lit) { f.fuel -= dt * 0.8; if (f.fuel <= 0) f.lit = false; }
+        }
+        for (let i = this.torches.length - 1; i >= 0; i--) {
+            const t = this.torches[i];
+            if (t.lit) { t.fuel -= dt * 0.8; if (t.fuel <= 0) t.lit = false; }
         }
     }
 };

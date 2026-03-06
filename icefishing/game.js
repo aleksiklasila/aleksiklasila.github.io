@@ -6,6 +6,7 @@ const Game = {
     height: 0,
 
     camera: { x: 0, y: 0 },
+    originX: 0,
 
     keys: {},
     keysJustPressed: {},
@@ -173,6 +174,7 @@ const Game = {
         World.generate();
         Voxels.generate();
         Inventory.init();
+        Inventory.addItem('torch', 1); // Starter torch
         Survival.init();
         Fishing.init();
         Fishing.generateWorldFish();
@@ -183,6 +185,8 @@ const Game = {
         }
 
         Player.init(startX);
+        this.originX = startX;
+        Difficulty.originX = startX;
         this.camera.x = Player.x;
         this.camera.y = 0;
 
@@ -237,17 +241,6 @@ const Game = {
         if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen) return;
 
         // Item use is now handled by left-click (in setupInputs)
-
-        if (this.keysJustPressed['KeyF'] && !Fishing.active && Player.actionTimer <= 0) {
-            const item = Inventory.getSelectedItem();
-            if (item && (item.id === 'raw_fish' || item.id === 'cooked_fish' || item.id === 'raw_fish_large' || item.id === 'cooked_fish_large')) {
-                Survival.useItem(Player.x);
-            } else {
-                Player.stats.thirst = Math.min(100, Player.stats.thirst + 8);
-                Player.stats.warmth = Math.max(0, Player.stats.warmth - 3);
-                this.showMessage('Ate snow for water. (-3 warmth)', 1.5);
-            }
-        }
 
         Player.update(dt, this.keys);
         Survival.update(dt);
@@ -343,26 +336,50 @@ const Game = {
 
         const baseY = this.height * 0.6;
 
-        // Ambient light from day/night cycle
-        const dayMix = Math.max(0, Math.min(1, Math.sin(Survival.timeOfDay * Math.PI)));
-        Lighting.ambientLight = Survival.stormActive
-            ? Math.max(0.1, dayMix * 0.4)
-            : Math.max(0.05, dayMix * 0.85);
+        // --- Sun: directional light rotating around the player ---
+        // timeOfDay: 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
+        // Sun angle: 0.25 (sunrise) -> left (PI), 0.5 (noon) -> up (PI/2), 0.75 (sunset) -> right (0)
+        const sunAngle = Math.PI - (Survival.timeOfDay - 0.25) * Math.PI * 2;
+        // Direction from surface TO sun
+        const sunDirX = Math.cos(sunAngle);
+        const sunDirY = -Math.sin(sunAngle); // Negative because screen Y grows downward
 
-        // Player vision light (always active)
+        // Keep sun mostly bright during the day, fading entirely at midnight
+        let sunIntensity = Math.min(1.0, Math.sin(Survival.timeOfDay * Math.PI) * 1.5);
+        if (Survival.stormActive) sunIntensity *= 0.4;
+        Lighting.setSunDir(sunDirX, sunDirY, sunIntensity);
+
+        // --- Player vision (light index 0) — constant radius ---
         const playerSX = Player.x - this.camera.x + this.width / 2;
         const playerSY = baseY - Player.y - 25;
-        const visionRadius = Survival.isNight ? 250 : 600;
-        Lighting.addLight(playerSX, playerSY, visionRadius, 1.0, 1.0, 1.0, Survival.isNight ? 0.7 : 0.3);
+        const visionRadius = Survival.stormActive ? 350 : 600;
+        Lighting.addLight(playerSX, playerSY, visionRadius, 1.0, 1.0, 1.0, 1.0);
 
-        // Campfire lights
+        // --- Campfire lights (culled to on-screen) ---
         for (const fire of World.campfires) {
             if (!fire.lit) continue;
             const sx = fire.x - this.camera.x + this.width / 2;
             const sy = baseY - fire.surfaceY;
-            if (sx < -200 || sx > this.width + 200) continue;
-            const flicker = 0.9 + Math.sin(Date.now() / 150) * 0.1;
-            Lighting.addLight(sx, sy - 15, 180, 1.0, 0.65, 0.25, 0.9 * flicker);
+            // Cull: skip if too far off-screen
+            if (sx < -430 || sx > this.width + 430) continue;
+            Lighting.addLight(sx, sy - 15, 400, 1.0, 0.65, 0.25, 0.9);
+        }
+
+        // --- Ground torch lights (culled to on-screen) ---
+        if (World.torches) {
+            for (const torch of World.torches) {
+                if (!torch.lit) continue;
+                const sx = torch.x - this.camera.x + this.width / 2;
+                const sy = baseY - torch.surfaceY;
+                if (sx < -330 || sx > this.width + 330) continue;
+                Lighting.addLight(sx, sy - 20, 300, 1.0, 0.7, 0.3, 0.8);
+            }
+        }
+
+        // --- Carried torch light ---
+        const heldItem = Inventory.getSelectedItem();
+        if (heldItem && heldItem.id === 'torch' && heldItem.durability > 0) {
+            Lighting.addLight(playerSX, playerSY - 10, 300, 1.0, 0.7, 0.3, 0.8);
         }
     },
 
@@ -446,7 +463,7 @@ const Game = {
         }
 
         ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-        ctx.fillText('A/D Move  SCROLL Items  CLICK Use  E Inventory  F Eat/Drink', this.width - 10, 15);
+        ctx.fillText('A/D Move  SCROLL Items  CLICK Use  E Inventory', this.width - 10, 15);
         ctx.textAlign = 'left';
 
         if (Player.actionTimer > 0) {
@@ -457,6 +474,62 @@ const Game = {
             ctx.fillStyle = '#ffcc00'; ctx.fillRect(pbX, pbY, pbW * Math.min(1, progress), pbH);
             ctx.strokeStyle = '#888'; ctx.strokeRect(pbX - 2, pbY - 2, pbW + 4, pbH + 4);
         }
+
+        // Origin arrow indicator — show when > 100m from origin
+        this.renderOriginArrow(ctx);
+    },
+
+    renderOriginArrow(ctx) {
+        const distM = Difficulty.getDistance(Player.x);
+        if (distM < 50) return;
+
+        const originIsLeft = Player.x > this.originX;
+        const arrowSize = 40;
+        const margin = 20;
+        const ax = originIsLeft ? margin + arrowSize / 2 : this.width - margin - arrowSize / 2;
+        const ay = this.height - margin - arrowSize / 2 - 30;
+
+        // Background circle
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.fillStyle = '#1a1a2e';
+        ctx.beginPath();
+        ctx.arc(ax, ay, arrowSize / 2 + 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        // Arrow pointing toward origin
+        ctx.fillStyle = '#ffcc44';
+        ctx.beginPath();
+        if (originIsLeft) {
+            // Left-pointing arrow
+            ctx.moveTo(ax - 14, ay);
+            ctx.lineTo(ax + 6, ay - 12);
+            ctx.lineTo(ax + 6, ay - 4);
+            ctx.lineTo(ax + 14, ay - 4);
+            ctx.lineTo(ax + 14, ay + 4);
+            ctx.lineTo(ax + 6, ay + 4);
+            ctx.lineTo(ax + 6, ay + 12);
+        } else {
+            // Right-pointing arrow
+            ctx.moveTo(ax + 14, ay);
+            ctx.lineTo(ax - 6, ay - 12);
+            ctx.lineTo(ax - 6, ay - 4);
+            ctx.lineTo(ax - 14, ay - 4);
+            ctx.lineTo(ax - 14, ay + 4);
+            ctx.lineTo(ax - 6, ay + 4);
+            ctx.lineTo(ax - 6, ay + 12);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // Distance label
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${Math.round(distM)}m`, ax, ay + arrowSize / 2 + 14);
+        ctx.textAlign = 'left';
+        ctx.restore();
     },
 
     renderMessage(ctx) {

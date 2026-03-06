@@ -20,7 +20,8 @@ const Assets = {
         { name: 'cooked_fish', src: 'assets/item_cooked_fish.png' },
         // Fallbacks for large fish variants
         { name: 'raw_fish_large', src: 'assets/item_raw_fish.png' },
-        { name: 'cooked_fish_large', src: 'assets/item_cooked_fish.png' }
+        { name: 'cooked_fish_large', src: 'assets/item_cooked_fish.png' },
+        { name: 'torch', src: 'assets/item_torch.png' }
     ],
     loadedCount: 0,
 

@@ -80,6 +80,13 @@ const Player = {
                 currentSpeed *= 0.5; // Slow down 50% when sleepy
             }
 
+            // Terrain steepness slowdown — slope measured over 20px
+            const slope = Math.abs(World.getSurfaceY(this.x + 10) - World.getSurfaceY(this.x - 10)) / 20;
+            const slopeFactor = Math.max(0, 1 - slope * 0.02);
+            // Difficulty zone slowdown
+            const diffMult = Math.max(0, 1 - Difficulty.getLevel(this.x) * 0.05);
+            currentSpeed *= slopeFactor * diffMult;
+
             if (keys['KeyA'] || keys['ArrowLeft']) {
                 this.vx = -currentSpeed;
                 this.facing = -1;
@@ -157,9 +164,20 @@ const Player = {
                 break;
             }
         }
+        let nearTorchRec = false;
+        if (!nearFireRec && World.torches) {
+            for (const torch of World.torches) {
+                if (torch.lit && Math.abs(torch.x - this.x) < 60) {
+                    nearTorchRec = true;
+                    break;
+                }
+            }
+        }
         if (nearFireRec) {
             this.stats.warmth = Math.min(100, this.stats.warmth + dt * 8);
             this.stats.sleep = Math.min(100, this.stats.sleep + dt * 1);
+        } else if (nearTorchRec) {
+            this.stats.warmth = Math.min(100, this.stats.warmth + dt * 4);
         } else if (isInTent) {
             // Tent gives minor sleep recovery
             this.stats.sleep = Math.min(100, this.stats.sleep + dt * 3);
@@ -341,6 +359,24 @@ const Player = {
                     ctx.closePath();
                     ctx.fill();
                     break;
+                case 'torch': {
+                    // Torch stick
+                    ctx.fillStyle = '#6a4a2a';
+                    ctx.fillRect(0, -2, 16, 3);
+                    // Flame
+                    const tf = Math.sin(Date.now() / 100) * 2;
+                    ctx.fillStyle = '#ff8800';
+                    ctx.beginPath();
+                    ctx.moveTo(14, -5);
+                    ctx.quadraticCurveTo(18, -14 + tf, 22, -5);
+                    ctx.fill();
+                    ctx.fillStyle = '#ffcc44';
+                    ctx.beginPath();
+                    ctx.moveTo(15, -4);
+                    ctx.quadraticCurveTo(18, -10 + tf * 0.5, 21, -4);
+                    ctx.fill();
+                    break;
+                }
             }
         }
         ctx.restore();
