@@ -538,12 +538,12 @@ const Lighting = {
         gl.uniform1i(this._uniforms1['u_voxels'], 0);
 
         gl.uniform2f(this._uniforms1['u_chunkSize'], this._chunkW, this._chunkH);
-        gl.uniform2f(this._uniforms1['u_chunkStartVx'], this._chunkStartVx, this._chunkStartVy);
+        gl.uniform2f(this._uniforms1['u_chunkStartVx'], 0, this._chunkStartVy);
         gl.uniform2f(this._uniforms1['u_screenSize'], canvasW, canvasH);
         gl.uniform1f(this._uniforms1['u_voxelSize'], Voxels.SIZE);
         gl.uniform1f(this._uniforms1['u_baseY'], baseY);
         gl.uniform1f(this._uniforms1['u_topY'], Voxels.TOP_Y);
-        gl.uniform1f(this._uniforms1['u_cameraX'], alignedCamX);
+        gl.uniform1f(this._uniforms1['u_cameraX'], alignedCamX - this._chunkStartVx * Voxels.SIZE);
 
         // Player vision is distinct from actual emitted lights now
         if (this.playerVisionRadius > 0) {
@@ -594,12 +594,12 @@ const Lighting = {
         gl.uniform1i(this._uniforms3['u_voxels'], 0);
 
         gl.uniform2f(this._uniforms3['u_chunkSize'], this._chunkW, this._chunkH);
-        gl.uniform2f(this._uniforms3['u_chunkStartVx'], this._chunkStartVx, this._chunkStartVy);
+        gl.uniform2f(this._uniforms3['u_chunkStartVx'], 0, this._chunkStartVy);
         gl.uniform2f(this._uniforms3['u_screenSize'], canvasW, canvasH);
         gl.uniform1f(this._uniforms3['u_voxelSize'], Voxels.SIZE);
         gl.uniform1f(this._uniforms3['u_baseY'], baseY);
         gl.uniform1f(this._uniforms3['u_topY'], Voxels.TOP_Y);
-        gl.uniform1f(this._uniforms3['u_cameraX'], alignedCamX);
+        gl.uniform1f(this._uniforms3['u_cameraX'], alignedCamX - this._chunkStartVx * Voxels.SIZE);
 
         // Sun uniforms
         gl.uniform2f(this._uniforms3['u_sunDir'], this.sunDirX, this.sunDirY);

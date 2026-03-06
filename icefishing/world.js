@@ -1,7 +1,7 @@
 // world.js — Sky, mountains, surface objects (terrain is now in voxels.js)
 const World = {
     TILE_SIZE: 40,
-    WORLD_WIDTH: 800,
+    WORLD_WIDTH: 5000,
     columns: [],
     trees: [],
     fishingHoles: [],
@@ -30,7 +30,14 @@ const World = {
 
             // Scale terrain amplitude with distance from center (continuous)
             const terrainMult = Difficulty.getTerrainMultiplier(x, centerCol);
-            const height = (elevation + detail) * terrainMult;
+            let height = (elevation + detail) * terrainMult;
+
+            // Force a flat, safe ground area around the origin (spawn)
+            const distFromCenterRows = Math.abs(x - centerCol);
+            if (distFromCenterRows < 25) {
+                const blend = 1.0 - (distFromCenterRows / 25);
+                height = (height * (1 - blend)) + (0.15 * blend);
+            }
 
             let type;
             if (height > 0.02) type = 'ground';
@@ -60,13 +67,13 @@ const World = {
             if (this.columns[i].type === 'ground' && this.columns[i].height > 0.1) {
                 // Place shop a bit further than the spawn point so the player doesn't spawn exactly inside it
                 this.shop = {
-                    x: (i + 5) * this.TILE_SIZE,
-                    surfaceY: this.columns[i + 5].surfaceY
+                    x: (i + 4) * this.TILE_SIZE,
+                    surfaceY: this.columns[i + 4].surfaceY
                 };
 
                 // Place repair shop slightly further
                 // Need to make sure we don't index out of bounds, but i+15 is generally safe near spawn
-                let repairIdx = Math.min(i + 15, this.WORLD_WIDTH - 1);
+                let repairIdx = Math.min(i + 12, this.WORLD_WIDTH - 1);
                 this.repairShop = {
                     x: repairIdx * this.TILE_SIZE,
                     surfaceY: this.columns[repairIdx].surfaceY
@@ -113,16 +120,16 @@ const World = {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
         const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
-        const fire = { x: worldX, surfaceY, fuel: 100, lit: true };
+        const fire = { x: worldX, surfaceY, fuel: 100, lit: false };
         this.campfires.push(fire);
         return fire;
     },
 
-    addTorch(worldX, fuel = 100) {
+    addTorch(worldX, fuel = 100, isLit = false) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
         const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
-        const torch = { x: worldX, surfaceY, fuel, lit: true };
+        const torch = { x: worldX, surfaceY, fuel, lit: isLit };
         this.torches.push(torch);
         return torch;
     },
@@ -130,9 +137,9 @@ const World = {
     removeTorchNear(worldX) {
         for (let i = 0; i < this.torches.length; i++) {
             if (Math.abs(this.torches[i].x - worldX) < 50) {
-                const fuel = this.torches[i].fuel;
+                const data = { fuel: this.torches[i].fuel, lit: this.torches[i].lit };
                 this.torches.splice(i, 1);
-                return fuel;
+                return data;
             }
         }
         return false;
@@ -254,7 +261,6 @@ const World = {
 
         // Campfires
         for (const fire of this.campfires) {
-            if (!fire.lit) continue;
             const sx = fire.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
             this.renderCampfire(ctx, sx, baseY - fire.surfaceY, fire);
@@ -262,7 +268,6 @@ const World = {
 
         // Ground torches
         for (const torch of this.torches) {
-            if (!torch.lit) continue;
             const sx = torch.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
             this.renderTorch(ctx, sx, baseY - torch.surfaceY, torch);
@@ -328,27 +333,44 @@ const World = {
 
     renderCampfire(ctx, x, y, fire) {
         const img = Assets.get('campfire_anim');
-        const t = Date.now() / 100, fl = Math.sin(t) * 3;
-        const glow = ctx.createRadialGradient(x, y - 15, 5, x, y - 15, 60);
-        glow.addColorStop(0, `rgba(255,150,30,${0.4 + fl * 0.05})`);
-        glow.addColorStop(1, 'rgba(255,100,0,0)');
-        ctx.fillStyle = glow; ctx.fillRect(x - 70, y - 80, 140, 100);
-        if (img) {
-            // Campfire has 6 frames in a 3x2 grid (3 cols, 2 rows)
-            const frameWidth = img.width / 3;
-            const frameHeight = img.height / 2;
-            const animFrame = Math.floor(Date.now() / 150) % 6;
-            const col = animFrame % 3;
-            const row = Math.floor(animFrame / 3);
-            ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, x - 24, y - 48, 48, 48);
+
+        if (fire.lit) {
+            const t = Date.now() / 100, fl = Math.sin(t) * 3;
+            const glow = ctx.createRadialGradient(x, y - 15, 5, x, y - 15, 60);
+            glow.addColorStop(0, `rgba(255,150,30,${0.4 + fl * 0.05})`);
+            glow.addColorStop(1, 'rgba(255,100,0,0)');
+            ctx.fillStyle = glow; ctx.fillRect(x - 70, y - 80, 140, 100);
+
+            if (img) {
+                // Campfire has 6 frames in a 3x2 grid (3 cols, 2 rows)
+                const frameWidth = img.width / 3;
+                const frameHeight = img.height / 2;
+                const animFrame = Math.floor(Date.now() / 150) % 6;
+                const col = animFrame % 3;
+                const row = Math.floor(animFrame / 3);
+                ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, x - 24, y - 48, 48, 48);
+            } else {
+                ctx.fillStyle = '#4a2a10'; ctx.fillRect(x - 12, y - 4, 24, 4);
+                ctx.fillStyle = '#ff6600'; ctx.beginPath();
+                ctx.moveTo(x - 8, y - 5); ctx.quadraticCurveTo(x, y - 30 + fl, x + 8, y - 5); ctx.fill();
+            }
+
+            ctx.fillStyle = '#ffdd44';
+            for (let i = 0; i < 3; i++) ctx.fillRect(x + Math.sin(t + i * 2) * 6, y - 20 - Math.abs(Math.sin(t * 1.5 + i)) * 15, 2, 2);
         } else {
-            console.warn("Campfire image not found in assets!");
-            ctx.fillStyle = '#4a2a10'; ctx.fillRect(x - 12, y - 4, 24, 4);
-            ctx.fillStyle = '#ff6600'; ctx.beginPath();
-            ctx.moveTo(x - 8, y - 5); ctx.quadraticCurveTo(x, y - 30 + fl, x + 8, y - 5); ctx.fill();
+            // Unlit campfire
+            const imgOff = Assets.get('campfire_off');
+            if (imgOff) {
+                ctx.drawImage(imgOff, x - 24, y - 48, 48, 48);
+            } else if (img) {
+                // Draw just the first frame of the campfire without animating or glowing
+                const frameWidth = img.width / 3;
+                const frameHeight = img.height / 2;
+                ctx.drawImage(img, 0, 0, frameWidth, frameHeight, x - 24, y - 48, 48, 48);
+            } else {
+                ctx.fillStyle = '#4a2a10'; ctx.fillRect(x - 12, y - 4, 24, 4); // Just the logs
+            }
         }
-        ctx.fillStyle = '#ffdd44';
-        for (let i = 0; i < 3; i++) ctx.fillRect(x + Math.sin(t + i * 2) * 6, y - 20 - Math.abs(Math.sin(t * 1.5 + i)) * 15, 2, 2);
 
         // Render fuel/durability bar above campfire
         const pct = fire.fuel / 100;
@@ -369,28 +391,42 @@ const World = {
     },
 
     renderTorch(ctx, x, y, torch) {
-        const t = Date.now() / 100, fl = Math.sin(t + x) * 2;
-        // Glow
-        const glow = ctx.createRadialGradient(x, y - 20, 3, x, y - 20, 35);
-        glow.addColorStop(0, `rgba(255,160,40,${0.3 + fl * 0.03})`);
-        glow.addColorStop(1, 'rgba(255,100,0,0)');
-        ctx.fillStyle = glow; ctx.fillRect(x - 40, y - 55, 80, 60);
+        if (torch.lit) {
+            const t = Date.now() / 100, fl = Math.sin(t + x) * 2;
+            // Glow
+            const glow = ctx.createRadialGradient(x, y - 20, 3, x, y - 20, 35);
+            glow.addColorStop(0, `rgba(255,160,40,${0.3 + fl * 0.03})`);
+            glow.addColorStop(1, 'rgba(255,100,0,0)');
+            ctx.fillStyle = glow; ctx.fillRect(x - 40, y - 55, 80, 60);
+        }
 
-        // Stick
-        ctx.fillStyle = '#6a4a2a';
-        ctx.fillRect(x - 2, y - 28, 4, 28);
+        const img = Assets.get(torch.lit ? 'torch' : 'torch_off');
+        if (img) {
+            ctx.drawImage(img, x - 12, y - 24, 24, 24);
+        } else {
+            // Stick
+            ctx.fillStyle = '#6a4a2a';
+            ctx.fillRect(x - 2, y - 28, 4, 28);
 
-        // Flame
-        ctx.fillStyle = '#ff8800';
-        ctx.beginPath();
-        ctx.moveTo(x - 4, y - 28);
-        ctx.quadraticCurveTo(x, y - 42 + fl, x + 4, y - 28);
-        ctx.fill();
-        ctx.fillStyle = '#ffcc44';
-        ctx.beginPath();
-        ctx.moveTo(x - 2, y - 28);
-        ctx.quadraticCurveTo(x, y - 36 + fl * 0.5, x + 2, y - 28);
-        ctx.fill();
+            if (torch.lit) {
+                const fl = Math.sin(Date.now() / 100 + x) * 2;
+                // Flame
+                ctx.fillStyle = '#ff8800';
+                ctx.beginPath();
+                ctx.moveTo(x - 4, y - 28);
+                ctx.quadraticCurveTo(x, y - 42 + fl, x + 4, y - 28);
+                ctx.fill();
+                ctx.fillStyle = '#ffcc44';
+                ctx.beginPath();
+                ctx.moveTo(x - 2, y - 28);
+                ctx.quadraticCurveTo(x, y - 36 + fl * 0.5, x + 2, y - 28);
+                ctx.fill();
+            } else {
+                // Unlit top for the torch
+                ctx.fillStyle = '#3a2a1a';
+                ctx.fillRect(x - 3, y - 30, 6, 4);
+            }
+        }
 
         // Fuel bar
         const pct = torch.fuel / 100;

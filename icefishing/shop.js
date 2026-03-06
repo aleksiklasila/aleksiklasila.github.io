@@ -25,7 +25,7 @@ const Shop = {
 
         // Available item pool
         this.allItems = [
-            'ice_drill', 'fishing_rod', 'scoop', 'bait', 'axe',
+            'ice_drill', 'fishing_rod', 'scoop', 'bait', 'axe', 'hammer',
             'flint_steel', 'tent', 'firewood', 'raw_fish',
             'cooked_fish', 'raw_fish_large', 'cooked_fish_large', 'torch'
         ];
@@ -39,11 +39,11 @@ const Shop = {
                 this.isOpen = true;
                 Inventory.isOpen = true; // Open inventory so player can drag items
 
-                // Randomize shop items only once per day
+                // Render all items in shop at all times
                 if (this.lastRestockDay !== Survival.dayCount) {
                     this.lastRestockDay = Survival.dayCount;
-                    const availableKeys = Object.keys(Inventory.ITEMS);
-                    this.saleItems = availableKeys.sort(() => 0.5 - Math.random()).slice(0, 5);
+                    // Sort available keys logically by category or keep unsorted
+                    this.saleItems = [...this.allItems];
                 }
 
                 Game.showMessage('Welcome to the Shop!', 2);
@@ -76,7 +76,7 @@ const Shop = {
         }
     },
 
-    handleMouseDown(mouseX, mouseY, canvasW, canvasH) {
+    handleMouseDown(mouseX, mouseY, canvasW, canvasH, shiftKey = false, ctrlKey = false, button = 0) {
         if (!this.isOpen) return false;
 
         // Check if clicked the Sell button
@@ -93,10 +93,23 @@ const Shop = {
             const b = this.ui.sellSlotBounds;
             if (mouseX >= b.x && mouseX <= b.x + b.w && mouseY >= b.y && mouseY <= b.y + b.h) {
                 if (this.sellSlot) {
-                    // Pick up item from sell slot
-                    Inventory.dragItem = this.sellSlot;
-                    Inventory.dragSource = { type: 'shop' };
-                    this.sellSlot = null;
+                    const item = this.sellSlot;
+                    if (button === 2) {
+                        this.sellSlot = null;
+                        Inventory.moveToSecondHand(item);
+                        return true;
+                    }
+                    if (item.stackable && item.count > 1 && (shiftKey || ctrlKey)) {
+                        let takeCount = ctrlKey ? 1 : Math.max(1, Math.floor(item.count / 2));
+                        Inventory.dragItem = { ...item, count: takeCount };
+                        item.count -= takeCount;
+                        Inventory.dragSource = { type: 'shop_split' };
+                    } else {
+                        // Pick up item from sell slot
+                        Inventory.dragItem = this.sellSlot;
+                        Inventory.dragSource = { type: 'shop' };
+                        this.sellSlot = null;
+                    }
                     return true;
                 }
             }
@@ -109,6 +122,21 @@ const Shop = {
                 if (!b.itemId || Inventory.dragItem) return false;
 
                 const def = Inventory.ITEMS[b.itemId];
+
+                if (button === 2) {
+                    if (Player.money < def.price) {
+                        Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
+                        return true;
+                    }
+                    Player.money -= def.price;
+                    let item = { ...def, count: 1 };
+                    if (def.maxDurability) item.durability = def.maxDurability;
+                    this.saleItems[b.index] = null;
+                    Inventory.moveToSecondHand(item);
+                    Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                    return true;
+                }
+
                 let item = { ...def, count: 1 };
                 if (def.maxDurability) item.durability = def.maxDurability;
 
@@ -182,8 +210,8 @@ const Shop = {
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
-        const w = 480;
-        const h = 200; // Shorter for single row
+        const w = 620;
+        const h = 280; // Bigger for two rows if needed, or wide for one row
 
         const slotSize = 52;
         const gap = 4;
@@ -222,11 +250,15 @@ const Shop = {
         ctx.fillText('Items for Sale:', x + 15, y + 55);
 
         this.ui.buyItemBounds = [];
+        const itemsPerRow = 8;
         for (let i = 0; i < this.saleItems.length; i++) {
             const itemId = this.saleItems[i];
 
-            const sx = x + 15 + i * (slotSize + gap);
-            const sy = y + 70;
+            const row = Math.floor(i / itemsPerRow);
+            const col = i % itemsPerRow;
+
+            const sx = x + 15 + col * (slotSize + gap);
+            const sy = y + 70 + row * (slotSize + gap + 25);
 
             // Slot BG
             ctx.fillStyle = 'rgba(40,50,70,0.8)';

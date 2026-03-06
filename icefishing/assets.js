@@ -6,10 +6,12 @@ const Assets = {
         { name: 'player_walk', src: 'assets/player_walk.png' },
         { name: 'tree', src: 'assets/tree.png' },
         { name: 'campfire_anim', src: 'assets/campfire_anim.png' },
+        { name: 'campfire_on', src: 'assets/campfire_on.png' },
+        { name: 'campfire_off', src: 'assets/campfire_off.png' },
         { name: 'shop', src: 'assets/shop.png' },
         { name: 'repair_shop', src: 'assets/repair_shop.png' },
-        { name: 'fishing_hole', src: 'assets/fishing_hole.png' },
         { name: 'axe', src: 'assets/item_axe.png' },
+        { name: 'hammer', src: 'assets/item_hammer.png' },
         { name: 'fishing_rod', src: 'assets/item_fishing_rod.png' },
         { name: 'ice_drill', src: 'assets/item_ice_drill.png' },
         { name: 'scoop', src: 'assets/item_scoop.png' },
@@ -21,7 +23,8 @@ const Assets = {
         // Fallbacks for large fish variants
         { name: 'raw_fish_large', src: 'assets/item_raw_fish.png' },
         { name: 'cooked_fish_large', src: 'assets/item_cooked_fish.png' },
-        { name: 'torch', src: 'assets/item_torch.png' }
+        { name: 'torch', src: 'assets/item_torch.png' },
+        { name: 'torch_off', src: 'assets/item_torch_off.png' }
     ],
     loadedCount: 0,
 
