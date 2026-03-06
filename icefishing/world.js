@@ -43,7 +43,7 @@ const World = {
 
             if (type === 'ground' && height > 0.06) {
                 const treeDensity = Perlin.fbm(nx, 100, 2, 2.0, 0.5);
-                if (treeDensity > 0.1 && Math.random() < 0.40) {
+                if (treeDensity > 0 && Math.random() < 0.80) {
                     this.trees.push({
                         x: x * this.TILE_SIZE + Math.random() * 20 - 10,
                         groundCol: x,
