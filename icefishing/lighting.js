@@ -1,5 +1,5 @@
 // lighting.js — WebGL GPU-accelerated raycasting + visibility dilation
-// Pass 1: Ray trace visibility from player/lights → FBO texture
+// Pass 1: Ray trace visibility from player + light sources → FBO texture
 // Pass 2: Dilate visibility (expand visible area into solid terrain by R pixels)
 const Lighting = {
     canvas: null,
@@ -14,9 +14,13 @@ const Lighting = {
     fboTexture: null,
 
     lights: [],
-    ambientLight: 0.8,
     MAX_LIGHTS: 8,
     EXPAND_RADIUS: 3.0, // voxels of expansion (= pixels * voxelSize)
+
+    // Sun state (set by game.js each frame)
+    sunDirX: 0,
+    sunDirY: 1,
+    sunIntensity: 0.8,
 
     _chunkStartVx: 0,
     _chunkStartVy: 0,
@@ -63,21 +67,30 @@ const Lighting = {
     `,
 
     // Pass 1: Raycast visibility → writes light value to FBO
+    // Dual-condition: pixel must be (1) visible to player AND (2) lit by sun or any light
+    // Shadow: player-visible but unlit → dim
     _fragPass1: `
         precision mediump float;
         uniform sampler2D u_voxels;
         uniform vec2 u_chunkSize, u_chunkStartVx, u_screenSize;
-        uniform float u_voxelSize, u_baseY, u_topY, u_cameraX, u_ambientLight;
+        uniform float u_voxelSize, u_baseY, u_topY, u_cameraX;
         #define MAX_LIGHTS 8
         uniform vec2 u_lightScreenPos[MAX_LIGHTS];
         uniform vec3 u_lightColor[MAX_LIGHTS];
         uniform float u_lightRadius[MAX_LIGHTS];
         uniform float u_lightIntensity[MAX_LIGHTS];
         uniform int u_numLights;
+        // Sun: directional light
+        uniform vec2 u_sunDir;
+        uniform float u_sunIntensity;
+        // Shadow brightness for player-visible but unlit pixels
+        const float SHADOW_BRIGHTNESS = 0.04;
 
         bool isSolid(vec2 vc) {
             vec2 local = floor(vc) - u_chunkStartVx;
-            if (local.x < 0.0 || local.y < 0.0 || local.x >= u_chunkSize.x || local.y >= u_chunkSize.y) return true;
+            if (local.y < 0.0) return false; // Sky is open air
+            if (local.y >= u_chunkSize.y) return true; // Deep below world is solid
+            if (local.x < 0.0 || local.x >= u_chunkSize.x) return false; // Sides are open (prevents edge shadows)
             return texture2D(u_voxels, (local + 0.5) / u_chunkSize).r > 0.5;
         }
 
@@ -113,19 +126,30 @@ const Lighting = {
             vec2 sp = gl_FragCoord.xy;
             sp.y = u_screenSize.y - sp.y;
             vec2 tv = s2v(sp);
+
+            // --- Step 1: Player visibility check (constant radius) ---
             vec2 pv = s2v(u_lightScreenPos[0]);
             float pd = length(sp - u_lightScreenPos[0]);
-            bool vis = pd < u_lightRadius[0] && !traceRay(pv, tv);
+            bool playerCanSee = pd < u_lightRadius[0] && !traceRay(pv, tv);
 
-            if (!vis) {
+            if (!playerCanSee) {
+                // Fully invisible — black
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                 return;
             }
 
-            vec3 light = vec3(u_ambientLight);
-            float pa = 1.0 - pd / u_lightRadius[0];
-            light *= (0.5 + 0.5 * pa * pa);
+            // --- Step 2: Accumulate light from all sources ---
+            vec3 light = vec3(0.0);
 
+            // Sun: directional light — trace ray from pixel in sun direction
+            if (u_sunIntensity > 0.01) {
+                vec2 sunEnd = tv + u_sunDir * 200.0;
+                if (!traceRay(tv, sunEnd)) {
+                    light += vec3(1.0, 0.98, 0.92) * u_sunIntensity;
+                }
+            }
+
+            // Other lights (campfires, torches, carried torch)
             for (int i = 1; i < MAX_LIGHTS; i++) {
                 if (i >= u_numLights) break;
                 float d = length(sp - u_lightScreenPos[i]);
@@ -138,8 +162,17 @@ const Lighting = {
                 }
             }
 
-            light = clamp(light, 0.0, 1.0);
-            gl_FragColor = vec4(light, 1.0);
+            // --- Step 3: Shadow distinction ---
+            float lum = max(light.r, max(light.g, light.b));
+            if (lum < 0.01) {
+                // Player can see but no light reaches → dim shadow
+                gl_FragColor = vec4(SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, SHADOW_BRIGHTNESS, 1.0);
+            } else {
+                light = clamp(light, 0.0, 1.0);
+                // Ensure shadow minimum even for very faint lights
+                light = max(light, vec3(SHADOW_BRIGHTNESS));
+                gl_FragColor = vec4(light, 1.0);
+            }
         }
     `,
 
@@ -187,7 +220,8 @@ const Lighting = {
 
             if (bestLight > 0.01) {
                 // Neighbor is visible — show this pixel with reduced brightness
-                gl_FragColor = bestColor * 0.6;
+                // Ensure alpha is 1.0 so background doesn't bleed through
+                gl_FragColor = vec4(bestColor.rgb * 0.6, 1.0);
             } else {
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
             }
@@ -205,7 +239,7 @@ const Lighting = {
         const names1 = [
             'u_voxels', 'u_chunkSize', 'u_chunkStartVx', 'u_screenSize',
             'u_voxelSize', 'u_baseY', 'u_topY', 'u_cameraX',
-            'u_ambientLight', 'u_numLights'
+            'u_numLights', 'u_sunDir', 'u_sunIntensity'
         ];
         for (const n of names1) this._uniforms1[n] = gl.getUniformLocation(this.raycastProgram, n);
         for (let i = 0; i < this.MAX_LIGHTS; i++) {
@@ -293,6 +327,12 @@ const Lighting = {
 
     clearLights() { this.lights = []; },
 
+    setSunDir(dx, dy, intensity) {
+        this.sunDirX = dx;
+        this.sunDirY = dy;
+        this.sunIntensity = intensity;
+    },
+
     addLight(screenX, screenY, radius, r, g, b, intensity) {
         if (this.lights.length >= this.MAX_LIGHTS) return;
         this.lights.push({ screenX, screenY, radius, r, g, b, intensity });
@@ -330,7 +370,10 @@ const Lighting = {
         gl.uniform1f(this._uniforms1['u_baseY'], baseY);
         gl.uniform1f(this._uniforms1['u_topY'], Voxels.TOP_Y);
         gl.uniform1f(this._uniforms1['u_cameraX'], alignedCamX);
-        gl.uniform1f(this._uniforms1['u_ambientLight'], this.ambientLight);
+
+        // Sun uniforms (direction)
+        gl.uniform2f(this._uniforms1['u_sunDir'], this.sunDirX, this.sunDirY);
+        gl.uniform1f(this._uniforms1['u_sunIntensity'], this.sunIntensity);
 
         gl.uniform1i(this._uniforms1['u_numLights'], this.lights.length);
         for (let i = 0; i < this.MAX_LIGHTS; i++) {

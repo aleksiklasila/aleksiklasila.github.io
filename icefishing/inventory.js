@@ -22,7 +22,8 @@ const Inventory = {
         raw_fish: { id: 'raw_fish', name: 'Raw Fish', stackable: true, maxStack: 10, usable: true, category: 'food', price: 10 },
         cooked_fish: { id: 'cooked_fish', name: 'Cooked Fish', stackable: true, maxStack: 10, usable: true, category: 'food', price: 15 },
         raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 25 },
-        cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 35 }
+        cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 35 },
+        torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 15, maxDurability: 100 }
     },
 
     init() {
