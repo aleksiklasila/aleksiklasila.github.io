@@ -219,37 +219,29 @@ const Lighting = {
             float dist = length(dir);
             if (dist < 1.0) return baseIntensity;
             
-            dir /= dist;
-            vec2 sd = sign(dir);
-            vec2 td = abs(vec2(1.0) / max(abs(dir), vec2(0.0001)));
+            float stepSize = 0.25; // Smaller step size to reduce jagged shadows
+            vec2 step = (dir / dist) * stepSize;
+            int numSteps = int(dist / stepSize);
             
-            vec2 cur = floor(lightPos);
-            vec2 ec = floor(targetPixel);
-            vec2 tm;
-            tm.x = (sd.x > 0.0 ? cur.x + 1.0 - lightPos.x : lightPos.x - cur.x) * td.x;
-            tm.y = (sd.y > 0.0 ? cur.y + 1.0 - lightPos.y : lightPos.y - cur.y) * td.y;
-            
-            // Fix axis-aligned infinite DDA loops
-            if (abs(dir.x) < 0.0001) tm.x = 999999.0;
-            if (abs(dir.y) < 0.0001) tm.y = 999999.0;
-            
+            vec2 cur = lightPos;
             float intensity = baseIntensity;
-            float lossPerSolid = 1.2; // 1 solid block heavily attenuates light, stopping it dead on the 2nd block
+            float lossPerSolid = 1.2 * stepSize; // Continuous falloff inside solid blocks
             
-            int is_ignore_original = 5;
-            int is_ignore = is_ignore_original;
-            for (int i = 0; i < 400; i++) {
-                if (cur.x == ec.x && cur.y == ec.y) break;
+            float is_ignore_original = 4.0;
+            float is_ignore = is_ignore_original;
+            
+            for (int i = 0; i < 800; i++) {
+                if (i >= numSteps) break;
                 
                 if (isSolid(cur)) {
-                    if (is_ignore == 0) {
+                    if (is_ignore <= 0.0) {
                         intensity -= lossPerSolid;
                     }
                     if (intensity <= 0.0) return 0.0;
-                    is_ignore -= 1;
+                    is_ignore -= stepSize;
                 } else {
-                    if (is_ignore <= is_ignore_original - 2) {
-                        intensity -= lossPerSolid; // * (is_ignore_original - is_ignore)
+                    if (is_ignore <= is_ignore_original - 1.0) {
+                        intensity -= lossPerSolid; 
                         is_ignore_original = is_ignore;
                         if (intensity <= 0.0) return 0.0;
                     } else {
@@ -257,13 +249,7 @@ const Lighting = {
                     }
                 }
                 
-                if (tm.x < tm.y) { 
-                    cur.x += sd.x; 
-                    tm.x += td.x; 
-                } else { 
-                    cur.y += sd.y; 
-                    tm.y += td.y; 
-                }
+                cur += step;
             }
             
             return intensity;
@@ -289,8 +275,17 @@ const Lighting = {
             if (u_sunIntensity > 0.01) {
                 vec2 sunEnd = tv + u_sunDir * 200.0; 
                 
-                // Trace from target pixel UP to the sun
-                float sunBase = u_sunIntensity * 1.35;
+                // sunHeight: how high the sun is. u_sunDir.y < 0 means above horizon.
+                // -1.0 = directly overhead, 0.0 = at horizon, >0 = below horizon
+                float sunHeight = -u_sunDir.y; // positive = above horizon
+                
+                // Scale sun brightness based on height:
+                // Above horizon (sunHeight > 0): stays near max most of the day
+                // Near horizon (sunHeight ~0): dims gradually
+                // Below horizon (sunHeight < 0): fades to 0 (dark)
+                float heightFactor = clamp(sunHeight * 4.0 + 0.5, 0.0, 1.0);
+                
+                float sunBase = u_sunIntensity * 1.35 * heightFactor;
                 float trans = traceRayLossy(tv, sunEnd, sunBase);
                 
                 if (trans > 0.0) {
