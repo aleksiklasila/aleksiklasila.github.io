@@ -33,7 +33,10 @@ const Assets = {
         { name: 'pickaxe', src: 'assets/pickaxe.png' },
         { name: 'rock', src: 'assets/rock.png' },
         { name: 'item_rock', src: 'assets/item_rock.png' },
-        { name: 'anvil', src: 'assets/anvil.png' }
+        { name: 'anvil', src: 'assets/anvil.png' },
+        { name: 'chest', src: 'assets/chest.png' },
+        { name: 'item_chest', src: 'assets/item_chest.png' },
+        { name: 'tombstone', src: 'assets/tombstone.png' }
     ],
     loadedCount: 0,
 

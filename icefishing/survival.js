@@ -261,7 +261,39 @@ const Survival = {
                 Game.showMessage('Got firewood!', 1.5);
             });
         } else {
-            Game.showMessage('Nothing to chop nearby.', 1);
+            // Check for nearby chest to break
+            let nearestChest = null;
+            let nearestChestDist = Infinity;
+            for (const chest of World.chests) {
+                const d = Math.abs(chest.x - playerX);
+                if (d < nearestChestDist && d < 60) {
+                    nearestChestDist = d;
+                    nearestChest = chest;
+                }
+            }
+
+            if (nearestChest) {
+                Player.startAction(1.5, 'chopping', () => {
+                    const removed = World.removeChestNear(nearestChest.x);
+                    if (removed) {
+                        // Drop chest contents on ground
+                        for (const item of removed.inventory) {
+                            if (item) {
+                                World.addGroundItem(removed.x + (Math.random() - 0.5) * 30, item);
+                            }
+                        }
+                        Inventory.addItem('firewood', 3);
+                        Inventory.consumeHandItem(isSecondHand, 1);
+                        // Close ChestUI if this chest was open
+                        if (ChestUI.isOpen && ChestUI.currentChest === removed) {
+                            ChestUI.close();
+                        }
+                        Game.showMessage('Broke chest! Got 3 firewood.', 1.5);
+                    }
+                });
+            } else {
+                Game.showMessage('Nothing to chop nearby.', 1);
+            }
         }
     },
 
@@ -291,7 +323,32 @@ const Survival = {
                 Game.showMessage('Mined some rocks!', 1.5);
             });
         } else {
-            Game.showMessage('No rocks nearby to mine.', 1);
+            // Check for nearby tombstone to break
+            let nearestTombstone = null;
+            let nearestTombDist = Infinity;
+            for (const ts of World.tombstones) {
+                const d = Math.abs(ts.x - playerX);
+                if (d < nearestTombDist && d < 60) {
+                    nearestTombDist = d;
+                    nearestTombstone = ts;
+                }
+            }
+
+            if (nearestTombstone) {
+                Player.startAction(2.0, 'chopping', () => {
+                    const removed = World.removeTombstoneNear(nearestTombstone.x);
+                    if (removed) {
+                        Inventory.consumeHandItem(isSecondHand, 1);
+                        // Close ChestUI if this tombstone was open
+                        if (ChestUI.isOpen && ChestUI.currentChest === removed) {
+                            ChestUI.close();
+                        }
+                        Game.showMessage('Destroyed tombstone. Items lost.', 2);
+                    }
+                });
+            } else {
+                Game.showMessage('No rocks nearby to mine.', 1);
+            }
         }
     },
 
