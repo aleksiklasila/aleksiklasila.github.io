@@ -10,6 +10,38 @@ const Inventory = {
     dragSource: null,
     secondHand: null,
 
+    getLayout(canvasW, canvasH) {
+        const slotSize = 52;
+        const gap = 4;
+        const bagCols = 8;
+        const bagRows = 3;
+        const totalW = bagCols * (slotSize + gap);
+        const totalH = (bagRows + 1) * (slotSize + gap) + 60;
+
+        const anyMenuOpen = typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen || ChestUI.isOpen);
+
+        let startX, startY;
+        if (anyMenuOpen) {
+            let activeMenuWidth = 0;
+            if (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen) {
+                activeMenuWidth = UIMenu.width;
+            } else if (ChestUI.isOpen) {
+                activeMenuWidth = ChestUI.COLS * (ChestUI.SLOT_SIZE + ChestUI.GAP);
+            }
+
+            const combinedW = totalW + 20 + activeMenuWidth;
+            startX = (canvasW - combinedW) / 2;
+            const targetBottomY = canvasH - 100;
+            startY = targetBottomY - totalH - 15; // Account for panelPad (15) in renderBag
+        } else {
+            // Centered positioning
+            startX = (canvasW - totalW) / 2;
+            startY = (canvasH - totalH) / 2;
+        }
+
+        return { startX, startY, totalW, totalH, slotSize, gap, bagCols, bagRows };
+    },
+
     ITEMS: {
         money: { id: 'money', name: 'Money', stackable: true, maxStack: 1000, usable: false, category: 'currency', cost: {} },
         ice_drill: { id: 'ice_drill', name: 'Ice Drill', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 100 }, maxDurability: 5 },
@@ -260,24 +292,7 @@ const Inventory = {
     },
 
     handleMouseDown(mouseX, mouseY, canvasW, canvasH, shiftKey = false, ctrlKey = false, button = 0) {
-        // If right clicking while inventory is closed, we still might right-click the hotbar/secondhand.
-        // Wait, the hotbar is always open. But `handleMouseDown` might be restricted: 
-        // if (!this.isOpen && (mouseY < hotbarY)){ return false; } -- we will handle that.
-        // Let's check bounding boxes specifically.
-
-        const slotSize = 52;
-        const gap = 4;
-        const bagCols = 8;
-        const bagRows = 3;
-        const totalW = bagCols * (slotSize + gap);
-        const totalH = (bagRows + 1) * (slotSize + gap) + 40; // +1 for hotbar row
-        const startX = (canvasW - totalW) / 2;
-
-        let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
-            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
-            startY = menuY + UIMenu.height + 20;
-        }
+        const { startX, startY, totalW, totalH, slotSize, gap, bagCols, bagRows } = this.getLayout(canvasW, canvasH);
 
         // Check bag slots (only if inventory is open)
         if (this.isOpen) {
@@ -290,7 +305,6 @@ const Inventory = {
                         if (this.bag[idx]) {
                             const item = this.bag[idx];
                             if (button === 2) {
-                                // Right click: instantly move to second hand
                                 this.bag[idx] = null;
                                 this.moveToSecondHand(item);
                                 return true;
@@ -307,80 +321,16 @@ const Inventory = {
                             }
                             return true;
                         }
-                        // if clicked empty slot, just return true if it was within UI
                         return true;
                     }
                 }
             }
-        }
 
-        // Check hotbar in inventory view or game view
-        const hotbarSlotSize = 48;
-        const hotbarGap = 4;
-        const totalHotbarW = this.HOTBAR_SIZE * (hotbarSlotSize + hotbarGap) - hotbarGap;
-        const hotbarStartX = (canvasW - totalHotbarW) / 2;
-        const hotbarY = canvasH - hotbarSlotSize - 12;
+            // Check hotbar inside bag UI
+            const bagHotbarY = startY + 30 + bagRows * (slotSize + gap) + 10;
+            const bshX = startX - slotSize - 20;
 
-        // Second Hand Slot Check
-        const shX = hotbarStartX - hotbarSlotSize - 20;
-        const shY = hotbarY;
-        if (mouseX >= shX && mouseX < shX + hotbarSlotSize && mouseY >= shY && mouseY < shY + hotbarSlotSize) {
-            if (this.secondHand) {
-                if (button === 2) {
-                    // Right click on second hand moves to inventory? Or ignore.
-                    // Just ignore for now or swap to inventory. Lets swap.
-                    const item = this.secondHand;
-                    this.secondHand = null;
-                    this.addItem(item.id, item.count, item.durability);
-                } else {
-                    const item = this.secondHand;
-                    this.dragItem = item;
-                    this.secondHand = null;
-                    this.dragSource = { type: 'secondHand', idx: 0 };
-                }
-                return true;
-            }
-            // Clicked empty second hand
-            return true;
-        }
-
-        for (let i = 0; i < this.HOTBAR_SIZE; i++) {
-            const sx = hotbarStartX + i * (hotbarSlotSize + hotbarGap);
-            if (mouseX >= sx && mouseX < sx + hotbarSlotSize && mouseY >= hotbarY && mouseY < hotbarY + hotbarSlotSize) {
-                if (this.hotbar[i]) {
-                    const item = this.hotbar[i];
-                    if (button === 2) {
-                        // Right click: instantly move to second hand
-                        this.hotbar[i] = null;
-                        this.moveToSecondHand(item);
-                        return true;
-                    }
-                    if (item.stackable && item.count > 1 && (shiftKey || ctrlKey)) {
-                        let takeCount = ctrlKey ? 1 : Math.max(1, Math.floor(item.count / 2));
-                        this.dragItem = { ...item, count: takeCount };
-                        item.count -= takeCount;
-                        this.dragSource = { type: 'hotbar_split', idx: i };
-                    } else {
-                        this.dragItem = item;
-                        this.hotbar[i] = null;
-                        this.dragSource = { type: 'hotbar', idx: i };
-                    }
-                    return true;
-                }
-                // Clicked empty hotbar slot
-                return true;
-            }
-        }
-
-        // Clicked inside open inventory background, do nothing but consume interaction
-        if (this.isOpen) {
-            // Check duplicate hotbar inside bag UI
-            const bagSlotSize = 52;
-            const bagGap = 4;
-            const bagHotbarY = startY + 30 + bagRows * (bagSlotSize + bagGap) + 10;
-            const bshX = startX - bagSlotSize - 20;
-
-            if (mouseX >= bshX && mouseX < bshX + bagSlotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + bagSlotSize) {
+            if (mouseX >= bshX && mouseX < bshX + slotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + slotSize) {
                 if (this.secondHand) {
                     if (button === 2) {
                         const item = this.secondHand;
@@ -398,8 +348,8 @@ const Inventory = {
             }
 
             for (let i = 0; i < this.HOTBAR_SIZE; i++) {
-                const sx = startX + i * (bagSlotSize + bagGap);
-                if (mouseX >= sx && mouseX < sx + bagSlotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + bagSlotSize) {
+                const sx = startX + i * (slotSize + gap);
+                if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + slotSize) {
                     if (this.hotbar[i]) {
                         const item = this.hotbar[i];
                         if (button === 2) {
@@ -428,25 +378,64 @@ const Inventory = {
             }
         }
 
+        // Check hotbar in game view (bottom centered)
+        const hotbarSlotSize = 48;
+        const hotbarGap = 4;
+        const totalHotbarW = this.HOTBAR_SIZE * (hotbarSlotSize + hotbarGap) - hotbarGap;
+        const hotbarStartX = (canvasW - totalHotbarW) / 2;
+        const hotbarY = canvasH - hotbarSlotSize - 12;
+        const shX = hotbarStartX - hotbarSlotSize - 20;
+
+        if (mouseX >= shX && mouseX < shX + hotbarSlotSize && mouseY >= hotbarY && mouseY < hotbarY + hotbarSlotSize) {
+            if (this.secondHand) {
+                if (button === 2) {
+                    const item = this.secondHand;
+                    this.secondHand = null;
+                    this.addItem(item.id, item.count, item.durability);
+                } else {
+                    const item = this.secondHand;
+                    this.dragItem = item;
+                    this.secondHand = null;
+                    this.dragSource = { type: 'secondHand', idx: 0 };
+                }
+                return true;
+            }
+            return true;
+        }
+
+        for (let i = 0; i < this.HOTBAR_SIZE; i++) {
+            const sx = hotbarStartX + i * (hotbarSlotSize + hotbarGap);
+            if (mouseX >= sx && mouseX < sx + hotbarSlotSize && mouseY >= hotbarY && mouseY < hotbarY + hotbarSlotSize) {
+                if (this.hotbar[i]) {
+                    const item = this.hotbar[i];
+                    if (button === 2) {
+                        this.hotbar[i] = null;
+                        this.moveToSecondHand(item);
+                        return true;
+                    }
+                    if (item.stackable && item.count > 1 && (shiftKey || ctrlKey)) {
+                        let takeCount = ctrlKey ? 1 : Math.max(1, Math.floor(item.count / 2));
+                        this.dragItem = { ...item, count: takeCount };
+                        item.count -= takeCount;
+                        this.dragSource = { type: 'hotbar_split', idx: i };
+                    } else {
+                        this.dragItem = item;
+                        this.hotbar[i] = null;
+                        this.dragSource = { type: 'hotbar', idx: i };
+                    }
+                    return true;
+                }
+                return true;
+            }
+        }
+
         return false;
     },
 
     handleMouseUp(mouseX, mouseY, canvasW, canvasH) {
         if (!this.dragItem) return false;
 
-        const slotSize = 52;
-        const gap = 4;
-        const bagCols = 8;
-        const bagRows = 3;
-        const totalW = bagCols * (slotSize + gap);
-        const totalH = (bagRows + 1) * (slotSize + gap) + 40;
-        const startX = (canvasW - totalW) / 2;
-
-        let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
-            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
-            startY = menuY + UIMenu.height + 20;
-        }
+        const { startX, startY, totalW, totalH, slotSize, gap, bagCols, bagRows } = this.getLayout(canvasW, canvasH);
 
         // Check bag slots (only if inventory is open)
         if (this.isOpen) {
@@ -496,17 +485,16 @@ const Inventory = {
                         } else {
                             this.dragSource = null;
                         }
+                        return true;
                     }
                 }
             }
 
-            // Check duplicate hotbar inside bag UI
-            const bagSlotSize = 52;
-            const bagGap = 4;
-            const bagHotbarY = startY + 30 + bagRows * (bagSlotSize + bagGap) + 10;
-            const bshX = startX - bagSlotSize - 20;
+            // Check hotbar inside bag UI
+            const bagHotbarY = startY + 30 + bagRows * (slotSize + gap) + 10;
+            const bshX = startX - slotSize - 20;
 
-            if (mouseX >= bshX && mouseX < bshX + bagSlotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + bagSlotSize) {
+            if (mouseX >= bshX && mouseX < bshX + slotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + slotSize) {
                 if (this.dragSource && this.dragSource.type === 'shop_buy') {
                     if (this.secondHand && (!this.dragItem.stackable || this.secondHand.id !== this.dragItem.id || this.secondHand.count >= this.secondHand.maxStack)) {
                         Game.showMessage("Cannot place item there!", 1.5);
@@ -549,8 +537,8 @@ const Inventory = {
             }
 
             for (let i = 0; i < this.HOTBAR_SIZE; i++) {
-                const sx = startX + i * (bagSlotSize + bagGap);
-                if (mouseX >= sx && mouseX < sx + bagSlotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + bagSlotSize) {
+                const sx = startX + i * (slotSize + gap);
+                if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + slotSize) {
                     if (this.dragSource && this.dragSource.type === 'shop_buy') {
                         const def = Inventory.ITEMS[this.dragItem.id];
                         if (def.cost && def.cost.money) {
@@ -591,17 +579,15 @@ const Inventory = {
             }
         }
 
-        // Check hotbar in inventory view or game view
+        // Check hotbar in game view (bottom centered)
         const hotbarSlotSize = 48;
         const hotbarGap = 4;
         const totalHotbarW = this.HOTBAR_SIZE * (hotbarSlotSize + hotbarGap) - hotbarGap;
         const hotbarStartX = (canvasW - totalHotbarW) / 2;
         const hotbarY = canvasH - hotbarSlotSize - 12;
-
-        // Second Hand Slot Drop
         const shX = hotbarStartX - hotbarSlotSize - 20;
-        const shY = hotbarY;
-        if (mouseX >= shX && mouseX < shX + hotbarSlotSize && mouseY >= shY && mouseY < shY + hotbarSlotSize) {
+
+        if (mouseX >= shX && mouseX < shX + hotbarSlotSize && mouseY >= hotbarY && mouseY < hotbarY + hotbarSlotSize) {
             if (this.dragSource && this.dragSource.type === 'shop_buy') {
                 const def = Inventory.ITEMS[this.dragItem.id];
                 if (def.cost && def.cost.money) {
@@ -616,7 +602,6 @@ const Inventory = {
                 this.dragSource = null;
             }
 
-            // Stacking in second hand just in case
             if (this.secondHand && this.secondHand.id === this.dragItem.id && this.dragItem.stackable) {
                 const space = this.secondHand.maxStack - this.secondHand.count;
                 const add = Math.min(this.dragItem.count, space);
@@ -645,8 +630,6 @@ const Inventory = {
         for (let i = 0; i < this.HOTBAR_SIZE; i++) {
             const sx = hotbarStartX + i * (hotbarSlotSize + hotbarGap);
             if (mouseX >= sx && mouseX < sx + hotbarSlotSize && mouseY >= hotbarY && mouseY < hotbarY + hotbarSlotSize) {
-
-                // Shop Buy Check
                 if (this.dragSource && this.dragSource.type === 'shop_buy') {
                     const def = Inventory.ITEMS[this.dragItem.id];
                     if (def.cost && def.cost.money) {
@@ -661,7 +644,6 @@ const Inventory = {
                     this.dragSource = null;
                 }
 
-                // Same item stacking logic
                 if (this.hotbar[i] && this.hotbar[i].id === this.dragItem.id && this.dragItem.stackable) {
                     const space = this.hotbar[i].maxStack - this.hotbar[i].count;
                     const add = Math.min(this.dragItem.count, space);
@@ -675,7 +657,6 @@ const Inventory = {
                     }
                 }
 
-                // Swap or place
                 const temp = this.hotbar[i];
                 this.hotbar[i] = this.dragItem;
                 this.dragItem = temp;
@@ -756,18 +737,7 @@ const Inventory = {
     },
 
     renderBag(ctx, canvasW, canvasH) {
-        const slotSize = 52;
-        const gap = 4;
-        const bagCols = 8;
-        const bagRows = 3;
-        const totalW = bagCols * (slotSize + gap);
-        const totalH = (bagRows + 1) * (slotSize + gap) + 60;
-        const startX = (canvasW - totalW) / 2;
-        let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
-            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
-            startY = menuY + UIMenu.height + 20;
-        }
+        const { startX, startY, totalW, totalH, slotSize, gap, bagCols, bagRows } = this.getLayout(canvasW, canvasH);
 
         // Inventory Panel
         ctx.fillStyle = '#141e32'; // Solid color, no transparency
