@@ -29,7 +29,10 @@ const Inventory = {
         shovel: { id: 'shovel', name: 'Shovel', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 50 }, maxDurability: 50 },
         simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', cost: { money: 20 } },
         fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 10 } },
-        tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } }
+        tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } },
+        rock: { id: 'rock', name: 'Rock', stackable: true, maxStack: 10, usable: false, category: 'resource', cost: { money: 3 } },
+        pickaxe: { id: 'pickaxe', name: 'Pickaxe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 90 }, maxDurability: 20 },
+        anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 }
     },
 
     init() {
@@ -270,7 +273,7 @@ const Inventory = {
         const startX = (canvasW - totalW) / 2;
 
         let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
             const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
             startY = menuY + UIMenu.height + 20;
         }
@@ -439,7 +442,7 @@ const Inventory = {
         const startX = (canvasW - totalW) / 2;
 
         let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
             const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
             startY = menuY + UIMenu.height + 20;
         }
@@ -455,10 +458,7 @@ const Inventory = {
 
                         // Shop Buy Check
                         if (this.dragSource && this.dragSource.type === 'shop_buy') {
-                            if (this.bag[idx] && (!this.dragItem.stackable || this.bag[idx].id !== this.dragItem.id || this.bag[idx].count >= this.bag[idx].maxStack)) {
-                                Game.showMessage("Cannot place item there!", 1.5);
-                                return true;
-                            }
+                            const def = Inventory.ITEMS[this.dragItem.id];
                             if (def.cost && def.cost.money) {
                                 if (!Inventory.canAfford({ money: def.cost.money })) {
                                     Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
@@ -551,10 +551,7 @@ const Inventory = {
                 const sx = startX + i * (bagSlotSize + bagGap);
                 if (mouseX >= sx && mouseX < sx + bagSlotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + bagSlotSize) {
                     if (this.dragSource && this.dragSource.type === 'shop_buy') {
-                        if (this.hotbar[i] && (!this.dragItem.stackable || this.hotbar[i].id !== this.dragItem.id || this.hotbar[i].count >= this.hotbar[i].maxStack)) {
-                            Game.showMessage("Cannot place item there!", 1.5);
-                            return true;
-                        }
+                        const def = Inventory.ITEMS[this.dragItem.id];
                         if (def.cost && def.cost.money) {
                             if (!Inventory.canAfford({ money: def.cost.money })) {
                                 Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
@@ -604,12 +601,8 @@ const Inventory = {
         const shX = hotbarStartX - hotbarSlotSize - 20;
         const shY = hotbarY;
         if (mouseX >= shX && mouseX < shX + hotbarSlotSize && mouseY >= shY && mouseY < shY + hotbarSlotSize) {
-            // Shop Buy Check
             if (this.dragSource && this.dragSource.type === 'shop_buy') {
-                if (this.secondHand && (!this.dragItem.stackable || this.secondHand.id !== this.dragItem.id || this.secondHand.count >= this.secondHand.maxStack)) {
-                    Game.showMessage("Cannot place item there!", 1.5);
-                    return true;
-                }
+                const def = Inventory.ITEMS[this.dragItem.id];
                 if (def.cost && def.cost.money) {
                     if (!Inventory.canAfford({ money: def.cost.money })) {
                         Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
@@ -654,10 +647,6 @@ const Inventory = {
 
                 // Shop Buy Check
                 if (this.dragSource && this.dragSource.type === 'shop_buy') {
-                    if (this.hotbar[i] && (!this.dragItem.stackable || this.hotbar[i].id !== this.dragItem.id || this.hotbar[i].count >= this.hotbar[i].maxStack)) {
-                        Game.showMessage("Cannot place item there!", 1.5);
-                        return true;
-                    }
                     const def = Inventory.ITEMS[this.dragItem.id];
                     if (def.cost && def.cost.money) {
                         if (!Inventory.canAfford({ money: def.cost.money })) {
@@ -774,7 +763,7 @@ const Inventory = {
         const totalH = (bagRows + 1) * (slotSize + gap) + 60;
         const startX = (canvasW - totalW) / 2;
         let startY = (canvasH - totalH) / 2;
-        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen)) {
             const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
             startY = menuY + UIMenu.height + 20;
         }
@@ -858,6 +847,7 @@ const Inventory = {
 
         let assetName = item.id;
         if (assetName === 'firewood') assetName = 'wood';
+        if (assetName === 'rock') assetName = 'item_rock';
         if (item.id === 'torch' && item.lit !== true) assetName = 'torch_off';
 
         const img = Assets.get(assetName);

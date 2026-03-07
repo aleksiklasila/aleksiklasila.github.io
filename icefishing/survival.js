@@ -127,6 +127,19 @@ const Survival = {
             }
         }
 
+        // 2b. Rock Eggs growth chance
+        for (let i = World.rockEggs.length - 1; i >= 0; i--) {
+            if (Math.random() < 1 / this.dayCount) {
+                const re = World.rockEggs[i];
+                World.rocks.push({
+                    x: re.x,
+                    groundCol: re.groundCol,
+                    alive: true
+                });
+                World.rockEggs.splice(i, 1);
+            }
+        }
+
         // 3. Fish Eggs hatching chance
         for (let i = World.fishEggs.length - 1; i >= 0; i--) {
             if (Math.random() < 1 / this.dayCount) {
@@ -249,6 +262,36 @@ const Survival = {
             });
         } else {
             Game.showMessage('Nothing to chop nearby.', 1);
+        }
+    },
+
+    // Use pickaxe to mine rocks
+    usePickaxe(playerX, isSecondHand = false) {
+        // Find nearest alive rock
+        let nearestRock = null;
+        let nearestRockDist = Infinity;
+        for (const rock of World.rocks) {
+            if (!rock.alive) continue;
+            const d = Math.abs(rock.x - playerX);
+            if (d < nearestRockDist && d < 60) {
+                nearestRockDist = d;
+                nearestRock = rock;
+            }
+        }
+
+        if (nearestRockDist < Infinity) {
+            Player.startAction(2.0, 'chopping', () => {
+                nearestRock.alive = false;
+                Inventory.addItem('rock', 3 + ((Math.random() * 6) | 0));
+                Inventory.consumeHandItem(isSecondHand, 1);
+
+                // Spawn rock egg for regrowth
+                World.rockEggs.push({ x: nearestRock.x, groundCol: nearestRock.groundCol });
+
+                Game.showMessage('Mined some rocks!', 1.5);
+            });
+        } else {
+            Game.showMessage('No rocks nearby to mine.', 1);
         }
     },
 
@@ -498,6 +541,14 @@ const Survival = {
 
             case 'axe':
                 this.useAxe(playerX, isSecondHand);
+                break;
+
+            case 'pickaxe':
+                this.usePickaxe(playerX, isSecondHand);
+                break;
+
+            case 'anvil':
+                Anvil.toggle();
                 break;
 
             case 'flint_steel':

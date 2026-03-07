@@ -182,7 +182,6 @@ const Player = {
         }
         if (nearFireRec) {
             this.stats.warmth = Math.min(100, this.stats.warmth + dt * 8);
-            this.stats.sleep = Math.min(100, this.stats.sleep + dt * 1);
         } else if (nearTorchRec) {
             this.stats.warmth = Math.min(100, this.stats.warmth + dt * 4);
         } else if (isInTent) {

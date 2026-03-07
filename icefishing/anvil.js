@@ -1,5 +1,5 @@
-// repair_shop.js — Handles the Repair Station Interface
-const RepairShop = {
+// anvil.js — Handles the Anvil repair interface (uses materials instead of money)
+const Anvil = {
     isOpen: false,
 
     // The item currently placed in the repair slot
@@ -18,15 +18,10 @@ const RepairShop = {
     },
 
     toggle() {
-        if (!this.isOpen) {
-            // Check if player is near the repair shop building
-            if (World.repairShop && Math.abs(Player.x - World.repairShop.x) < 100) {
-                this.isOpen = true;
-                Inventory.isOpen = true; // Open inventory so player can drag items
-                Game.showMessage('Welcome to the Repair Station!', 2);
-            } else {
-                Game.showMessage('You are too far from the repair station!', 1.5);
-            }
+        this.isOpen = !this.isOpen;
+        if (this.isOpen) {
+            Inventory.isOpen = true;
+            Game.showMessage('Anvil Repair Menu Opened', 1.5);
         } else {
             this.close();
         }
@@ -48,6 +43,22 @@ const RepairShop = {
             }
             this.repairSlot = null;
         }
+        if (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen) return;
+        Inventory.isOpen = false;
+    },
+
+    getRepairCost(itemDef) {
+        // Anvil uses materials: firewood and rock
+        const basePrice = (itemDef.cost && itemDef.cost.money) ? itemDef.cost.money : 0;
+        const materialAmount = Math.max(1, Math.floor(basePrice / 30));
+        return { firewood: materialAmount, rock: materialAmount };
+    },
+
+    getRepairCostString(cost) {
+        const parts = [];
+        if (cost.firewood) parts.push(`${cost.firewood} Wood`);
+        if (cost.rock) parts.push(`${cost.rock} Rock`);
+        return parts.join(' + ');
     },
 
     handleMouseDown(mouseX, mouseY, canvasW, canvasH, shiftKey = false, ctrlKey = false, button = 0) {
@@ -75,7 +86,7 @@ const RepairShop = {
                     }
                     // Pick up item from repair slot
                     Inventory.dragItem = this.repairSlot;
-                    Inventory.dragSource = { type: 'repair_shop' };
+                    Inventory.dragSource = { type: 'anvil' };
                     this.repairSlot = null;
                     return true;
                 }
@@ -98,7 +109,7 @@ const RepairShop = {
                 Inventory.dragItem = temp;
 
                 if (Inventory.dragItem) {
-                    Inventory.dragSource = { type: 'repair_shop' };
+                    Inventory.dragSource = { type: 'anvil' };
                 } else {
                     Inventory.dragSource = null;
                 }
@@ -123,26 +134,27 @@ const RepairShop = {
             return;
         }
 
-        const basePrice = (def.cost && def.cost.money) ? def.cost.money : 0;
-        let repairCost = Math.max(1, Math.floor(basePrice / 4));
+        const cost = this.getRepairCost(def);
 
-        const repairAmount = def.maxDurability - this.repairSlot.durability;
+        if (Inventory.canAfford(cost)) {
+            Inventory.payCost(cost);
+            this.repairSlot.durability = def.maxDurability;
 
-        if (Inventory.canAfford({ money: repairCost })) {
-            Inventory.payCost({ money: repairCost });
-            this.repairSlot.durability = Math.min(this.repairSlot.durability + repairAmount, def.maxDurability);
-            Game.showMessage(`Repaired ${def.name} for $${repairCost}!`, 2);
+            // Damage the anvil
+            Inventory.damageItemById('anvil', 1);
+
+            Game.showMessage(`Repaired ${def.name} using ${this.getRepairCostString(cost)}!`, 2);
         } else {
-            Game.showMessage(`Not enough money! Need $${repairCost}.`, 2);
+            Game.showMessage(`Not enough materials! Need ${this.getRepairCostString(cost)}.`, 2);
         }
     },
 
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
-        const bounds = UIMenu.renderMenuBase(ctx, canvasW, canvasH, 'REPAIR STATION', this);
+        const bounds = UIMenu.renderMenuBase(ctx, canvasW, canvasH, 'ANVIL REPAIR', this);
 
-        // Draw interaction panel on the right matching selling workflow
+        // Draw interaction panel on the right matching repair shop workflow
         const panelBounds = UIMenu.renderRightPanel(ctx, bounds, 'Repair Tool:', '(Drag item here)');
         this.ui.repairSlotBounds = UIMenu.renderActionSlot(ctx, panelBounds, 48);
 
@@ -156,10 +168,18 @@ const RepairShop = {
             const def = Inventory.ITEMS[this.repairSlot.id];
 
             if (def.maxDurability && this.repairSlot.durability < def.maxDurability) {
-                const basePrice = (def.cost && def.cost.money) ? def.cost.money : 0;
-                let repairCost = Math.max(1, Math.floor(basePrice / 4));
+                const cost = this.getRepairCost(def);
+                const costStr = this.getRepairCostString(cost);
+                const canAfford = Inventory.canAfford(cost);
 
-                this.ui.repairButtonBounds = UIMenu.renderActionButton(ctx, panelBounds, ssy, repairSlotSize, `REPAIR($${repairCost})`, '#aa3333');
+                // Draw cost info
+                ctx.fillStyle = canAfford ? '#a3d2ca' : '#ff7b54';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(costStr, ssx + repairSlotSize / 2, ssy + repairSlotSize + 14);
+                ctx.textAlign = 'left';
+
+                this.ui.repairButtonBounds = UIMenu.renderActionButton(ctx, panelBounds, ssy, repairSlotSize, 'REPAIR', canAfford ? '#336633' : '#663333');
             } else {
                 this.ui.repairButtonBounds = null;
 

@@ -132,7 +132,8 @@ const Crafting = {
 
     close() {
         this.isOpen = false;
-        if (Shop.isOpen || RepairShop.isOpen) return; // let inventory naturally follow the next window or close
+        if (Shop.isOpen || RepairShop.isOpen || Anvil.isOpen) return; // let inventory naturally follow the next window or close
+        Inventory.isOpen = false;
     },
 
     handleMouseDown(mouseX, mouseY, canvasW, canvasH, button = 0) {
