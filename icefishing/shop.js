@@ -27,7 +27,7 @@ const Shop = {
         this.allItems = [
             'ice_drill', 'fishing_rod', 'scoop', 'bait', 'axe', 'hammer',
             'flint_steel', 'tent', 'firewood', 'raw_fish',
-            'cooked_fish', 'raw_fish_large', 'cooked_fish_large', 'torch'
+            'cooked_fish', 'raw_fish_large', 'cooked_fish_large', 'torch', 'shovel'
         ];
         this.saleItems = [];
     },

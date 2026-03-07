@@ -5,11 +5,14 @@ const World = {
     columns: [],
     trees: [],
     fishingHoles: [],
-    campfires: [],
     tents: [],
     torches: [],
+    groundItems: [],
     shop: null,
     repairShop: null,
+    fishEggs: [],
+    treeEggs: [],
+    bridges: [],
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -19,6 +22,10 @@ const World = {
         this.campfires = [];
         this.tents = [];
         this.torches = [];
+        this.groundItems = [];
+        this.fishEggs = [];
+        this.treeEggs = [];
+        this.bridges = [];
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -116,6 +123,23 @@ const World = {
         return true;
     },
 
+    addBridge(worldX) {
+        const col = this.getColumnAt(worldX);
+        if (!col || col.type !== 'water') return false;
+        for (const b of this.bridges) {
+            if (Math.abs(b.x - worldX) < this.TILE_SIZE) return false;
+        }
+        this.bridges.push({ x: worldX, col: Math.round(worldX / this.TILE_SIZE), surfaceY: 0 });
+        return true;
+    },
+
+    isBridgeAt(worldX) {
+        for (const b of this.bridges) {
+            if (Math.abs(b.x - worldX) < this.TILE_SIZE / 2) return true;
+        }
+        return false;
+    },
+
     addCampfire(worldX) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
@@ -140,6 +164,25 @@ const World = {
                 const data = { fuel: this.torches[i].fuel, lit: this.torches[i].lit };
                 this.torches.splice(i, 1);
                 return data;
+            }
+        }
+        return false;
+    },
+
+    addGroundItem(worldX, item) {
+        const col = this.getColumnAt(worldX);
+        if (!col) return false;
+        const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
+        this.groundItems.push({ x: worldX, surfaceY, item: { ...item } });
+        return true;
+    },
+
+    removeGroundItemNear(worldX) {
+        for (let i = 0; i < this.groundItems.length; i++) {
+            if (Math.abs(this.groundItems[i].x - worldX) < 50) {
+                const item = this.groundItems[i].item;
+                this.groundItems.splice(i, 1);
+                return item;
             }
         }
         return false;
@@ -208,6 +251,18 @@ const World = {
             }
         }
 
+        // Bridges
+        for (const bridge of this.bridges) {
+            const sx = bridge.x - camera.x + canvasW / 2;
+            if (sx < -80 || sx > canvasW + 80) continue;
+            const img = Assets.get('simple_bridge');
+            if (img) ctx.drawImage(img, sx - 24, baseY - 12 - bridge.surfaceY, 48, 24);
+            else {
+                ctx.fillStyle = '#6a4a2a';
+                ctx.fillRect(sx - 20, baseY - 6 - bridge.surfaceY, 40, 12);
+            }
+        }
+
         // Shop
         if (this.shop) {
             const sx = this.shop.x - camera.x + canvasW / 2;
@@ -259,6 +314,22 @@ const World = {
             this.renderTree(ctx, sx, baseY - col.surfaceY, tree.type);
         }
 
+        // Tree Eggs (Saplings) - rendered as 1/5th scale trees
+        for (const te of this.treeEggs) {
+            const sx = te.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            this.renderTree(ctx, sx, baseY - te.surfaceY, te.type || 0, 0.2);
+        }
+
+        // Fish Eggs
+        for (const fe of this.fishEggs) {
+            const sx = fe.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            const img = Assets.get('fish_egg');
+            // Draw at the bottom of the water column
+            if (img) ctx.drawImage(img, sx - 10, baseY - fe.surfaceY + 6 - 20, 20, 20);
+        }
+
         // Campfires
         for (const fire of this.campfires) {
             const sx = fire.x - camera.x + canvasW / 2;
@@ -271,6 +342,13 @@ const World = {
             const sx = torch.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
             this.renderTorch(ctx, sx, baseY - torch.surfaceY, torch);
+        }
+
+        // Ground Items
+        for (const gItem of this.groundItems) {
+            const sx = gItem.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY - 20, 24);
         }
     },
 
@@ -296,27 +374,27 @@ const World = {
         ctx.lineTo(canvasW, canvasH); ctx.fill();
     },
 
-    renderTree(ctx, x, y, type) {
+    renderTree(ctx, x, y, type, scale = 1.0) {
         const img = Assets.get('tree');
         if (img) {
-            const s = 1 + type * 0.2;
+            const s = (1 + type * 0.2) * scale;
             ctx.drawImage(img, x - 24 * s, y - 96 * s + 5, 48 * s, 96 * s);
             return;
         }
-        const trunkH = 30 + type * 10, trunkW = 4 + type;
+        const trunkH = (30 + type * 10) * scale, trunkW = (4 + type) * scale;
         ctx.fillStyle = '#5a3a20';
         ctx.fillRect(x - trunkW / 2, y - trunkH, trunkW, trunkH);
-        const layers = 3 + type, maxW = 20 + type * 8;
+        const layers = 3 + type, maxW = (20 + type * 8) * scale;
         ctx.fillStyle = '#1a4a2a';
         for (let i = 0; i < layers; i++) {
-            const ly = y - trunkH - i * 14 + 5, lw = maxW - i * 4;
-            ctx.beginPath(); ctx.moveTo(x - lw / 2, ly); ctx.lineTo(x, ly - 20); ctx.lineTo(x + lw / 2, ly);
+            const ly = y - trunkH - (i * 14 - 5) * scale, lw = maxW - i * 4 * scale;
+            ctx.beginPath(); ctx.moveTo(x - lw / 2, ly); ctx.lineTo(x, ly - 20 * scale); ctx.lineTo(x + lw / 2, ly);
             ctx.closePath(); ctx.fill();
         }
         ctx.fillStyle = 'rgba(230,240,250,0.8)';
         for (let i = 0; i < layers; i++) {
-            const ly = y - trunkH - i * 14 + 5, lw = maxW - i * 4;
-            ctx.beginPath(); ctx.moveTo(x - lw / 2 + 3, ly); ctx.lineTo(x, ly - 5); ctx.lineTo(x + lw / 2 - 3, ly);
+            const ly = y - trunkH - (i * 14 - 5) * scale, lw = maxW - i * 4 * scale;
+            ctx.beginPath(); ctx.moveTo(x - lw / 2 + 3 * scale, ly); ctx.lineTo(x, ly - 5 * scale); ctx.lineTo(x + lw / 2 - 3 * scale, ly);
             ctx.closePath(); ctx.fill();
         }
     },

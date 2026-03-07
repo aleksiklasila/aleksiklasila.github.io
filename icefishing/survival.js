@@ -55,6 +55,7 @@ const Survival = {
             this.timeOfDay -= 1;
             this.dayCount++;
             Game.showMessage(`Day ${this.dayCount}`, 3);
+            this.runMidnightRoutines();
         }
 
         // Determine night
@@ -105,6 +106,74 @@ const Survival = {
         this.feelsLikeTemp = this.currentTemp - stormDrop;
     },
 
+    runMidnightRoutines() {
+        // 1. Remove far fishing holes (ice freezes over)
+        World.fishingHoles = World.fishingHoles.filter(hole => {
+            const dist = Math.abs(hole.x - Player.x);
+            return dist < 800; // Keep holes within a reasonable radius
+        });
+
+        // 2. Tree Saplings growth chance
+        for (let i = World.treeEggs.length - 1; i >= 0; i--) {
+            if (Math.random() < 1 / this.dayCount) {
+                const te = World.treeEggs[i];
+                World.trees.push({
+                    x: te.x,
+                    groundCol: Math.round(te.x / World.TILE_SIZE),
+                    type: (Math.random() * 3) | 0,
+                    alive: true
+                });
+                World.treeEggs.splice(i, 1);
+            }
+        }
+
+        // 3. Fish Eggs hatching chance
+        for (let i = World.fishEggs.length - 1; i >= 0; i--) {
+            if (Math.random() < 1 / this.dayCount) {
+                const fe = World.fishEggs[i];
+
+                // Pick random fish
+                const totalWeight = Fishing.FISH_TYPES.reduce((sum, f) => sum + f.rarity, 0);
+                let r = Math.random() * totalWeight;
+                let selected = Fishing.FISH_TYPES[0];
+                for (const f of Fishing.FISH_TYPES) {
+                    r -= f.rarity;
+                    if (r <= 0) { selected = f; break; }
+                }
+
+                // Find region
+                let startX = fe.x;
+                let endX = fe.x;
+                while (startX > 0 && (World.getColumnAt(startX - World.TILE_SIZE).type === 'ice' || World.getColumnAt(startX - World.TILE_SIZE).type === 'water')) {
+                    startX -= World.TILE_SIZE;
+                }
+                while (endX < World.WORLD_WIDTH * World.TILE_SIZE - World.TILE_SIZE && (World.getColumnAt(endX + World.TILE_SIZE).type === 'ice' || World.getColumnAt(endX + World.TILE_SIZE).type === 'water')) {
+                    endX += World.TILE_SIZE;
+                }
+
+                const depth = (selected.minDepth + Math.random() * (selected.maxDepth - selected.minDepth)) / 100;
+                const initVx = (Math.random() - 0.5) * selected.speed;
+                const initVy = (Math.random() - 0.5) * selected.speed * 0.004;
+
+                Fishing.worldFish.push({
+                    x: fe.x,
+                    y: depth,
+                    vx: initVx,
+                    vy: initVy,
+                    targetVx: initVx,
+                    targetVy: initVy,
+                    speed: selected.speed,
+                    type: selected,
+                    regionStartX: startX,
+                    regionEndX: endX,
+                    dirTimer: 1 + Math.random() * 2,
+                    facing: initVx >= 0 ? 1 : -1
+                });
+                World.fishEggs.splice(i, 1);
+            }
+        }
+    },
+
     startStorm() {
         const diffLevel = Difficulty.getLevel(Player.x);
         this.stormActive = true;
@@ -146,7 +215,7 @@ const Survival = {
     },
 
     // Use axe to chop trees or pick up tents
-    useAxe(playerX) {
+    useAxe(playerX, isSecondHand = false) {
         if (!Inventory.hasItem('axe')) {
             Game.showMessage('You need an axe!', 1.5);
             return;
@@ -168,7 +237,14 @@ const Survival = {
             Player.startAction(1.5, 'chopping', () => {
                 nearestTree.alive = false;
                 Inventory.addItem('firewood', 2 + (Math.random() * 2) | 0);
-                Inventory.damageSelectedItem(1);
+                Inventory.consumeHandItem(isSecondHand, 1);
+
+                // Spawn sapling
+                const col = World.getColumnAt(nearestTree.x);
+                if (col) {
+                    World.treeEggs.push({ x: nearestTree.x, surfaceY: col.surfaceY, type: nearestTree.type });
+                }
+
                 Game.showMessage('Got firewood!', 1.5);
             });
         } else {
@@ -177,7 +253,7 @@ const Survival = {
     },
 
     // Make a fire
-    makeFire(playerX) {
+    makeFire(playerX, isSecondHand = false) {
         if (!Inventory.hasItem('flint_steel')) {
             Game.showMessage('You need flint & steel!', 1.5);
             return;
@@ -217,7 +293,7 @@ const Survival = {
         Player.startAction(1.5, 'chopping', () => {
             target.lit = true;
             target.fuel = 100;
-            Inventory.damageSelectedItem(1);
+            Inventory.consumeHandItem(isSecondHand, 1);
             Game.showMessage('Fire started!', 2);
         });
     },
@@ -282,6 +358,7 @@ const Survival = {
     updateCarriedTorch(dt) {
         let burnoutSlot = null;
         let isHotbar = false;
+        let isSecondHand = false;
 
         for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
             const item = Inventory.hotbar[i];
@@ -307,26 +384,43 @@ const Survival = {
             }
         }
 
-        if (burnoutSlot !== null) {
-            if (isHotbar) Inventory.hotbar[burnoutSlot] = null;
+        // Check second hand
+        if (Inventory.secondHand && Inventory.secondHand.id === 'torch' && Inventory.secondHand.lit) {
+            Inventory.secondHand.durability -= dt * 0.8;
+            if (Inventory.secondHand.durability <= 0) {
+                Inventory.secondHand.durability = 0;
+                burnoutSlot = 0; // arbitrary, handled by flag
+                isSecondHand = true;
+            }
+        }
+
+        if (burnoutSlot !== null || isSecondHand) {
+            if (isSecondHand) Inventory.secondHand = null;
+            else if (isHotbar) Inventory.hotbar[burnoutSlot] = null;
             else Inventory.bag[burnoutSlot] = null;
             Game.showMessage('A lit torch in your inventory burned out!', 2);
         }
     },
 
     // Use selected item
-    useItem(playerX) {
-        const item = Inventory.getSelectedItem();
+    useItem(playerX, isSecondHand = false) {
+        const item = Inventory.getHandItem(isSecondHand);
         if (!item) return;
 
         switch (item.id) {
             case 'ice_drill': {
                 const col = World.getColumnAt(playerX);
                 if (col && col.type === 'ice') {
+                    // Prevent drilling on bridge
+                    if (World.isBridgeAt(playerX)) {
+                        Game.showMessage('Cannot drill through the bridge!', 1.5);
+                        return;
+                    }
+
                     Player.startAction(2.5, 'chopping', () => {
                         if (World.addFishingHole(playerX)) {
                             Voxels.drillHole(playerX);
-                            Inventory.damageSelectedItem(1);
+                            Inventory.consumeHandItem(isSecondHand, 1);
                             Game.showMessage('Made a fishing hole!', 2);
                         } else {
                             Game.showMessage('Too close to another hole!', 1.5);
@@ -370,17 +464,31 @@ const Survival = {
                 if (nearestHole) {
                     Player.startAction(1.5, 'chopping', () => {
                         Player.stats.thirst = Math.min(100, Player.stats.thirst + 40);
-                        Inventory.damageSelectedItem(1);
+                        Inventory.consumeHandItem(isSecondHand, 1);
                         Game.showMessage('Drank water from the hole! (+40 thirst)', 2);
                     });
                 } else {
                     Player.startAction(1.5, 'chopping', () => {
                         Player.stats.thirst = Math.min(100, Player.stats.thirst + 8);
                         Player.stats.warmth = Math.max(0, Player.stats.warmth - 3);
-                        Inventory.damageSelectedItem(1);
+                        Inventory.consumeHandItem(isSecondHand, 1);
                         Game.showMessage('Ate snow for water. (-3 warmth)', 1.5);
                     });
                 }
+                break;
+            }
+
+            case 'shovel': {
+                // Must be on ground to dig (or maybe ice/snow is fine too)
+                Player.startAction(1.5, 'chopping', () => {
+                    Inventory.consumeHandItem(isSecondHand, 1);
+                    if (Math.random() < 0.3) {
+                        Inventory.addItem('bait', 1);
+                        Game.showMessage('Dug up some bait!', 2);
+                    } else {
+                        Game.showMessage('Dug around, found nothing.', 1.5);
+                    }
+                });
                 break;
             }
 
@@ -389,22 +497,22 @@ const Survival = {
                 break;
 
             case 'axe':
-                this.useAxe(playerX);
+                this.useAxe(playerX, isSecondHand);
                 break;
 
             case 'flint_steel':
-                this.makeFire(playerX);
+                this.makeFire(playerX, isSecondHand);
                 break;
 
             case 'cooked_fish':
-                Inventory.removeItem('cooked_fish', 1);
+                Inventory.consumeHandItem(isSecondHand, 1);
                 Player.stats.hunger = Math.min(100, Player.stats.hunger + 30);
                 Player.stats.thirst = Math.min(100, Player.stats.thirst + 5);
                 Game.showMessage('Ate cooked fish! (+30 hunger)', 1.5);
                 break;
 
             case 'cooked_fish_large':
-                Inventory.removeItem('cooked_fish_large', 1);
+                Inventory.consumeHandItem(isSecondHand, 1);
                 Player.stats.hunger = Math.min(100, Player.stats.hunger + 50);
                 Player.stats.thirst = Math.min(100, Player.stats.thirst + 10);
                 Game.showMessage('Ate large cooked fish! (+50 hunger)', 1.5);
@@ -412,14 +520,14 @@ const Survival = {
 
             case 'raw_fish':
                 // Can eat raw but less effective and risks
-                Inventory.removeItem('raw_fish', 1);
+                Inventory.consumeHandItem(isSecondHand, 1);
                 Player.stats.hunger = Math.min(100, Player.stats.hunger + 10);
                 Player.stats.warmth = Math.max(0, Player.stats.warmth - 5);
                 Game.showMessage('Ate raw fish... (-5 warmth)', 1.5);
                 break;
 
             case 'raw_fish_large':
-                Inventory.removeItem('raw_fish_large', 1);
+                Inventory.consumeHandItem(isSecondHand, 1);
                 Player.stats.hunger = Math.min(100, Player.stats.hunger + 20);
                 Player.stats.warmth = Math.max(0, Player.stats.warmth - 5);
                 Game.showMessage('Ate large raw fish... (-5 warmth)', 1.5);
@@ -429,7 +537,7 @@ const Survival = {
                 // Check near fire
                 for (const fire of World.campfires) {
                     if (fire.lit && Math.abs(fire.x - playerX) < 80) {
-                        Inventory.removeItem('firewood', 1);
+                        Inventory.consumeHandItem(isSecondHand, 1);
                         fire.fuel = 100; // Fully restore
                         Game.showMessage('Added fuel to fire.', 1.5);
                         return;
@@ -440,11 +548,11 @@ const Survival = {
 
             case 'tent': {
                 // Place tent
-                const tentItem = Inventory.getSelectedItem();
+                const tentItem = item;
                 const currentDurability = tentItem.durability !== undefined ? tentItem.durability : 5;
 
                 if (World.addTent(playerX, currentDurability - 1)) {
-                    Inventory.removeItem('tent', 1);
+                    Inventory.removeHandItem(isSecondHand);
                     if (currentDurability - 1 <= 0) {
                         Game.showMessage('Pitched tent! (It looks very fragile...)', 2);
                     } else {
@@ -462,7 +570,7 @@ const Survival = {
 
             case 'torch': {
                 // Determine if we are lighting or placing
-                const torchItem = Inventory.getSelectedItem();
+                const torchItem = item;
 
                 // If it's lit, can we extinguish it? Use flint/steel context maybe?
                 // For now, placing it is just standard action
@@ -470,10 +578,7 @@ const Survival = {
                 const isLit = !!torchItem.lit;
 
                 if (World.addTorch(playerX, fuel, isLit)) {
-                    // Do not clear the item entirely if it stacked? 
-                    // Torches shouldn't stack, but `removeItem` is safer.
-                    // Wait, `selectedSlot` logic is currently `Inventory.hotbar[Inventory.selectedSlot] = null;`
-                    Inventory.hotbar[Inventory.selectedSlot] = null;
+                    Inventory.removeHandItem(isSecondHand);
                     Game.showMessage('Placed torch on the ground.', 1.5);
                 } else {
                     Game.showMessage("Can't place torch here!", 1.5);

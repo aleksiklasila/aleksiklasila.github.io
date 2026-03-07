@@ -24,7 +24,11 @@ const Assets = {
         { name: 'raw_fish_large', src: 'assets/item_raw_fish.png' },
         { name: 'cooked_fish_large', src: 'assets/item_cooked_fish.png' },
         { name: 'torch', src: 'assets/item_torch.png' },
-        { name: 'torch_off', src: 'assets/item_torch_off.png' }
+        { name: 'torch_off', src: 'assets/item_torch_off.png' },
+        { name: 'fish_egg', src: 'assets/item_fish_egg.png' },
+        { name: 'tree_egg', src: 'assets/item_tree_egg.png' },
+        { name: 'shovel', src: 'assets/item_shovel.png' },
+        { name: 'simple_bridge', src: 'assets/item_simple_bridge.png' }
     ],
     loadedCount: 0,
 

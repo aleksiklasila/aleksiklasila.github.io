@@ -126,13 +126,34 @@ const Game = {
             // Handle clicking world items (Tents and Torches) to pick them up
             if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen && !Crafting.isOpen) {
                 const worldX = this.mouseX + this.camera.x - this.width / 2;
+                const baseY = this.height * 0.6;
 
                 // Check if worldX is close enough to Player to pick up (e.g. within 60px)
                 if (Math.abs(Player.x - worldX) < 100) {
+                    // Check Ground Items
+                    if (World.groundItems) {
+                        for (let i = 0; i < World.groundItems.length; i++) {
+                            const gItem = World.groundItems[i];
+                            const itemScreenY = baseY - gItem.surfaceY - 8;
+                            if (Math.abs(gItem.x - worldX) < 30 && Math.abs(this.mouseY - itemScreenY) < 30) {
+                                const pickedItem = World.removeGroundItemNear(worldX);
+                                if (pickedItem) {
+                                    if (e.button === 2) {
+                                        Inventory.moveToSecondHand(pickedItem);
+                                    } else {
+                                        Inventory.addItem(pickedItem.id, pickedItem.count, pickedItem.durability);
+                                    }
+                                    Game.showMessage('Picked up ' + pickedItem.name, 1.5);
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     // Check Tents
                     for (let i = 0; i < World.tents.length; i++) {
                         const tent = World.tents[i];
-                        if (Math.abs(tent.x - worldX) < 40) {
+                        const tentScreenY = baseY - tent.surfaceY - 18;
+                        if (Math.abs(tent.x - worldX) < 40 && Math.abs(this.mouseY - tentScreenY) < 40) {
                             const removedTentDurability = World.removeTentNear(worldX);
                             if (removedTentDurability !== false) {
                                 if (removedTentDurability <= 0) {
@@ -155,7 +176,8 @@ const Game = {
                     if (World.torches) {
                         for (let i = 0; i < World.torches.length; i++) {
                             const torch = World.torches[i];
-                            if (Math.abs(torch.x - worldX) < 30) {
+                            const torchScreenY = baseY - torch.surfaceY - 15;
+                            if (Math.abs(torch.x - worldX) < 30 && Math.abs(this.mouseY - torchScreenY) < 30) {
                                 const torchData = World.removeTorchNear(worldX);
                                 if (torchData !== false) {
                                     const torchItem = { ...Inventory.ITEMS['torch'], count: 1, durability: torchData.fuel, lit: !!torchData.lit };
@@ -190,7 +212,9 @@ const Game = {
 
                 // If no item picked up, try using the selected item
                 if (e.button === 0) {
-                    Survival.useItem(Player.x);
+                    Survival.useItem(Player.x, false);
+                } else if (e.button === 2) {
+                    Survival.useItem(Player.x, true);
                 }
             }
         });
@@ -219,78 +243,20 @@ const Game = {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
 
-            // If we didn't drop it in a valid slot, return it to source
             if (!droppedInUI && Inventory.dragItem && Inventory.dragSource) {
-                const src = Inventory.dragSource;
+                // Drop into the world
+                const worldX = this.mouseX + this.camera.x - this.width / 2;
 
-                const returnToContainer = (container, idx, item) => {
-                    // Try to put it back exactly where it came from
-                    if (!container[idx]) {
-                        container[idx] = item;
-                        return;
+                if (Inventory.dragItem.id === 'torch' && Inventory.dragItem.lit) {
+                    const placed = World.addTorch(worldX, Inventory.dragItem.durability, true);
+                    if (!placed) {
+                        World.addGroundItem(worldX, Inventory.dragItem);
                     }
-                    // Try to stack it if it was a split or same item
-                    if (item.stackable && container[idx].id === item.id && container[idx].count + item.count <= item.maxStack) {
-                        container[idx].count += item.count;
-                        return;
-                    }
-                    // If slot is occupied by something else, find first empty slot in bag
-                    for (let i = 0; i < Inventory.BAG_SIZE; i++) {
-                        if (!Inventory.bag[i]) {
-                            Inventory.bag[i] = item;
-                            return;
-                        }
-                    }
-                    // Or first empty slot in hotbar
-                    for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-                        if (!Inventory.hotbar[i]) {
-                            Inventory.hotbar[i] = item;
-                            return;
-                        }
-                    }
-                    // Fallback to overwrite if completely full (should never happen in this scenario)
-                    container[idx] = item;
-                };
-
-                const returnToSingleSlot = (getSlot, setSlot, item) => {
-                    const currentItem = getSlot();
-                    if (!currentItem) {
-                        setSlot(item);
-                        return;
-                    }
-                    if (item.stackable && currentItem.id === item.id && currentItem.count + item.count <= item.maxStack) {
-                        currentItem.count += item.count;
-                        return;
-                    }
-                    // Find first empty slot in bag
-                    for (let i = 0; i < Inventory.BAG_SIZE; i++) {
-                        if (!Inventory.bag[i]) {
-                            Inventory.bag[i] = item;
-                            return;
-                        }
-                    }
-                    // Or first empty slot in hotbar
-                    for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
-                        if (!Inventory.hotbar[i]) {
-                            Inventory.hotbar[i] = item;
-                            return;
-                        }
-                    }
-                    setSlot(item);
-                };
-
-                if (src.type === 'bag' || src.type === 'bag_split') {
-                    returnToContainer(Inventory.bag, src.idx, Inventory.dragItem);
-                } else if (src.type === 'hotbar' || src.type === 'hotbar_split') {
-                    returnToContainer(Inventory.hotbar, src.idx, Inventory.dragItem);
-                } else if (src.type === 'shop' || src.type === 'shop_split') {
-                    returnToSingleSlot(() => Shop.sellSlot, (val) => Shop.sellSlot = val, Inventory.dragItem);
-                } else if (src.type === 'repair_shop') {
-                    returnToSingleSlot(() => RepairShop.repairSlot, (val) => RepairShop.repairSlot = val, Inventory.dragItem);
-                } else if (src.type === 'shop_buy') {
-                    // Do nothing, item returns to shop (not bought)
+                } else {
+                    World.addGroundItem(worldX, Inventory.dragItem);
                 }
 
+                Game.showMessage('Dropped ' + Inventory.dragItem.name, 1.5);
                 Inventory.dragItem = null;
                 Inventory.dragSource = null;
             }
@@ -323,6 +289,10 @@ const Game = {
         const starterTorch = Inventory.createItem('torch', 1);
         starterTorch.lit = false;
         Inventory.hotbar[7] = starterTorch;
+
+        // Add starter shovel to hotbar
+        const starterShovel = Inventory.createItem('shovel', 1);
+        Inventory.hotbar[6] = starterShovel;
 
         Survival.init();
         Fishing.init();
@@ -530,6 +500,12 @@ const Game = {
         // --- Carried torch light ---
         const heldItem = Inventory.getSelectedItem();
         if (heldItem && heldItem.id === 'torch' && heldItem.lit && heldItem.durability > 0) {
+            Lighting.addLight(playerSX, playerSY - 10, 300, 1.0, 0.7, 0.3, 0.8);
+        }
+
+        // --- Second hand torch light ---
+        const offHandItem = Inventory.secondHand;
+        if (offHandItem && offHandItem.id === 'torch' && offHandItem.lit && offHandItem.durability > 0) {
             Lighting.addLight(playerSX, playerSY - 10, 300, 1.0, 0.7, 0.3, 0.8);
         }
     },
