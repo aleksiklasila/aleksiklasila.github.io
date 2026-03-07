@@ -24,7 +24,11 @@ const Inventory = {
         cooked_fish: { id: 'cooked_fish', name: 'Cooked Fish', stackable: true, maxStack: 10, usable: true, category: 'food', price: 15 },
         raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 25 },
         cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 35 },
-        torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 15, maxDurability: 100, lit: false }
+        torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 15, maxDurability: 100, lit: false },
+        shovel: { id: 'shovel', name: 'Shovel', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 50, maxDurability: 50 },
+        simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', price: 20 },
+        fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', price: 10 },
+        tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', price: 5 }
     },
 
     init() {
@@ -143,15 +147,38 @@ const Inventory = {
         return count <= 0;
     },
 
-    damageSelectedItem(amount = 1) {
-        const item = this.hotbar[this.selectedSlot];
-        if (item && item.durability !== undefined) {
+    getHandItem(isSecondHand) {
+        return isSecondHand ? this.secondHand : this.hotbar[this.selectedSlot];
+    },
+
+    removeHandItem(isSecondHand) {
+        if (isSecondHand) {
+            this.secondHand = null;
+        } else {
+            this.hotbar[this.selectedSlot] = null;
+        }
+    },
+
+    consumeHandItem(isSecondHand, amount = 1) {
+        const item = this.getHandItem(isSecondHand);
+        if (!item) return;
+
+        if (item.durability !== undefined) {
             item.durability -= amount;
             if (item.durability <= 0) {
-                this.hotbar[this.selectedSlot] = null;
+                this.removeHandItem(isSecondHand);
                 Game.showMessage(`${item.name} broke!`, 2);
             }
+        } else if (item.stackable) {
+            item.count -= amount;
+            if (item.count <= 0) {
+                this.removeHandItem(isSecondHand);
+            }
         }
+    },
+
+    damageSelectedItem(amount = 1) {
+        this.consumeHandItem(false, amount);
     },
 
     damageItemById(id, amount = 1) {
@@ -178,6 +205,9 @@ const Inventory = {
         }
         for (const item of this.bag) {
             if (item && item.id === id) total += item.count;
+        }
+        if (this.secondHand && this.secondHand.id === id) {
+            total += this.secondHand.count;
         }
         return total >= count;
     },

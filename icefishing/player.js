@@ -104,7 +104,13 @@ const Player = {
 
         // Apply movement
         if (this.state !== 'sleeping') {
-            this.x += this.vx * dt;
+            const nextX = this.x + this.vx * dt;
+            const newCol = World.getColumnAt(nextX);
+            if (newCol && newCol.type === 'water' && !World.isBridgeAt(nextX)) {
+                this.vx = 0;
+            } else {
+                this.x = nextX;
+            }
         }
         // Clamp to world
         this.x = Math.max(40, Math.min((World.WORLD_WIDTH - 1) * World.TILE_SIZE, this.x));

@@ -100,6 +100,23 @@ const Crafting = {
                 }
                 return false;
             }
+        },
+        {
+            id: 'simple_bridge',
+            name: 'Simple Bridge',
+            description: 'Walk over water.',
+            costId: 'firewood',
+            costAmount: 10,
+            icon: 'simple_bridge',
+            onBuild: (playerX) => {
+                const targetX = playerX + Player.facing * World.TILE_SIZE * 1.5;
+                if (World.addBridge(targetX)) {
+                    Game.showMessage('Built a bridge!', 2);
+                } else {
+                    Game.showMessage('Cannot build here!', 2);
+                    Inventory.addItem('firewood', 10);
+                }
+            }
         }
     ],
 

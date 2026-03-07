@@ -273,6 +273,12 @@ const Fishing = {
             Game.showMessage(`Caught a ${this.hookedFish.type.name}!`, 2.5);
             Inventory.addItem(this.hookedFish.type.item, 1);
             Inventory.damageSelectedItem(1);
+
+            const col = World.getColumnAt(this.hole.x);
+            if (col) {
+                World.fishEggs.push({ x: this.hole.x, surfaceY: col.surfaceY });
+            }
+
             this.stopFishing();
         }
 
