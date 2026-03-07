@@ -14,6 +14,12 @@ const Game = {
     mouseY: 0,
 
     lastTime: 0,
+    nextFrameTime: 0,
+    fps: 0,
+    fpsFrames: 0,
+    fpsLastTime: 0,
+    fpsLocked: false,
+    targetFPS: 60,
     running: false,
     gameOver: false,
 
@@ -77,6 +83,11 @@ const Game = {
             const rect = this.canvas.getBoundingClientRect();
             this.mouseX = e.clientX - rect.left;
             this.mouseY = e.clientY - rect.top;
+
+            if (e.button === 0 && this.mouseX >= 5 && this.mouseX <= 110 && this.mouseY >= this.height - 25 && this.mouseY <= this.height - 5) {
+                this.fpsLocked = !this.fpsLocked;
+                return;
+            }
 
             // Click Shop UI
             if (Shop.isOpen) {
@@ -321,8 +332,48 @@ const Game = {
 
     loop(timestamp) {
         if (!this.running) return;
+
+        if (this.fpsLocked) {
+            if (!this.nextFrameTime) this.nextFrameTime = timestamp;
+            const frameDelay = 1000 / this.targetFPS;
+
+            // 40% frame delay tolerance prevents rejecting native 60Hz 
+            // requestAnimationFrame timings due to browser jitter,
+            // while successfully throttling 120Hz/144Hz setups to 60 FPS.
+            if (timestamp < this.nextFrameTime - (frameDelay * 0.4)) {
+                requestAnimationFrame(t => this.loop(t));
+                return;
+            }
+
+            this.nextFrameTime += frameDelay;
+            // Catch up if execution paused (e.g. background tab)
+            if (timestamp > this.nextFrameTime + (frameDelay * 2)) {
+                this.nextFrameTime = timestamp;
+            }
+        } else {
+            this.nextFrameTime = 0; // reset for clean lock re-entry
+        }
+
         const dt = Math.min((timestamp - this.lastTime) / 1000, 0.05);
         this.lastTime = timestamp;
+
+        if (!this.fpsLastTime) this.fpsLastTime = timestamp;
+        this.fpsFrames++;
+        if (timestamp - this.fpsLastTime >= 1000) {
+            // Precise adjustment: If we are locked and running smoothly, we clamp the displayed FPS to prevent
+            // reporting 61, 62 etc. due to tiny requestAnimationFrame jitter over the second.
+            let computedFps = this.fpsFrames;
+            if (this.fpsLocked) {
+                // If it's hitting 59, 60, 61, 62, clamp it to 60 for consistency
+                if (computedFps >= this.targetFPS - 1 && computedFps <= this.targetFPS + 2) {
+                    computedFps = this.targetFPS;
+                }
+            }
+            this.fps = computedFps;
+            this.fpsFrames = 0;
+            this.fpsLastTime = timestamp;
+        }
+
         this.update(dt);
         this.render();
         this.keysJustPressed = {};
@@ -450,9 +501,22 @@ const Game = {
             Inventory.renderItemIcon(ctx, Inventory.dragItem, this.mouseX - 20, this.mouseY - 20, 40);
         }
 
+        this.renderFPS(ctx);
+
         this.renderMessage(ctx);
 
         if (this.gameOver) this.renderGameOver(ctx);
+    },
+
+    renderFPS(ctx) {
+        const text = `FPS: ${this.fps || 0}${this.fpsLocked ? ' (60)' : ''}`;
+        const extW = this.fpsLocked ? 40 : 0;
+        ctx.fillStyle = this.fpsLocked ? 'rgba(50,80,50,0.8)' : 'rgba(0,0,0,0.5)';
+        ctx.fillRect(5, this.height - 25, 65 + extW, 20);
+        ctx.fillStyle = this.fps >= 50 ? '#00ff00' : (this.fps >= 30 ? '#ffff00' : '#ff0000');
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(text, 10, this.height - 10);
     },
 
     updateLights() {
