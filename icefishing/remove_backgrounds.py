@@ -14,7 +14,7 @@ def process_images(directory):
                 for item in data:
                     r, g, b, a = item
                     # Check for the near-magenta background: r >= 240, g <= 5, b >= 240
-                    if r >= 230 and g <= 10 and b >= 230:
+                    if r >= 150 and g <= 10 and b >= 150:
                         # Set alpha to 0 (fully transparent)
                         new_data.append((r, g, b, 0))
                     else:

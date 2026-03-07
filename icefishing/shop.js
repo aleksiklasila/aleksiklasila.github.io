@@ -124,16 +124,20 @@ const Shop = {
                 const def = Inventory.ITEMS[b.itemId];
 
                 if (button === 2) {
-                    if (Player.money < def.price) {
-                        Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
+                    if (def.cost && def.cost.money && !Inventory.canAfford({ money: def.cost.money })) {
+                        Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
                         return true;
                     }
-                    Player.money -= def.price;
+                    if (def.cost && def.cost.money) {
+                        Inventory.payCost({ money: def.cost.money });
+                    }
                     let item = { ...def, count: 1 };
                     if (def.maxDurability) item.durability = def.maxDurability;
                     this.saleItems[b.index] = null;
                     Inventory.moveToSecondHand(item);
-                    Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                    if (def.cost && def.cost.money) {
+                        Game.showMessage(`Bought ${def.name} for $${def.cost.money}`, 1.5);
+                    }
                     return true;
                 }
 
@@ -192,16 +196,16 @@ const Shop = {
 
         // Value is 3/4 of the buy price
         const def = Inventory.ITEMS[this.sellSlot.id];
-        if (!def.price) return;
+        if (!def.cost || !def.cost.money) return;
 
-        const saleValuePerItem = Math.floor(def.price * 0.75);
+        const saleValuePerItem = Math.floor(def.cost.money * 0.75);
         if (saleValuePerItem <= 0) {
             Game.showMessage('This item cannot be sold.', 2);
             return;
         }
 
         const totalValue = saleValuePerItem * this.sellSlot.count;
-        Player.money += totalValue;
+        Inventory.addItem('money', totalValue);
 
         Game.showMessage(`Sold ${this.sellSlot.count}x ${def.name} for $${totalValue}`, 2);
         this.sellSlot = null;
@@ -210,149 +214,66 @@ const Shop = {
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
-        const w = 620;
-        const h = 280; // Bigger for two rows if needed, or wide for one row
-
-        const slotSize = 52;
-        const gap = 4;
-        const bagCols = 8;
-        const bagRows = 3;
-        const inventoryW = bagCols * (slotSize + gap);
-        const inventoryH = (bagRows + 1) * (slotSize + gap) + 60;
-        const invStartY = (canvasH - inventoryH) / 2;
-
-        // Position shop above the inventory
-        const x = (canvasW - w) / 2;
-        const y = Math.max(20, invStartY - h - 30);
-
-        this.ui.x = x;
-        this.ui.y = y;
-        this.ui.w = w;
-        this.ui.h = h;
-
-        // Background
-        ctx.fillStyle = '#141e32'; // Solid color, no transparency
-        ctx.strokeStyle = '#6496c8';
-        ctx.lineWidth = 3;
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-
-        // Title
-        ctx.fillStyle = '#99ccff';
-        ctx.font = 'bold 20px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('FISHING SHOP', x + w / 2, y + 25);
-        ctx.textAlign = 'left';
+        const bounds = UIMenu.renderMenuBase(ctx, canvasW, canvasH, 'FISHING SHOP', this);
 
         // Draw Items for Sale (Left side)
-        ctx.fillStyle = '#ddd';
-        ctx.font = '14px monospace';
-        ctx.fillText('Items for Sale:', x + 15, y + 55);
-
-        this.ui.buyItemBounds = [];
-        const itemsPerRow = 8;
-        for (let i = 0; i < this.saleItems.length; i++) {
-            const itemId = this.saleItems[i];
-
-            const row = Math.floor(i / itemsPerRow);
-            const col = i % itemsPerRow;
-
-            const sx = x + 15 + col * (slotSize + gap);
-            const sy = y + 70 + row * (slotSize + gap + 25);
-
-            // Slot BG
-            ctx.fillStyle = 'rgba(40,50,70,0.8)';
-            ctx.fillRect(sx, sy, slotSize, slotSize);
-            ctx.strokeStyle = 'rgba(100,150,200,0.5)';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(sx, sy, slotSize, slotSize);
-
-            if (!itemId) {
-                ctx.fillStyle = '#888';
-                ctx.font = 'bold 12px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText('SOLD', sx + slotSize / 2, sy + slotSize / 2 + 4);
-                ctx.textAlign = 'left';
+        this.ui.buyItemBounds = UIMenu.renderLeftGrid(ctx, bounds, 'Items for Sale:', this.saleItems, (c, item, i, sx, sy, slotSize) => {
+            if (!item) {
+                c.fillStyle = '#888';
+                c.font = 'bold 12px monospace';
+                c.textAlign = 'center';
+                c.fillText('SOLD', sx + slotSize / 2, sy + slotSize / 2 + 4);
+                c.textAlign = 'left';
             } else {
-                const def = Inventory.ITEMS[itemId];
-                if (!def) continue;
+                const def = Inventory.ITEMS[item];
+                if (!def) return;
 
                 // Icon
-                Inventory.renderItemIcon(ctx, { id: itemId, stackable: false }, sx + 6, sy + 6, slotSize - 12);
+                Inventory.renderItemIcon(c, { id: item, stackable: false }, sx + 6, sy + 6, slotSize - 12);
 
-                if (Player.money < def.price) {
-                    ctx.fillStyle = 'rgba(255,0,0,0.3)';
-                    ctx.fillRect(sx, sy, slotSize, slotSize);
+                if (def.cost && def.cost.money) {
+                    if (!Inventory.canAfford({ money: def.cost.money })) {
+                        c.fillStyle = 'rgba(255,0,0,0.3)';
+                        c.fillRect(sx, sy, slotSize, slotSize);
+                    }
+
+                    // Price tag
+                    c.fillStyle = Inventory.canAfford({ money: def.cost.money }) ? '#ffaa44' : '#ff4444';
+                    c.font = '10px monospace';
+                    c.textAlign = 'center';
+                    c.fillText(`$${def.cost.money}`, sx + slotSize / 2, sy + slotSize + 12);
+                    c.textAlign = 'left';
                 }
-
-                // Interaction bounds
-                this.ui.buyItemBounds.push({ x: sx, y: sy, w: slotSize, h: slotSize, itemId: itemId, index: i });
-
-                // Price tag
-                ctx.fillStyle = Player.money >= def.price ? '#ffaa44' : '#ff4444';
-                ctx.font = '10px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText(`$${def.price}`, sx + slotSize / 2, sy + slotSize + 12);
-                ctx.textAlign = 'left';
             }
-        }
+        });
+
+        // Remap bounds data
+        this.ui.buyItemBounds.forEach(b => b.itemId = b.item);
 
         // Draw Sell Area (Right side)
-        const rx = x + w - 160;
-        ctx.fillStyle = 'rgba(20,30,50,0.6)';
-        ctx.fillRect(rx, y + 50, 145, h - 65);
-
-        ctx.fillStyle = '#ddd';
-        ctx.font = '14px monospace';
-        ctx.fillText('Sell Items:', rx + 15, y + 75);
-
-        ctx.fillStyle = '#888';
-        ctx.font = '10px monospace';
-        ctx.fillText('(Drag item here)', rx + 15, y + 90);
-
-        // Sell Slot
-        const sellSlotSize = 48;
-        const ssx = rx + (145 - sellSlotSize) / 2;
-        const ssy = y + 100;
-
-        this.ui.sellSlotBounds = { x: ssx, y: ssy, w: sellSlotSize, h: sellSlotSize };
-
-        ctx.fillStyle = 'rgba(10,15,25,0.8)';
-        ctx.fillRect(ssx, ssy, sellSlotSize, sellSlotSize);
-        ctx.strokeStyle = '#6496c8';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(ssx, ssy, sellSlotSize, sellSlotSize);
+        const panelBounds = UIMenu.renderRightPanel(ctx, bounds, 'Sell Items:', '(Drag item here)');
+        this.ui.sellSlotBounds = UIMenu.renderActionSlot(ctx, panelBounds, 48);
 
         if (this.sellSlot) {
+            const ssx = this.ui.sellSlotBounds.x;
+            const ssy = this.ui.sellSlotBounds.y;
+            const sellSlotSize = this.ui.sellSlotBounds.w;
+
             Inventory.renderItemIcon(ctx, this.sellSlot, ssx + 8, ssy + 8, sellSlotSize - 16);
 
             const def = Inventory.ITEMS[this.sellSlot.id];
-            const saleValue = Math.floor(def.price * 0.75) * this.sellSlot.count;
+            if (def.cost && def.cost.money) {
+                const saleValue = Math.floor(def.cost.money * 0.75) * this.sellSlot.count;
 
-            ctx.fillStyle = '#44ff44';
-            ctx.font = 'bold 12px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(`+ $${saleValue}`, ssx + sellSlotSize / 2, ssy + sellSlotSize + 15);
-            ctx.textAlign = 'left';
+                ctx.fillStyle = '#44ff44';
+                ctx.font = 'bold 12px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`+ $${saleValue}`, ssx + sellSlotSize / 2, ssy + sellSlotSize + 15);
+                ctx.textAlign = 'left';
+            }
 
             // Sell Button
-            const btnW = 80;
-            const btnH = 24;
-            const btnX = rx + (145 - btnW) / 2;
-            const btnY = ssy + sellSlotSize + 20;
-
-            this.ui.sellButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
-
-            ctx.fillStyle = '#aa3333';
-            ctx.fillRect(btnX, btnY, btnW, btnH);
-            ctx.strokeStyle = '#ff6666';
-            ctx.strokeRect(btnX, btnY, btnW, btnH);
-
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 14px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText('SELL', btnX + btnW / 2, btnY + 20);
-            ctx.textAlign = 'left';
+            this.ui.sellButtonBounds = UIMenu.renderActionButton(ctx, panelBounds, ssy, sellSlotSize, 'SELL', '#aa3333');
         } else {
             this.ui.sellButtonBounds = null;
         }

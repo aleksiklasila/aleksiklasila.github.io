@@ -17,6 +17,7 @@ const Assets = {
         { name: 'scoop', src: 'assets/item_scoop.png' },
         { name: 'flint_steel', src: 'assets/item_flint_steel.png' },
         { name: 'tent', src: 'assets/item_tent.png' },
+        { name: 'money', src: 'assets/item_money.png' },
         { name: 'wood', src: 'assets/item_wood.png' },
         { name: 'raw_fish', src: 'assets/item_raw_fish.png' },
         { name: 'cooked_fish', src: 'assets/item_cooked_fish.png' },

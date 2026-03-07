@@ -294,6 +294,9 @@ const Game = {
         const starterShovel = Inventory.createItem('shovel', 1);
         Inventory.hotbar[6] = starterShovel;
 
+        // Add starter money
+        Inventory.addItem('money', 100);
+
         Survival.init();
         Fishing.init();
         Fishing.generateWorldFish();
@@ -575,9 +578,14 @@ const Game = {
             y += 16;
         }
 
+        const moneyCount = Inventory.countItem('money');
         ctx.fillStyle = 'rgba(255,215,0,0.8)';
         ctx.font = 'bold 14px monospace';
-        ctx.fillText(`💵 $${Player.money}`, startX, y + 15);
+        ctx.fillText(`💵 $${moneyCount}`, startX, y + 15);
+
+        const woodCount = Inventory.countItem('firewood');
+        ctx.fillStyle = '#f2a365';
+        ctx.fillText(`🪵 ${woodCount}`, startX + 90, y + 15);
 
         const selectedItem = Inventory.getSelectedItem();
         if (selectedItem) {
