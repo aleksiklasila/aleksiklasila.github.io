@@ -11,24 +11,25 @@ const Inventory = {
     secondHand: null,
 
     ITEMS: {
-        ice_drill: { id: 'ice_drill', name: 'Ice Drill', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 100, maxDurability: 5 },
-        fishing_rod: { id: 'fishing_rod', name: 'Fishing Rod', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 50, maxDurability: 10 },
-        scoop: { id: 'scoop', name: 'Scoop', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 20, maxDurability: 10 },
-        bait: { id: 'bait', name: 'Bait', stackable: true, maxStack: 20, usable: true, category: 'consumable', price: 5 },
-        axe: { id: 'axe', name: 'Axe', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 80, maxDurability: 20 },
-        hammer: { id: 'hammer', name: 'Hammer', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 120, maxDurability: 50 },
-        flint_steel: { id: 'flint_steel', name: 'Flint & Steel', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 30, maxDurability: 10 },
-        tent: { id: 'tent', name: 'Tent', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 250, maxDurability: 5 },
-        firewood: { id: 'firewood', name: 'Firewood', stackable: true, maxStack: 10, usable: true, category: 'resource', price: 2 },
-        raw_fish: { id: 'raw_fish', name: 'Raw Fish', stackable: true, maxStack: 10, usable: true, category: 'food', price: 10 },
-        cooked_fish: { id: 'cooked_fish', name: 'Cooked Fish', stackable: true, maxStack: 10, usable: true, category: 'food', price: 15 },
-        raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 25 },
-        cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', price: 35 },
-        torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 15, maxDurability: 100, lit: false },
-        shovel: { id: 'shovel', name: 'Shovel', stackable: false, maxStack: 1, usable: true, category: 'tool', price: 50, maxDurability: 50 },
-        simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', price: 20 },
-        fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', price: 10 },
-        tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', price: 5 }
+        money: { id: 'money', name: 'Money', stackable: true, maxStack: 1000, usable: false, category: 'currency', cost: {} },
+        ice_drill: { id: 'ice_drill', name: 'Ice Drill', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 100 }, maxDurability: 5 },
+        fishing_rod: { id: 'fishing_rod', name: 'Fishing Rod', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 50 }, maxDurability: 10 },
+        scoop: { id: 'scoop', name: 'Scoop', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 20 }, maxDurability: 10 },
+        bait: { id: 'bait', name: 'Bait', stackable: true, maxStack: 20, usable: true, category: 'consumable', cost: { money: 5 } },
+        axe: { id: 'axe', name: 'Axe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 80 }, maxDurability: 20 },
+        hammer: { id: 'hammer', name: 'Hammer', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 120 }, maxDurability: 50 },
+        flint_steel: { id: 'flint_steel', name: 'Flint & Steel', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 30 }, maxDurability: 10 },
+        tent: { id: 'tent', name: 'Tent', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 250 }, maxDurability: 5 },
+        firewood: { id: 'firewood', name: 'Firewood', stackable: true, maxStack: 10, usable: true, category: 'resource', cost: { money: 2 } },
+        raw_fish: { id: 'raw_fish', name: 'Raw Fish', stackable: true, maxStack: 10, usable: true, category: 'food', cost: { money: 10 } },
+        cooked_fish: { id: 'cooked_fish', name: 'Cooked Fish', stackable: true, maxStack: 10, usable: true, category: 'food', cost: { money: 15 } },
+        raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', cost: { money: 25 } },
+        cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', cost: { money: 35 } },
+        torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 15 }, maxDurability: 100, lit: false },
+        shovel: { id: 'shovel', name: 'Shovel', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 50 }, maxDurability: 50 },
+        simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', cost: { money: 20 } },
+        fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 10 } },
+        tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } }
     },
 
     init() {
@@ -199,6 +200,10 @@ const Inventory = {
     },
 
     hasItem(id, count = 1) {
+        return this.countItem(id) >= count;
+    },
+
+    countItem(id) {
         let total = 0;
         for (const item of this.hotbar) {
             if (item && item.id === id) total += item.count;
@@ -209,7 +214,22 @@ const Inventory = {
         if (this.secondHand && this.secondHand.id === id) {
             total += this.secondHand.count;
         }
-        return total >= count;
+        return total;
+    },
+
+    canAfford(costObj) {
+        for (const id in costObj) {
+            if (!this.hasItem(id, costObj[id])) return false;
+        }
+        return true;
+    },
+
+    payCost(costObj) {
+        if (!this.canAfford(costObj)) return false;
+        for (const id in costObj) {
+            this.removeItem(id, costObj[id]);
+        }
+        return true;
     },
 
     moveToSecondHand(item) {
@@ -250,10 +270,9 @@ const Inventory = {
         const startX = (canvasW - totalW) / 2;
 
         let startY = (canvasH - totalH) / 2;
-        if (Shop.isOpen) {
-            startY = Shop.ui.y + Shop.ui.h + 20;
-        } else if (RepairShop.isOpen) {
-            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
+            startY = menuY + UIMenu.height + 20;
         }
 
         // Check bag slots (only if inventory is open)
@@ -420,10 +439,9 @@ const Inventory = {
         const startX = (canvasW - totalW) / 2;
 
         let startY = (canvasH - totalH) / 2;
-        if (Shop.isOpen) {
-            startY = Shop.ui.y + Shop.ui.h + 20;
-        } else if (RepairShop.isOpen) {
-            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
+            startY = menuY + UIMenu.height + 20;
         }
 
         // Check bag slots (only if inventory is open)
@@ -441,14 +459,15 @@ const Inventory = {
                                 Game.showMessage("Cannot place item there!", 1.5);
                                 return true;
                             }
-                            const def = Inventory.ITEMS[this.dragItem.id];
-                            if (Player.money < def.price) {
-                                Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-                                return true;
+                            if (def.cost && def.cost.money) {
+                                if (!Inventory.canAfford({ money: def.cost.money })) {
+                                    Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                                    return true;
+                                }
+                                Inventory.payCost({ money: def.cost.money });
                             }
-                            Player.money -= def.price;
                             Shop.saleItems[this.dragSource.index] = null;
-                            Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                            Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
                             this.dragSource = null;
                         }
 
@@ -493,13 +512,15 @@ const Inventory = {
                         return true;
                     }
                     const def = Inventory.ITEMS[this.dragItem.id];
-                    if (Player.money < def.price) {
-                        Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-                        return true;
+                    if (def.cost && def.cost.money) {
+                        if (!Inventory.canAfford({ money: def.cost.money })) {
+                            Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                            return true;
+                        }
+                        Inventory.payCost({ money: def.cost.money });
                     }
-                    Player.money -= def.price;
                     Shop.saleItems[this.dragSource.index] = null;
-                    Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                    Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
                     this.dragSource = null;
                 }
 
@@ -534,14 +555,15 @@ const Inventory = {
                             Game.showMessage("Cannot place item there!", 1.5);
                             return true;
                         }
-                        const def = Inventory.ITEMS[this.dragItem.id];
-                        if (Player.money < def.price) {
-                            Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-                            return true;
+                        if (def.cost && def.cost.money) {
+                            if (!Inventory.canAfford({ money: def.cost.money })) {
+                                Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                                return true;
+                            }
+                            Inventory.payCost({ money: def.cost.money });
                         }
-                        Player.money -= def.price;
                         Shop.saleItems[this.dragSource.index] = null;
-                        Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                        Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
                         this.dragSource = null;
                     }
 
@@ -588,14 +610,15 @@ const Inventory = {
                     Game.showMessage("Cannot place item there!", 1.5);
                     return true;
                 }
-                const def = Inventory.ITEMS[this.dragItem.id];
-                if (Player.money < def.price) {
-                    Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-                    return true;
+                if (def.cost && def.cost.money) {
+                    if (!Inventory.canAfford({ money: def.cost.money })) {
+                        Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                        return true;
+                    }
+                    Inventory.payCost({ money: def.cost.money });
                 }
-                Player.money -= def.price;
                 Shop.saleItems[this.dragSource.index] = null;
-                Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
                 this.dragSource = null;
             }
 
@@ -636,13 +659,15 @@ const Inventory = {
                         return true;
                     }
                     const def = Inventory.ITEMS[this.dragItem.id];
-                    if (Player.money < def.price) {
-                        Game.showMessage(`Not enough money! Need $${def.price}`, 1.5);
-                        return true;
+                    if (def.cost && def.cost.money) {
+                        if (!Inventory.canAfford({ money: def.cost.money })) {
+                            Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                            return true;
+                        }
+                        Inventory.payCost({ money: def.cost.money });
                     }
-                    Player.money -= def.price;
                     Shop.saleItems[this.dragSource.index] = null;
-                    Game.showMessage(`Bought ${def.name} for $${def.price}`, 1.5);
+                    Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
                     this.dragSource = null;
                 }
 
@@ -749,10 +774,9 @@ const Inventory = {
         const totalH = (bagRows + 1) * (slotSize + gap) + 60;
         const startX = (canvasW - totalW) / 2;
         let startY = (canvasH - totalH) / 2;
-        if (Shop.isOpen) {
-            startY = Shop.ui.y + Shop.ui.h + 20;
-        } else if (RepairShop.isOpen) {
-            startY = RepairShop.ui.y + RepairShop.ui.h + 20;
+        if (typeof UIMenu !== 'undefined' && (Shop.isOpen || RepairShop.isOpen || Crafting.isOpen)) {
+            const menuY = UIMenu.calculateYPosition(canvasW, canvasH, bagRows, slotSize, gap);
+            startY = menuY + UIMenu.height + 20;
         }
 
         // Inventory Panel

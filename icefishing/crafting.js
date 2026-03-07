@@ -13,8 +13,7 @@ const Crafting = {
             id: 'campfire',
             name: 'Campfire',
             description: 'Unlit. Use Flint & Steel.',
-            costId: 'firewood',
-            costAmount: 2,
+            cost: { firewood: 2 },
             icon: 'campfire_off',
             onBuild: (playerX) => {
                 const col = World.getColumnAt(playerX);
@@ -35,8 +34,7 @@ const Crafting = {
             id: 'torch',
             name: 'Torch',
             description: 'Unlit. Use Flint & Steel.',
-            costId: 'firewood',
-            costAmount: 1,
+            cost: { firewood: 1 },
             icon: 'torch_off',
             onBuild: (playerX) => {
                 const col = World.getColumnAt(playerX);
@@ -57,8 +55,7 @@ const Crafting = {
             id: 'campfire_lit',
             name: 'Lit Campfire',
             description: 'Use Flint & Steel.',
-            costId: 'firewood',
-            costAmount: 2,
+            cost: { firewood: 2 },
             requiresItem: 'flint_steel',
             icon: 'campfire_on',
             onBuild: (playerX) => {
@@ -81,8 +78,7 @@ const Crafting = {
             id: 'torch_lit',
             name: 'Lit Torch',
             description: 'Use Flint & Steel.',
-            costId: 'firewood',
-            costAmount: 1,
+            cost: { firewood: 1 },
             requiresItem: 'flint_steel',
             icon: 'torch',
             onBuild: (playerX) => {
@@ -105,16 +101,16 @@ const Crafting = {
             id: 'simple_bridge',
             name: 'Simple Bridge',
             description: 'Walk over water.',
-            costId: 'firewood',
-            costAmount: 10,
+            cost: { firewood: 10 },
             icon: 'simple_bridge',
             onBuild: (playerX) => {
                 const targetX = playerX + Player.facing * World.TILE_SIZE * 1.5;
                 if (World.addBridge(targetX)) {
                     Game.showMessage('Built a bridge!', 2);
+                    return true;
                 } else {
                     Game.showMessage('Cannot build here!', 2);
-                    Inventory.addItem('firewood', 10);
+                    return false;
                 }
             }
         }
@@ -127,12 +123,16 @@ const Crafting = {
     toggle() {
         this.isOpen = !this.isOpen;
         if (this.isOpen) {
+            Inventory.isOpen = true;
             Game.showMessage("Crafting Menu Opened", 1.5);
+        } else {
+            this.close();
         }
     },
 
     close() {
         this.isOpen = false;
+        if (Shop.isOpen || RepairShop.isOpen) return; // let inventory naturally follow the next window or close
     },
 
     handleMouseDown(mouseX, mouseY, canvasW, canvasH, button = 0) {
@@ -157,9 +157,8 @@ const Crafting = {
     craftItem(recipeIndex, button = 0) {
         const recipe = this.recipes[recipeIndex];
 
-        if (!Inventory.hasItem(recipe.costId, recipe.costAmount)) {
-            const def = Inventory.ITEMS[recipe.costId];
-            Game.showMessage(`Need ${recipe.costAmount}x ${def ? def.name : recipe.costId}!`, 1.5);
+        if (!Inventory.canAfford(recipe.cost)) {
+            Game.showMessage('Not enough materials!', 1.5);
             return;
         }
 
@@ -189,7 +188,7 @@ const Crafting = {
             }
 
             if (success) {
-                Inventory.removeItem(recipe.costId, recipe.costAmount);
+                Inventory.payCost(recipe.cost);
 
                 // Damage hammer
                 for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
@@ -214,91 +213,43 @@ const Crafting = {
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
-        const w = 400;
-        const h = 240;
-
-        const x = (canvasW - w) / 2;
-        const y = (canvasH - h) / 2 - 50;
-
-        this.ui.x = x;
-        this.ui.y = y;
-        this.ui.w = w;
-        this.ui.h = h;
-
-        // Background
-        ctx.fillStyle = '#222831';
-        ctx.strokeStyle = '#f2a365';
-        ctx.lineWidth = 3;
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-
-        // Title
-        ctx.fillStyle = '#ececec';
-        ctx.font = 'bold 20px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('CRAFTING', x + w / 2, y + 25);
-        ctx.textAlign = 'left';
-
-        ctx.fillStyle = '#a3a3a3';
-        ctx.font = '12px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('Select an item to build', x + w / 2, y + 45);
-        ctx.textAlign = 'left';
-
-        this.ui.craftItemBounds = [];
-        const slotSize = 64;
-        const gap = 20;
+        const bounds = UIMenu.renderMenuBase(ctx, canvasW, canvasH, 'CRAFTING', this);
 
         const visibleRecipes = this.recipes
             .map((r, index) => ({ ...r, originalIndex: index }))
             .filter(r => !r.requiresItem || Inventory.hasItem(r.requiresItem, 1));
 
-        const startX = x + (w - (visibleRecipes.length * slotSize + (visibleRecipes.length - 1) * gap)) / 2;
-        const startY = y + 70;
-
-        for (let i = 0; i < visibleRecipes.length; i++) {
-            const recipe = visibleRecipes[i];
-            const sx = startX + i * (slotSize + gap);
-            const sy = startY;
-
-            // Slot Background
-            ctx.fillStyle = 'rgba(50, 60, 75, 0.8)';
-            ctx.fillRect(sx, sy, slotSize, slotSize);
-            ctx.strokeStyle = '#f2a365';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(sx, sy, slotSize, slotSize);
-
+        this.ui.craftItemBounds = UIMenu.renderLeftGrid(ctx, bounds, 'Select an item to build:', visibleRecipes, (c, recipe, i, sx, sy, slotSize) => {
             // Icon
-            Inventory.renderItemIcon(ctx, { id: recipe.icon, stackable: false }, sx + 8, sy + 8, slotSize - 16);
+            Inventory.renderItemIcon(c, { id: recipe.icon, stackable: false, lit: recipe.id.includes('_lit') }, sx + 8, sy + 8, slotSize - 16);
 
             // Can afford?
-            const afford = Inventory.hasItem(recipe.costId, recipe.costAmount);
+            const afford = Inventory.canAfford(recipe.cost);
             if (!afford) {
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-                ctx.fillRect(sx, sy, slotSize, slotSize);
+                c.fillStyle = 'rgba(255, 0, 0, 0.3)';
+                c.fillRect(sx, sy, slotSize, slotSize);
             }
 
-            // Target area for clicking
-            this.ui.craftItemBounds.push({ x: sx, y: sy, w: slotSize, h: slotSize, recipeIndex: recipe.originalIndex });
+            // Cost tags
+            let cIdx = 0;
+            const costKeys = Object.keys(recipe.cost);
+            const tagW = costKeys.length * 36;
+            let startTx = sx + slotSize / 2 - tagW / 2;
 
-            // Name
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 14px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(recipe.name, sx + slotSize / 2, sy + slotSize + 20);
+            for (const key of costKeys) {
+                const amount = recipe.cost[key];
+                Inventory.renderItemIcon(c, { id: key, stackable: false }, startTx + cIdx * 36, sy + slotSize + 12, 14);
+                c.fillStyle = Inventory.hasItem(key, amount) ? '#a3d2ca' : '#ff7b54';
+                c.font = '10px monospace';
+                c.textAlign = 'left';
+                c.fillText(`${amount}`, startTx + cIdx * 36 + 18, sy + slotSize + 22);
+                cIdx++;
+            }
+        });
 
-            // Cost tag
-            ctx.fillStyle = afford ? '#a3d2ca' : '#ff7b54';
-            ctx.font = '12px monospace';
-            const reqDef = Inventory.ITEMS[recipe.costId];
-            const costText = `${recipe.costAmount}x ${reqDef ? reqDef.name : recipe.costId}`;
-            ctx.fillText(costText, sx + slotSize / 2, sy + slotSize + 36);
-
-            // Desc
-            ctx.fillStyle = '#a3a3a3';
-            ctx.font = '10px monospace';
-            ctx.fillText(recipe.description, sx + slotSize / 2, sy + slotSize + 50);
-            ctx.textAlign = 'left';
-        }
+        // Remap the interaction bounds for crafting click targeting
+        this.ui.craftItemBounds.forEach(b => {
+            b.recipeIndex = b.item.originalIndex;
+        });
     }
 };

@@ -127,10 +127,14 @@ const RepairShop = {
         let repairCost = Math.floor(salePrice / 8);
         if (repairCost <= 0) repairCost = 1; // Minimum cost of $1
 
-        if (Player.money >= repairCost) {
-            Player.money -= repairCost;
-            this.repairSlot.durability = def.maxDurability;
-            Game.showMessage(`${def.name} repaired for $${repairCost}!`, 2);
+        // Assuming a full repair for now, as `repairAmount` is not defined elsewhere.
+        // If partial repair is intended, `repairAmount` would need to be calculated.
+        const repairAmount = def.maxDurability - this.repairSlot.durability;
+
+        if (Inventory.canAfford({ money: repairCost })) {
+            Inventory.payCost({ money: repairCost });
+            this.repairSlot.durability = Math.min(this.repairSlot.durability + repairAmount, def.maxDurability);
+            Game.showMessage(`Repaired ${def.name} for $${repairCost}!`, 2);
         } else {
             Game.showMessage(`Not enough money! Need $${repairCost}.`, 2);
         }
@@ -139,99 +143,40 @@ const RepairShop = {
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen) return;
 
-        const w = 240;
-        const h = 180;
+        const bounds = UIMenu.renderMenuBase(ctx, canvasW, canvasH, 'REPAIR STATION', this);
 
-        const slotSize = 52;
-        const gap = 4;
-        const bagCols = 8;
-        const bagRows = 3;
-        const inventoryH = (bagRows + 1) * (slotSize + gap) + 60;
-        const invStartY = (canvasH - inventoryH) / 2;
-
-        const x = (canvasW - w) / 2;
-        const y = Math.max(20, invStartY - h - 30);
-
-        this.ui.x = x;
-        this.ui.y = y;
-        this.ui.w = w;
-        this.ui.h = h;
-
-        // Background
-        ctx.fillStyle = '#1e3214'; // Darker green solid color
-        ctx.strokeStyle = '#64c864';
-        ctx.lineWidth = 3;
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-
-        // Title
-        ctx.fillStyle = '#99ff99';
-        ctx.font = 'bold 20px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('REPAIR STATION', x + w / 2, y + 25);
-        ctx.textAlign = 'left';
-
-        ctx.fillStyle = '#ddd';
-        ctx.font = '14px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('Fix broken tools', x + w / 2, y + 55);
-
-        ctx.fillStyle = '#888';
-        ctx.font = '10px monospace';
-        ctx.fillText('(Drag item here)', x + w / 2, y + 70);
-        ctx.textAlign = 'left';
-
-        // Repair Slot
-        const repairSlotSize = 48;
-        const rx = x + (w - repairSlotSize) / 2;
-        const ry = y + 80;
-
-        this.ui.repairSlotBounds = { x: rx, y: ry, w: repairSlotSize, h: repairSlotSize };
-
-        ctx.fillStyle = 'rgba(10,25,10,0.8)';
-        ctx.fillRect(rx, ry, repairSlotSize, repairSlotSize);
-        ctx.strokeStyle = '#64c864';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(rx, ry, repairSlotSize, repairSlotSize);
+        // Draw interaction panel on the right matching selling workflow
+        const panelBounds = UIMenu.renderRightPanel(ctx, bounds, 'Repair Tool:', '(Drag item here)');
+        this.ui.repairSlotBounds = UIMenu.renderActionSlot(ctx, panelBounds, 48);
 
         if (this.repairSlot) {
-            Inventory.renderItemIcon(ctx, this.repairSlot, rx + 8, ry + 8, repairSlotSize - 16);
+            const ssx = this.ui.repairSlotBounds.x;
+            const ssy = this.ui.repairSlotBounds.y;
+            const repairSlotSize = this.ui.repairSlotBounds.w;
+
+            Inventory.renderItemIcon(ctx, this.repairSlot, ssx + 8, ssy + 8, repairSlotSize - 16);
 
             const def = Inventory.ITEMS[this.repairSlot.id];
-
-            // Repair button
-            const btnW = 90;
-            const btnH = 24;
-            const btnX = x + (w - btnW) / 2;
-            const btnY = ry + repairSlotSize + 15;
 
             if (def.maxDurability && this.repairSlot.durability < def.maxDurability) {
                 const salePrice = Math.floor(def.price * 0.75);
                 let repairCost = Math.floor(salePrice / 8);
                 if (repairCost <= 0) repairCost = 1;
 
-                this.ui.repairButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
-
-                ctx.fillStyle = '#aa3333';
-                ctx.fillRect(btnX, btnY, btnW, btnH);
-                ctx.strokeStyle = '#ff6666';
-                ctx.strokeRect(btnX, btnY, btnW, btnH);
-
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 12px monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText(`REPAIR ($${repairCost})`, btnX + btnW / 2, btnY + 16);
-                ctx.textAlign = 'left';
+                this.ui.repairButtonBounds = UIMenu.renderActionButton(ctx, panelBounds, ssy, repairSlotSize, `REPAIR($${repairCost})`, '#aa3333');
             } else {
                 this.ui.repairButtonBounds = null;
+
+                const btnX = panelBounds.rx + (panelBounds.rw - 80) / 2;
+                const btnY = ssy + repairSlotSize + 20;
 
                 ctx.fillStyle = '#888';
                 ctx.font = '12px monospace';
                 ctx.textAlign = 'center';
                 if (!def.maxDurability) {
-                    ctx.fillText('Cannot be repaired', btnX + btnW / 2, btnY + 16);
+                    ctx.fillText('Cannot repair', btnX + 40, btnY + 16);
                 } else {
-                    ctx.fillText('Fully repaired', btnX + btnW / 2, btnY + 16);
+                    ctx.fillText('Fully repaired', btnX + 40, btnY + 16);
                 }
                 ctx.textAlign = 'left';
             }

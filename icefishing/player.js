@@ -49,6 +49,10 @@ const Player = {
     update(dt, keys) {
         if (this.isDead) return;
 
+        // Drain stats continuously while alive
+        this.updateStats(dt);
+        if (this.isDead) return;
+
         // Action in progress (chopping, drilling, etc.)
         if (this.actionTimer > 0) {
             this.actionTimer -= dt;
@@ -125,9 +129,6 @@ const Player = {
             this.animTimer = 0;
             this.animFrame = (this.animFrame + 1) % 6; // up to 6 frames for the 3x2 grid
         }
-
-        // Drain stats
-        this.updateStats(dt);
     },
 
     updateStats(dt) {
