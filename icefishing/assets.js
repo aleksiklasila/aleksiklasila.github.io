@@ -29,7 +29,11 @@ const Assets = {
         { name: 'fish_egg', src: 'assets/item_fish_egg.png' },
         { name: 'tree_egg', src: 'assets/item_tree_egg.png' },
         { name: 'shovel', src: 'assets/item_shovel.png' },
-        { name: 'simple_bridge', src: 'assets/item_simple_bridge.png' }
+        { name: 'simple_bridge', src: 'assets/item_simple_bridge.png' },
+        { name: 'pickaxe', src: 'assets/pickaxe.png' },
+        { name: 'rock', src: 'assets/rock.png' },
+        { name: 'item_rock', src: 'assets/item_rock.png' },
+        { name: 'anvil', src: 'assets/anvil.png' }
     ],
     loadedCount: 0,
 

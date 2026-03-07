@@ -13,6 +13,8 @@ const World = {
     fishEggs: [],
     treeEggs: [],
     bridges: [],
+    rocks: [],
+    rockEggs: [],
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -26,6 +28,8 @@ const World = {
         this.fishEggs = [];
         this.treeEggs = [];
         this.bridges = [];
+        this.rocks = [];
+        this.rockEggs = [];
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -62,6 +66,14 @@ const World = {
                         x: x * this.TILE_SIZE + Math.random() * 20 - 10,
                         groundCol: x,
                         type: (Math.random() * 3) | 0,
+                        alive: true
+                    });
+                }
+                // Rocks spawn on higher ground with some randomness (rarer)
+                if (height > 0.1 && Math.random() < 0.083) {
+                    this.rocks.push({
+                        x: x * this.TILE_SIZE + Math.random() * 20 - 10,
+                        groundCol: x,
                         alive: true
                     });
                 }
@@ -351,6 +363,49 @@ const World = {
             const col = this.columns[tree.groundCol];
             if (!col) continue;
             this.renderTree(ctx, sx, baseY - col.surfaceY, tree.type);
+        }
+
+        // Rocks
+        for (const rock of this.rocks) {
+            if (!rock.alive) continue;
+            const sx = rock.x - camera.x + canvasW / 2;
+            if (sx < -60 || sx > canvasW + 60) continue;
+            const col = this.columns[rock.groundCol];
+            if (!col) continue;
+            const ry = baseY - col.surfaceY;
+            const img = Assets.get('rock');
+            if (img) {
+                ctx.drawImage(img, sx - 24, ry - 42, 48, 48);
+            } else {
+                ctx.fillStyle = '#7a7a7a';
+                ctx.beginPath();
+                ctx.moveTo(sx - 18, ry);
+                ctx.lineTo(sx - 12, ry - 28);
+                ctx.lineTo(sx + 12, ry - 25);
+                ctx.lineTo(sx + 18, ry);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        // Rock Eggs (small rocks ready to regrow)
+        for (const re of this.rockEggs) {
+            const sx = re.x - camera.x + canvasW / 2;
+            if (sx < -30 || sx > canvasW + 30) continue;
+            const col = this.columns[re.groundCol];
+            if (!col) continue;
+            const ry = baseY - col.surfaceY;
+            const img = Assets.get('rock');
+            if (img) {
+                ctx.globalAlpha = 0.6;
+                ctx.drawImage(img, sx - 6, ry - 10, 12, 12);
+                ctx.globalAlpha = 1;
+            } else {
+                ctx.fillStyle = '#999';
+                ctx.beginPath();
+                ctx.arc(sx, ry - 4, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
 
         // Tree Eggs (Saplings) - rendered as 1/5th scale trees

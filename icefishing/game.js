@@ -104,6 +104,11 @@ const Game = {
                 if (Crafting.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.button)) return;
             }
 
+            // Click Anvil UI
+            if (Anvil.isOpen) {
+                if (Anvil.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
+            }
+
             // Click Inventory UI
             if (Inventory.isOpen) {
                 if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
@@ -135,7 +140,7 @@ const Game = {
             }
 
             // Handle clicking world items (Tents and Torches) to pick them up
-            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen && !Crafting.isOpen) {
+            if (!this.gameOver && !Fishing.active && Player.actionTimer <= 0 && !Shop.isOpen && !RepairShop.isOpen && !Inventory.isOpen && !Crafting.isOpen && !Anvil.isOpen) {
                 const worldX = this.mouseX + this.camera.x - this.width / 2;
                 const baseY = this.height * 0.6;
 
@@ -247,6 +252,10 @@ const Game = {
                 droppedInUI = RepairShop.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
 
+            if (!droppedInUI && Anvil.isOpen) {
+                droppedInUI = Anvil.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
+
             if (!droppedInUI && Inventory.isOpen) {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
@@ -255,6 +264,22 @@ const Game = {
             }
 
             if (!droppedInUI && Inventory.dragItem && Inventory.dragSource) {
+                // If buying from shop and dropping to world, still charge
+                if (Inventory.dragSource.type === 'shop_buy') {
+                    const def = Inventory.ITEMS[Inventory.dragItem.id];
+                    if (def.cost && def.cost.money) {
+                        if (!Inventory.canAfford({ money: def.cost.money })) {
+                            Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                            Inventory.dragItem = null;
+                            Inventory.dragSource = null;
+                            return;
+                        }
+                        Inventory.payCost({ money: def.cost.money });
+                    }
+                    Shop.saleItems[Inventory.dragSource.index] = null;
+                    Game.showMessage(`Bought and dropped ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
+                }
+
                 // Drop into the world
                 const worldX = this.mouseX + this.camera.x - this.width / 2;
 
@@ -267,7 +292,9 @@ const Game = {
                     World.addGroundItem(worldX, Inventory.dragItem);
                 }
 
-                Game.showMessage('Dropped ' + Inventory.dragItem.name, 1.5);
+                if (Inventory.dragSource.type !== 'shop_buy') {
+                    Game.showMessage('Dropped ' + Inventory.dragItem.name, 1.5);
+                }
                 Inventory.dragItem = null;
                 Inventory.dragSource = null;
             }
@@ -295,6 +322,7 @@ const Game = {
         Shop.init();
         RepairShop.init();
         Crafting.init();
+        Anvil.init();
 
         // Add starter unlit torch to hotbar
         const starterTorch = Inventory.createItem('torch', 1);
@@ -307,6 +335,11 @@ const Game = {
 
         // Add starter money
         Inventory.addItem('money', 100);
+
+        // Add starter pickaxe, anvil, and tent to bag
+        Inventory.bag[1] = Inventory.createItem('pickaxe');
+        Inventory.bag[2] = Inventory.createItem('anvil');
+        Inventory.bag[3] = Inventory.createItem('tent');
 
         Survival.init();
         Fishing.init();
@@ -405,14 +438,15 @@ const Game = {
             }
         }
 
-        if (Inventory.isOpen || Crafting.isOpen) {
+        if (Inventory.isOpen || Crafting.isOpen || Anvil.isOpen) {
             if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
                 Inventory.isOpen = false;
                 Crafting.isOpen = false;
+                Anvil.close();
             }
         }
 
-        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen) return;
+        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen) return;
 
         // Item use is now handled by left-click (in setupInputs)
 
@@ -483,7 +517,7 @@ const Game = {
         Survival.renderOverlays(ctx, this.width, this.height);
 
         // 8. UI Screens (Shop / Repair Shop / Inventory / Crafting)
-        if (Shop.isOpen || RepairShop.isOpen || Inventory.isOpen || Crafting.isOpen) {
+        if (Shop.isOpen || RepairShop.isOpen || Inventory.isOpen || Crafting.isOpen || Anvil.isOpen) {
             ctx.fillStyle = 'rgba(0,0,0,0.8)';
             ctx.fillRect(0, 0, this.width, this.height);
         }
@@ -492,6 +526,7 @@ const Game = {
         RepairShop.render(ctx, this.width, this.height);
         Inventory.render(ctx, this.width, this.height);
         Crafting.render(ctx, this.width, this.height);
+        Anvil.render(ctx, this.width, this.height);
 
         // 9. HUD
         this.renderHUD(ctx);
@@ -650,6 +685,10 @@ const Game = {
         const woodCount = Inventory.countItem('firewood');
         ctx.fillStyle = '#f2a365';
         ctx.fillText(`🪵 ${woodCount}`, startX + 90, y + 15);
+
+        const rockCount = Inventory.countItem('rock');
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(`🪨 ${rockCount}`, startX + 140, y + 15);
 
         const selectedItem = Inventory.getSelectedItem();
         if (selectedItem) {
