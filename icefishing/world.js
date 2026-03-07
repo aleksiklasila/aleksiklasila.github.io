@@ -124,18 +124,52 @@ const World = {
     },
 
     addBridge(worldX) {
+        const colIdx = Math.round(worldX / this.TILE_SIZE);
         const col = this.getColumnAt(worldX);
         if (!col || col.type !== 'water') return false;
+
+        // Check if there's already a bridge at this exact spot
         for (const b of this.bridges) {
-            if (Math.abs(b.x - worldX) < this.TILE_SIZE) return false;
+            if (colIdx >= b.startCol && colIdx <= b.endCol) return false;
         }
-        this.bridges.push({ x: worldX, col: Math.round(worldX / this.TILE_SIZE), surfaceY: 0 });
+
+        // Expand left to find start of water or an existing bridge
+        let leftCol = colIdx;
+        while (leftCol > 0 && this.columns[leftCol - 1].type === 'water') {
+            const hasBridge = this.bridges.some(b => (leftCol - 1) >= b.startCol && (leftCol - 1) <= b.endCol);
+            if (hasBridge) break;
+            leftCol--;
+        }
+
+        // Expand right to find end of water or an existing bridge
+        let rightCol = colIdx;
+        while (rightCol < this.WORLD_WIDTH - 1 && this.columns[rightCol + 1].type === 'water') {
+            const hasBridge = this.bridges.some(b => (rightCol + 1) >= b.startCol && (rightCol + 1) <= b.endCol);
+            if (hasBridge) break;
+            rightCol++;
+        }
+
+        // We want a max of 10 tiles. If the span is longer, truncate it.
+        const maxSpan = 10;
+        let span = rightCol - leftCol + 1;
+        if (span > maxSpan) {
+            if (colIdx - leftCol < rightCol - colIdx) {
+                // Closer to left shore, anchor to left
+                rightCol = leftCol + maxSpan - 1;
+            } else {
+                // Closer to right shore, anchor to right
+                leftCol = rightCol - maxSpan + 1;
+            }
+        }
+
+        this.bridges.push({ startCol: leftCol, endCol: rightCol, surfaceY: 0 });
         return true;
     },
 
     isBridgeAt(worldX) {
+        const colIdx = Math.round(worldX / this.TILE_SIZE);
         for (const b of this.bridges) {
-            if (Math.abs(b.x - worldX) < this.TILE_SIZE / 2) return true;
+            if (colIdx >= b.startCol && colIdx <= b.endCol) return true;
         }
         return false;
     },
@@ -253,13 +287,18 @@ const World = {
 
         // Bridges
         for (const bridge of this.bridges) {
-            const sx = bridge.x - camera.x + canvasW / 2;
-            if (sx < -80 || sx > canvasW + 80) continue;
+            const bridgePixelWidth = (bridge.endCol - bridge.startCol + 1) * this.TILE_SIZE;
+            const bridgeCenterX = ((bridge.startCol + bridge.endCol) / 2) * this.TILE_SIZE;
+            const sx = bridgeCenterX - camera.x + canvasW / 2;
+
+            if (sx + bridgePixelWidth / 2 < -80 || sx - bridgePixelWidth / 2 > canvasW + 80) continue;
+
             const img = Assets.get('simple_bridge');
-            if (img) ctx.drawImage(img, sx - 24, baseY - 12 - bridge.surfaceY, 48, 24);
-            else {
+            if (img) {
+                ctx.drawImage(img, sx - bridgePixelWidth / 2, baseY - 12 - bridge.surfaceY, bridgePixelWidth, 24);
+            } else {
                 ctx.fillStyle = '#6a4a2a';
-                ctx.fillRect(sx - 20, baseY - 6 - bridge.surfaceY, 40, 12);
+                ctx.fillRect(sx - bridgePixelWidth / 2, baseY - 6 - bridge.surfaceY, bridgePixelWidth, 12);
             }
         }
 
