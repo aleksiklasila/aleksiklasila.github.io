@@ -22,6 +22,7 @@ const Game = {
     targetFPS: 60,
     running: false,
     gameOver: false,
+    gameOverButtons: { newGame: { x: 0, y: 0, w: 0, h: 0 }, continue_: { x: 0, y: 0, w: 0, h: 0 } },
 
     messageText: '',
     messageTimer: 0,
@@ -83,6 +84,25 @@ const Game = {
             const rect = this.canvas.getBoundingClientRect();
             this.mouseX = e.clientX - rect.left;
             this.mouseY = e.clientY - rect.top;
+
+            // Game over button clicks
+            if (this.gameOver && e.button === 0) {
+                const mx = this.mouseX, my = this.mouseY;
+                const ng = this.gameOverButtons.newGame;
+                const ct = this.gameOverButtons.continue_;
+                if (mx >= ng.x && mx <= ng.x + ng.w && my >= ng.y && my <= ng.y + ng.h) {
+                    this.startNewGame();
+                    return;
+                }
+                if (mx >= ct.x && mx <= ct.x + ct.w && my >= ct.y && my <= ct.y + ct.h) {
+                    this.continueGame();
+                    return;
+                }
+                return;
+            }
+
+            // ChestUI handle click
+            if (ChestUI.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
 
             if (e.button === 0 && this.mouseX >= 5 && this.mouseX <= 110 && this.mouseY >= this.height - 25 && this.mouseY <= this.height - 5) {
                 this.fpsLocked = !this.fpsLocked;
@@ -165,6 +185,27 @@ const Game = {
                             }
                         }
                     }
+
+                    // Check Chests (before tents)
+                    const chest = World.getChestNear(worldX);
+                    if (chest) {
+                        const chestScreenY = baseY - chest.surfaceY - 14;
+                        if (Math.abs(chest.x - worldX) < 30 && Math.abs(this.mouseY - chestScreenY) < 30) {
+                            ChestUI.open(chest, false, false);
+                            return;
+                        }
+                    }
+
+                    // Check Tombstones
+                    const ts = World.getTombstoneNear(worldX);
+                    if (ts) {
+                        const tsScreenY = baseY - ts.surfaceY - 18;
+                        if (Math.abs(ts.x - worldX) < 35 && Math.abs(this.mouseY - tsScreenY) < 35) {
+                            ChestUI.open(ts, true, true);
+                            return;
+                        }
+                    }
+
                     // Check Tents
                     for (let i = 0; i < World.tents.length; i++) {
                         const tent = World.tents[i];
@@ -415,7 +456,6 @@ const Game = {
 
     update(dt) {
         if (this.gameOver) {
-            if (this.keysJustPressed['Space']) this.startNewGame();
             return;
         }
 
@@ -438,26 +478,50 @@ const Game = {
             }
         }
 
-        if (Inventory.isOpen || Crafting.isOpen || Anvil.isOpen) {
+        if (Inventory.isOpen || Crafting.isOpen || Anvil.isOpen || ChestUI.isOpen) {
             if (this.keysJustPressed['KeyW'] || this.keysJustPressed['KeyS'] || this.keysJustPressed['KeyA'] || this.keysJustPressed['KeyD']) {
                 Inventory.isOpen = false;
                 Crafting.isOpen = false;
                 Anvil.close();
+                ChestUI.close();
+            } else {
+                if (ChestUI.isOpen && ChestUI.currentChest && Math.abs(Player.x - ChestUI.currentChest.x) >= 100) {
+                    ChestUI.close();
+                }
             }
         }
 
-        if (Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen) return;
+        // Don't allow player movement or item use while menus are open,
+        // but keep the game world updating below
 
         // Item use is now handled by left-click (in setupInputs)
 
-        Player.update(dt, this.keys);
+        const anyMenuOpen = Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen || ChestUI.isOpen;
+
+        if (!anyMenuOpen) {
+            Player.update(dt, this.keys);
+        }
         Survival.update(dt);
         World.update(dt);
         Fishing.update(dt, this.keys, this.keysJustPressed);
 
         this.camera.x += (Player.x - this.camera.x) * 0.08;
 
-        if (Player.isDead) this.gameOver = true;
+        if (Player.isDead && !this.gameOver) {
+            // Spawn tombstone with player items
+            const items = [];
+            for (let i = 0; i < Inventory.HOTBAR_SIZE; i++) {
+                if (Inventory.hotbar[i]) { items.push(Inventory.hotbar[i]); Inventory.hotbar[i] = null; }
+            }
+            for (let i = 0; i < Inventory.BAG_SIZE; i++) {
+                if (Inventory.bag[i]) { items.push(Inventory.bag[i]); Inventory.bag[i] = null; }
+            }
+            if (Inventory.secondHand) { items.push(Inventory.secondHand); Inventory.secondHand = null; }
+            if (items.length > 0) {
+                World.addTombstone(Player.x, items);
+            }
+            this.gameOver = true;
+        }
 
         if (this.messageTimer > 0) this.messageTimer -= dt;
         this.checkTutorials();
@@ -524,6 +588,7 @@ const Game = {
 
         Shop.render(ctx, this.width, this.height);
         RepairShop.render(ctx, this.width, this.height);
+        ChestUI.render(ctx, this.width, this.height);
         Inventory.render(ctx, this.width, this.height);
         Crafting.render(ctx, this.width, this.height);
         Anvil.render(ctx, this.width, this.height);
@@ -785,17 +850,62 @@ const Game = {
         ctx.textAlign = 'left';
     },
 
+    continueGame() {
+        this.gameOver = false;
+        Player.isDead = false;
+        Player.state = 'idle';
+        Player.stats = { warmth: 50, hunger: 50, thirst: 50, sleep: 50 };
+        // Empty inventory on continue — player retrieves items from tombstone
+        Inventory.bag = new Array(Inventory.BAG_SIZE).fill(null);
+        Inventory.hotbar = new Array(Inventory.HOTBAR_SIZE).fill(null);
+        Inventory.secondHand = null;
+        Inventory.selectedSlot = 0;
+        Inventory.isOpen = false;
+        Inventory.dragItem = null;
+        Inventory.dragSource = null;
+
+        // Move player back to origin
+        Player.x = this.originX;
+        Player.y = World.getSurfaceY(this.originX);
+        this.camera.x = Player.x;
+    },
+
     renderGameOver(ctx) {
         ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, this.width, this.height);
         ctx.textAlign = 'center';
         ctx.fillStyle = '#cc3333'; ctx.font = 'bold 48px monospace';
-        ctx.fillText('GAME OVER', this.width / 2, this.height / 2 - 40);
+        ctx.fillText('GAME OVER', this.width / 2, this.height / 2 - 50);
         ctx.fillStyle = '#ddd'; ctx.font = '20px monospace';
-        ctx.fillText(Player.deathCause, this.width / 2, this.height / 2 + 10);
+        ctx.fillText(Player.deathCause, this.width / 2, this.height / 2);
         ctx.fillStyle = '#aaa'; ctx.font = '16px monospace';
-        ctx.fillText(`Survived ${Survival.dayCount} day${Survival.dayCount > 1 ? 's' : ''}`, this.width / 2, this.height / 2 + 45);
-        ctx.fillStyle = '#ffcc00'; ctx.font = '14px monospace';
-        ctx.fillText('Press SPACE to try again', this.width / 2, this.height / 2 + 85);
+        ctx.fillText(`Survived ${Survival.dayCount} day${Survival.dayCount > 1 ? 's' : ''}`, this.width / 2, this.height / 2 + 35);
+
+        // Buttons
+        const btnW = 160, btnH = 40, btnGap = 20;
+        const btnY = this.height / 2 + 65;
+        const ngX = this.width / 2 - btnW - btnGap / 2;
+        const ctX = this.width / 2 + btnGap / 2;
+
+        // New Game button
+        ctx.fillStyle = '#882222';
+        ctx.fillRect(ngX, btnY, btnW, btnH);
+        ctx.strokeStyle = '#cc4444'; ctx.lineWidth = 2;
+        ctx.strokeRect(ngX, btnY, btnW, btnH);
+        ctx.fillStyle = '#ffcc00'; ctx.font = 'bold 16px monospace';
+        ctx.fillText('New Game', ngX + btnW / 2, btnY + 26);
+
+        // Continue button
+        ctx.fillStyle = '#225522';
+        ctx.fillRect(ctX, btnY, btnW, btnH);
+        ctx.strokeStyle = '#44cc44'; ctx.lineWidth = 2;
+        ctx.strokeRect(ctX, btnY, btnW, btnH);
+        ctx.fillStyle = '#ffcc00'; ctx.font = 'bold 16px monospace';
+        ctx.fillText('Continue', ctX + btnW / 2, btnY + 26);
+
+        // Store button bounds for click detection
+        this.gameOverButtons.newGame = { x: ngX, y: btnY, w: btnW, h: btnH };
+        this.gameOverButtons.continue_ = { x: ctX, y: btnY, w: btnW, h: btnH };
+
         ctx.textAlign = 'left';
     }
 };

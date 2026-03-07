@@ -113,6 +113,22 @@ const Crafting = {
                     return false;
                 }
             }
+        },
+        {
+            id: 'chest',
+            name: 'Chest',
+            description: 'Store items (8x5).',
+            cost: { firewood: 5 },
+            icon: 'chest',
+            onBuild: (playerX) => {
+                if (World.addChest(playerX)) {
+                    Game.showMessage('Placed a chest!', 2);
+                    return true;
+                } else {
+                    Game.showMessage("Can't place chest here!", 1.5);
+                    return false;
+                }
+            }
         }
     ],
 

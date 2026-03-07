@@ -15,6 +15,8 @@ const World = {
     bridges: [],
     rocks: [],
     rockEggs: [],
+    chests: [],
+    tombstones: [],
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -30,6 +32,8 @@ const World = {
         this.bridges = [];
         this.rocks = [];
         this.rockEggs = [];
+        this.chests = [];
+        this.tombstones = [];
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -261,6 +265,66 @@ const World = {
         return false;
     },
 
+    addChest(worldX) {
+        const col = this.getColumnAt(worldX);
+        if (!col || col.type === 'water') return false;
+        // prevent placing too close to another chest
+        for (const c of this.chests) {
+            if (Math.abs(c.x - worldX) < 50) return false;
+        }
+        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        this.chests.push({ x: worldX, surfaceY, inventory: new Array(40).fill(null) });
+        return true;
+    },
+
+    removeChestNear(worldX) {
+        for (let i = 0; i < this.chests.length; i++) {
+            if (Math.abs(this.chests[i].x - worldX) < 50) {
+                const chest = this.chests[i];
+                this.chests.splice(i, 1);
+                return chest;
+            }
+        }
+        return null;
+    },
+
+    getChestNear(worldX) {
+        for (const c of this.chests) {
+            if (Math.abs(c.x - worldX) < 50) return c;
+        }
+        return null;
+    },
+
+    addTombstone(worldX, items) {
+        const col = this.getColumnAt(worldX);
+        if (!col) return false;
+        const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
+        const inventory = new Array(40).fill(null);
+        for (let i = 0; i < items.length && i < 40; i++) {
+            inventory[i] = items[i];
+        }
+        this.tombstones.push({ x: worldX, surfaceY, inventory, locked: true });
+        return true;
+    },
+
+    removeTombstoneNear(worldX) {
+        for (let i = 0; i < this.tombstones.length; i++) {
+            if (Math.abs(this.tombstones[i].x - worldX) < 50) {
+                const ts = this.tombstones[i];
+                this.tombstones.splice(i, 1);
+                return ts;
+            }
+        }
+        return null;
+    },
+
+    getTombstoneNear(worldX) {
+        for (const t of this.tombstones) {
+            if (Math.abs(t.x - worldX) < 50) return t;
+        }
+        return null;
+    },
+
     // Render sky, mountains, and surface objects (terrain handled by Voxels)
     render(ctx, camera, canvasW, canvasH, timeOfDay) {
         const baseY = canvasH * 0.6;
@@ -443,6 +507,62 @@ const World = {
             const sx = gItem.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
             Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY - 20, 24);
+        }
+
+        // Chests
+        for (const chest of this.chests) {
+            const sx = chest.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            const cy = baseY - chest.surfaceY;
+            const img = Assets.get('chest');
+            if (img) {
+                ctx.drawImage(img, sx - 16, cy - 28, 32, 28);
+            } else {
+                // Fallback box
+                ctx.fillStyle = '#8B6914';
+                ctx.fillRect(sx - 14, cy - 22, 28, 22);
+                ctx.fillStyle = '#6a4a10';
+                ctx.fillRect(sx - 14, cy - 22, 28, 5);
+                ctx.strokeStyle = '#4a3010';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(sx - 14, cy - 22, 28, 22);
+                // Lock/latch
+                ctx.fillStyle = '#c0a020';
+                ctx.fillRect(sx - 3, cy - 16, 6, 6);
+            }
+        }
+
+        // Tombstones
+        for (const ts of this.tombstones) {
+            const sx = ts.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            const ty = baseY - ts.surfaceY;
+            const img = Assets.get('tombstone');
+            if (img) {
+                ctx.drawImage(img, sx - 16, ty - 36, 32, 36);
+            } else {
+                // Fallback tombstone shape
+                ctx.fillStyle = '#666';
+                ctx.beginPath();
+                ctx.moveTo(sx - 10, ty);
+                ctx.lineTo(sx - 10, ty - 24);
+                ctx.quadraticCurveTo(sx, ty - 36, sx + 10, ty - 24);
+                ctx.lineTo(sx + 10, ty);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                // Cross
+                ctx.strokeStyle = '#999';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(sx, ty - 28);
+                ctx.lineTo(sx, ty - 12);
+                ctx.moveTo(sx - 5, ty - 22);
+                ctx.lineTo(sx + 5, ty - 22);
+                ctx.stroke();
+            }
         }
     },
 

@@ -103,7 +103,11 @@ const Player = {
                 this.vx = 0;
             }
 
-            this.state = moving ? 'walking' : 'idle';
+            if (!moving && World.isPlayerInTent(this.x)) {
+                this.state = 'sleeping';
+            } else {
+                this.state = moving ? 'walking' : 'idle';
+            }
         }
 
         // Apply movement

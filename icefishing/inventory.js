@@ -32,7 +32,8 @@ const Inventory = {
         tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } },
         rock: { id: 'rock', name: 'Rock', stackable: true, maxStack: 10, usable: false, category: 'resource', cost: { money: 3 } },
         pickaxe: { id: 'pickaxe', name: 'Pickaxe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 90 }, maxDurability: 20 },
-        anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 }
+        anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 },
+        chest: { id: 'chest', name: 'Chest', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } }
     },
 
     init() {
