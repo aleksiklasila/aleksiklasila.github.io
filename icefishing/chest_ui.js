@@ -7,6 +7,8 @@ const ChestUI = {
 
     COLS: 8,
     ROWS: 5,
+    SLOT_SIZE: 52,
+    GAP: 4,
 
     // UI bounds for click detection
     ui: { x: 0, y: 0, w: 0, h: 0 },
@@ -38,21 +40,33 @@ const ChestUI = {
         }
     },
 
+    getLayout(canvasW, canvasH) {
+        const totalW = this.COLS * (this.SLOT_SIZE + this.GAP);
+        const totalH = this.ROWS * (this.SLOT_SIZE + this.GAP) + 30;
+
+        // Center the combined unit (Inventory + Gap + Chest)
+        // Inventory Width = 448, Gap = 20, Chest Width = totalW
+        const invTotalW = 448;
+        const combinedW = invTotalW + 20 + totalW;
+        const invStartX = (canvasW - combinedW) / 2;
+
+        const startX = invStartX + invTotalW + 20;
+        const targetBottomY = canvasH - 100;
+        const startY = targetBottomY - totalH - 15; // Account for panelPad (15) in render
+
+        return { startX, startY, totalW, totalH };
+    },
+
     handleMouseDown(mouseX, mouseY, canvasW, canvasH, shiftKey = false, ctrlKey = false, button = 0) {
         if (!this.isOpen || !this.currentChest) return false;
 
-        const slotSize = 52;
-        const gap = 4;
-        const totalW = this.COLS * (slotSize + gap);
-        const totalH = this.ROWS * (slotSize + gap) + 30;
-        const startX = (canvasW - totalW) / 2;
-        const startY = 30; // chest UI at top of screen
+        const { startX, startY, totalW, totalH } = this.getLayout(canvasW, canvasH);
 
         for (let row = 0; row < this.ROWS; row++) {
             for (let col = 0; col < this.COLS; col++) {
-                const sx = startX + col * (slotSize + gap);
-                const sy = startY + 30 + row * (slotSize + gap);
-                if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= sy && mouseY < sy + slotSize) {
+                const sx = startX + col * (this.SLOT_SIZE + this.GAP);
+                const sy = startY + 30 + row * (this.SLOT_SIZE + this.GAP);
+                if (mouseX >= sx && mouseX < sx + this.SLOT_SIZE && mouseY >= sy && mouseY < sy + this.SLOT_SIZE) {
                     const idx = row * this.COLS + col;
                     if (this.currentChest.inventory[idx]) {
                         const item = this.currentChest.inventory[idx];
@@ -83,8 +97,10 @@ const ChestUI = {
             }
         }
 
-        // Check if click is within the UI panel area
-        if (mouseX >= startX - 15 && mouseX <= startX + totalW + 15 && mouseY >= startY - 15 && mouseY <= startY + totalH + 30) {
+        // Check if click is within the UI panel area: intercept to prevent world clicks
+        const panelPad = 15;
+        if (mouseX >= startX - panelPad && mouseX <= startX + totalW + panelPad &&
+            mouseY >= startY - panelPad && mouseY <= startY + totalH + panelPad) {
             return true;
         }
 
@@ -92,57 +108,63 @@ const ChestUI = {
     },
 
     handleMouseUp(mouseX, mouseY, canvasW, canvasH) {
-        if (!this.isOpen || !this.currentChest || !Inventory.dragItem) return false;
+        if (!this.isOpen || !this.currentChest) return false;
 
-        const slotSize = 52;
-        const gap = 4;
-        const startX = (canvasW - this.COLS * (slotSize + gap)) / 2;
-        const startY = 30;
+        const { startX, startY, totalW, totalH } = this.getLayout(canvasW, canvasH);
 
-        for (let row = 0; row < this.ROWS; row++) {
-            for (let col = 0; col < this.COLS; col++) {
-                const sx = startX + col * (slotSize + gap);
-                const sy = startY + 30 + row * (slotSize + gap);
-                if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= sy && mouseY < sy + slotSize) {
-                    const idx = row * this.COLS + col;
+        if (Inventory.dragItem) {
+            for (let row = 0; row < this.ROWS; row++) {
+                for (let col = 0; col < this.COLS; col++) {
+                    const sx = startX + col * (this.SLOT_SIZE + this.GAP);
+                    const sy = startY + 30 + row * (this.SLOT_SIZE + this.GAP);
+                    if (mouseX >= sx && mouseX < sx + this.SLOT_SIZE && mouseY >= sy && mouseY < sy + this.SLOT_SIZE) {
+                        const idx = row * this.COLS + col;
 
-                    // If locked (tombstone), prevent placing items IN
-                    if (this.isLocked) {
-                        // Only allow putting back to original slot if dragged FROM this chest
-                        if (Inventory.dragSource && Inventory.dragSource.type === 'chest' && Inventory.dragSource.idx === idx) {
-                            // Allow putting back
+                        // If locked (tombstone), prevent placing items IN
+                        if (this.isLocked) {
+                            // Only allow putting back to original slot if dragged FROM this chest
+                            if (Inventory.dragSource && Inventory.dragSource.type === 'chest' && Inventory.dragSource.idx === idx) {
+                                // Allow putting back
+                            } else {
+                                Game.showMessage("Cannot place items in the tombstone!", 1.5);
+                                return true;
+                            }
+                        }
+
+                        // Stack if same item
+                        if (this.currentChest.inventory[idx] && this.currentChest.inventory[idx].id === Inventory.dragItem.id && Inventory.dragItem.stackable) {
+                            const space = this.currentChest.inventory[idx].maxStack - this.currentChest.inventory[idx].count;
+                            const add = Math.min(Inventory.dragItem.count, space);
+                            this.currentChest.inventory[idx].count += add;
+                            Inventory.dragItem.count -= add;
+                            if (Inventory.dragItem.count <= 0) {
+                                Inventory.dragItem = null;
+                                Inventory.dragSource = null;
+                                return true;
+                            }
+                        }
+
+                        // Swap or place
+                        const temp = this.currentChest.inventory[idx];
+                        this.currentChest.inventory[idx] = Inventory.dragItem;
+                        Inventory.dragItem = temp;
+
+                        if (Inventory.dragItem) {
+                            Inventory.dragSource = { type: 'chest', idx, locked: this.isLocked };
                         } else {
-                            Game.showMessage("Cannot place items in the tombstone!", 1.5);
-                            return true;
-                        }
-                    }
-
-                    // Stack if same item
-                    if (this.currentChest.inventory[idx] && this.currentChest.inventory[idx].id === Inventory.dragItem.id && Inventory.dragItem.stackable) {
-                        const space = this.currentChest.inventory[idx].maxStack - this.currentChest.inventory[idx].count;
-                        const add = Math.min(Inventory.dragItem.count, space);
-                        this.currentChest.inventory[idx].count += add;
-                        Inventory.dragItem.count -= add;
-                        if (Inventory.dragItem.count <= 0) {
-                            Inventory.dragItem = null;
                             Inventory.dragSource = null;
-                            return true;
                         }
+                        return true;
                     }
-
-                    // Swap or place
-                    const temp = this.currentChest.inventory[idx];
-                    this.currentChest.inventory[idx] = Inventory.dragItem;
-                    Inventory.dragItem = temp;
-
-                    if (Inventory.dragItem) {
-                        Inventory.dragSource = { type: 'chest', idx, locked: this.isLocked };
-                    } else {
-                        Inventory.dragSource = null;
-                    }
-                    return true;
                 }
             }
+        }
+
+        // Intercept all clicks within the panel bounds to prevent "drop to ground"
+        const panelPad = 15;
+        if (mouseX >= startX - panelPad && mouseX <= startX + totalW + panelPad &&
+            mouseY >= startY - panelPad && mouseY <= startY + totalH + panelPad) {
+            return true;
         }
 
         return false;
@@ -151,24 +173,25 @@ const ChestUI = {
     render(ctx, canvasW, canvasH) {
         if (!this.isOpen || !this.currentChest) return;
 
-        const slotSize = 52;
-        const gap = 4;
-        const totalW = this.COLS * (slotSize + gap);
-        const totalH = this.ROWS * (slotSize + gap) + 30;
-        const startX = (canvasW - totalW) / 2;
-        const startY = 30;
+        const { startX, startY, totalW, totalH } = this.getLayout(canvasW, canvasH);
         const panelPad = 15;
+
+        // Update stored bounds for other logic (like closing on movement)
+        this.ui.x = startX - panelPad;
+        this.ui.y = startY - panelPad;
+        this.ui.w = totalW + panelPad * 2;
+        this.ui.h = totalH + panelPad * 2;
 
         // Panel background
         ctx.fillStyle = this.isTombstone ? '#2a1a1a' : '#1a2a14';
         ctx.strokeStyle = this.isTombstone ? '#884444' : '#4a8a3a';
         ctx.lineWidth = 2;
-        ctx.fillRect(startX - panelPad, startY - panelPad, totalW + panelPad * 2, totalH + panelPad * 2);
-        ctx.strokeRect(startX - panelPad, startY - panelPad, totalW + panelPad * 2, totalH + panelPad * 2);
+        ctx.fillRect(this.ui.x, this.ui.y, this.ui.w, this.ui.h);
+        ctx.strokeRect(this.ui.x, this.ui.y, this.ui.w, this.ui.h);
 
         // Title
         ctx.fillStyle = this.isTombstone ? '#cc8888' : '#88cc88';
-        ctx.font = '16px monospace';
+        ctx.font = 'bold 16px monospace';
         ctx.fillText(this.isTombstone ? 'TOMBSTONE' : 'CHEST', startX, startY + 20);
 
         if (this.isLocked) {
@@ -180,26 +203,20 @@ const ChestUI = {
         // Slots
         for (let row = 0; row < this.ROWS; row++) {
             for (let col = 0; col < this.COLS; col++) {
-                const x = startX + col * (slotSize + gap);
-                const y = startY + 30 + row * (slotSize + gap);
+                const x = startX + col * (this.SLOT_SIZE + this.GAP);
+                const y = startY + 30 + row * (this.SLOT_SIZE + this.GAP);
                 const idx = row * this.COLS + col;
 
                 ctx.fillStyle = this.isLocked ? 'rgba(50,30,30,0.8)' : 'rgba(40,50,30,0.8)';
-                ctx.fillRect(x, y, slotSize, slotSize);
+                ctx.fillRect(x, y, this.SLOT_SIZE, this.SLOT_SIZE);
                 ctx.strokeStyle = this.isLocked ? 'rgba(120,60,60,0.6)' : 'rgba(60,100,40,0.6)';
                 ctx.lineWidth = 1;
-                ctx.strokeRect(x, y, slotSize, slotSize);
+                ctx.strokeRect(x, y, this.SLOT_SIZE, this.SLOT_SIZE);
 
                 if (this.currentChest.inventory[idx]) {
-                    Inventory.renderItemIcon(ctx, this.currentChest.inventory[idx], x + 6, y + 6, slotSize - 12);
+                    Inventory.renderItemIcon(ctx, this.currentChest.inventory[idx], x + 6, y + 6, this.SLOT_SIZE - 12);
                 }
             }
         }
-
-        // Store UI bounds
-        this.ui.x = startX - panelPad;
-        this.ui.y = startY - panelPad;
-        this.ui.w = totalW + panelPad * 2;
-        this.ui.h = totalH + panelPad * 2;
     }
 };

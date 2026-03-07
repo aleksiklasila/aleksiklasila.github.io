@@ -5,7 +5,7 @@ const UIMenu = {
 
     // Shared dimensions
     width: 620,
-    height: 280,
+    height: 320,
     slotSize: 52,
     gap: 4,
 
@@ -35,17 +35,20 @@ const UIMenu = {
         };
     },
 
-    // Helper to calculate Y position so a menu floats above the inventory
-    calculateYPosition(canvasW, canvasH, bagRows, bagSlotSize, bagGap) {
-        const inventoryH = (bagRows + 1) * (bagSlotSize + bagGap) + 60;
-        const invStartY = (canvasH - inventoryH) / 2;
-        return Math.max(20, invStartY - this.height - 30);
+    // Helper to calculate Y position to bottom-align with a 100px margin
+    calculateYPosition(canvasW, canvasH) {
+        return canvasH - this.height - 100;
     },
 
     renderMenuBase(ctx, canvasW, canvasH, title, sourceObject) {
-        // Assume default layout logic
-        const x = (canvasW - this.width) / 2;
-        const y = this.calculateYPosition(canvasW, canvasH, 3, this.slotSize, this.gap);
+        // Center the combined unit (Inventory + Gap + Menu)
+        // Inventory Width = 448, Gap = 20, Menu Width = 620
+        const invTotalW = 448;
+        const combinedW = invTotalW + 20 + this.width;
+        const invStartX = (canvasW - combinedW) / 2;
+
+        const x = invStartX + invTotalW + 20;
+        const y = this.calculateYPosition(canvasW, canvasH);
 
         // Save bounds to active menu tracking
         this.activeMenu = { x, y, w: this.width, h: this.height };

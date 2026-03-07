@@ -49,7 +49,7 @@ const Player = {
     update(dt, keys) {
         if (this.isDead) return;
 
-        // Drain stats continuously while alive
+        // Consistently update stats (warmth, hunger, etc.)
         this.updateStats(dt);
         if (this.isDead) return;
 

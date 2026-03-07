@@ -119,7 +119,7 @@ const Crafting = {
             name: 'Chest',
             description: 'Store items (8x5).',
             cost: { firewood: 5 },
-            icon: 'chest',
+            icon: 'item_chest',
             onBuild: (playerX) => {
                 if (World.addChest(playerX)) {
                     Game.showMessage('Placed a chest!', 2);

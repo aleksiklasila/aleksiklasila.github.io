@@ -498,12 +498,19 @@ const Game = {
 
         const anyMenuOpen = Inventory.isOpen || Shop.isOpen || RepairShop.isOpen || Crafting.isOpen || Anvil.isOpen || ChestUI.isOpen;
 
-        if (!anyMenuOpen) {
-            Player.update(dt, this.keys);
-        }
+        // Effective keys: if a menu is open, systems receive no input to prevent accidental actions
+        const effectiveKeys = anyMenuOpen ? {} : this.keys;
+        const effectiveKeysJustPressed = anyMenuOpen ? {} : this.keysJustPressed;
+
+        // Player updates: movement, animation, sub-stats (re-consolidated)
+        Player.update(dt, effectiveKeys);
+
+        // World updates: campfires, torches, weather, time
         Survival.update(dt);
         World.update(dt);
-        Fishing.update(dt, this.keys, this.keysJustPressed);
+
+        // Fishing updates: world fish movement + reeling (input blocked if menu open)
+        Fishing.update(dt, effectiveKeys, effectiveKeysJustPressed);
 
         this.camera.x += (Player.x - this.camera.x) * 0.08;
 
