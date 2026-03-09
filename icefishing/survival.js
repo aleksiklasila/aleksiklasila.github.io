@@ -23,8 +23,8 @@ const Survival = {
     messages: [],
 
     init() {
-        this.timeOfDay = 0.0; // Start in morning
-        this.dayCount = 3;
+        this.timeOfDay = 0.18; // Start in morning
+        this.dayCount = 1;
         this.stormActive = false;
         this.stormTimer = 0;
         this.stormCooldown = 60 + Math.random() * 40;
@@ -171,7 +171,7 @@ const Survival = {
                     y: World.getSurfaceY(pbe.x),
                     vx: 0,
                     vy: 0,
-                    speed: 60,
+                    speed: 110,
                     hp: 80,
                     maxHp: 80,
                     facing: 1,
@@ -863,8 +863,13 @@ const Survival = {
             if (sx < -100 || sx > canvasW + 100) continue;
 
             const glowGrad = ctx.createRadialGradient(sx, sy - 15, 5, sx, sy - 15, 100);
-            glowGrad.addColorStop(0, `rgba(255,180,60,${0.15 * nightAlpha})`);
-            glowGrad.addColorStop(1, 'rgba(255,100,0,0)');
+            if (fire.isBlue) {
+                glowGrad.addColorStop(0, `rgba(60,180,255,${0.15 * nightAlpha})`);
+                glowGrad.addColorStop(1, 'rgba(0,100,255,0)');
+            } else {
+                glowGrad.addColorStop(0, `rgba(255,180,60,${0.15 * nightAlpha})`);
+                glowGrad.addColorStop(1, 'rgba(255,100,0,0)');
+            }
             ctx.globalCompositeOperation = 'lighter';
             ctx.fillStyle = glowGrad;
             ctx.fillRect(sx - 120, sy - 120, 240, 200);

@@ -21,10 +21,31 @@ const Crafting = {
                     Game.showMessage("Can't build campfire here!", 1.5);
                     return false;
                 }
-                const fire = World.addCampfire(playerX);
+                const fire = World.addCampfire(playerX, false);
                 if (fire) {
                     fire.lit = false;
                     Game.showMessage("Built Campfire! Light it with Flint & Steel.", 2);
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            id: 'campfire_blue',
+            name: 'Blue Campfire',
+            description: 'Unlit. Repels zombies on Blood Moons.',
+            cost: { firewood: 6 },
+            icon: 'campfire_blue_off',
+            onBuild: (playerX) => {
+                const col = World.getColumnAt(playerX);
+                if (!col || col.type === 'water') {
+                    Game.showMessage("Can't build blue campfire here!", 1.5);
+                    return false;
+                }
+                const fire = World.addCampfire(playerX, true); // true = isBlue
+                if (fire) {
+                    fire.lit = false;
+                    Game.showMessage("Built Blue Campfire! Light it with Flint & Steel.", 2);
                     return true;
                 }
                 return false;
@@ -64,11 +85,34 @@ const Crafting = {
                     Game.showMessage("Can't build campfire here!", 1.5);
                     return false;
                 }
-                const fire = World.addCampfire(playerX);
+                const fire = World.addCampfire(playerX, false);
                 if (fire) {
                     fire.lit = true;
                     Inventory.damageItemById('flint_steel', 1);
                     Game.showMessage("Built a Lit Campfire!", 2);
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            id: 'campfire_blue_lit',
+            name: 'Lit Blue Campfire',
+            description: 'Use Flint & Steel.',
+            cost: { firewood: 6 },
+            requiresItem: 'flint_steel',
+            icon: 'campfire_blue_on',
+            onBuild: (playerX) => {
+                const col = World.getColumnAt(playerX);
+                if (!col || col.type === 'water') {
+                    Game.showMessage("Can't build blue campfire here!", 1.5);
+                    return false;
+                }
+                const fire = World.addCampfire(playerX, true); // true = isBlue
+                if (fire) {
+                    fire.lit = true;
+                    Inventory.damageItemById('flint_steel', 1);
+                    Game.showMessage("Built a Lit Blue Campfire!", 2);
                     return true;
                 }
                 return false;
