@@ -9,6 +9,7 @@ const Inventory = {
     dragItem: null,
     dragSource: null,
     secondHand: null,
+    clothing: null,
 
     getLayout(canvasW, canvasH) {
         const slotSize = 52;
@@ -62,10 +63,13 @@ const Inventory = {
         simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', cost: { money: 20 } },
         fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 10 } },
         tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } },
+        polar_bear_egg: { id: 'polar_bear_egg', name: 'Polar Bear Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 100 } },
         rock: { id: 'rock', name: 'Rock', stackable: true, maxStack: 10, usable: false, category: 'resource', cost: { money: 10 } },
         pickaxe: { id: 'pickaxe', name: 'Pickaxe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 90 }, maxDurability: 20 },
         anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 },
-        chest: { id: 'chest', name: 'Chest', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } }
+        chest: { id: 'chest', name: 'Chest', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } },
+        shotgun: { id: 'shotgun', name: 'Shotgun', stackable: false, maxStack: 1, usable: true, category: 'weapon', cost: { money: 70 }, maxDurability: 10 },
+        hide: { id: 'hide', name: 'Hide', stackable: false, maxStack: 1, usable: false, category: 'clothing', cost: { money: 50 }, maxDurability: 100 }
     },
 
     init() {
@@ -85,6 +89,7 @@ const Inventory = {
 
         // Bait in bag
         this.bag[0] = this.createItem('bait', 10);
+        this.bag[4] = this.createItem('shotgun');
     },
 
     createItem(id, count = 1, durability = undefined) {
@@ -283,6 +288,19 @@ const Inventory = {
         this.secondHand = item;
     },
 
+    moveToClothing(item) {
+        if (!item || item.id !== 'hide') return false;
+
+        if (this.clothing) {
+            const oldItem = this.clothing;
+            this.clothing = null;
+            this.addItem(oldItem.id, oldItem.count, oldItem.durability);
+        }
+
+        this.clothing = item;
+        return true;
+    },
+
     scrollSlot(delta) {
         this.selectedSlot = ((this.selectedSlot + delta) % this.HOTBAR_SIZE + this.HOTBAR_SIZE) % this.HOTBAR_SIZE;
     },
@@ -341,6 +359,26 @@ const Inventory = {
                         this.dragItem = item;
                         this.secondHand = null;
                         this.dragSource = { type: 'secondHand', idx: 0 };
+                    }
+                    return true;
+                }
+                return true;
+            }
+
+            // Check clothing slot
+            const clothX = startX + totalW + 20;
+            const clothY = bagHotbarY;
+            if (mouseX >= clothX && mouseX < clothX + slotSize && mouseY >= clothY && mouseY < clothY + slotSize) {
+                if (this.clothing) {
+                    if (button === 2) {
+                        const item = this.clothing;
+                        this.clothing = null;
+                        this.addItem(item.id, item.count, item.durability);
+                    } else {
+                        const item = this.clothing;
+                        this.dragItem = item;
+                        this.clothing = null;
+                        this.dragSource = { type: 'clothing', idx: 0 };
                     }
                     return true;
                 }
@@ -536,6 +574,40 @@ const Inventory = {
                 return true;
             }
 
+            // Check clothing slot drop
+            const clothX = bshX;
+            const clothY = bagHotbarY - slotSize - 20;
+            if (mouseX >= clothX && mouseX < clothX + slotSize && mouseY >= clothY && mouseY < clothY + slotSize) {
+                if (this.dragItem.id !== 'hide') {
+                    Game.showMessage("Can only equip hide here!", 1.5);
+                    return true;
+                }
+
+                if (this.dragSource && this.dragSource.type === 'shop_buy') {
+                    const def = Inventory.ITEMS[this.dragItem.id];
+                    if (def.cost && def.cost.money) {
+                        if (!Inventory.canAfford({ money: def.cost.money })) {
+                            Game.showMessage(`Not enough money! Need $${def.cost.money}`, 1.5);
+                            return true;
+                        }
+                        Inventory.payCost({ money: def.cost.money });
+                    }
+                    Shop.saleItems[this.dragSource.index] = null;
+                    Game.showMessage(`Bought ${def.name} for $${def.cost ? def.cost.money : 0}`, 1.5);
+                    this.dragSource = null;
+                }
+
+                const temp = this.clothing;
+                this.clothing = this.dragItem;
+                this.dragItem = temp;
+                if (this.dragItem) {
+                    this.dragSource = { type: 'clothing', idx: 0 };
+                } else {
+                    this.dragSource = null;
+                }
+                return true;
+            }
+
             for (let i = 0; i < this.HOTBAR_SIZE; i++) {
                 const sx = startX + i * (slotSize + gap);
                 if (mouseX >= sx && mouseX < sx + slotSize && mouseY >= bagHotbarY && mouseY < bagHotbarY + slotSize) {
@@ -670,6 +742,88 @@ const Inventory = {
             }
         }
 
+        // --- Fallback if dropped in empty space ---
+        if (this.dragItem) {
+            // Did it come from the shop? If so, just cancel the purchase
+            if (this.dragSource && this.dragSource.type === 'shop_buy') {
+                this.dragItem = null;
+                this.dragSource = null;
+                return true;
+            }
+
+            // Return to its original slot
+            if (this.dragSource) {
+                if (this.dragSource.type === 'bag') {
+                    // Try to put it back exactly where it was, or find any empty slot
+                    if (!this.bag[this.dragSource.idx]) {
+                        this.bag[this.dragSource.idx] = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'hotbar') {
+                    if (!this.hotbar[this.dragSource.idx]) {
+                        this.hotbar[this.dragSource.idx] = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'secondHand') {
+                    if (!this.secondHand) {
+                        this.secondHand = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'clothing') {
+                    if (!this.clothing) {
+                        this.clothing = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'chest') {
+                    if (ChestUI.currentChest && !ChestUI.currentChest.inventory[this.dragSource.idx]) {
+                        ChestUI.currentChest.inventory[this.dragSource.idx] = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'repair_shop') {
+                    if (!RepairShop.repairSlot) {
+                        RepairShop.repairSlot = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'anvil') {
+                    if (!Anvil.repairSlot) {
+                        Anvil.repairSlot = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'shop' || this.dragSource.type === 'shop_split') {
+                    if (!Shop.sellSlot) {
+                        Shop.sellSlot = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'bag_split') {
+                    if (!this.bag[this.dragSource.idx]) {
+                        this.bag[this.dragSource.idx] = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                } else if (this.dragSource.type === 'hotbar_split') {
+                    if (!this.hotbar[this.dragSource.idx]) {
+                        this.hotbar[this.dragSource.idx] = this.dragItem;
+                    } else {
+                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+                    }
+                }
+            } else {
+                // If it somehow had no source, just add it to inventory
+                Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
+            }
+
+            this.dragItem = null;
+            this.dragSource = null;
+        }
+
         return false;
     },
 
@@ -792,6 +946,23 @@ const Inventory = {
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
         ctx.font = '10px monospace';
         ctx.fillText("2nd", bshX + 3, hotbarY + 12);
+
+        // Render clothing slot in bag view
+        const clothX = bshX;
+        const clothY = hotbarY - slotSize - 20;
+        ctx.fillStyle = 'rgba(40,50,70,0.8)';
+        ctx.fillRect(clothX, clothY, slotSize, slotSize);
+        ctx.strokeStyle = '#a3a3a3';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(clothX, clothY, slotSize, slotSize);
+
+        if (this.clothing) {
+            this.renderItemIcon(ctx, this.clothing, clothX + 6, clothY + 6, slotSize - 12);
+        }
+
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '10px monospace';
+        ctx.fillText("Cloth", clothX + 3, clothY + 12);
 
         // Hotbar slots in inventory view
         for (let i = 0; i < this.HOTBAR_SIZE; i++) {
