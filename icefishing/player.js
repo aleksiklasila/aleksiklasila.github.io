@@ -114,7 +114,7 @@ const Player = {
         if (this.state !== 'sleeping') {
             const nextX = this.x + this.vx * dt;
             const newCol = World.getColumnAt(nextX);
-            if (newCol && newCol.type === 'water' && !World.isBridgeAt(nextX)) {
+            if ((newCol && newCol.type === 'water' && !World.isBridgeAt(nextX)) || World.isGateAt(nextX)) {
                 this.vx = 0;
             } else {
                 this.x = nextX;

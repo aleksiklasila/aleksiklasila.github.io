@@ -52,7 +52,7 @@ const Inventory = {
         hammer: { id: 'hammer', name: 'Hammer', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 120 }, maxDurability: 50 },
         flint_steel: { id: 'flint_steel', name: 'Flint & Steel', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 30 }, maxDurability: 10 },
         tent: { id: 'tent', name: 'Tent', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 250 }, maxDurability: 5 },
-        firewood: { id: 'firewood', name: 'Firewood', stackable: true, maxStack: 10, usable: true, category: 'resource', cost: { money: 2 } },
+        firewood: { id: 'firewood', name: 'Firewood', stackable: true, maxStack: 10, usable: true, category: 'resource', cost: { money: 7 } },
         raw_fish: { id: 'raw_fish', name: 'Raw Fish', stackable: true, maxStack: 10, usable: true, category: 'food', cost: { money: 10 } },
         cooked_fish: { id: 'cooked_fish', name: 'Cooked Fish', stackable: true, maxStack: 10, usable: true, category: 'food', cost: { money: 15 } },
         raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', cost: { money: 25 } },
@@ -62,7 +62,7 @@ const Inventory = {
         simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', cost: { money: 20 } },
         fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 10 } },
         tree_egg: { id: 'tree_egg', name: 'Tree Sapling', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 5 } },
-        rock: { id: 'rock', name: 'Rock', stackable: true, maxStack: 10, usable: false, category: 'resource', cost: { money: 3 } },
+        rock: { id: 'rock', name: 'Rock', stackable: true, maxStack: 10, usable: false, category: 'resource', cost: { money: 10 } },
         pickaxe: { id: 'pickaxe', name: 'Pickaxe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 90 }, maxDurability: 20 },
         anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 },
         chest: { id: 'chest', name: 'Chest', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } }
@@ -819,6 +819,7 @@ const Inventory = {
         let assetName = item.id;
         if (assetName === 'firewood') assetName = 'wood';
         if (assetName === 'rock') assetName = 'item_rock';
+        if (assetName === 'item_chest') assetName = 'chest';
         if (item.id === 'torch' && item.lit !== true) assetName = 'torch_off';
 
         const img = Assets.get(assetName);
@@ -841,6 +842,29 @@ const Inventory = {
                 ctx.beginPath();
                 ctx.arc(16 * s, 16 * s, 3 * s, 0, Math.PI * 2);
                 ctx.fill();
+            } else if (item.id === 'chest') {
+                // Chest Icon Fallback
+                ctx.fillStyle = '#6b4423';
+                ctx.fillRect(4 * s, 8 * s, 24 * s, 20 * s);
+                ctx.fillStyle = '#8b5a2b';
+                ctx.fillRect(4 * s, 8 * s, 24 * s, 6 * s); // Lid
+                ctx.fillStyle = '#ffd700'; // Lock
+                ctx.fillRect(14 * s, 14 * s, 4 * s, 4 * s);
+            } else if (item.id === 'tombstone') {
+                // Tombstone Icon Fallback
+                ctx.fillStyle = '#777';
+                ctx.beginPath();
+                ctx.moveTo(8 * s, 28 * s);
+                ctx.lineTo(8 * s, 12 * s);
+                ctx.arc(16 * s, 12 * s, 8 * s, Math.PI, 0);
+                ctx.lineTo(24 * s, 28 * s);
+                ctx.fill();
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.fillStyle = '#333';
+                ctx.font = `${8 * s}px monospace`;
+                ctx.fillText("RIP", 12 * s, 18 * s);
             } else {
                 ctx.fillStyle = '#ff00ff';
                 ctx.fillRect(0, 0, size, size);

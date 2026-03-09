@@ -29,6 +29,7 @@ const Game = {
 
     tutorialStep: 0,
     tutorialShown: {},
+    _hudState: {}, // Tracks last rendered HUD values to avoid fillText
 
     init() {
         const startBtn = document.getElementById('start-btn');
@@ -46,6 +47,11 @@ const Game = {
 
             // Initialize lighting system
             Lighting.init();
+
+            // HUD label cache
+            this._hudCache = document.createElement('canvas');
+            this._hudCtx = this._hudCache.getContext('2d');
+            this._hudCacheDirty = true;
 
             this.startNewGame();
         });
@@ -156,6 +162,22 @@ const Game = {
                 if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
                     RepairShop.toggle();
                     return;
+                }
+            }
+
+            // Click on Gate in World
+            if (!this.gameOver && !Fishing.active && e.button === 0) {
+                const worldX = this.mouseX + this.camera.x - this.width / 2;
+                const gate = World.getGateNear(worldX);
+                if (gate) {
+                    const sx = gate.x - this.camera.x + this.width / 2;
+                    const sy = (this.height * 0.6) - gate.surfaceY - 128;
+                    // Gate image is 128x128
+                    if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
+                        gate.open = !gate.open;
+                        this.showMessage(gate.open ? 'Gate opened.' : 'Gate closed.', 1.5);
+                        return;
+                    }
                 }
             }
 
@@ -300,6 +322,10 @@ const Game = {
             if (!droppedInUI && Inventory.isOpen) {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
+
+            if (!droppedInUI && ChestUI.isOpen) {
+                droppedInUI = ChestUI.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
+            }
             if (!droppedInUI && !Inventory.isOpen) {
                 droppedInUI = Inventory.handleMouseUp(this.mouseX, this.mouseY, this.width, this.height);
             }
@@ -349,6 +375,7 @@ const Game = {
         this.height = window.innerHeight;
         this.canvas.width = this.width;
         this.canvas.height = this.height;
+        this._hudCacheDirty = true;
     },
 
     startNewGame() {
@@ -684,98 +711,183 @@ const Game = {
         }
     },
 
-    renderHUD(ctx) {
-        const barW = 140, barH = 14, startX = 15, gap = 22;
-        let y = 15;
-
+    _renderHUDLabels() {
         const stats = [
-            { key: 'warmth', label: '🔥 WARMTH', color: '#ff6633', bgColor: '#441100' },
-            { key: 'hunger', label: '🍖 HUNGER', color: '#44bb44', bgColor: '#003300' },
-            { key: 'thirst', label: '💧 THIRST', color: '#3388ff', bgColor: '#001144' },
-            { key: 'sleep', label: '😴 SLEEP', color: '#bb88ff', bgColor: '#220044' }
+            { label: '🔥 WARMTH' },
+            { label: '🍖 HUNGER' },
+            { label: '💧 THIRST' },
+            { label: '😴 SLEEP' }
         ];
+        const gap = 22;
+        this._hudCache.width = 600; // Wider to accommodate more text
+        this._hudCache.height = 300;
+        const ctx = this._hudCtx;
+        ctx.clearRect(0, 0, this._hudCache.width, this._hudCache.height);
 
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.fillRect(startX - 5, y - 5, barW + 60, stats.length * gap + 10);
+        ctx.fillStyle = '#ccc';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
 
+        let y = 15;
         for (const stat of stats) {
-            const val = Player.stats[stat.key];
-            ctx.fillStyle = '#ccc'; ctx.font = '10px monospace';
-            ctx.fillText(stat.label, startX, y + 10);
-            const bx = startX + 85;
-            ctx.fillStyle = stat.bgColor; ctx.fillRect(bx, y, barW, barH);
-            ctx.fillStyle = val < 25 ? '#ff2200' : stat.color;
-            ctx.fillRect(bx, y, barW * (val / 100), barH);
-            if (val < 20) {
-                ctx.fillStyle = `rgba(255,0,0,${Math.sin(Date.now() / 200) * 0.3 + 0.3})`;
-                ctx.fillRect(bx, y, barW, barH);
-            }
-            if (stat.key === 'warmth') {
-                // Map 0-100 warmth to 34.0C - 37.0C
-                const bodyTemp = 34.0 + (val / 100) * 3.0;
-                ctx.fillText(`${bodyTemp.toFixed(1)}°C`, bx + barW + 5, y + 11);
-            } else {
-                ctx.fillText(`${Math.round(val)}`, bx + barW + 5, y + 11);
-            }
+            ctx.fillText(stat.label, 15, y + 10);
             y += gap;
         }
 
         y += 5;
-        // Adjust for wider time + temp box
-        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(startX - 5, y - 2, 175, 40);
+        ctx.fillStyle = '#ffaa44';
+        ctx.font = '12px monospace';
+        // Static parts of time/temp labels
+        ctx.fillText('Temp:', 15, y + 28);
+
+        // Help text
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('A/D Move  SCROLL Items  CLICK Use  E Inventory', 590, 15);
+        ctx.textAlign = 'left';
+
+        this._hudCacheDirty = false;
+        this._hudState = {}; // Reset state to force redraw of values
+    },
+
+    renderHUD(ctx) {
+        if (this._hudCacheDirty) this._renderHUDLabels();
+
+        const barW = 140, barH = 14, startX = 15, gap = 22;
+        let y = 15;
+
+        // 1. Draw Backgrounds
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(startX - 5, y - 5, barW + 60, this.HUD_STATS.length * gap + 10);
+
+        // 2. Draw Cached Static Labels & Help
+        ctx.drawImage(this._hudCache, 0, 0);
+
+        // 3. Draw Dynamic Bars and Values
+        for (const stat of this.HUD_STATS) {
+            const val = Player.stats[stat.key];
+            const bx = startX + 85;
+
+            // Draw Bar (fast)
+            ctx.fillStyle = stat.bgColor; ctx.fillRect(bx, y, barW, barH);
+            ctx.fillStyle = val < 25 ? '#ff2200' : stat.color;
+            ctx.fillRect(bx, y, barW * (val / 100), barH);
+
+            // Animation overlay (fast)
+            if (val < 20) {
+                ctx.fillStyle = `rgba(255,0,0,${Math.sin(Date.now() / 200) * 0.3 + 0.3})`;
+                ctx.fillRect(bx, y, barW, barH);
+            }
+
+            // Value text (cached)
+            let valStr = '';
+            if (stat.key === 'warmth') {
+                valStr = (34.0 + (val / 100) * 3.0).toFixed(1) + '°C';
+            } else {
+                valStr = Math.round(val).toString();
+            }
+
+            if (this._hudState[stat.key] !== valStr) {
+                this._hudState[stat.key] = valStr;
+                // Clear and redraw value in cache
+                this._hudCtx.clearRect(bx + barW + 5, y, 60, 20);
+                this._hudCtx.fillStyle = '#ccc';
+                this._hudCtx.font = '10px monospace';
+                this._hudCtx.fillText(valStr, bx + barW + 5, y + 11);
+            }
+
+            y += gap;
+        }
+
+        // Time and Temperature
+        y += 5;
         const hours = Math.floor(Survival.timeOfDay * 24);
         const mins = Math.floor((Survival.timeOfDay * 24 - hours) * 60);
-        ctx.fillStyle = Survival.isNight ? '#8888cc' : '#ffffaa';
-        ctx.font = '12px monospace';
-        ctx.fillText(`Day ${Survival.dayCount}  ${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`, startX, y + 14);
+        const dayStr = `Day ${Survival.dayCount}  ${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+        const cTempStr = Survival.currentTemp.toFixed(1) + '°C';
+        const fTempStr = `(Feels: ${Survival.feelsLikeTemp.toFixed(1)}°C)`;
 
-        ctx.fillStyle = '#ffaa44';
-        const cTemp = Survival.currentTemp.toFixed(1);
-        const fTemp = Survival.feelsLikeTemp.toFixed(1);
-        ctx.fillText(`Temp: ${cTemp}°C`, startX, y + 28);
-        ctx.fillStyle = '#ccccff';
-        ctx.fillText(`(Feels: ${fTemp}°C)`, startX + 90, y + 28);
+        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(startX - 5, y - 2, 175, 40);
+
+        if (this._hudState.dayTime !== dayStr) {
+            this._hudState.dayTime = dayStr;
+            this._hudCtx.clearRect(startX, y, 170, 18);
+            this._hudCtx.fillStyle = Survival.isNight ? '#8888cc' : '#ffffaa';
+            this._hudCtx.font = '12px monospace';
+            this._hudCtx.fillText(dayStr, startX, y + 14);
+        }
+
+        if (this._hudState.temp !== cTempStr + fTempStr) {
+            this._hudState.temp = cTempStr + fTempStr;
+            this._hudCtx.clearRect(startX + 50, y + 18, 200, 18);
+            this._hudCtx.font = '12px monospace';
+            this._hudCtx.fillStyle = '#ffaa44';
+            this._hudCtx.fillText(cTempStr, startX + 50, y + 28);
+            this._hudCtx.fillStyle = '#ccccff';
+            this._hudCtx.fillText(fTempStr, startX + 90, y + 28);
+        }
 
         y += 38;
 
-        if (Survival.stormActive) {
-            ctx.fillStyle = 'rgba(200,0,0,0.7)'; ctx.font = 'bold 12px monospace';
-            ctx.fillText('⚠ STORM', startX, y + 12);
-            y += 16;
-        }
-        if (World.isPlayerInTent(Player.x)) {
-            ctx.fillStyle = 'rgba(60,120,60,0.7)'; ctx.font = 'bold 11px monospace';
-            ctx.fillText('🏕 IN TENT', startX, y + 12);
-            y += 16;
+        // Warnings (Redraw cache if state changes)
+        const storm = !!Survival.stormActive;
+        const tent = !!World.isPlayerInTent(Player.x);
+        if (this._hudState.storm !== storm || this._hudState.tent !== tent) {
+            this._hudState.storm = storm;
+            this._hudState.tent = tent;
+            this._hudCtx.clearRect(startX, y, 100, 40);
+            let wy = y;
+            if (storm) {
+                this._hudCtx.fillStyle = 'rgba(200,0,0,0.7)'; this._hudCtx.font = 'bold 12px monospace';
+                this._hudCtx.fillText('⚠ STORM', startX, wy + 12);
+                wy += 16;
+            }
+            if (tent) {
+                this._hudCtx.fillStyle = 'rgba(60,120,60,0.7)'; this._hudCtx.font = 'bold 11px monospace';
+                this._hudCtx.fillText('🏕 IN TENT', startX, wy + 12);
+            }
         }
 
+        // Resources (Money, wood, rock)
         const moneyCount = Inventory.countItem('money');
-        ctx.fillStyle = 'rgba(255,215,0,0.8)';
-        ctx.font = 'bold 14px monospace';
-        ctx.fillText(`💵 $${moneyCount}`, startX, y + 15);
-
         const woodCount = Inventory.countItem('firewood');
-        ctx.fillStyle = '#f2a365';
-        ctx.fillText(`🪵 ${woodCount}`, startX + 90, y + 15);
-
         const rockCount = Inventory.countItem('rock');
-        ctx.fillStyle = '#aaa';
-        ctx.fillText(`🪨 ${rockCount}`, startX + 140, y + 15);
+        const resourceStr = `${moneyCount},${woodCount},${rockCount}`;
+        const ry = y + (storm ? 16 : 0) + (tent ? 16 : 0);
 
-        const selectedItem = Inventory.getSelectedItem();
-        if (selectedItem) {
-            ctx.fillStyle = 'rgba(0,0,0,0.5)';
-            const nameW = ctx.measureText(selectedItem.name).width + 20;
-            ctx.fillRect(this.width / 2 - nameW / 2, this.height - 72, nameW, 18);
-            ctx.fillStyle = '#ddd'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
-            ctx.fillText(selectedItem.name, this.width / 2, this.height - 58);
-            ctx.textAlign = 'left';
+        if (this._hudState.resources !== resourceStr || this._hudState.resourceY !== ry) {
+            this._hudState.resources = resourceStr;
+            this._hudState.resourceY = ry;
+            this._hudCtx.clearRect(startX, y + 32, 300, 40); // Clear both potential areas
+            this._hudCtx.clearRect(startX, ry, 300, 20);
+
+            this._hudCtx.font = 'bold 14px monospace';
+            this._hudCtx.fillStyle = 'rgba(255,215,0,0.8)';
+            this._hudCtx.fillText(`💵 $${moneyCount}`, startX, ry + 15);
+            this._hudCtx.fillStyle = '#f2a365';
+            this._hudCtx.fillText(`🪵 ${woodCount}`, startX + 90, ry + 15);
+            this._hudCtx.fillStyle = '#aaa';
+            this._hudCtx.fillText(`🪨 ${rockCount}`, startX + 140, ry + 15);
         }
 
-        ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
-        ctx.fillText('A/D Move  SCROLL Items  CLICK Use  E Inventory', this.width - 10, 15);
-        ctx.textAlign = 'left';
+        // Selected Item Name
+        const selectedItem = Inventory.getSelectedItem();
+        const itemName = selectedItem ? selectedItem.name : '';
+        if (this._hudState.itemName !== itemName) {
+            this._hudState.itemName = itemName;
+            this._hudCtx.clearRect(0, this.height - 80, this.width, 30);
+            if (itemName) {
+                this._hudCtx.fillStyle = 'rgba(0,0,0,0.5)';
+                const nameW = this._hudCtx.measureText(itemName).width + 20;
+                this._hudCtx.fillRect(this.width / 2 - nameW / 2, this.height - 72, nameW, 18);
+                this._hudCtx.fillStyle = '#ddd'; this._hudCtx.font = '12px monospace'; this._hudCtx.textAlign = 'center';
+                this._hudCtx.fillText(itemName, this.width / 2, this.height - 58);
+                this._hudCtx.textAlign = 'left';
+            }
+        }
 
+        // Player Progress Bar (Action timer) - Draw direct (fast)
         if (Player.actionTimer > 0) {
             const progress = 1 - (Player.actionTimer / 2.5);
             const pbW = 100, pbH = 8;
@@ -914,5 +1026,12 @@ const Game = {
         this.gameOverButtons.continue_ = { x: ctX, y: btnY, w: btnW, h: btnH };
 
         ctx.textAlign = 'left';
-    }
+    },
+
+    HUD_STATS: [
+        { key: 'warmth', label: '🔥 WARMTH', color: '#ff6633', bgColor: '#441100' },
+        { key: 'hunger', label: '🍖 HUNGER', color: '#44bb44', bgColor: '#003300' },
+        { key: 'thirst', label: '💧 THIRST', color: '#3388ff', bgColor: '#001144' },
+        { key: 'sleep', label: '😴 SLEEP', color: '#bb88ff', bgColor: '#220044' }
+    ]
 };

@@ -36,7 +36,9 @@ const Assets = {
         { name: 'anvil', src: 'assets/anvil.png' },
         { name: 'chest', src: 'assets/chest.png' },
         { name: 'item_chest', src: 'assets/item_chest.png' },
-        { name: 'tombstone', src: 'assets/tombstone.png' }
+        { name: 'tombstone', src: 'assets/tombstone.png' },
+        { name: 'gate_closed', src: 'assets/gate_closed.png' },
+        { name: 'gate_open', src: 'assets/gate_open.png' }
     ],
     loadedCount: 0,
 
