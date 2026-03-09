@@ -77,6 +77,18 @@ const NPCs = {
                     }
                 }
 
+                let avoidThisPlayer = !npc.aggro && !isBloodMoon;
+                if (avoidThisPlayer) {
+                    const heldItem = Inventory.getSelectedItem();
+                    const offHandItem = Inventory.secondHand;
+                    const playerHasTorch = (heldItem && heldItem.id === 'torch' && heldItem.lit && heldItem.durability > 0) ||
+                        (offHandItem && offHandItem.id === 'torch' && offHandItem.lit && offHandItem.durability > 0);
+                    if (playerHasTorch && distToPlayer < minLightDist) {
+                        nearestLight = Player;
+                        minLightDist = distToPlayer;
+                    }
+                }
+
                 if (nearestLight) {
                     lightDir = npc.x > nearestLight.x ? 1 : -1;
                 }
