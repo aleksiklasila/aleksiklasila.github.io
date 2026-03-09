@@ -983,10 +983,12 @@ const Game = {
         const ry = y + (storm ? 16 : 0) + (tent ? 16 : 0);
 
         if (this._hudState.resources !== resourceStr || this._hudState.resourceY !== ry) {
+            if (this._hudState.resourceY !== undefined && this._hudState.resourceY !== ry) {
+                this._hudCtx.clearRect(startX, this._hudState.resourceY, 300, 24);
+            }
             this._hudState.resources = resourceStr;
             this._hudState.resourceY = ry;
-            this._hudCtx.clearRect(startX, y + 32, 300, 40); // Clear both potential areas
-            this._hudCtx.clearRect(startX, ry, 300, 20);
+            this._hudCtx.clearRect(startX, ry, 300, 24);
 
             this._hudCtx.font = 'bold 14px monospace';
             this._hudCtx.fillStyle = 'rgba(255,215,0,0.8)';

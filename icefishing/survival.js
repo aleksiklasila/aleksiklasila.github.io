@@ -116,15 +116,6 @@ const Survival = {
 
         this.currentTemp = dayCycleTemp - diffCold;
         this.feelsLikeTemp = this.currentTemp - stormDrop;
-
-        if (Inventory.clothing && Inventory.clothing.id === 'hide') {
-            this.currentTemp += 15;
-            this.feelsLikeTemp += 15;
-
-            // Need dt? We don't have dt in this scope seamlessly unless passed.
-            // But we can approximate dt as 1/60 if we want, or do it in update()
-            // We'll rely on dt passing in update() instead of here for durability.
-        }
     },
 
     runMidnightRoutines() {

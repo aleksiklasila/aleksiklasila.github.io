@@ -159,12 +159,17 @@ const Player = {
         const feelsLike = Survival.feelsLikeTemp;
         let warmthMultiplier = 0;
 
+        // Hide clothing gives excellent insulation, lowering the temperature limit before drain starts
+        const hasHide = Inventory.clothing && Inventory.clothing.id === 'hide';
+        const safeTempLimit = hasHide ? -25 : -10;
+
         // If it's warm enough (e.g. above 0C), warmly recover or stay neutral
         if (feelsLike > 10) {
             this.stats.warmth = Math.min(100, this.stats.warmth + feelsLike * 0.1 * dt);
-        } else if (feelsLike < -10) {
-            // Drain based on how cold it is below 0
-            warmthMultiplier = Math.abs(feelsLike + 10) * 0.15; // e.g. -20C = 1.5x drain
+        } else if (feelsLike < safeTempLimit) {
+            // Drain based on how cold it is below the safe limit
+            // Formula: Math.abs(feelsLike - safeTempLimit)
+            warmthMultiplier = Math.abs(feelsLike - safeTempLimit) * 0.15; // e.g. -20C (w/o hide) = 10 * 0.15 = 1.5x drain
             if (isOnIce) warmthMultiplier *= 1.1;
             if (isInTent) warmthMultiplier *= 0.3; // 70% reduction
 
