@@ -27,6 +27,9 @@ const Lighting = {
     sunDirX: 0,
     sunDirY: 1,
     sunIntensity: 0.8,
+    sunColorR: 1.0,
+    sunColorG: 0.98,
+    sunColorB: 0.92,
 
     _chunkStartVx: 0,
     _chunkStartVy: 0,
@@ -199,6 +202,7 @@ const Lighting = {
         
         uniform vec2 u_sunDir;
         uniform float u_sunIntensity;
+        uniform vec3 u_sunColor;
         
         const float SHADOW_BRIGHTNESS = 0.04;
 
@@ -293,7 +297,7 @@ const Lighting = {
                 float trans = traceRayLossy(tv, sunEnd, sunBase);
                 
                 if (trans > 0.0) {
-                    light += vec3(1.0, 0.98, 0.92) * (trans / 1.35); 
+                    light += u_sunColor * (trans / 1.35); 
                 }
             }
 
@@ -378,7 +382,7 @@ const Lighting = {
         const names3 = [
             'u_pass2', 'u_voxels', 'u_chunkSize', 'u_chunkStartVx', 'u_screenSize',
             'u_voxelSize', 'u_baseY', 'u_topY', 'u_cameraX',
-            'u_numLights', 'u_sunDir', 'u_sunIntensity'
+            'u_numLights', 'u_sunDir', 'u_sunIntensity', 'u_sunColor'
         ];
         for (const n of names3) this._uniforms3[n] = gl.getUniformLocation(this.accumulateProgram, n);
         for (let i = 0; i < this.MAX_LIGHTS; i++) {
@@ -492,10 +496,13 @@ const Lighting = {
 
     clearLights() { this.lights = []; },
 
-    setSunDir(dx, dy, intensity) {
+    setSunDir(dx, dy, intensity, r = 1.0, g = 0.98, b = 0.92) {
         this.sunDirX = dx;
         this.sunDirY = dy;
         this.sunIntensity = intensity;
+        this.sunColorR = r;
+        this.sunColorG = g;
+        this.sunColorB = b;
     },
 
     setPlayerVision(screenX, screenY, radius) {
@@ -604,6 +611,7 @@ const Lighting = {
         // Sun uniforms
         gl.uniform2f(this._uniforms3['u_sunDir'], this.sunDirX, this.sunDirY);
         gl.uniform1f(this._uniforms3['u_sunIntensity'], this.sunIntensity);
+        gl.uniform3f(this._uniforms3['u_sunColor'], this.sunColorR, this.sunColorG, this.sunColorB);
 
         // Lights
         const passedLights = Math.min(this.MAX_LIGHTS, this.lights.length);

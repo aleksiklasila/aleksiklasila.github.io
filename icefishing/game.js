@@ -144,6 +144,7 @@ const Game = {
                 if (Inventory.handleMouseDown(this.mouseX, this.mouseY, this.width, this.height, e.shiftKey, e.ctrlKey, e.button)) return;
             }
 
+            // Gate repair is now combined with gate open/close mechanic
             // Click on Shop Building in World
             if (!this.gameOver && !Fishing.active && World.shop && e.button === 0) {
                 const sx = World.shop.x - this.camera.x + this.width / 2;
@@ -174,8 +175,30 @@ const Game = {
                     const sy = (this.height * 0.6) - gate.surfaceY - 128;
                     // Gate image is 128x128
                     if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
-                        gate.open = !gate.open;
-                        this.showMessage(gate.open ? 'Gate opened.' : 'Gate closed.', 1.5);
+                        const handItem = Inventory.getHandItem(false);
+                        const isHoldingRepairItem = handItem && (handItem.id === 'firewood' || handItem.id === 'rock');
+
+                        // Repair gate block
+                        if (gate.durability < gate.maxDurability && isHoldingRepairItem) {
+                            Player.startAction(0.4, 'chopping', () => {
+                                const prevDur = gate.durability;
+                                gate.durability = Math.min(gate.maxDurability, gate.durability + 10); // each repairs 10
+                                if (prevDur <= 0 && gate.durability > 0) {
+                                    gate.open = false; // It stands up
+                                }
+                                Inventory.consumeHandItem(false, 1);
+                                this.showMessage(`Repaired gate with ${handItem.name}! (+10 hp)`, 1.5);
+                            });
+                            return;
+                        }
+
+                        // Normal open / close interaction
+                        if (gate.durability > 0) {
+                            gate.open = !gate.open;
+                            this.showMessage(gate.open ? 'Gate opened.' : 'Gate closed.', 1.5);
+                        } else {
+                            this.showMessage('Gate is broken! Equip firewood or rock to repair.', 2);
+                        }
                         return;
                     }
                 }
@@ -208,6 +231,64 @@ const Game = {
                         }
                     }
 
+                    // Check NPCs (Melee Attack)
+                    let handledByMelee = false;
+                    const handItem = Inventory.getHandItem(false);
+                    // Do not trigger melee if holding a shotgun
+                    if (!handItem || handItem.id !== 'shotgun') {
+                        for (let i = 0; i < NPCs.entities.length; i++) {
+                            const npc = NPCs.entities[i];
+                            const npcScreenY = baseY - npc.y - 30;
+                            if (Math.abs(npc.x - worldX) < 40 && Math.abs(this.mouseY - npcScreenY) < 60) {
+                                if (e.button === 0) {
+                                    // Check distance to player
+                                    if (Math.abs(Player.x - npc.x) < 80 && Math.abs(Player.y - npc.y) < 60) {
+
+                                        // Simple cooldown check
+                                        const now = Date.now();
+                                        if (now - (Player.lastMeleeTime || 0) < 400) {
+                                            handledByMelee = true;
+                                            break;
+                                        }
+                                        Player.lastMeleeTime = now;
+
+                                        let dmg = 10; // Fists damage
+                                        let toolName = 'fists';
+
+                                        if (handItem) {
+                                            if (handItem.id === 'axe') { dmg = 25; toolName = 'axe'; }
+                                            else if (handItem.id === 'pickaxe') { dmg = 20; toolName = 'pickaxe'; }
+                                            else if (handItem.id === 'hammer') { dmg = 15; toolName = 'hammer'; }
+                                            else if (handItem.id === 'ice_drill' || handItem.id === 'shovel') { dmg = 15; toolName = handItem.name.toLowerCase(); }
+                                        }
+
+                                        // Apply damage instantly without stopping movement
+                                        npc.hp -= dmg;
+                                        npc.aggro = true;
+                                        npc.x += (npc.x > Player.x ? 1 : -1) * 15; // Pushback
+
+                                        this.showMessage(`Hit ${npc.type.replace('_', ' ')} with ${toolName}!`, 1);
+
+                                        if (handItem && handItem.durability !== undefined && toolName !== 'fists') {
+                                            handItem.durability -= 1;
+                                            if (handItem.durability <= 0) {
+                                                Inventory.removeHandItem(false);
+                                                this.showMessage(`${handItem.name} broke!`, 1.5);
+                                            }
+                                        }
+                                        handledByMelee = true;
+                                        break;
+                                    } else {
+                                        this.showMessage("Too far to melee attack!", 1);
+                                        handledByMelee = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (handledByMelee) return;
+
                     // Check Chests (before tents)
                     const chest = World.getChestNear(worldX);
                     if (chest) {
@@ -231,6 +312,8 @@ const Game = {
                     // Check Tents
                     for (let i = 0; i < World.tents.length; i++) {
                         const tent = World.tents[i];
+                        if (tent.permanent) continue;
+
                         const tentScreenY = baseY - tent.surfaceY - 18;
                         if (Math.abs(tent.x - worldX) < 40 && Math.abs(this.mouseY - tentScreenY) < 40) {
                             const removedTentDurability = World.removeTentNear(worldX);
@@ -255,6 +338,8 @@ const Game = {
                     if (World.torches) {
                         for (let i = 0; i < World.torches.length; i++) {
                             const torch = World.torches[i];
+                            if (torch.permanent) continue;
+
                             const torchScreenY = baseY - torch.surfaceY - 15;
                             if (Math.abs(torch.x - worldX) < 30 && Math.abs(this.mouseY - torchScreenY) < 30) {
                                 const torchData = World.removeTorchNear(worldX);
@@ -379,11 +464,17 @@ const Game = {
     },
 
     startNewGame() {
+        if (this.loopId !== undefined) {
+            cancelAnimationFrame(this.loopId);
+        }
+
+        this.running = false; // Temporarily stop loop logic before full reset
         this.gameOver = false;
         this.messageText = '';
         this.messageTimer = 0;
         this.tutorialShown = {};
 
+        NPCs.init();
         World.generate();
         Voxels.generate();
         Inventory.init();
@@ -391,6 +482,10 @@ const Game = {
         RepairShop.init();
         Crafting.init();
         Anvil.init();
+        ChestUI.close();
+
+        Inventory.dragItem = null;
+        Inventory.dragSource = null;
 
         // Add starter unlit torch to hotbar
         const starterTorch = Inventory.createItem('torch', 1);
@@ -428,7 +523,7 @@ const Game = {
 
         this.running = true;
         this.lastTime = performance.now();
-        requestAnimationFrame(t => this.loop(t));
+        this.loopId = requestAnimationFrame(t => this.loop(t));
     },
 
     loop(timestamp) {
@@ -442,7 +537,7 @@ const Game = {
             // requestAnimationFrame timings due to browser jitter,
             // while successfully throttling 120Hz/144Hz setups to 60 FPS.
             if (timestamp < this.nextFrameTime - (frameDelay * 0.4)) {
-                requestAnimationFrame(t => this.loop(t));
+                this.loopId = requestAnimationFrame(t => this.loop(t));
                 return;
             }
 
@@ -478,7 +573,7 @@ const Game = {
         this.update(dt);
         this.render();
         this.keysJustPressed = {};
-        requestAnimationFrame(t => this.loop(t));
+        this.loopId = requestAnimationFrame(t => this.loop(t));
     },
 
     update(dt) {
@@ -529,12 +624,18 @@ const Game = {
         const effectiveKeys = anyMenuOpen ? {} : this.keys;
         const effectiveKeysJustPressed = anyMenuOpen ? {} : this.keysJustPressed;
 
+        // Allow cancelling actions by moving
+        if (effectiveKeys['KeyA'] || effectiveKeys['KeyD']) {
+            Player.cancelAction();
+        }
+
         // Player updates: movement, animation, sub-stats (re-consolidated)
         Player.update(dt, effectiveKeys);
 
         // World updates: campfires, torches, weather, time
         Survival.update(dt);
         World.update(dt);
+        NPCs.update(dt);
 
         // Fishing updates: world fish movement + reeling (input blocked if menu open)
         Fishing.update(dt, effectiveKeys, effectiveKeysJustPressed);
@@ -603,6 +704,9 @@ const Game = {
         // 4. Surface objects (holes, tents, trees, campfires)
         World.renderObjects(ctx, this.camera, this.width, this.height);
 
+        // 4.5 NPCs
+        NPCs.render(ctx, this.camera, this.width, this.height);
+
         // 5. Player
         Player.render(ctx, this.camera, this.width, this.height);
 
@@ -663,13 +767,30 @@ const Game = {
         // Sun angle: 0.25 (sunrise) -> left (PI), 0.5 (noon) -> up (PI/2), 0.75 (sunset) -> right (0)
         const sunAngle = Math.PI - (Survival.timeOfDay - 0.25) * Math.PI * 2;
         // Direction from surface TO sun
-        const sunDirX = Math.cos(sunAngle);
-        const sunDirY = -Math.sin(sunAngle); // Negative because screen Y grows downward
+        let sunDirX = Math.cos(sunAngle);
+        let sunDirY = -Math.sin(sunAngle); // Negative because screen Y grows downward
 
         // Keep sun mostly bright during the day, fading entirely at midnight
-        let sunIntensity = Math.min(1.0, Math.sin(Survival.timeOfDay * Math.PI) * 1.5);
+        let sunIntensity = Math.max(0.0, Math.sin(Survival.timeOfDay * Math.PI) * 1.5);
         if (Survival.stormActive) sunIntensity *= 0.4;
-        Lighting.setSunDir(sunDirX, sunDirY, sunIntensity);
+
+        let sunColorR = 1.0;
+        let sunColorG = 0.98;
+        let sunColorB = 0.92;
+
+        if (Survival.isNight && Survival.dayCount % 3 === 0) {
+            // Blood Moon (opposite in the sky to the sun)
+            sunDirX = -sunDirX;
+            sunDirY = -sunDirY;
+            // Dimmer than daytime, but bright enough to see red shadows at night
+            sunIntensity = 1.0;
+            if (Survival.stormActive) sunIntensity *= 0.8;
+            sunColorR = 1.0;
+            sunColorG = 0.0;
+            sunColorB = 0.0;
+        }
+
+        Lighting.setSunDir(sunDirX, sunDirY, Math.min(1.0, sunIntensity), sunColorR, sunColorG, sunColorB);
 
         // --- Player vision ---
         const playerSX = Player.x - this.camera.x + this.width / 2;

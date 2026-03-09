@@ -18,6 +18,7 @@ const World = {
     chests: [],
     tombstones: [],
     gates: [],
+    polarBearEggs: [],
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -36,6 +37,7 @@ const World = {
         this.chests = [];
         this.tombstones = [];
         this.gates = [];
+        this.polarBearEggs = [];
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -91,6 +93,24 @@ const World = {
                         alive: true
                     });
                 }
+                // Polar Bears spawn randomly on ground
+                if (Math.random() < 0.04 && distFromCenter > 50) { // ~100 Polar Bears total, away from spawn
+                    NPCs.entities.push({
+                        type: 'polar_bear',
+                        x: x * this.TILE_SIZE,
+                        y: surfaceY,
+                        vx: 0,
+                        vy: 0,
+                        speed: 100,
+                        hp: 80,
+                        maxHp: 80,
+                        facing: 1,
+                        wanderTimer: 0,
+                        attackTimer: 0,
+                        directionCooldown: 0,
+                        aggro: false
+                    });
+                }
             }
         }
 
@@ -114,8 +134,23 @@ const World = {
                 // Place gates at the edges of the plateau
                 // Plateau is +/- 15m (15 tiles) from centerCol
                 const gateOffset = 14;
-                this.gates.push({ x: (centerCol - gateOffset) * this.TILE_SIZE, surfaceY: this.columns[centerCol - gateOffset].surfaceY, open: false });
-                this.gates.push({ x: (centerCol + gateOffset) * this.TILE_SIZE, surfaceY: this.columns[centerCol + gateOffset].surfaceY, open: false });
+                const g1x = (centerCol - gateOffset) * this.TILE_SIZE;
+                const g1y = this.columns[centerCol - gateOffset].surfaceY;
+                const g2x = (centerCol + gateOffset) * this.TILE_SIZE;
+                const g2y = this.columns[centerCol + gateOffset].surfaceY;
+                this.gates.push({ x: g1x, surfaceY: g1y, open: false, durability: 100, maxDurability: 100 });
+                this.gates.push({ x: g2x, surfaceY: g2y, open: false, durability: 100, maxDurability: 100 });
+
+                // Add permanent lit torches above gates
+                this.torches.push({ x: g1x, surfaceY: g1y + 100, fuel: Infinity, lit: true, permanent: true });
+                this.torches.push({ x: g2x, surfaceY: g2y + 100, fuel: Infinity, lit: true, permanent: true });
+
+                // Add permanent campfire and tent at origin
+                const ogX = centerCol * this.TILE_SIZE;
+                const ogY = this.columns[centerCol].surfaceY;
+                this.campfires.push({ x: ogX - 40, surfaceY: ogY, fuel: Infinity, lit: true, permanent: true });
+                this.tents.push({ x: ogX + 40, surfaceY: ogY, durability: Infinity, permanent: true });
+
                 break;
             }
         }
@@ -512,9 +547,14 @@ const World = {
         for (const fe of this.fishEggs) {
             const sx = fe.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            const img = Assets.get('fish_egg');
-            // Draw at the bottom of the water column
-            if (img) ctx.drawImage(img, sx - 10, baseY - fe.surfaceY + 6 - 20, 20, 20);
+            // Eggs are now invisible
+        }
+
+        // Polar Bear Eggs
+        for (const pbe of this.polarBearEggs) {
+            const sx = pbe.x - camera.x + canvasW / 2;
+            if (sx < -50 || sx > canvasW + 50) continue;
+            // Eggs are now invisible
         }
 
         // Campfires
@@ -602,15 +642,31 @@ const World = {
             const img = Assets.get(gate.open ? 'gate_open' : 'gate_closed');
             if (img) {
                 ctx.drawImage(img, sx - 64, gy - 128, 128, 128);
-            } else {
-                // Fallback gate
-                ctx.fillStyle = '#666'; // Stone pillars
-                ctx.fillRect(sx - 50, gy - 80, 20, 80);
-                ctx.fillRect(sx + 30, gy - 80, 20, 80);
-                if (!gate.open) {
-                    ctx.fillStyle = '#6a4a2a'; // Wood gate
-                    ctx.fillRect(sx - 30, gy - 70, 60, 70);
-                }
+            }
+
+            // Render durability bar if damaged
+            if (gate.durability < gate.maxDurability && gate.durability > 0) {
+                const pct = gate.durability / gate.maxDurability;
+                const barW = 40;
+                const barH = 5;
+                const bx = sx - barW / 2;
+                const by = gy - 140; // above gate
+
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(bx, by, barW, barH);
+                ctx.fillStyle = pct > 0.5 ? '#00ff00' : (pct > 0.2 ? '#ffcc00' : '#cc3300');
+                ctx.fillRect(bx, by, barW * pct, barH);
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(bx, by, barW, barH);
+            } else if (gate.durability <= 0) {
+                ctx.fillStyle = 'red';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText("BROKEN", sx, gy - 145);
+                ctx.fillStyle = 'white';
+                ctx.fillText("Click to repair (5 Firewood, 5 Rock)", sx, gy - 130);
+                ctx.textAlign = 'left';
             }
         }
     },
@@ -714,21 +770,23 @@ const World = {
         }
 
         // Render fuel/durability bar above campfire
-        const pct = fire.fuel / 100;
-        const barW = 24;
-        const barH = 4;
-        const bx = x - barW / 2;
-        const by = y - 55; // above campfire
+        if (!fire.permanent) {
+            const pct = fire.fuel / 100;
+            const barW = 24;
+            const barH = 4;
+            const bx = x - barW / 2;
+            const by = y - 55; // above campfire
 
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(bx, by, barW, barH);
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(bx, by, barW, barH);
 
-        ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
-        ctx.fillRect(bx, by, barW * pct, barH);
+            ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
+            ctx.fillRect(bx, by, barW * pct, barH);
 
-        ctx.strokeStyle = '#222';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(bx, by, barW, barH);
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bx, by, barW, barH);
+        }
     },
 
     renderTorch(ctx, x, y, torch) {
@@ -770,18 +828,20 @@ const World = {
         }
 
         // Fuel bar
-        const pct = torch.fuel / 100;
-        const barW = 18;
-        const barH = 3;
-        const bx = x - barW / 2;
-        const by = y - 48;
-        ctx.fillStyle = 'rgba(0,0,0,0.7)';
-        ctx.fillRect(bx, by, barW, barH);
-        ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
-        ctx.fillRect(bx, by, barW * pct, barH);
-        ctx.strokeStyle = '#222';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(bx, by, barW, barH);
+        if (!torch.permanent) {
+            const pct = torch.fuel / 100;
+            const barW = 18;
+            const barH = 3;
+            const bx = x - barW / 2;
+            const by = y - 48;
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(bx, by, barW, barH);
+            ctx.fillStyle = pct > 0.5 ? '#ffcc00' : (pct > 0.2 ? '#cc6600' : '#cc3300');
+            ctx.fillRect(bx, by, barW * pct, barH);
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bx, by, barW, barH);
+        }
     },
 
     update(dt) {

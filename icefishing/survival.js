@@ -23,8 +23,8 @@ const Survival = {
     messages: [],
 
     init() {
-        this.timeOfDay = 0.25; // Start in morning
-        this.dayCount = 1;
+        this.timeOfDay = 0.0; // Start in morning
+        this.dayCount = 3;
         this.stormActive = false;
         this.stormTimer = 0;
         this.stormCooldown = 60 + Math.random() * 40;
@@ -59,7 +59,12 @@ const Survival = {
         }
 
         // Determine night
+        const wasNight = this.isNight;
         this.isNight = this.timeOfDay < 0.2 || this.timeOfDay > 0.8;
+
+        if (!wasNight && this.isNight && this.dayCount % 3 === 0) {
+            Game.showMessage("The Blood Moon rises...", 4);
+        }
 
         // Storm logic
         if (!this.stormActive) {
@@ -79,6 +84,15 @@ const Survival = {
 
         // Update Tempearture
         this.updateTemperatures();
+
+        // Drain clothing durability
+        if (Inventory.clothing && Inventory.clothing.durability !== undefined) {
+            Inventory.clothing.durability -= dt * 0.1; // 1 durability per 10 real seconds
+            if (Inventory.clothing.durability <= 0) {
+                Inventory.clothing = null;
+                Game.showMessage("Your clothing broke!", 2);
+            }
+        }
 
         // Handle auto-cooking fish
         this.updateCooking(dt);
@@ -101,9 +115,16 @@ const Survival = {
         const diffCold = Difficulty.getLevel(Player.x) * 3;
 
         this.currentTemp = dayCycleTemp - diffCold;
-
-        // Feels like accounts for wind/storm
         this.feelsLikeTemp = this.currentTemp - stormDrop;
+
+        if (Inventory.clothing && Inventory.clothing.id === 'hide') {
+            this.currentTemp += 15;
+            this.feelsLikeTemp += 15;
+
+            // Need dt? We don't have dt in this scope seamlessly unless passed.
+            // But we can approximate dt as 1/60 if we want, or do it in update()
+            // We'll rely on dt passing in update() instead of here for durability.
+        }
     },
 
     runMidnightRoutines() {
@@ -137,6 +158,28 @@ const Survival = {
                     alive: true
                 });
                 World.rockEggs.splice(i, 1);
+            }
+        }
+
+        // 2c. Polar Bear Eggs hatching chance
+        for (let i = World.polarBearEggs.length - 1; i >= 0; i--) {
+            if (Math.random() < 1 / this.dayCount) {
+                const pbe = World.polarBearEggs[i];
+                NPCs.entities.push({
+                    type: 'polar_bear',
+                    x: pbe.x,
+                    y: World.getSurfaceY(pbe.x),
+                    vx: 0,
+                    vy: 0,
+                    speed: 60,
+                    hp: 80,
+                    maxHp: 80,
+                    facing: 1,
+                    wanderTimer: 0,
+                    attackTimer: 0,
+                    aggro: false
+                });
+                World.polarBearEggs.splice(i, 1);
             }
         }
 
@@ -505,7 +548,75 @@ const Survival = {
     // Use selected item
     useItem(playerX, isSecondHand = false) {
         const item = Inventory.getHandItem(isSecondHand);
-        if (!item) return;
+        if (!item) {
+            // Barehanded gathering (5x slower)
+            let nearestTree = null;
+            let nearestTreeDist = Infinity;
+            for (const tree of World.trees) {
+                if (!tree.alive) continue;
+                const d = Math.abs(tree.x - playerX);
+                if (d < nearestTreeDist && d < 60) {
+                    nearestTreeDist = d;
+                    nearestTree = tree;
+                }
+            }
+
+            let nearestChest = null;
+            let nearestChestDist = Infinity;
+            if (!nearestTree) {
+                for (const chest of World.chests) {
+                    const d = Math.abs(chest.x - playerX);
+                    if (d < nearestChestDist && d < 60) {
+                        nearestChestDist = d;
+                        nearestChest = chest;
+                    }
+                }
+            }
+
+            let nearestRock = null;
+            let nearestRockDist = Infinity;
+            if (!nearestTree && !nearestChest) {
+                for (const rock of World.rocks) {
+                    if (!rock.alive) continue;
+                    const d = Math.abs(rock.x - playerX);
+                    if (d < nearestRockDist && d < 60) {
+                        nearestRockDist = d;
+                        nearestRock = rock;
+                    }
+                }
+            }
+
+            if (nearestTree) {
+                Player.startAction(7.5, 'chopping', () => { // 5x of 1.5s
+                    nearestTree.alive = false;
+                    Inventory.addItem('firewood', 2 + (Math.random() * 2) | 0);
+                    const col = World.getColumnAt(nearestTree.x);
+                    if (col) World.treeEggs.push({ x: nearestTree.x, surfaceY: col.surfaceY, type: nearestTree.type });
+                    Game.showMessage('Gathered firewood barehanded!', 1.5);
+                });
+            } else if (nearestChest) {
+                Player.startAction(7.5, 'chopping', () => { // 5x of 1.5s
+                    const removed = World.removeChestNear(nearestChest.x);
+                    if (removed) {
+                        for (const item of removed.inventory) {
+                            if (item) World.addGroundItem(removed.x + (Math.random() - 0.5) * 30, item);
+                        }
+                        Inventory.addItem('firewood', 3);
+                        if (ChestUI.isOpen && ChestUI.currentChest === removed) ChestUI.close();
+                        Game.showMessage('Broke chest barehanded! Got 3 firewood.', 1.5);
+                    }
+                });
+            } else if (nearestRock) {
+                Player.startAction(10.0, 'chopping', () => { // 5x of 2.0s
+                    nearestRock.alive = false;
+                    Inventory.addItem('rock', 3 + ((Math.random() * 6) | 0));
+                    const col = World.getColumnAt(nearestRock.x);
+                    if (col) World.rockEggs.push({ x: nearestRock.x, groundCol: col.groundCol });
+                    Game.showMessage('Mined rock barehanded!', 1.5);
+                });
+            }
+            return;
+        }
 
         switch (item.id) {
             case 'ice_drill': {
@@ -645,10 +756,15 @@ const Survival = {
                 // Check near fire
                 for (const fire of World.campfires) {
                     if (fire.lit && Math.abs(fire.x - playerX) < 80) {
-                        Inventory.consumeHandItem(isSecondHand, 1);
-                        fire.fuel = 100; // Fully restore
-                        Game.showMessage('Added fuel to fire.', 1.5);
-                        return;
+                        if (!fire.permanent) {
+                            Inventory.consumeHandItem(isSecondHand, 1);
+                            fire.fuel = 100; // Fully restore
+                            Game.showMessage('Added fuel to fire.', 1.5);
+                            return;
+                        } else {
+                            Game.showMessage('This fire never dies.', 1.5);
+                            return;
+                        }
                     }
                 }
                 Game.showMessage('Use near a campfire to add fuel.', 1.5);
@@ -693,6 +809,32 @@ const Survival = {
                 }
                 break;
             }
+
+            case 'shotgun': {
+                if (item.durability !== undefined && item.durability <= 0) {
+                    Game.showMessage("Out of ammo/durability!", 1.5);
+                    return;
+                }
+
+                // Fire immediately
+                const dmg = 60; // Max dmg up close, falls off nicely over distance
+                NPCs.damageInLine(playerX, 500, Player.facing, dmg);
+                Game.showMessage('BANG!', 0.5);
+
+                // Visual pellets
+                for (let i = 0; i < 5; i++) {
+                    NPCs.spawnPellet(playerX, Player.y - 45, Player.facing, 500);
+                }
+
+                if (item.durability !== undefined) {
+                    item.durability -= 1;
+                    if (item.durability <= 0) {
+                        Inventory.removeHandItem(isSecondHand);
+                        Game.showMessage('Shotgun broke!', 1.5);
+                    }
+                }
+                break;
+            }
         }
     },
 
@@ -703,7 +845,12 @@ const Survival = {
             : Math.max(0, 0.3 - Math.sin(this.timeOfDay * Math.PI) * 0.4);
 
         if (nightAlpha > 0.05) {
-            ctx.fillStyle = `rgba(5,5,25,${nightAlpha})`;
+            if (this.isNight && this.dayCount % 3 === 0) {
+                // Blood moon overlay
+                ctx.fillStyle = `rgba(40,0,0,${nightAlpha * 0.8})`;
+            } else {
+                ctx.fillStyle = `rgba(5,5,25,${nightAlpha})`;
+            }
             ctx.fillRect(0, 0, canvasW, canvasH);
         }
 

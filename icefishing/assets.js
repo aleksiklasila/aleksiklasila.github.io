@@ -28,6 +28,7 @@ const Assets = {
         { name: 'torch_off', src: 'assets/item_torch_off.png' },
         { name: 'fish_egg', src: 'assets/item_fish_egg.png' },
         { name: 'tree_egg', src: 'assets/item_tree_egg.png' },
+        { name: 'polar_bear_egg', src: 'assets/polar_bear_egg.png' },
         { name: 'shovel', src: 'assets/item_shovel.png' },
         { name: 'simple_bridge', src: 'assets/item_simple_bridge.png' },
         { name: 'pickaxe', src: 'assets/pickaxe.png' },
@@ -37,8 +38,12 @@ const Assets = {
         { name: 'chest', src: 'assets/chest.png' },
         { name: 'item_chest', src: 'assets/item_chest.png' },
         { name: 'tombstone', src: 'assets/tombstone.png' },
+        { name: 'gate_open', src: 'assets/gate_open.png' },
         { name: 'gate_closed', src: 'assets/gate_closed.png' },
-        { name: 'gate_open', src: 'assets/gate_open.png' }
+        { name: 'shotgun', src: 'assets/shotgun.png' },
+        { name: 'hide', src: 'assets/hide.png' },
+        { name: 'zombie', src: 'assets/zombie.png' },
+        { name: 'polar_bear', src: 'assets/polar_bear.png' }
     ],
     loadedCount: 0,
 

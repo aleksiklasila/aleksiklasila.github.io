@@ -7,7 +7,7 @@ const Player = {
     width: 24,
     height: 40,
     facing: 1, // 1=right, -1=left
-    state: 'idle', // idle, walking, fishing, chopping, dying
+    state: 'idle', // 'idle', 'walking', 'chopping', 'fishing', 'sleeping', 'dying'
     animFrame: 0,
     animTimer: 0,
 
@@ -36,6 +36,9 @@ const Player = {
     // Action state
     actionTimer: 0,
     actionCallback: null,
+    asyncActionTimer: 0,
+    asyncActionCallback: null,
+    asyncActionText: '',
 
     init(worldX) {
         this.x = worldX;
@@ -53,7 +56,17 @@ const Player = {
         this.updateStats(dt);
         if (this.isDead) return;
 
-        // Action in progress (chopping, drilling, etc.)
+        // Update async actions (like charging a shotgun) without blocking movement
+        if (this.asyncActionTimer > 0) {
+            this.asyncActionTimer -= dt;
+            if (this.asyncActionTimer <= 0 && this.asyncActionCallback) {
+                this.asyncActionCallback();
+                this.asyncActionCallback = null;
+                this.asyncActionText = '';
+            }
+        }
+
+        // Action lock (like chopping) blocks movement
         if (this.actionTimer > 0) {
             this.actionTimer -= dt;
             if (this.actionTimer <= 0) {
@@ -147,12 +160,12 @@ const Player = {
         let warmthMultiplier = 0;
 
         // If it's warm enough (e.g. above 0C), warmly recover or stay neutral
-        if (feelsLike > 0) {
+        if (feelsLike > 10) {
             this.stats.warmth = Math.min(100, this.stats.warmth + feelsLike * 0.1 * dt);
-        } else {
+        } else if (feelsLike < -10) {
             // Drain based on how cold it is below 0
-            warmthMultiplier = Math.abs(feelsLike) * 0.15; // e.g. -10C = 1.5x drain
-            if (isOnIce) warmthMultiplier *= 1.5;
+            warmthMultiplier = Math.abs(feelsLike + 10) * 0.15; // e.g. -20C = 1.5x drain
+            if (isOnIce) warmthMultiplier *= 1.1;
             if (isInTent) warmthMultiplier *= 0.3; // 70% reduction
 
             let warmthDrain = this.drainRates.warmth * warmthMultiplier;
@@ -228,6 +241,27 @@ const Player = {
         this.actionTimer = duration;
         this.state = state;
         this.actionCallback = callback;
+    },
+
+    startAsyncAction(duration, text, callback) {
+        if (this.asyncActionTimer > 0) return false; // Already doing something
+        this.asyncActionTimer = duration;
+        this.asyncActionText = text;
+        this.asyncActionCallback = callback;
+        return true;
+    },
+
+    cancelAction() {
+        if (this.actionTimer > 0) {
+            this.actionTimer = 0;
+            this.actionCallback = null;
+            this.state = 'idle';
+        }
+        if (this.asyncActionTimer > 0) {
+            this.asyncActionTimer = 0;
+            this.asyncActionCallback = null;
+            this.asyncActionText = '';
+        }
     },
 
     render(ctx, camera, canvasW, canvasH) {
