@@ -59,6 +59,8 @@ const Inventory = {
         raw_fish_large: { id: 'raw_fish_large', name: 'Large Raw Fish', stackable: true, maxStack: 5, usable: true, category: 'food', cost: { money: 25 } },
         cooked_fish_large: { id: 'cooked_fish_large', name: 'Large Cooked Fish', stackable: true, maxStack: 5, usable: true, category: 'food', cost: { money: 35 } },
         torch: { id: 'torch', name: 'Torch', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 15 }, maxDurability: 100, lit: false },
+        campfire_blue: { id: 'campfire_blue', name: 'Blue Campfire', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } },
+        campfire_blue_lit: { id: 'campfire_blue_lit', name: 'Lit Blue Campfire', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } },
         shovel: { id: 'shovel', name: 'Shovel', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 50 }, maxDurability: 50 },
         simple_bridge: { id: 'simple_bridge', name: 'Simple Bridge', stackable: true, maxStack: 10, usable: true, category: 'building', cost: { money: 20 } },
         fish_egg: { id: 'fish_egg', name: 'Fish Egg', stackable: true, maxStack: 10, usable: false, category: 'material', cost: { money: 10 } },

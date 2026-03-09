@@ -47,38 +47,43 @@ const NPCs = {
 
                 const distToPlayer = Math.abs(npc.x - Player.x);
 
-                // Check light avoidance unless blood moon or aggroed
-                let avoidsLight = !isBloodMoon && !npc.aggro;
                 let lightDir = 0;
+                let nearestLight = null;
+                let minLightDist = 300; // Light radius to avoid
 
-                if (avoidsLight) {
-                    // Find nearest light (fire or lit torch)
-                    let nearestLight = null;
-                    let minLightDist = 300; // Light radius to avoid
+                for (const fire of World.campfires) {
+                    if (!fire.lit) continue;
 
-                    for (const fire of World.campfires) {
-                        if (fire.lit && Math.abs(fire.x - npc.x) < minLightDist) {
-                            nearestLight = fire;
-                            minLightDist = Math.abs(fire.x - npc.x);
+                    let avoidThis = !npc.aggro && !isBloodMoon; // Normal behavior
+
+                    // Blue campfire overrides blood moon & aggro
+                    if (fire.isBlue && !npc.immuneToBlue) {
+                        avoidThis = true;
+                    }
+
+                    if (avoidThis && Math.abs(fire.x - npc.x) < minLightDist) {
+                        nearestLight = fire;
+                        minLightDist = Math.abs(fire.x - npc.x);
+                    }
+                }
+
+                if (World.torches) {
+                    for (const torch of World.torches) {
+                        let avoidThis = !npc.aggro && !isBloodMoon;
+                        if (torch.lit && avoidThis && Math.abs(torch.x - npc.x) < minLightDist) {
+                            nearestLight = torch;
+                            minLightDist = Math.abs(torch.x - npc.x);
                         }
                     }
-                    if (World.torches) {
-                        for (const torch of World.torches) {
-                            if (torch.lit && Math.abs(torch.x - npc.x) < minLightDist) {
-                                nearestLight = torch;
-                                minLightDist = Math.abs(torch.x - npc.x);
-                            }
-                        }
-                    }
+                }
 
-                    if (nearestLight) {
-                        lightDir = npc.x > nearestLight.x ? 1 : -1;
-                    }
+                if (nearestLight) {
+                    lightDir = npc.x > nearestLight.x ? 1 : -1;
                 }
 
                 let desiredVx = npc.vx;
 
-                if (avoidsLight && lightDir !== 0) {
+                if (lightDir !== 0) {
                     // Run away from light
                     desiredVx = npc.speed * lightDir;
                 } else if (distToPlayer < 800) { // Chase player if in range
@@ -148,7 +153,7 @@ const NPCs = {
 
                 let desiredVx = 0;
                 if (targetX !== null) {
-                    desiredVx = npc.x < targetX ? npc.speed : -npc.speed;
+                    desiredVx = npc.x < targetX ? npc.speed * 1.2 : -npc.speed * 1.2;
                 }
 
                 if (desiredVx !== 0) {
@@ -260,6 +265,7 @@ const NPCs = {
             facing: 1,
             wanderTimer: 0,
             attackTimer: 0,
+            immuneToBlue: Math.random() < 0.10 + 0.01 * Survival.dayCount, // 10% chance to ignore blue campfire, increase by 1% every day
             aggro: false
         });
     },
@@ -274,7 +280,7 @@ const NPCs = {
             y: World.getSurfaceY(x),
             vx: 0,
             vy: 0,
-            speed: 100, // Reduced speed
+            speed: 110, // Slightly faster than player with slope penalties
             hp: 80, // Heavy
             maxHp: 80,
             facing: 1,

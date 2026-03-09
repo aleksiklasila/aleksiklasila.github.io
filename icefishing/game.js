@@ -805,7 +805,12 @@ const Game = {
             const sy = baseY - fire.surfaceY;
             // Cull: skip if too far off-screen
             if (sx < -430 || sx > this.width + 430) continue;
-            Lighting.addLight(sx, sy - 15, 400, 1.0, 0.65, 0.25, 0.9);
+
+            if (fire.isBlue) {
+                Lighting.addLight(sx, sy - 15, 400, 0.3, 0.7, 1.0, 0.9);
+            } else {
+                Lighting.addLight(sx, sy - 15, 400, 1.0, 0.65, 0.25, 0.9);
+            }
         }
 
         // --- Ground torch lights (culled to on-screen) ---

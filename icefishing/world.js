@@ -101,7 +101,7 @@ const World = {
                         y: surfaceY,
                         vx: 0,
                         vy: 0,
-                        speed: 100,
+                        speed: 110,
                         hp: 80,
                         maxHp: 80,
                         facing: 1,
@@ -240,11 +240,11 @@ const World = {
         return false;
     },
 
-    addCampfire(worldX) {
-        const col = this.getColumnAt(worldX);
+    addCampfire(playerX, isBlue = false) {
+        const col = this.getColumnAt(playerX);
         if (!col || col.type === 'water') return false;
         const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
-        const fire = { x: worldX, surfaceY, fuel: 100, lit: false };
+        const fire = { x: playerX, surfaceY, fuel: 50, lit: false, permanent: false, isBlue: isBlue };
         this.campfires.push(fire);
         return fire;
     },
@@ -729,7 +729,7 @@ const World = {
     },
 
     renderCampfire(ctx, x, y, fire) {
-        const img = Assets.get('campfire_anim');
+        const img = fire.isBlue ? Assets.get('campfire_blue_anim') : Assets.get('campfire_anim');
 
         if (fire.lit) {
             const t = Date.now() / 100, fl = Math.sin(t) * 3;
@@ -756,7 +756,7 @@ const World = {
             for (let i = 0; i < 3; i++) ctx.fillRect(x + Math.sin(t + i * 2) * 6, y - 20 - Math.abs(Math.sin(t * 1.5 + i)) * 15, 2, 2);
         } else {
             // Unlit campfire
-            const imgOff = Assets.get('campfire_off');
+            const imgOff = fire.isBlue ? Assets.get('campfire_blue_off') : Assets.get('campfire_off');
             if (imgOff) {
                 ctx.drawImage(imgOff, x - 24, y - 48, 48, 48);
             } else if (img) {
