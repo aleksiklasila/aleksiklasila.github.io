@@ -17,6 +17,7 @@ const World = {
     rockEggs: [],
     chests: [],
     tombstones: [],
+    gates: [],
 
     generate(seed) {
         Perlin.seed(seed || (Math.random() * 100000) | 0);
@@ -34,6 +35,7 @@ const World = {
         this.rockEggs = [];
         this.chests = [];
         this.tombstones = [];
+        this.gates = [];
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -47,11 +49,19 @@ const World = {
             const terrainMult = Difficulty.getTerrainMultiplier(x, centerCol);
             let height = (elevation + detail) * terrainMult;
 
-            // Force a flat, safe ground area around the origin (spawn)
-            const distFromCenterRows = Math.abs(x - centerCol);
-            if (distFromCenterRows < 25) {
-                const blend = 1.0 - (distFromCenterRows / 25);
-                height = (height * (1 - blend)) + (0.15 * blend);
+            // Force a flat, elevated town center plateau around the origin (spawn)
+            const distFromCenter = Math.abs(x - centerCol);
+            const plateauRadius = 15;    // 15m plateau
+            const transitionWidth = 25;  // 25m transition (total 40m)
+
+            if (distFromCenter < plateauRadius) {
+                // Plateau: > 2.5m (0.33 * 300 = 100px), almost flat (5% noise)
+                height = 0.33 + (elevation + detail) * 0.05;
+            } else if (distFromCenter < plateauRadius + transitionWidth) {
+                // Transition: gradually blend from plateau to normal perlin terrain
+                const blend = (distFromCenter - plateauRadius) / transitionWidth;
+                const plateauBase = 0.33 + (elevation + detail) * 0.05;
+                height = (plateauBase * (1 - blend)) + (height * blend);
             }
 
             let type;
@@ -88,19 +98,24 @@ const World = {
         let spawnCol = Math.floor(this.WORLD_WIDTH / 2);
         for (let i = spawnCol; i < this.WORLD_WIDTH; i++) {
             if (this.columns[i].type === 'ground' && this.columns[i].height > 0.1) {
-                // Place shop a bit further than the spawn point so the player doesn't spawn exactly inside it
+                // Place shops symmetrically around the spawn point
                 this.shop = {
-                    x: (i + 4) * this.TILE_SIZE,
-                    surfaceY: this.columns[i + 4].surfaceY
+                    x: (i - 3) * this.TILE_SIZE,
+                    surfaceY: this.columns[i - 3].surfaceY
                 };
 
-                // Place repair shop slightly further
-                // Need to make sure we don't index out of bounds, but i+15 is generally safe near spawn
-                let repairIdx = Math.min(i + 12, this.WORLD_WIDTH - 1);
+                // Place repair shop on the other side
+                let repairIdx = i + 3;
                 this.repairShop = {
                     x: repairIdx * this.TILE_SIZE,
                     surfaceY: this.columns[repairIdx].surfaceY
                 };
+
+                // Place gates at the edges of the plateau
+                // Plateau is +/- 15m (15 tiles) from centerCol
+                const gateOffset = 14;
+                this.gates.push({ x: (centerCol - gateOffset) * this.TILE_SIZE, surfaceY: this.columns[centerCol - gateOffset].surfaceY, open: false });
+                this.gates.push({ x: (centerCol + gateOffset) * this.TILE_SIZE, surfaceY: this.columns[centerCol + gateOffset].surfaceY, open: false });
                 break;
             }
         }
@@ -323,6 +338,20 @@ const World = {
             if (Math.abs(t.x - worldX) < 50) return t;
         }
         return null;
+    },
+
+    getGateNear(worldX) {
+        for (const g of this.gates) {
+            if (Math.abs(g.x - worldX) < 60) return g;
+        }
+        return null;
+    },
+
+    isGateAt(worldX) {
+        for (const g of this.gates) {
+            if (!g.open && Math.abs(g.x - worldX) < 30) return true;
+        }
+        return false;
     },
 
     // Render sky, mountains, and surface objects (terrain handled by Voxels)
@@ -564,6 +593,26 @@ const World = {
                 ctx.stroke();
             }
         }
+
+        // Gates
+        for (const gate of this.gates) {
+            const sx = gate.x - camera.x + canvasW / 2;
+            if (sx < -100 || sx > canvasW + 100) continue;
+            const gy = baseY - gate.surfaceY;
+            const img = Assets.get(gate.open ? 'gate_open' : 'gate_closed');
+            if (img) {
+                ctx.drawImage(img, sx - 64, gy - 128, 128, 128);
+            } else {
+                // Fallback gate
+                ctx.fillStyle = '#666'; // Stone pillars
+                ctx.fillRect(sx - 50, gy - 80, 20, 80);
+                ctx.fillRect(sx + 30, gy - 80, 20, 80);
+                if (!gate.open) {
+                    ctx.fillStyle = '#6a4a2a'; // Wood gate
+                    ctx.fillRect(sx - 30, gy - 70, 60, 70);
+                }
+            }
+        }
     },
 
     renderMountains(ctx, camera, canvasW, canvasH, baseY, dayMix) {
@@ -738,11 +787,21 @@ const World = {
     update(dt) {
         for (let i = this.campfires.length - 1; i >= 0; i--) {
             const f = this.campfires[i];
-            if (f.lit) { f.fuel -= dt * 0.8; if (f.fuel <= 0) f.lit = false; }
+            if (f.lit) {
+                f.fuel -= dt * 0.8;
+                if (f.fuel <= 0) {
+                    this.campfires.splice(i, 1);
+                }
+            }
         }
         for (let i = this.torches.length - 1; i >= 0; i--) {
             const t = this.torches[i];
-            if (t.lit) { t.fuel -= dt * 0.8; if (t.fuel <= 0) t.lit = false; }
+            if (t.lit) {
+                t.fuel -= dt * 0.8;
+                if (t.fuel <= 0) {
+                    this.torches.splice(i, 1);
+                }
+            }
         }
     }
 };

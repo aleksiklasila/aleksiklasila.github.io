@@ -14,6 +14,7 @@ const Voxels = {
     LAKEBED: 5,
 
     grid: null,       // Uint8Array
+    solidity: null,   // Uint8Array for fast lighting checks (0=pass, 255=solid)
 
     // Color palette [r, g, b] for each tile type
     COLORS: [
@@ -25,13 +26,19 @@ const Voxels = {
         [80, 70, 45],     // 5: LAKEBED
     ],
 
-    // Offscreen canvas for batch rendering
+    // Voxel tile caching
+    TILE_SIZE_VX: 64, // voxels per tile side
+    _tileCache: {},   // map of "tx,ty" -> { canvas, ctx, dirty }
+
+    // Offscreen canvas for batch rendering (legacy/fallback)
     _canvas: null,
     _ctx: null,
 
     generate() {
         this.GRID_W = Math.ceil(World.WORLD_WIDTH * World.TILE_SIZE / this.SIZE);
         this.grid = new Uint8Array(this.GRID_W * this.GRID_H);
+        this.solidity = new Uint8Array(this.GRID_W * this.GRID_H);
+        this._tileCache = {};
 
         for (let vx = 0; vx < this.GRID_W; vx++) {
             const worldX = vx * this.SIZE;
@@ -69,7 +76,9 @@ const Voxels = {
                     }
                 }
 
-                this.grid[vy * this.GRID_W + vx] = type;
+                const idx = vy * this.GRID_W + vx;
+                this.grid[idx] = type;
+                this.solidity[idx] = this.isSolid(type) ? 255 : 0;
             }
         }
     },
@@ -81,7 +90,18 @@ const Voxels = {
 
     set(vx, vy, type) {
         if (vx < 0 || vx >= this.GRID_W || vy < 0 || vy >= this.GRID_H) return;
-        this.grid[vy * this.GRID_W + vx] = type;
+        const idx = vy * this.GRID_W + vx;
+        if (this.grid[idx] === type) return;
+
+        this.grid[idx] = type;
+        this.solidity[idx] = this.isSolid(type) ? 255 : 0;
+
+        // Invalidate tile cache
+        const tx = Math.floor(vx / this.TILE_SIZE_VX);
+        const ty = Math.floor(vy / this.TILE_SIZE_VX);
+        if (this._tileCache[`${tx},${ty}`]) {
+            this._tileCache[`${tx},${ty}`].dirty = true;
+        }
     },
 
     isSolid(type) {
@@ -125,83 +145,126 @@ const Voxels = {
 
     _dirty: true,
 
-    // Render visible voxels using offscreen canvas
+    // Render visible voxels using tile-based caching
     render(ctx, camera, canvasW, canvasH) {
         const baseY = canvasH * 0.6;
-
-        // Determine visible voxel range
         const camOffX = camera.x - canvasW / 2;
-        const startVx = Math.max(0, Math.floor(camOffX / this.SIZE) - 1);
-        const endVx = Math.min(this.GRID_W, startVx + Math.ceil(canvasW / this.SIZE) + 2);
 
-        const topWorldY = baseY; // screenY=0 → worldY=baseY
-        const botWorldY = baseY - canvasH; // screenY=canvasH → worldY=baseY-canvasH
+        const startX = Math.floor((camera.x - canvasW / 2) / this.SIZE);
+        const endX = Math.ceil((camera.x + canvasW / 2) / this.SIZE);
+
+        const topWorldY = baseY;
+        const botWorldY = baseY - canvasH;
         const startVy = Math.max(0, Math.floor((this.TOP_Y - topWorldY) / this.SIZE) - 1);
         const endVy = Math.min(this.GRID_H, Math.ceil((this.TOP_Y - botWorldY) / this.SIZE) + 1);
 
-        const renderW = endVx - startVx;
-        const renderH = endVy - startVy;
-        if (renderW <= 0 || renderH <= 0) return;
+        const startTx = Math.floor(startX / this.TILE_SIZE_VX);
+        const endTx = Math.floor(endX / this.TILE_SIZE_VX);
+        const startTy = Math.floor(startVy / this.TILE_SIZE_VX);
+        const endTy = Math.floor(endVy / this.TILE_SIZE_VX);
 
-        // Create/resize offscreen canvas for voxel chunk
-        if (!this._canvas || this._canvas.width < renderW || this._canvas.height < renderH) {
-            this._canvas = document.createElement('canvas');
-            this._canvas.width = Math.max(renderW, 600);
-            this._canvas.height = Math.max(renderH, 400);
-            this._ctx = this._canvas.getContext('2d');
+        for (let tx = startTx; tx <= endTx; tx++) {
+            if (tx < 0 || tx * this.TILE_SIZE_VX >= this.GRID_W) continue;
+            for (let ty = startTy; ty <= endTy; ty++) {
+                if (ty < 0 || ty * this.TILE_SIZE_VX >= this.GRID_H) continue;
+
+                const tile = this._getOrRenderTile(tx, ty);
+                if (!tile) continue;
+
+                const drawX = (tx * this.TILE_SIZE_VX) * this.SIZE - camOffX;
+                const drawY = baseY - (this.TOP_Y - (ty * this.TILE_SIZE_VX) * this.SIZE);
+
+                ctx.drawImage(tile.canvas, drawX, drawY);
+            }
+        }
+    },
+
+    _getOrRenderTile(tx, ty) {
+        const key = `${tx},${ty}`;
+        let tile = this._tileCache[key];
+
+        if (!tile) {
+            const canvas = document.createElement('canvas');
+            canvas.width = this.TILE_SIZE_VX * this.SIZE;
+            canvas.height = this.TILE_SIZE_VX * this.SIZE;
+            tile = { canvas, ctx: canvas.getContext('2d'), dirty: true };
+            this._tileCache[key] = tile;
         }
 
-        const imgData = this._ctx.createImageData(renderW, renderH);
-        const data = imgData.data;
+        if (tile.dirty) {
+            this._renderTile(tx, ty, tile);
+            tile.dirty = false;
+        }
 
-        for (let ly = 0; ly < renderH; ly++) {
-            const vy = startVy + ly;
+        return tile;
+    },
+
+    _renderTile(tx, ty, tile) {
+        const vxStart = tx * this.TILE_SIZE_VX;
+        const vyStart = ty * this.TILE_SIZE_VX;
+        const tSize = this.TILE_SIZE_VX;
+
+        const imgData = tile.ctx.createImageData(tSize * this.SIZE, tSize * this.SIZE);
+        const data32 = new Uint32Array(imgData.data.buffer);
+
+        for (let lvy = 0; lvy < tSize; lvy++) {
+            const vy = vyStart + lvy;
+            if (vy >= this.GRID_H) break;
             const rowOff = vy * this.GRID_W;
-            for (let lx = 0; lx < renderW; lx++) {
-                const vx = startVx + lx;
+
+            for (let lvx = 0; lvx < tSize; lvx++) {
+                const vx = vxStart + lvx;
+                if (vx >= this.GRID_W) break;
+
                 const type = this.grid[rowOff + vx];
                 if (type === this.AIR) continue;
 
                 const baseColor = this.COLORS[type];
                 if (!baseColor) continue;
 
-                // Pseudo-random per-voxel variation for texture
                 const hash = ((vx * 7919 + vy * 6271) & 255) / 255;
                 const v = (hash - 0.5) * 18;
 
-                // Depth darkening for ground (deeper = darker)
                 let depthDarken = 0;
                 if (type === this.GROUND || type === this.LAKEBED) {
                     const surfVy = Math.floor((this.TOP_Y - 0) / this.SIZE);
                     depthDarken = Math.min(40, Math.max(0, (vy - surfVy) * 0.4));
                 }
 
-                const idx = (ly * renderW + lx) * 4;
-                data[idx] = Math.max(0, Math.min(255, baseColor[0] + v - depthDarken));
-                data[idx + 1] = Math.max(0, Math.min(255, baseColor[1] + v - depthDarken));
-                data[idx + 2] = Math.max(0, Math.min(255, baseColor[2] + v - depthDarken));
-                data[idx + 3] = type === this.WATER ? 210 : 255;
+                const r = Math.max(0, Math.min(255, baseColor[0] + v - depthDarken));
+                const g = Math.max(0, Math.min(255, baseColor[1] + v - depthDarken));
+                const b = Math.max(0, Math.min(255, baseColor[2] + v - depthDarken));
+                const a = type === this.WATER ? 210 : 255;
+
+                const colValue = (a << 24) | (b << 16) | (g << 8) | r;
+
+                // Fill SIZE x SIZE pixels
+                for (let py = 0; py < this.SIZE; py++) {
+                    const lineOffset = (lvy * this.SIZE + py) * (tSize * this.SIZE);
+                    for (let px = 0; px < this.SIZE; px++) {
+                        data32[lineOffset + (lvx * this.SIZE + px)] = colValue;
+                    }
+                }
             }
         }
-
-        this._ctx.putImageData(imgData, 0, 0);
-
-        // Draw the voxel chunk onto the main canvas at the correct position
-        const drawX = startVx * this.SIZE - camOffX;
-        const drawY = baseY - (this.TOP_Y - startVy * this.SIZE);
-
-        ctx.drawImage(this._canvas, 0, 0, renderW, renderH,
-            drawX, drawY, renderW * this.SIZE, renderH * this.SIZE);
+        tile.ctx.putImageData(imgData, 0, 0);
     },
 
     // Get solidity chunk for GPU lighting (0=pass-through, 255=solid)
     getSolidityChunk(startVx, startVy, width, height) {
         const data = new Uint8Array(width * height);
         for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const type = this.get(startVx + x, startVy + y);
-                data[y * width + x] = this.isSolid(type) ? 255 : 0;
+            const vy = startVy + y;
+            if (vy < 0 || vy >= this.GRID_H) {
+                if (vy >= this.GRID_H) data.fill(255, y * width, (y + 1) * width);
+                continue;
             }
+            const gridRowOff = vy * this.GRID_W + startVx;
+            const chunkRowOff = y * width;
+
+            // Subarray and set is faster than per-pixel loop
+            const rowData = this.solidity.subarray(gridRowOff, gridRowOff + width);
+            data.set(rowData, chunkRowOff);
         }
         return data;
     }

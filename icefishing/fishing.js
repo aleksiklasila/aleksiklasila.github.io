@@ -61,6 +61,7 @@ const Fishing = {
                 regionStart = -1;
             }
         }
+        console.log(`Spawned ${this.worldFish.length} fish.`);
     },
 
     spawnRegionFish(regionStartX, regionEndX) {
