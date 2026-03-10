@@ -2,42 +2,59 @@
 const World = {
     TILE_SIZE: 40,
     WORLD_WIDTH: 5000,
+    // These are now initialized as proxies in generate()
     columns: [],
-    trees: [],
-    fishingHoles: [],
-    tents: [],
-    torches: [],
-    groundItems: [],
+    trees: null,
+    fishingHoles: null,
+    campfires: null,
+    tents: null,
+    torches: null,
+    groundItems: null,
     shop: null,
     repairShop: null,
-    fishEggs: [],
-    treeEggs: [],
-    bridges: [],
-    rocks: [],
-    rockEggs: [],
-    chests: [],
-    tombstones: [],
-    gates: [],
-    polarBearEggs: [],
+    fishEggs: null,
+    treeEggs: null,
+    bridges: null,
+    rocks: null,
+    rockEggs: null,
+    chests: null,
+    tombstones: null,
+    gates: null,
+    polarBearEggs: null,
 
     generate(seed) {
-        Perlin.seed(seed || (Math.random() * 100000) | 0);
+        this.seed = seed || (Math.random() * 100000) | 0;
+        Perlin.seed(this.seed);
         this.columns = [];
-        this.trees = [];
-        this.fishingHoles = [];
-        this.campfires = [];
-        this.tents = [];
-        this.torches = [];
-        this.groundItems = [];
-        this.fishEggs = [];
-        this.treeEggs = [];
-        this.bridges = [];
-        this.rocks = [];
-        this.rockEggs = [];
-        this.chests = [];
-        this.tombstones = [];
-        this.gates = [];
-        this.polarBearEggs = [];
+
+        // Tiny deterministic LCG random generator for world gen
+        const rng = {
+            state: this.seed,
+            next: function () {
+                this.state = (this.state * 9301 + 49297) % 233280;
+                return this.state / 233280;
+            }
+        };
+
+        // Use SpatialSyncDB collections for synced entities
+        this.trees = SpatialSyncDB.createCollection('trees', []);
+        this.fishingHoles = SpatialSyncDB.createCollection('fishingHoles', []);
+        this.campfires = SpatialSyncDB.createCollection('campfires', []);
+        this.tents = SpatialSyncDB.createCollection('tents', []);
+        this.torches = SpatialSyncDB.createCollection('torches', []);
+        this.groundItems = SpatialSyncDB.createCollection('groundItems', []);
+        this.fishEggs = SpatialSyncDB.createCollection('fishEggs', []);
+        this.treeEggs = SpatialSyncDB.createCollection('treeEggs', []);
+        this.bridges = SpatialSyncDB.createCollection('bridges', []);
+        this.rocks = SpatialSyncDB.createCollection('rocks', []);
+        this.rockEggs = SpatialSyncDB.createCollection('rockEggs', []);
+        this.chests = SpatialSyncDB.createCollection('chests', []);
+        this.tombstones = SpatialSyncDB.createCollection('tombstones', []);
+        this.gates = SpatialSyncDB.createCollection('gates', []);
+        this.polarBearEggs = SpatialSyncDB.createCollection('polarBearEggs', []);
+
+        this.gates = SpatialSyncDB.createCollection('gates', []);
+        this.polarBearEggs = SpatialSyncDB.createCollection('polarBearEggs', []);
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -73,29 +90,32 @@ const World = {
 
             const surfaceY = height * 300;
 
-            this.columns.push({ x, surfaceY, height, type, current, snowDepth: Math.random() * 3 + 1 });
+            this.columns.push({ x, surfaceY, height, type, current, snowDepth: rng.next() * 3 + 1 });
 
             if (type === 'ground' && height > 0.06) {
                 const treeDensity = Perlin.fbm(nx, 100, 2, 2.0, 0.5);
-                if (treeDensity > 0 && Math.random() < 0.80) {
+                if (treeDensity > 0 && rng.next() < 0.80) {
                     this.trees.push({
-                        x: x * this.TILE_SIZE + Math.random() * 20 - 10,
+                        id: 'tree_' + x,
+                        x: x * this.TILE_SIZE + rng.next() * 20 - 10,
                         groundCol: x,
-                        type: (Math.random() * 3) | 0,
+                        type: (rng.next() * 3) | 0,
                         alive: true
                     });
                 }
                 // Rocks spawn on higher ground with some randomness (rarer)
-                if (height > 0.1 && Math.random() < 0.083) {
+                if (height > 0.1 && rng.next() < 0.083) {
                     this.rocks.push({
-                        x: x * this.TILE_SIZE + Math.random() * 20 - 10,
+                        id: 'rock_' + x,
+                        x: x * this.TILE_SIZE + rng.next() * 20 - 10,
                         groundCol: x,
                         alive: true
                     });
                 }
                 // Polar Bears spawn randomly on ground
-                if (Math.random() < 0.04 && distFromCenter > 50) { // ~100 Polar Bears total, away from spawn
+                if (rng.next() < 0.04 && distFromCenter > 50) { // ~100 Polar Bears total, away from spawn
                     NPCs.entities.push({
+                        id: 'pb_' + x,
                         type: 'polar_bear',
                         x: x * this.TILE_SIZE,
                         y: surfaceY,
@@ -120,6 +140,7 @@ const World = {
             if (this.columns[i].type === 'ground' && this.columns[i].height > 0.1) {
                 // Place shops symmetrically around the spawn point
                 this.shop = {
+                    id: 'shop_0',
                     x: (i - 3) * this.TILE_SIZE,
                     surfaceY: this.columns[i - 3].surfaceY
                 };
@@ -127,29 +148,29 @@ const World = {
                 // Place repair shop on the other side
                 let repairIdx = i + 3;
                 this.repairShop = {
+                    id: 'repair_0',
                     x: repairIdx * this.TILE_SIZE,
                     surfaceY: this.columns[repairIdx].surfaceY
                 };
 
                 // Place gates at the edges of the plateau
-                // Plateau is +/- 15m (15 tiles) from centerCol
                 const gateOffset = 14;
                 const g1x = (centerCol - gateOffset) * this.TILE_SIZE;
                 const g1y = this.columns[centerCol - gateOffset].surfaceY;
                 const g2x = (centerCol + gateOffset) * this.TILE_SIZE;
                 const g2y = this.columns[centerCol + gateOffset].surfaceY;
-                this.gates.push({ x: g1x, surfaceY: g1y, open: false, durability: 100, maxDurability: 100 });
-                this.gates.push({ x: g2x, surfaceY: g2y, open: false, durability: 100, maxDurability: 100 });
+                this.gates.push({ id: 'gate_1', x: g1x, surfaceY: g1y, open: false, durability: 100, maxDurability: 100 });
+                this.gates.push({ id: 'gate_2', x: g2x, surfaceY: g2y, open: false, durability: 100, maxDurability: 100 });
 
                 // Add permanent lit torches above gates
-                this.torches.push({ x: g1x, surfaceY: g1y + 100, fuel: Infinity, lit: true, permanent: true });
-                this.torches.push({ x: g2x, surfaceY: g2y + 100, fuel: Infinity, lit: true, permanent: true });
+                this.torches.push({ id: 'torch_g1', x: g1x, surfaceY: g1y + 100, fuel: -1, lit: true, permanent: true });
+                this.torches.push({ id: 'torch_g2', x: g2x, surfaceY: g2y + 100, fuel: -1, lit: true, permanent: true });
 
                 // Add permanent campfire and tent at origin
                 const ogX = centerCol * this.TILE_SIZE;
                 const ogY = this.columns[centerCol].surfaceY;
-                this.campfires.push({ x: ogX - 40, surfaceY: ogY, fuel: Infinity, lit: true, permanent: true });
-                this.tents.push({ x: ogX + 40, surfaceY: ogY, durability: Infinity, permanent: true });
+                this.campfires.push({ id: 'fire_0', x: ogX - 40, surfaceY: ogY, fuel: -1, lit: true, permanent: true });
+                this.tents.push({ id: 'tent_0', x: ogX + 40, surfaceY: ogY, durability: -1, permanent: true });
 
                 break;
             }

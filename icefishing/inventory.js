@@ -753,69 +753,13 @@ const Inventory = {
                 return true;
             }
 
-            // Return to its original slot
+            // Drop item into the world instead of returning to inventory
             if (this.dragSource) {
-                if (this.dragSource.type === 'bag') {
-                    // Try to put it back exactly where it was, or find any empty slot
-                    if (!this.bag[this.dragSource.idx]) {
-                        this.bag[this.dragSource.idx] = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'hotbar') {
-                    if (!this.hotbar[this.dragSource.idx]) {
-                        this.hotbar[this.dragSource.idx] = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'secondHand') {
-                    if (!this.secondHand) {
-                        this.secondHand = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'clothing') {
-                    if (!this.clothing) {
-                        this.clothing = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'chest') {
-                    if (ChestUI.currentChest && !ChestUI.currentChest.inventory[this.dragSource.idx]) {
-                        ChestUI.currentChest.inventory[this.dragSource.idx] = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'repair_shop') {
-                    if (!RepairShop.repairSlot) {
-                        RepairShop.repairSlot = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'anvil') {
-                    if (!Anvil.repairSlot) {
-                        Anvil.repairSlot = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'shop' || this.dragSource.type === 'shop_split') {
-                    if (!Shop.sellSlot) {
-                        Shop.sellSlot = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'bag_split') {
-                    if (!this.bag[this.dragSource.idx]) {
-                        this.bag[this.dragSource.idx] = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
-                } else if (this.dragSource.type === 'hotbar_split') {
-                    if (!this.hotbar[this.dragSource.idx]) {
-                        this.hotbar[this.dragSource.idx] = this.dragItem;
-                    } else {
-                        Inventory.addItem(this.dragItem.id, this.dragItem.count, this.dragItem.durability);
-                    }
+                // Determine drop location based on player position and a random offset
+                const dropX = Player.x + (Math.random() - 0.5) * 60;
+                if (this.dragItem) {
+                    World.addGroundItem(dropX, this.dragItem);
+                    Game.showMessage(`Dropped ${this.dragItem.name}`, 1.5);
                 }
             } else {
                 // If it somehow had no source, just add it to inventory

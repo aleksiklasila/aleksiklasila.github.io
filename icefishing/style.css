@@ -125,8 +125,61 @@ body {
     transform: scale(1.05);
 }
 
-#start-btn:active {
+#start-btn:active,
+#host-btn:active,
+#join-btn:active {
     transform: scale(0.98);
+}
+
+.multiplayer-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+#host-btn,
+#join-btn,
+.solo-btn {
+    font-family: 'VT323', monospace;
+    font-size: 24px;
+    color: #b0d4f0;
+    background: rgba(40, 80, 120, 0.6);
+    border: 2px solid rgba(100, 180, 255, 0.3);
+    border-radius: 8px;
+    padding: 12px 40px;
+    cursor: pointer;
+    letter-spacing: 4px;
+    transition: all 0.3s ease;
+    width: 250px;
+}
+
+#host-btn:hover,
+#join-btn:hover,
+.solo-btn:hover {
+    background: rgba(60, 120, 180, 0.7);
+    border-color: rgba(150, 210, 255, 0.6);
+    box-shadow: 0 0 25px rgba(100, 180, 255, 0.3);
+    transform: scale(1.05);
+}
+
+#join-id {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    padding: 8px 12px;
+    border: 2px solid rgba(100, 180, 255, 0.3);
+    border-radius: 4px;
+    background: rgba(10, 20, 40, 0.6);
+    color: #fff;
+    text-align: center;
+    width: 250px;
+}
+
+#network-status {
+    color: #ffaa00;
+    margin-top: 15px;
+    font-size: 18px;
 }
 
 /* Animations */

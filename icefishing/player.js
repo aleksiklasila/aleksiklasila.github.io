@@ -442,5 +442,60 @@ const Player = {
             }
         }
         ctx.restore();
+    },
+
+    renderRemote(ctx, camera, canvasW, canvasH, remoteData) {
+        const baseY = canvasH * 0.6;
+        const sx = remoteData.x - camera.x + canvasW / 2;
+        const sy = baseY - remoteData.y;
+
+        if (sx < -100 || sx > canvasW + 100) return;
+
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.scale(remoteData.facing || 1, 1);
+
+        const state = remoteData.state || 'idle';
+        const animFrame = remoteData.animFrame || 0;
+
+        const bobY = state === 'walking' ? Math.sin(animFrame * Math.PI / 2) * 3 : 0;
+        let imgName = state === 'walking' ? 'player_walk' : 'player_idle';
+        if (state === 'sleeping' || state === 'dying') {
+            imgName = 'player_idle';
+        }
+
+        const img = Assets.get(imgName);
+        if (img) {
+            const frameWidth = img.width / 3;
+            const frameHeight = img.height / 2;
+            const aFrame = animFrame % 6;
+            const col = aFrame % 3;
+            const row = Math.floor(aFrame / 3);
+
+            if (state === 'sleeping' || state === 'dying') {
+                ctx.save();
+                ctx.translate(0, -20);
+                // Rotate 90 degrees to lay down
+                ctx.rotate(Math.PI / 2);
+                ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -28, 40, 56);
+                ctx.restore();
+            } else {
+                ctx.drawImage(img, col * frameWidth, row * frameHeight, frameWidth, frameHeight, -20, -56 - bobY, 40, 56);
+            }
+        }
+
+        if (remoteData.handItem) {
+            this.renderHeldItem(ctx, remoteData.handItem, bobY, false);
+        }
+        if (remoteData.secondHand) {
+            this.renderHeldItem(ctx, remoteData.secondHand, bobY, true);
+        }
+
+        ctx.restore();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText("Player", sx, sy - 65 - bobY);
     }
 };

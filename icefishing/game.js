@@ -18,7 +18,7 @@ const Game = {
     fps: 0,
     fpsFrames: 0,
     fpsLastTime: 0,
-    fpsLocked: false,
+    fpsLocked: true,
     targetFPS: 60,
     running: false,
     gameOver: false,
@@ -475,7 +475,9 @@ const Game = {
         this.tutorialShown = {};
 
         NPCs.init();
-        World.generate();
+        SpatialSyncDB._isApplyingPatch = true;
+        World.generate(World.seed);
+        SpatialSyncDB._isApplyingPatch = false;
         Voxels.generate();
         Inventory.init();
         Shop.init();
@@ -526,10 +528,13 @@ const Game = {
         this.loopId = requestAnimationFrame(t => this.loop(t));
     },
 
-    loop(timestamp) {
+    loop(timestamp, fromWorker = false) {
         if (!this.running) return;
 
-        if (this.fpsLocked) {
+        // If the worker triggered this, but the tab is currently active, ignore it so requestAnimationFrame can handle smooth vsync.
+        if (fromWorker && !document.hidden) return;
+
+        if (this.fpsLocked && !fromWorker) {
             if (!this.nextFrameTime) this.nextFrameTime = timestamp;
             const frameDelay = 1000 / this.targetFPS;
 
@@ -546,7 +551,7 @@ const Game = {
             if (timestamp > this.nextFrameTime + (frameDelay * 2)) {
                 this.nextFrameTime = timestamp;
             }
-        } else {
+        } else if (!fromWorker) {
             this.nextFrameTime = 0; // reset for clean lock re-entry
         }
 
@@ -571,9 +576,21 @@ const Game = {
         }
 
         this.update(dt);
-        this.render();
+
+        // Clients and Hosts both render, but we can skip rendering if tab is hidden
+        if (!document.hidden) {
+            this.render();
+        }
+
         this.keysJustPressed = {};
-        this.loopId = requestAnimationFrame(t => this.loop(t));
+
+        if (Network.isHost) {
+            SpatialSyncDB.compileAndBroadcastPatches();
+        }
+
+        if (!fromWorker) {
+            this.loopId = requestAnimationFrame(t => this.loop(t));
+        }
     },
 
     update(dt) {
@@ -631,6 +648,31 @@ const Game = {
 
         // Player updates: movement, animation, sub-stats (re-consolidated)
         Player.update(dt, effectiveKeys);
+
+        // --- NETWORK SYNC ---
+        if (Network.isHost && SpatialSyncDB.players) {
+            const myP = SpatialSyncDB.players.find(p => p.id === Network.myId);
+            if (myP) {
+                myP.x = Player.x;
+                myP.y = Player.y;
+                myP.facing = Player.facing;
+                myP.state = Player.state;
+                myP.animFrame = Player.animFrame;
+                myP.handItem = Inventory.getSelectedItem();
+                myP.secondHand = Inventory.secondHand;
+            }
+        } else if (Network.isClient) {
+            Network.sendToHost({
+                type: 'input',
+                x: Player.x,
+                y: Player.y,
+                facing: Player.facing,
+                state: Player.state,
+                animFrame: Player.animFrame,
+                handItem: Inventory.getSelectedItem(),
+                secondHand: Inventory.secondHand
+            });
+        }
 
         // World updates: campfires, torches, weather, time
         Survival.update(dt);
@@ -709,6 +751,15 @@ const Game = {
 
         // 5. Player
         Player.render(ctx, this.camera, this.width, this.height);
+
+        // 5.5 Remote Players
+        if (SpatialSyncDB.players && SpatialSyncDB.players.length > 0) {
+            for (const p of SpatialSyncDB.players) {
+                if (p.id !== Network.myId) {
+                    Player.renderRemote(ctx, this.camera, this.width, this.height, p);
+                }
+            }
+        }
 
         // 6. GPU Lighting overlay
         this.updateLights();
