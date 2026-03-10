@@ -66,16 +66,28 @@ const Survival = {
             Game.showMessage("The Blood Moon rises...", 4);
         }
 
-        // Storm logic
-        if (!this.stormActive) {
-            this.stormCooldown -= dt;
-            if (this.stormCooldown <= 0) {
-                this.startStorm();
+        // Storm logic (Host only configures storms, clients get broadcast)
+        if (Network.isHost) {
+            if (!this.stormActive) {
+                this.stormCooldown -= dt;
+                if (this.stormCooldown <= 0) {
+                    this.startStorm();
+                    Network.broadcastGlobal('weather', { stormActive: true, stormIntensity: this.stormIntensity });
+                }
+            } else {
+                this.stormTimer -= dt;
+                if (this.stormTimer <= 0) {
+                    this.endStorm();
+                    Network.broadcastGlobal('weather', { stormActive: false });
+                }
             }
-        } else {
-            this.stormTimer -= dt;
-            if (this.stormTimer <= 0) {
-                this.endStorm();
+
+            // Sync time every 10 seconds to correct drift
+            if (this.syncTimer === undefined) this.syncTimer = 0;
+            this.syncTimer += dt;
+            if (this.syncTimer > 10) {
+                this.syncTimer = 0;
+                Network.broadcastGlobal('time', { timeOfDay: this.timeOfDay, dayCount: this.dayCount });
             }
         }
 

@@ -1,18 +1,40 @@
 // npcs.js - NPCs (Polar Bear, Zombie) system
 
 const NPCs = {
-    entities: [],
+    // entities is now a tracked collection
+    entities: null,
     particles: [],
 
     init() {
-        this.entities = [];
+        this.entities = SpatialSyncDB.createCollection('npcs', []);
         this.particles = [];
     },
 
     update(dt) {
         if (Game.gameOver) return;
 
-        // Spawn Zombies at night
+        if (Network.isClient) {
+            // Client dead reckoning
+            for (let i = 0; i < this.entities.length; i++) {
+                const npc = this.entities[i];
+                if (npc.vx !== 0) {
+                    npc.x += npc.vx * dt;
+                    npc.y = World.getSurfaceY(npc.x);
+                    npc.facing = npc.vx > 0 ? 1 : -1;
+                }
+            }
+            // Particles
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                const p = this.particles[i];
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.life -= dt;
+                if (p.life <= 0) this.particles.splice(i, 1);
+            }
+            return;
+        }
+
+        // Spawn Zombies at night (Host only)
         if (Survival.isNight) {
             // Determine max zombies based on day count
             const maxZombies = Survival.dayCount * 2
@@ -35,6 +57,18 @@ const NPCs = {
                 this.handleDeath(npc);
                 this.entities.splice(i, 1);
                 continue;
+            }
+
+            // Sleep Optimization (Host Only)
+            let nearestPlayerDist = Infinity;
+            for (const pid in SpatialSyncDB.players) {
+                const p = SpatialSyncDB.players[pid];
+                const d = Math.abs(p.x - npc.x);
+                if (d < nearestPlayerDist) nearestPlayerDist = d;
+            }
+            if (nearestPlayerDist > 2500) {
+                // Too far from any player (approx 60 tiles away)
+                continue; // Skip AI update
             }
 
             if (npc.type === 'zombie') {

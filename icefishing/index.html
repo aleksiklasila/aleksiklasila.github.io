@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body>
+<body onload="Network.autoJoin();">
     <canvas id="game"></canvas>
 
     <div id="title-screen">
@@ -24,17 +24,29 @@
                 <div class="control-row"><span class="key">SCROLL</span> Switch Items</div>
                 <div class="control-row"><span class="key">CLICK</span> Use Item</div>
                 <div class="control-row"><span class="key">E</span> Inventory</div>
-                <div class="control-row"><span class="key">F</span> Eat / Drink Snow</div>
                 <div class="control-row"><span class="key">W</span><span class="key">S</span> Fishing Depth</div>
             </div>
-            <button id="start-btn" onclick="Game.init();">
-                START GAME
-            </button>
+            <div class="multiplayer-controls">
+                <button id="host-btn" onclick="Network.hostGame();">
+                    HOST GAME
+                </button>
+                <input type="text" id="join-id" placeholder="Paste Lobby ID here" />
+                <button id="join-btn" onclick="Network.joinGame();">
+                    JOIN GAME
+                </button>
+                <button id="start-btn" onclick="Network.startSolo();" class="solo-btn">
+                    PLAY SOLO
+                </button>
+                <p id="network-status"></p>
+            </div>
         </div>
     </div>
 
     <!-- Load scripts in dependency order -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="assets.js"></script>
+    <script src="network.js"></script>
+    <script src="spatial_db.js"></script>
     <script src="perlin.js"></script>
     <script src="difficulty.js"></script>
     <script src="world.js"></script>
