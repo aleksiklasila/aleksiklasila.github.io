@@ -36,7 +36,7 @@ const World = {
             }
         };
 
-        // Use SpatialSyncDB collections for synced entities
+        // Use SpatialSyncDB collections for synced entities, completely clearing previous state on reload
         this.trees = SpatialSyncDB.createCollection('trees', []);
         this.fishingHoles = SpatialSyncDB.createCollection('fishingHoles', []);
         this.campfires = SpatialSyncDB.createCollection('campfires', []);
@@ -53,10 +53,39 @@ const World = {
         this.gates = SpatialSyncDB.createCollection('gates', []);
         this.polarBearEggs = SpatialSyncDB.createCollection('polarBearEggs', []);
 
-        this.gates = SpatialSyncDB.createCollection('gates', []);
-        this.polarBearEggs = SpatialSyncDB.createCollection('polarBearEggs', []);
+        // Explicitly clear them so they don't carry over between reloads locally
+        this.trees.length = 0;
+        this.fishingHoles.length = 0;
+        this.campfires.length = 0;
+        this.tents.length = 0;
+        this.torches.length = 0;
+        this.groundItems.length = 0;
+        this.bridges.length = 0;
+        this.rocks.length = 0;
+        this.chests.length = 0;
+        this.tombstones.length = 0;
+        this.gates.length = 0;
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
+
+        let dungeonCols = new Set();
+        dungeonCols.add(centerCol); // Add entrance at origin
+
+        // Populate entrances every +200m (roughly)
+        let currCol = centerCol;
+        while (currCol < this.WORLD_WIDTH - 50) {
+            currCol += 200 + Math.floor((rng.next() - 0.5) * 40);
+            dungeonCols.add(currCol);
+        }
+
+        // Populate entrances every -200m (roughly)
+        currCol = centerCol;
+        while (currCol > 50) {
+            currCol -= 200 + Math.floor((rng.next() - 0.5) * 40);
+            dungeonCols.add(currCol);
+        }
+
+        Dungeons.init();
 
         for (let x = 0; x < this.WORLD_WIDTH; x++) {
             const nx = x / 80;
@@ -70,18 +99,33 @@ const World = {
 
             // Force a flat, elevated town center plateau around the origin (spawn)
             const distFromCenter = Math.abs(x - centerCol);
-            const plateauRadius = 15;    // 15m plateau
-            const transitionWidth = 25;  // 25m transition (total 40m)
 
-            if (distFromCenter < plateauRadius) {
-                // Plateau: > 2.5m (0.33 * 300 = 100px), almost flat (5% noise)
-                height = 0.33 + (elevation + detail) * 0.05;
-            } else if (distFromCenter < plateauRadius + transitionWidth) {
-                // Transition: gradually blend from plateau to normal perlin terrain
-                const blend = (distFromCenter - plateauRadius) / transitionWidth;
-                const plateauBase = 0.33 + (elevation + detail) * 0.05;
-                height = (plateauBase * (1 - blend)) + (height * blend);
+            let dungeonDist = 9999;
+            // The dungeon exactly at spawn is skipped in this loop, handled by town plateau instead
+            for (let dc of dungeonCols) {
+                if (dc === centerCol) continue; // Town handles center
+                let d = Math.abs(x - dc);
+                if (d < dungeonDist) dungeonDist = d;
             }
+
+            // Helper to linearly blend a plateau into existing terrain
+            const applyPlateau = (currentHeight, dist, flatRadius, blendRadius, targetHeight) => {
+                if (dist < flatRadius) {
+                    return targetHeight;
+                } else if (dist < flatRadius + blendRadius) {
+                    let blend = (dist - flatRadius) / blendRadius;
+                    return (targetHeight * (1 - blend)) + (currentHeight * blend);
+                }
+                return currentHeight;
+            };
+
+            // 1. Generate dungeon islands (they can be overwritten by town if nearby)
+            let dungeonTargetH = Math.max(0.15, height * 0.5 + 0.15);
+            height = applyPlateau(height, dungeonDist, 10, 20, dungeonTargetH);
+
+            // 2. Generate town plateau (takes absolute precedence)
+            let townTargetH = 0.33 + (elevation + detail) * 0.05;
+            height = applyPlateau(height, distFromCenter, 15, 25, townTargetH);
 
             let type;
             if (height > 0.02) type = 'ground';
@@ -173,6 +217,13 @@ const World = {
                 this.tents.push({ id: 'tent_0', x: ogX + 40, surfaceY: ogY, durability: -1, permanent: true });
 
                 break;
+            }
+        }
+
+        // Build Dungeons
+        for (let x = 0; x < this.WORLD_WIDTH; x++) {
+            if (dungeonCols.has(x)) {
+                Dungeons.buildDungeon(x * this.TILE_SIZE, () => rng.next());
             }
         }
     },

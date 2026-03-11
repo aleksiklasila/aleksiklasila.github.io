@@ -125,6 +125,8 @@ const Lighting = {
             }
             return false;
         }
+        
+        uniform int u_renderMode; // 0 = normal, 1 = full bright
 
         void main() {
             vec2 sp = gl_FragCoord.xy;
@@ -138,7 +140,11 @@ const Lighting = {
             if (playerCanSee) {
                 gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
             } else {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                if (u_renderMode == 1) {
+                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); // full bright
+                } else {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                }
             }
         }
 
@@ -262,13 +268,15 @@ const Lighting = {
             
             return intensity;
         }
+        
+        uniform int u_renderMode; // 0 = normal, 1 = full bright
 
         void main() {
             vec2 uv = gl_FragCoord.xy / u_screenSize;
             vec4 vis = texture2D(u_pass2, uv);
             
             // If pixel is entirely outside expanded visibility, it's black.
-            if (vis.r < 0.5) {
+            if (vis.r < 0.5 && u_renderMode == 0) {
                 gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                 return;
             }
@@ -277,7 +285,12 @@ const Lighting = {
             sp.y = u_screenSize.y - sp.y;
             vec2 tv = s2v(sp);
 
-            vec3 light = vec3(SHADOW_BRIGHTNESS);
+            vec3 light;
+            if (u_renderMode == 1) {
+                light = vec3(1.0, 1.0, 1.0); // full bright
+            } else {
+                light = vec3(SHADOW_BRIGHTNESS);
+            }
 
             // Sun
             if (u_sunIntensity > 0.01) {
@@ -365,7 +378,7 @@ const Lighting = {
         const names1 = [
             'u_voxels', 'u_chunkSize', 'u_chunkStartVx', 'u_screenSize',
             'u_voxelSize', 'u_baseY', 'u_topY', 'u_cameraX',
-            'u_playerScreenPos', 'u_playerVisionRadius'
+            'u_playerScreenPos', 'u_playerVisionRadius', 'u_renderMode'
         ];
         for (const n of names1) this._uniforms1[n] = gl.getUniformLocation(this.raycastProgram, n);
 
@@ -382,7 +395,7 @@ const Lighting = {
         const names3 = [
             'u_pass2', 'u_voxels', 'u_chunkSize', 'u_chunkStartVx', 'u_screenSize',
             'u_voxelSize', 'u_baseY', 'u_topY', 'u_cameraX',
-            'u_numLights', 'u_sunDir', 'u_sunIntensity', 'u_sunColor'
+            'u_numLights', 'u_sunDir', 'u_sunIntensity', 'u_sunColor', 'u_renderMode'
         ];
         for (const n of names3) this._uniforms3[n] = gl.getUniformLocation(this.accumulateProgram, n);
         for (let i = 0; i < this.MAX_LIGHTS; i++) {
@@ -562,6 +575,8 @@ const Lighting = {
             gl.uniform1f(this._uniforms1['u_playerVisionRadius'], 600.0);
         }
 
+        gl.uniform1i(this._uniforms1['u_renderMode'], typeof Game !== 'undefined' ? Game.renderMode : 0);
+
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         // ---- Pass 2: Dilate Player Visibility to FBO2 ----
@@ -612,6 +627,8 @@ const Lighting = {
         gl.uniform2f(this._uniforms3['u_sunDir'], this.sunDirX, this.sunDirY);
         gl.uniform1f(this._uniforms3['u_sunIntensity'], this.sunIntensity);
         gl.uniform3f(this._uniforms3['u_sunColor'], this.sunColorR, this.sunColorG, this.sunColorB);
+
+        gl.uniform1i(this._uniforms3['u_renderMode'], typeof Game !== 'undefined' ? Game.renderMode : 0);
 
         // Lights
         const passedLights = Math.min(this.MAX_LIGHTS, this.lights.length);
