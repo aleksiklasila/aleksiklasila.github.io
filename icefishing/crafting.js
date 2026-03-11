@@ -148,14 +148,16 @@ const Crafting = {
             cost: { firewood: 10 },
             icon: 'simple_bridge',
             onBuild: (playerX) => {
-                const targetX = playerX + Player.facing * World.TILE_SIZE * 1.5;
-                if (World.addBridge(targetX)) {
-                    Game.showMessage('Built a bridge!', 2);
-                    return true;
-                } else {
-                    Game.showMessage('Cannot build here!', 2);
-                    return false;
+                // Try several points in front of the player to find a gap
+                for (let dist = 1.0; dist <= 3.0; dist += 0.5) {
+                    const targetX = playerX + Player.facing * World.TILE_SIZE * dist;
+                    if (World.addBridge(targetX, Player.y)) {
+                        Game.showMessage('Built a bridge!', 2);
+                        return true;
+                    }
                 }
+                Game.showMessage('Cannot build here!', 2);
+                return false;
             }
         },
         {
