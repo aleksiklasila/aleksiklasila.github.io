@@ -131,8 +131,10 @@ const Player = {
         // Apply movement
         if (this.state !== 'sleeping') {
             const nextX = this.x + this.vx * dt;
-            const newCol = World.getColumnAt(nextX);
-            if ((newCol && newCol.type === 'water' && !World.isBridgeAt(nextX)) || World.isGateAt(nextX)) {
+            // Check collision at the leading edge (12px ahead of center)
+            const checkX = nextX + (this.vx > 0 ? 12 : -12);
+            const newCol = World.getColumnAt(checkX);
+            if ((newCol && newCol.type === 'water' && !World.isBridgeAt(checkX)) || World.isGateAt(checkX)) {
                 this.vx = 0;
             } else {
                 this.x = nextX;

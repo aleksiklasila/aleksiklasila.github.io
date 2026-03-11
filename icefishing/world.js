@@ -22,6 +22,22 @@ const World = {
     gates: null,
     polarBearEggs: null,
 
+    // Smoothly cap terrain Y to stay within voxel grid bounds [-700, 500]
+    // Capping at [-650, 450] for a safe buffer
+    smoothCapY(y) {
+        const TOP_LIMIT = 450;
+        const BOT_LIMIT = -650;
+        const MARGIN = 100;
+
+        if (y > TOP_LIMIT - MARGIN) {
+            y = (TOP_LIMIT - MARGIN) + MARGIN * Math.tanh((y - (TOP_LIMIT - MARGIN)) / MARGIN);
+        }
+        if (y < BOT_LIMIT + MARGIN) {
+            y = (BOT_LIMIT + MARGIN) + MARGIN * Math.tanh((y - (BOT_LIMIT + MARGIN)) / MARGIN);
+        }
+        return y;
+    },
+
     generate(seed) {
         this.seed = seed || (Math.random() * 100000) | 0;
         Perlin.seed(this.seed);
@@ -88,10 +104,10 @@ const World = {
         Dungeons.init();
 
         for (let x = 0; x < this.WORLD_WIDTH; x++) {
-            const nx = x / 80;
+            const nx = x / 50; // Increased frequency from 80, but much less than 20
             const elevation = Perlin.fbm(nx, 0, 5, 2.0, 0.5) * 1.2;
             const detail = Perlin.fbm(nx, 10, 3, 2.0, 0.4) * 0.3;
-            const current = Math.abs(Perlin.fbm(nx, 50, 3, 2.5, 0.6));
+            const current = Math.abs(Perlin.fbm(nx, 50, 4, 3.0, 0.6)); // Higher frequency and octaves for more gaps
 
             // Scale terrain amplitude with distance from center (continuous)
             const terrainMult = Difficulty.getTerrainMultiplier(x, centerCol);
@@ -128,11 +144,14 @@ const World = {
             height = applyPlateau(height, distFromCenter, 15, 25, townTargetH);
 
             let type;
-            if (height > 0.02) type = 'ground';
-            else if (height > -0.02) type = 'shore';
-            else type = current > 0.4 ? 'water' : 'ice';
+            if (height > 0.03) type = 'ground';
+            else if (height > 0.01) type = 'shore';
+            else type = (current > 0.35 && height < -0.5) ? 'water' : 'ice'; // Balanced threshold (original 0.4, 0.33 was too common for user?)
 
-            const surfaceY = height * 300;
+            let surfaceY = height * 300;
+
+            // Smoothly cap surfaceY to prevent it from going outside voxel grid vertical limits
+            surfaceY = this.smoothCapY(surfaceY);
 
             this.columns.push({ x, surfaceY, height, type, current, snowDepth: rng.next() * 3 + 1 });
 
@@ -229,14 +248,32 @@ const World = {
     },
 
     getSurfaceY(worldX) {
-        const col = (worldX / this.TILE_SIZE) | 0;
-        if (col < 0 || col >= this.WORLD_WIDTH - 1) return 0;
-        const c = this.columns[col];
-        const c1 = this.columns[Math.min(col + 1, this.WORLD_WIDTH - 1)];
-        const y0 = (c.type === 'ice' || c.type === 'water') ? 0 : c.surfaceY;
-        const y1 = (c1.type === 'ice' || c1.type === 'water') ? 0 : c1.surfaceY;
-        const frac = (worldX / this.TILE_SIZE) - col;
+        const bridge = this.getBridgeAt(worldX);
+        if (bridge) return bridge.surfaceY;
+
+        const colIdx = (worldX / this.TILE_SIZE) | 0;
+        if (colIdx < 0 || colIdx >= this.WORLD_WIDTH - 1) return 0;
+        const c = this.columns[colIdx];
+        const c1 = this.columns[Math.min(colIdx + 1, this.WORLD_WIDTH - 1)];
+
+        const getY = (col) => {
+            if (col.type === 'ice') return 6;
+            if (col.type === 'water') return 2;
+            return col.surfaceY;
+        };
+
+        const y0 = getY(c);
+        const y1 = getY(c1);
+        const frac = (worldX / this.TILE_SIZE) - colIdx;
         return y0 + (y1 - y0) * frac;
+    },
+
+    getBridgeAt(worldX) {
+        const colIdx = Math.round(worldX / this.TILE_SIZE);
+        for (const b of this.bridges) {
+            if (colIdx >= b.startCol && colIdx <= b.endCol) return b;
+        }
+        return null;
     },
 
     getColumnAt(worldX) {
@@ -261,7 +298,7 @@ const World = {
         return true;
     },
 
-    addBridge(worldX) {
+    addBridge(worldX, surfaceY = null) {
         const colIdx = Math.round(worldX / this.TILE_SIZE);
         const col = this.getColumnAt(worldX);
         if (!col || col.type !== 'water') return false;
@@ -287,20 +324,10 @@ const World = {
             rightCol++;
         }
 
-        // We want a max of 10 tiles. If the span is longer, truncate it.
-        const maxSpan = 10;
-        let span = rightCol - leftCol + 1;
-        if (span > maxSpan) {
-            if (colIdx - leftCol < rightCol - colIdx) {
-                // Closer to left shore, anchor to left
-                rightCol = leftCol + maxSpan - 1;
-            } else {
-                // Closer to right shore, anchor to right
-                leftCol = rightCol - maxSpan + 1;
-            }
-        }
+        // Bridges should always span the gap and sit at ice level (6)
+        surfaceY = 6;
 
-        this.bridges.push({ startCol: leftCol, endCol: rightCol, surfaceY: 0 });
+        this.bridges.push({ startCol: leftCol, endCol: rightCol, surfaceY: surfaceY });
         return true;
     },
 
@@ -315,7 +342,7 @@ const World = {
     addCampfire(playerX, isBlue = false) {
         const col = this.getColumnAt(playerX);
         if (!col || col.type === 'water') return false;
-        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(playerX);
         const fire = { x: playerX, surfaceY, fuel: 50, lit: false, permanent: false, isBlue: isBlue };
         this.campfires.push(fire);
         return fire;
@@ -324,7 +351,7 @@ const World = {
     addTorch(worldX, fuel = 100, isLit = false) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
-        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(worldX);
         const torch = { x: worldX, surfaceY, fuel, lit: isLit };
         this.torches.push(torch);
         return torch;
@@ -344,7 +371,7 @@ const World = {
     addGroundItem(worldX, item) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
-        const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(worldX);
         this.groundItems.push({ x: worldX, surfaceY, item: { ...item } });
         return true;
     },
@@ -366,7 +393,7 @@ const World = {
         for (const t of this.tents) {
             if (Math.abs(t.x - worldX) < this.TILE_SIZE * 3) return false;
         }
-        const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(worldX);
         this.tents.push({ x: worldX, surfaceY, durability });
         return true;
     },
@@ -394,7 +421,7 @@ const World = {
         for (const c of this.chests) {
             if (Math.abs(c.x - worldX) < 50) return false;
         }
-        const surfaceY = (col.type === 'ice') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(worldX);
         this.chests.push({ x: worldX, surfaceY, inventory: new Array(40).fill(null) });
         return true;
     },
@@ -420,7 +447,7 @@ const World = {
     addTombstone(worldX, items) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
-        const surfaceY = (col.type === 'ice' || col.type === 'water') ? 0 : col.surfaceY;
+        const surfaceY = this.getSurfaceY(worldX);
         const inventory = new Array(40).fill(null);
         for (let i = 0; i < items.length && i < 40; i++) {
             inventory[i] = items[i];
@@ -499,18 +526,23 @@ const World = {
 
         // Bridges
         for (const bridge of this.bridges) {
-            const bridgePixelWidth = (bridge.endCol - bridge.startCol + 1) * this.TILE_SIZE;
-            const bridgeCenterX = ((bridge.startCol + bridge.endCol) / 2) * this.TILE_SIZE;
+            // Add 12px overlap on each side so it sits on the ice
+            const bridgePixelWidth = (bridge.endCol - bridge.startCol + 1) * this.TILE_SIZE + 24;
+            // The center of a range [start, end] in tiles is (start + end + 1) / 2
+            const bridgeCenterX = ((bridge.startCol + bridge.endCol + 1) / 2) * this.TILE_SIZE;
             const sx = bridgeCenterX - camera.x + canvasW / 2;
 
             if (sx + bridgePixelWidth / 2 < -80 || sx - bridgePixelWidth / 2 > canvasW + 80) continue;
 
             const img = Assets.get('simple_bridge');
+            // Alignment: Deck at surfaceY (6 for ice). Deck is roughly at midpoint of 24px asset.
+            const drawY = baseY - bridge.surfaceY - 12;
+
             if (img) {
-                ctx.drawImage(img, sx - bridgePixelWidth / 2, baseY - 12 - bridge.surfaceY, bridgePixelWidth, 24);
+                ctx.drawImage(img, sx - bridgePixelWidth / 2, drawY, bridgePixelWidth, 24);
             } else {
                 ctx.fillStyle = '#6a4a2a';
-                ctx.fillRect(sx - bridgePixelWidth / 2, baseY - 6 - bridge.surfaceY, bridgePixelWidth, 12);
+                ctx.fillRect(sx - bridgePixelWidth / 2, drawY + 12, bridgePixelWidth, 12);
             }
         }
 

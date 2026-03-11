@@ -36,7 +36,7 @@ const Dungeons = {
     },
 
     buildDungeon(startX, rng) {
-        console.log("buildDungeon(" + startX + ", " + rng + ")")
+        // console.log("buildDungeon(" + startX + ", " + rng + ")")
         let surfaceY = World.getSurfaceY(startX);
 
         let distFromOrigin = Math.abs(startX - (World.WORLD_WIDTH * World.TILE_SIZE / 2));
@@ -152,7 +152,7 @@ const Dungeons = {
     },
 
     carveRoom(grid, gridX, gridY) {
-        console.log("canCarveRoom: " + `${gridX},${gridY}`)
+        // console.log("canCarveRoom: " + `${gridX},${gridY}`)
         grid[`${gridX},${gridY}`] = true;
     },
 
