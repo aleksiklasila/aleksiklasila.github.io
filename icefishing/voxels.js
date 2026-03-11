@@ -12,6 +12,7 @@ const Voxels = {
     WATER: 3,
     SNOW: 4,
     LAKEBED: 5,
+    CAVE_BG: 6,
 
     grid: null,       // Uint8Array
     solidity: null,   // Uint8Array for fast lighting checks (0=pass, 255=solid)
@@ -24,6 +25,7 @@ const Voxels = {
         [18, 50, 105],    // 3: WATER
         [235, 240, 248],  // 4: SNOW
         [80, 70, 45],     // 5: LAKEBED
+        [40, 30, 20],     // 6: CAVE_BG
     ],
 
     // Voxel tile caching
@@ -76,6 +78,13 @@ const Voxels = {
                     }
                 }
 
+                // Zelda-style Dungeon Check
+                if (type === this.GROUND || type === this.LAKEBED || type === this.ICE || type === this.SNOW) {
+                    if (Dungeons.isCave(worldX, worldY)) {
+                        type = this.CAVE_BG;
+                    }
+                }
+
                 const idx = vy * this.GRID_W + vx;
                 this.grid[idx] = type;
                 this.solidity[idx] = this.isSolid(type) ? 255 : 0;
@@ -105,6 +114,7 @@ const Voxels = {
     },
 
     isSolid(type) {
+        // CAVE_BG is NOT solid, allowing light to pass and players to fall through
         return type === this.GROUND || type === this.ICE || type === this.SNOW || type === this.LAKEBED;
     },
 
@@ -218,6 +228,7 @@ const Voxels = {
 
                 const type = this.grid[rowOff + vx];
                 if (type === this.AIR) continue;
+                // CAVE_BG still gets rendered, allowing the cavern walls to be distinct from the sky
 
                 const baseColor = this.COLORS[type];
                 if (!baseColor) continue;
@@ -226,7 +237,8 @@ const Voxels = {
                 const v = (hash - 0.5) * 18;
 
                 let depthDarken = 0;
-                if (type === this.GROUND || type === this.LAKEBED) {
+                // Darken CAVE_BG based on depth too 
+                if (type === this.GROUND || type === this.LAKEBED || type === this.CAVE_BG) {
                     const surfVy = Math.floor((this.TOP_Y - 0) / this.SIZE);
                     depthDarken = Math.min(40, Math.max(0, (vy - surfVy) * 0.4));
                 }

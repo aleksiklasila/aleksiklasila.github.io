@@ -23,6 +23,11 @@ const Game = {
     running: false,
     gameOver: false,
     gameOverButtons: { newGame: { x: 0, y: 0, w: 0, h: 0 }, continue_: { x: 0, y: 0, w: 0, h: 0 } },
+    gameOverMessage: '',
+    renderMode: 0, // 0 = normal lighting, 1 = full bright
+
+    // Screen shake
+    shakeTime: 0,
 
     messageText: '',
     messageTimer: 0,
@@ -599,6 +604,24 @@ const Game = {
         }
 
         if (this.keysJustPressed['KeyE'] && !Fishing.active) Inventory.toggle();
+
+        // Render mode toggle (only in solo play)
+        if (this.keysJustPressed['KeyY'] && Network.myId === 'solo') {
+            this.renderMode = this.renderMode === 0 ? 1 : 0;
+            this.showMessage(this.renderMode === 1 ? 'Full Brightness ON' : 'Full Brightness OFF', 1.5);
+        }
+
+        // Debug speed toggle (only in solo play)
+        if (this.keysJustPressed['KeyU'] && Network.myId === 'solo') {
+            Player.debugSpeed = !Player.debugSpeed;
+            this.showMessage(Player.debugSpeed ? 'Speed Boost ON' : 'Speed Boost OFF', 1.5);
+        }
+
+        // God mode toggle (only in solo play)
+        if (this.keysJustPressed['KeyI'] && Network.myId === 'solo') {
+            Player.godMode = !Player.godMode;
+            this.showMessage(Player.godMode ? 'God Mode ON' : 'God Mode OFF', 1.5);
+        }
 
         // If shop or repair shop is open, handle them.
         if (Shop.isOpen || RepairShop.isOpen) {

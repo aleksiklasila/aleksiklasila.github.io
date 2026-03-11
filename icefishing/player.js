@@ -32,6 +32,8 @@ const Player = {
     isDead: false,
     deathCause: '',
     speed: 150,
+    debugSpeed: false,
+    godMode: false,
 
     // Action state
     actionTimer: 0,
@@ -93,6 +95,9 @@ const Player = {
             // keep sleeping
         } else {
             let currentSpeed = this.speed;
+            if (this.debugSpeed) {
+                currentSpeed *= 10;
+            }
             if (this.stats.sleep < 25) {
                 currentSpeed *= 0.5; // Slow down 50% when sleepy
             }
@@ -218,6 +223,13 @@ const Player = {
         } else if (this.state === 'sleeping') {
             // Force sleep recovery
             this.stats.sleep += dt * 5;
+        }
+
+        if (this.godMode) {
+            this.stats.warmth = 100;
+            this.stats.hunger = 100;
+            this.stats.thirst = 100;
+            this.stats.sleep = 100;
         }
 
         // Clamp
