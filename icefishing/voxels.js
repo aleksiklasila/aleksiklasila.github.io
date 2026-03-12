@@ -159,12 +159,13 @@ const Voxels = {
     render(ctx, camera, canvasW, canvasH) {
         const baseY = canvasH * 0.6;
         const camOffX = camera.x - canvasW / 2;
+        const camOffY = camera.y;
 
         const startX = Math.floor((camera.x - canvasW / 2) / this.SIZE);
         const endX = Math.ceil((camera.x + canvasW / 2) / this.SIZE);
 
-        const topWorldY = baseY;
-        const botWorldY = baseY - canvasH;
+        const topWorldY = baseY + camOffY;
+        const botWorldY = baseY + camOffY - canvasH;
         const startVy = Math.max(0, Math.floor((this.TOP_Y - topWorldY) / this.SIZE) - 1);
         const endVy = Math.min(this.GRID_H, Math.ceil((this.TOP_Y - botWorldY) / this.SIZE) + 1);
 
@@ -182,7 +183,7 @@ const Voxels = {
                 if (!tile) continue;
 
                 const drawX = (tx * this.TILE_SIZE_VX) * this.SIZE - camOffX;
-                const drawY = baseY - (this.TOP_Y - (ty * this.TILE_SIZE_VX) * this.SIZE);
+                const drawY = baseY - (this.TOP_Y - (ty * this.TILE_SIZE_VX) * this.SIZE) + camOffY;
 
                 ctx.drawImage(tile.canvas, drawX, drawY);
             }

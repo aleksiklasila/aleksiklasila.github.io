@@ -299,7 +299,7 @@ const Fishing = {
             const fishSX = fish.x - camera.x + canvasW / 2;
             if (fishSX < -50 || fishSX > canvasW + 50) continue;
 
-            const fishSY = baseY + 6 + fish.y * World.getWaterDepth(fish.x);
+            const fishSY = baseY + 6 + fish.y * World.getWaterDepth(fish.x) + camera.y;
             this.renderFish(ctx, fishSX, fishSY, fish);
         }
 
@@ -307,7 +307,7 @@ const Fishing = {
         if (this.hooked && this.hookedFish && this.hole) {
             const holeSX = this.hole.x - camera.x + canvasW / 2;
             const currentDepth = this.hookedDepth * (1 - this.reelProgress / 100);
-            const hookedY = baseY + 6 + currentDepth * World.getWaterDepth(this.hole.x);
+            const hookedY = baseY + 6 + currentDepth * World.getWaterDepth(this.hole.x) + camera.y;
             const wobble = Math.sin(Date.now() / 100) * 8;
             this.renderFish(ctx, holeSX + wobble, hookedY, this.hookedFish, true);
         }
@@ -316,7 +316,7 @@ const Fishing = {
         if (!this.active || !this.hole) return;
 
         const holeSX = this.hole.x - camera.x + canvasW / 2;
-        const iceScreenY = baseY;
+        const iceScreenY = baseY + camera.y;
         const baitScreenY = iceScreenY + 6 + (this.baitDepth / this.maxDepth) * World.getWaterDepth(this.hole.x);
 
         // Fishing line
