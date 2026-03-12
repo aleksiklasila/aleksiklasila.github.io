@@ -516,10 +516,10 @@ const World = {
             const sx = hole.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
             const img = Assets.get('fishing_hole');
-            if (img) ctx.drawImage(img, sx - 24, baseY - 12, 48, 24);
+            if (img) ctx.drawImage(img, sx - 24, baseY - 12 + camera.y, 48, 24);
             else {
                 ctx.fillStyle = '#1a3a5c';
-                ctx.beginPath(); ctx.ellipse(sx, baseY, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.ellipse(sx, baseY + camera.y, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
                 ctx.strokeStyle = '#8ac'; ctx.lineWidth = 2; ctx.stroke();
             }
         }
@@ -536,7 +536,7 @@ const World = {
 
             const img = Assets.get('simple_bridge');
             // Alignment: Deck at surfaceY (6 for ice). Deck is roughly at midpoint of 24px asset.
-            const drawY = baseY - bridge.surfaceY - 12;
+            const drawY = baseY - bridge.surfaceY - 12 + camera.y;
 
             if (img) {
                 ctx.drawImage(img, sx - bridgePixelWidth / 2, drawY, bridgePixelWidth, 24);
@@ -553,12 +553,12 @@ const World = {
                 const img = Assets.get('shop');
                 if (img) {
                     // Draw the shop so it sits on the ground
-                    ctx.drawImage(img, sx - 64, baseY - this.shop.surfaceY - 128, 128, 128);
+                    ctx.drawImage(img, sx - 64, baseY - this.shop.surfaceY - 128 + camera.y, 128, 128);
                 } else {
                     ctx.fillStyle = '#6e4c30';
-                    ctx.fillRect(sx - 60, baseY - this.shop.surfaceY - 100, 120, 100);
+                    ctx.fillRect(sx - 60, baseY - this.shop.surfaceY - 100 + camera.y, 120, 100);
                     ctx.fillStyle = '#8f6e4a';
-                    ctx.fillRect(sx - 20, baseY - this.shop.surfaceY - 40, 40, 40);
+                    ctx.fillRect(sx - 20, baseY - this.shop.surfaceY - 40 + camera.y, 40, 40);
                 }
             }
         }
@@ -570,12 +570,12 @@ const World = {
                 const img = Assets.get('repair_shop');
                 if (img) {
                     // Draw the repair shop so it sits on the ground
-                    ctx.drawImage(img, sx - 64, baseY - this.repairShop.surfaceY - 128, 128, 128);
+                    ctx.drawImage(img, sx - 64, baseY - this.repairShop.surfaceY - 128 + camera.y, 128, 128);
                 } else {
                     ctx.fillStyle = '#4a6e30';
-                    ctx.fillRect(sx - 60, baseY - this.repairShop.surfaceY - 100, 120, 100);
+                    ctx.fillRect(sx - 60, baseY - this.repairShop.surfaceY - 100 + camera.y, 120, 100);
                     ctx.fillStyle = '#6a8f4a';
-                    ctx.fillRect(sx - 20, baseY - this.repairShop.surfaceY - 40, 40, 40);
+                    ctx.fillRect(sx - 20, baseY - this.repairShop.surfaceY - 40 + camera.y, 40, 40);
                 }
             }
         }
@@ -584,7 +584,7 @@ const World = {
         for (const tent of this.tents) {
             const sx = tent.x - camera.x + canvasW / 2;
             if (sx < -80 || sx > canvasW + 80) continue;
-            this.renderTent(ctx, sx, baseY - tent.surfaceY);
+            this.renderTent(ctx, sx, baseY - tent.surfaceY + camera.y);
         }
 
         // Trees
@@ -594,7 +594,7 @@ const World = {
             if (sx < -60 || sx > canvasW + 60) continue;
             const col = this.columns[tree.groundCol];
             if (!col) continue;
-            this.renderTree(ctx, sx, baseY - col.surfaceY, tree.type);
+            this.renderTree(ctx, sx, baseY - col.surfaceY + camera.y, tree.type);
         }
 
         // Rocks
@@ -604,7 +604,7 @@ const World = {
             if (sx < -60 || sx > canvasW + 60) continue;
             const col = this.columns[rock.groundCol];
             if (!col) continue;
-            const ry = baseY - col.surfaceY;
+            const ry = baseY - col.surfaceY + camera.y;
             const img = Assets.get('rock');
             if (img) {
                 ctx.drawImage(img, sx - 24, ry - 42, 48, 48);
@@ -626,7 +626,7 @@ const World = {
             if (sx < -30 || sx > canvasW + 30) continue;
             const col = this.columns[re.groundCol];
             if (!col) continue;
-            const ry = baseY - col.surfaceY;
+            const ry = baseY - col.surfaceY - camera.y;
             const img = Assets.get('rock');
             if (img) {
                 ctx.globalAlpha = 0.6;
@@ -644,7 +644,7 @@ const World = {
         for (const te of this.treeEggs) {
             const sx = te.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderTree(ctx, sx, baseY - te.surfaceY, te.type || 0, 0.2);
+            this.renderTree(ctx, sx, baseY - te.surfaceY - camera.y, te.type || 0, 0.2);
         }
 
         // Fish Eggs
@@ -665,28 +665,28 @@ const World = {
         for (const fire of this.campfires) {
             const sx = fire.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderCampfire(ctx, sx, baseY - fire.surfaceY, fire);
+            this.renderCampfire(ctx, sx, baseY - fire.surfaceY - camera.y, fire);
         }
 
         // Ground torches
         for (const torch of this.torches) {
             const sx = torch.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderTorch(ctx, sx, baseY - torch.surfaceY, torch);
+            this.renderTorch(ctx, sx, baseY - torch.surfaceY - camera.y, torch);
         }
 
         // Ground Items
         for (const gItem of this.groundItems) {
             const sx = gItem.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY - 20, 24);
+            Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY - camera.y - 20, 24);
         }
 
         // Chests
         for (const chest of this.chests) {
             const sx = chest.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            const cy = baseY - chest.surfaceY;
+            const cy = baseY - chest.surfaceY - camera.y;
             const img = Assets.get('chest');
             if (img) {
                 ctx.drawImage(img, sx - 16, cy - 28, 32, 28);
@@ -709,7 +709,7 @@ const World = {
         for (const ts of this.tombstones) {
             const sx = ts.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            const ty = baseY - ts.surfaceY;
+            const ty = baseY - ts.surfaceY - camera.y;
             const img = Assets.get('tombstone');
             if (img) {
                 ctx.drawImage(img, sx - 16, ty - 36, 32, 36);
@@ -742,7 +742,7 @@ const World = {
         for (const gate of this.gates) {
             const sx = gate.x - camera.x + canvasW / 2;
             if (sx < -100 || sx > canvasW + 100) continue;
-            const gy = baseY - gate.surfaceY;
+            const gy = baseY - gate.surfaceY - camera.y;
             const img = Assets.get(gate.open ? 'gate_open' : 'gate_closed');
             if (img) {
                 ctx.drawImage(img, sx - 64, gy - 128, 128, 128);
@@ -782,7 +782,8 @@ const World = {
         ctx.beginPath(); ctx.moveTo(0, canvasH);
         for (let x = 0; x <= canvasW; x += 30) {
             const wx = (x + camera.x * 0.1) / 200;
-            ctx.lineTo(x, baseY - Perlin.fbm(wx, 200, 3, 2.0, 0.5) * 120 - 140);
+            // Vertical parallax for far mountains (10% tracking)
+            ctx.lineTo(x, baseY + camera.y * 0.1 - Perlin.fbm(wx, 200, 3, 2.0, 0.5) * 120 - 140);
         }
         ctx.lineTo(canvasW, canvasH); ctx.fill();
 
@@ -792,7 +793,8 @@ const World = {
         ctx.beginPath(); ctx.moveTo(0, canvasH);
         for (let x = 0; x <= canvasW; x += 20) {
             const wx = (x + camera.x * 0.3) / 150;
-            ctx.lineTo(x, baseY - Perlin.fbm(wx, 300, 3, 2.0, 0.5) * 80 - 30);
+            // Vertical parallax for near mountains (30% tracking)
+            ctx.lineTo(x, baseY + camera.y * 0.3 - Perlin.fbm(wx, 300, 3, 2.0, 0.5) * 80 - 30);
         }
         ctx.lineTo(canvasW, canvasH); ctx.fill();
     },

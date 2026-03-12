@@ -286,7 +286,7 @@ const Player = {
     render(ctx, camera, canvasW, canvasH) {
         const baseY = canvasH * 0.6;
         const sx = this.x - camera.x + canvasW / 2;
-        const sy = baseY - this.y;
+        const sy = baseY - this.y + camera.y;
 
         ctx.save();
         ctx.translate(sx, sy);
@@ -461,7 +461,7 @@ const Player = {
     renderRemote(ctx, camera, canvasW, canvasH, remoteData) {
         const baseY = canvasH * 0.6;
         const sx = remoteData.x - camera.x + canvasW / 2;
-        const sy = baseY - remoteData.y;
+        const sy = baseY - remoteData.y + camera.y;
 
         if (sx < -100 || sx > canvasW + 100) return;
 

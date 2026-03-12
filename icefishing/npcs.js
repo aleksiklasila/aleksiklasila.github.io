@@ -411,7 +411,7 @@ const NPCs = {
         const baseY = canvasH * 0.6;
         for (const npc of this.entities) {
             const sx = npc.x - camera.x + canvasW / 2;
-            const sy = baseY - npc.y;
+            const sy = baseY - npc.y + camera.y;
 
             if (sx < -100 || sx > canvasW + 100) continue;
 
@@ -462,7 +462,7 @@ const NPCs = {
         ctx.fillStyle = '#ffcc00';
         for (const p of this.particles) {
             const px = p.x - camera.x + canvasW / 2;
-            const py = baseY - p.y;
+            const py = baseY - p.y + camera.y;
             if (px < -10 || px > canvasW + 10) continue;
             ctx.globalAlpha = p.life / p.maxLife;
             ctx.fillRect(px, py, 4, 3);

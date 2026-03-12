@@ -705,7 +705,8 @@ const Game = {
         // Fishing updates: world fish movement + reeling (input blocked if menu open)
         Fishing.update(dt, effectiveKeys, effectiveKeysJustPressed);
 
-        this.camera.x += (Player.x - this.camera.x) * 0.08;
+        this.camera.x = Player.x;
+        this.camera.y = Player.y;
 
         if (Player.isDead && !this.gameOver) {
             // Spawn tombstone with player items
@@ -868,7 +869,7 @@ const Game = {
 
         // --- Player vision ---
         const playerSX = Player.x - this.camera.x + this.width / 2;
-        const playerSY = baseY - Player.y - 25;
+        const playerSY = baseY - Player.y + this.camera.y - 25;
         const visionRadius = Survival.stormActive ? 350 : 600;
         Lighting.setPlayerVision(playerSX, playerSY, visionRadius);
 
@@ -876,7 +877,7 @@ const Game = {
         for (const fire of World.campfires) {
             if (!fire.lit) continue;
             const sx = fire.x - this.camera.x + this.width / 2;
-            const sy = baseY - fire.surfaceY;
+            const sy = baseY - fire.surfaceY + this.camera.y;
             // Cull: skip if too far off-screen
             if (sx < -430 || sx > this.width + 430) continue;
 
@@ -892,7 +893,7 @@ const Game = {
             for (const torch of World.torches) {
                 if (!torch.lit) continue;
                 const sx = torch.x - this.camera.x + this.width / 2;
-                const sy = baseY - torch.surfaceY;
+                const sy = baseY - torch.surfaceY + this.camera.y;
                 if (sx < -330 || sx > this.width + 330) continue;
                 Lighting.addLight(sx, sy - 20, 300, 1.0, 0.7, 0.3, 0.8);
             }

@@ -561,7 +561,7 @@ const Lighting = {
         gl.uniform2f(this._uniforms1['u_chunkStartVx'], 0, this._chunkStartVy);
         gl.uniform2f(this._uniforms1['u_screenSize'], canvasW, canvasH);
         gl.uniform1f(this._uniforms1['u_voxelSize'], Voxels.SIZE);
-        gl.uniform1f(this._uniforms1['u_baseY'], baseY);
+        gl.uniform1f(this._uniforms1['u_baseY'], baseY + camera.y);
         gl.uniform1f(this._uniforms1['u_topY'], Voxels.TOP_Y);
         gl.uniform1f(this._uniforms1['u_cameraX'], alignedCamX - this._chunkStartVx * Voxels.SIZE);
 
@@ -619,7 +619,7 @@ const Lighting = {
         gl.uniform2f(this._uniforms3['u_chunkStartVx'], 0, this._chunkStartVy);
         gl.uniform2f(this._uniforms3['u_screenSize'], canvasW, canvasH);
         gl.uniform1f(this._uniforms3['u_voxelSize'], Voxels.SIZE);
-        gl.uniform1f(this._uniforms3['u_baseY'], baseY);
+        gl.uniform1f(this._uniforms3['u_baseY'], baseY + camera.y);
         gl.uniform1f(this._uniforms3['u_topY'], Voxels.TOP_Y);
         gl.uniform1f(this._uniforms3['u_cameraX'], alignedCamX - this._chunkStartVx * Voxels.SIZE);
 
@@ -668,10 +668,11 @@ const Lighting = {
         const baseY = canvasH * 0.6;
         const m = this._margin;
         const camOffX = alignedCamX - canvasW / 2;
+        const camOffY = camera.y;
         const startVx = Math.max(0, Math.floor(camOffX / Voxels.SIZE) - m);
         const endVx = Math.min(Voxels.GRID_W, Math.ceil((camOffX + canvasW) / Voxels.SIZE) + m);
-        const topWorldY = baseY;
-        const botWorldY = baseY - canvasH;
+        const topWorldY = baseY + camOffY;
+        const botWorldY = baseY + camOffY - canvasH;
         const startVy = Math.max(0, Math.floor((Voxels.TOP_Y - topWorldY) / Voxels.SIZE) - m);
         const endVy = Math.min(Voxels.GRID_H, Math.ceil((Voxels.TOP_Y - botWorldY) / Voxels.SIZE) + m);
 
