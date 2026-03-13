@@ -8,6 +8,13 @@ const Game = {
     camera: { x: 0, y: 0 },
     originX: 0,
 
+    worldToScreen(worldX, worldY) {
+        return {
+            x: worldX - this.camera.x + this.width / 2,
+            y: (this.height * 0.6) - worldY + this.camera.y
+        };
+    },
+
     keys: {},
     keysJustPressed: {},
     mouseX: 0,
@@ -152,10 +159,7 @@ const Game = {
             // Gate repair is now combined with gate open/close mechanic
             // Click on Shop Building in World
             if (!this.gameOver && !Fishing.active && World.shop && e.button === 0) {
-                const sx = World.shop.x - this.camera.x + this.width / 2;
-                const sy = (this.height * 0.6) - World.shop.surfaceY - 128;
-                // Shop image is 128x128
-                if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
+                if (Interactables.isHit('shop', World.shop.x, World.shop.surfaceY, this.mouseX, this.mouseY)) {
                     Shop.toggle();
                     return;
                 }
@@ -163,9 +167,7 @@ const Game = {
 
             // Click on Repair Shop Building in World
             if (!this.gameOver && !Fishing.active && World.repairShop && e.button === 0) {
-                const sx = World.repairShop.x - this.camera.x + this.width / 2;
-                const sy = (this.height * 0.6) - World.repairShop.surfaceY - 128;
-                if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
+                if (Interactables.isHit('repair_shop', World.repairShop.x, World.repairShop.surfaceY, this.mouseX, this.mouseY)) {
                     RepairShop.toggle();
                     return;
                 }
@@ -175,37 +177,32 @@ const Game = {
             if (!this.gameOver && !Fishing.active && e.button === 0) {
                 const worldX = this.mouseX + this.camera.x - this.width / 2;
                 const gate = World.getGateNear(worldX);
-                if (gate) {
-                    const sx = gate.x - this.camera.x + this.width / 2;
-                    const sy = (this.height * 0.6) - gate.surfaceY - 128;
-                    // Gate image is 128x128
-                    if (this.mouseX >= sx - 64 && this.mouseX <= sx + 64 && this.mouseY >= sy && this.mouseY <= sy + 128) {
-                        const handItem = Inventory.getHandItem(false);
-                        const isHoldingRepairItem = handItem && (handItem.id === 'firewood' || handItem.id === 'rock');
+                if (gate && Interactables.isHit('gate', gate.x, gate.surfaceY, this.mouseX, this.mouseY)) {
+                    const handItem = Inventory.getHandItem(false);
+                    const isHoldingRepairItem = handItem && (handItem.id === 'firewood' || handItem.id === 'rock');
 
-                        // Repair gate block
-                        if (gate.durability < gate.maxDurability && isHoldingRepairItem) {
-                            Player.startAction(0.4, 'chopping', () => {
-                                const prevDur = gate.durability;
-                                gate.durability = Math.min(gate.maxDurability, gate.durability + 10); // each repairs 10
-                                if (prevDur <= 0 && gate.durability > 0) {
-                                    gate.open = false; // It stands up
-                                }
-                                Inventory.consumeHandItem(false, 1);
-                                this.showMessage(`Repaired gate with ${handItem.name}! (+10 hp)`, 1.5);
-                            });
-                            return;
-                        }
-
-                        // Normal open / close interaction
-                        if (gate.durability > 0) {
-                            gate.open = !gate.open;
-                            this.showMessage(gate.open ? 'Gate opened.' : 'Gate closed.', 1.5);
-                        } else {
-                            this.showMessage('Gate is broken! Equip firewood or rock to repair.', 2);
-                        }
+                    // Repair gate block
+                    if (gate.durability < gate.maxDurability && isHoldingRepairItem) {
+                        Player.startAction(0.4, 'chopping', () => {
+                            const prevDur = gate.durability;
+                            gate.durability = Math.min(gate.maxDurability, gate.durability + 10);
+                            if (prevDur <= 0 && gate.durability > 0) {
+                                gate.open = false;
+                            }
+                            Inventory.consumeHandItem(false, 1);
+                            this.showMessage(`Repaired gate with ${handItem.name}! (+10 hp)`, 1.5);
+                        });
                         return;
                     }
+
+                    // Normal open / close interaction
+                    if (gate.durability > 0) {
+                        gate.open = !gate.open;
+                        this.showMessage(gate.open ? 'Gate opened.' : 'Gate closed.', 1.5);
+                    } else {
+                        this.showMessage('Gate is broken! Equip firewood or rock to repair.', 2);
+                    }
+                    return;
                 }
             }
 
@@ -220,8 +217,7 @@ const Game = {
                     if (World.groundItems) {
                         for (let i = 0; i < World.groundItems.length; i++) {
                             const gItem = World.groundItems[i];
-                            const itemScreenY = baseY - gItem.surfaceY - 8;
-                            if (Math.abs(gItem.x - worldX) < 30 && Math.abs(this.mouseY - itemScreenY) < 30) {
+                            if (Interactables.isHit('ground_item', gItem.x, gItem.surfaceY, this.mouseX, this.mouseY)) {
                                 const pickedItem = World.removeGroundItemNear(worldX);
                                 if (pickedItem) {
                                     if (e.button === 2) {
@@ -296,22 +292,16 @@ const Game = {
 
                     // Check Chests (before tents)
                     const chest = World.getChestNear(worldX);
-                    if (chest) {
-                        const chestScreenY = baseY - chest.surfaceY - 14;
-                        if (Math.abs(chest.x - worldX) < 30 && Math.abs(this.mouseY - chestScreenY) < 30) {
-                            ChestUI.open(chest, false, false);
-                            return;
-                        }
+                    if (chest && Interactables.isHit('chest', chest.x, chest.surfaceY, this.mouseX, this.mouseY)) {
+                        ChestUI.open(chest, false, false);
+                        return;
                     }
 
                     // Check Tombstones
                     const ts = World.getTombstoneNear(worldX);
-                    if (ts) {
-                        const tsScreenY = baseY - ts.surfaceY - 18;
-                        if (Math.abs(ts.x - worldX) < 35 && Math.abs(this.mouseY - tsScreenY) < 35) {
-                            ChestUI.open(ts, true, true);
-                            return;
-                        }
+                    if (ts && Interactables.isHit('tombstone', ts.x, ts.surfaceY, this.mouseX, this.mouseY)) {
+                        ChestUI.open(ts, true, true);
+                        return;
                     }
 
                     // Check Tents
@@ -319,8 +309,7 @@ const Game = {
                         const tent = World.tents[i];
                         if (tent.permanent) continue;
 
-                        const tentScreenY = baseY - tent.surfaceY - 18;
-                        if (Math.abs(tent.x - worldX) < 40 && Math.abs(this.mouseY - tentScreenY) < 40) {
+                        if (Interactables.isHit('tent', tent.x, tent.surfaceY, this.mouseX, this.mouseY)) {
                             const removedTentDurability = World.removeTentNear(worldX);
                             if (removedTentDurability !== false) {
                                 if (removedTentDurability <= 0) {
@@ -335,7 +324,7 @@ const Game = {
                                     Game.showMessage('Picked up tent.', 1.5);
                                 }
                             }
-                            return; // Stop after picking something up
+                            return;
                         }
                     }
 
@@ -345,8 +334,7 @@ const Game = {
                             const torch = World.torches[i];
                             if (torch.permanent) continue;
 
-                            const torchScreenY = baseY - torch.surfaceY - 15;
-                            if (Math.abs(torch.x - worldX) < 30 && Math.abs(this.mouseY - torchScreenY) < 30) {
+                            if (Interactables.isHit('torch', torch.x, torch.surfaceY, this.mouseX, this.mouseY)) {
                                 const torchData = World.removeTorchNear(worldX);
                                 if (torchData !== false) {
                                     const torchItem = { ...Inventory.ITEMS['torch'], count: 1, durability: torchData.fuel, lit: !!torchData.lit };

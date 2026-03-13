@@ -42,6 +42,16 @@ const Player = {
     asyncActionCallback: null,
     asyncActionText: '',
 
+    // Dungeon state
+    dungeonState: {
+        inDungeon: false,
+        dungeon: null,
+        currentNodeKey: '0,0',
+        targetNodeKey: null,
+        transitionTimer: 0,
+        transitionDuration: 0.5
+    },
+
     init(worldX) {
         this.x = worldX;
         this.y = World.getSurfaceY(worldX);
@@ -49,6 +59,14 @@ const Player = {
         this.money = 100;
         this.isDead = false;
         this.state = 'idle';
+        this.dungeonState = {
+            inDungeon: false,
+            dungeon: null,
+            currentNodeKey: '0,0',
+            targetNodeKey: null,
+            transitionTimer: 0,
+            transitionDuration: 0.5
+        };
     },
 
     update(dt, keys) {
@@ -84,6 +102,29 @@ const Player = {
 
         // Don't move while fishing
         if (this.state === 'fishing') return;
+
+        // Dungeon Traversal
+        if (this.dungeonState.inDungeon) {
+            this.updateDungeonMovement(dt, keys);
+            return;
+        }
+
+        // Check for dungeon entrance
+        if (keys['KeyS'] || keys['ArrowDown']) {
+            const dungeon = Dungeons.dungeons.find(d => Math.abs(d.worldX - this.x) < 40);
+            if (dungeon) {
+                this.dungeonState.inDungeon = true;
+                this.dungeonState.dungeon = dungeon;
+                this.dungeonState.currentNodeKey = '0,0';
+                this.dungeonState.targetNodeKey = null;
+                this.dungeonState.transitionTimer = 0;
+
+                // Position at room (0,0) center, slightly shifted down to touch floor
+                this.x = dungeon.worldX + 10;
+                this.y = dungeon.surfaceY - 20;
+                return;
+            }
+        }
 
         // Movement (A/D only - W/S are used for fishing depth when fishing)
         let moving = false;
@@ -140,12 +181,20 @@ const Player = {
                 this.x = nextX;
             }
         }
+
+        // Final updates common to all movement states
+        this.finalizeUpdate(dt, true);
+    },
+
+    finalizeUpdate(dt, onSurface = false) {
         // Clamp to world
         this.x = Math.max(40, Math.min((World.WORLD_WIDTH - 1) * World.TILE_SIZE, this.x));
 
-        // Stick to terrain surface
-        const surfaceY = World.getSurfaceY(this.x);
-        this.y = surfaceY;
+        if (onSurface) {
+            // Stick to terrain surface
+            const surfaceY = World.getSurfaceY(this.x);
+            this.y = surfaceY;
+        }
 
         // Animation
         this.animTimer += dt;
@@ -153,6 +202,104 @@ const Player = {
             this.animTimer = 0;
             this.animFrame = (this.animFrame + 1) % 6; // up to 6 frames for the 3x2 grid
         }
+    },
+
+    updateDungeonMovement(dt, keys) {
+        const ds = this.dungeonState;
+        const dungeon = ds.dungeon;
+        const currentNode = dungeon.nodes[ds.currentNodeKey];
+
+        // Determine speed
+        let currentSpeed = this.speed;
+        if (this.debugSpeed) currentSpeed *= 10;
+        if (this.stats.sleep < 25) currentSpeed *= 0.5;
+
+        // Position calculation helper
+        const getTargetPos = (nodeKey) => {
+            const node = dungeon.nodes[nodeKey];
+            return {
+                x: dungeon.worldX + node.x * Dungeons.ROOM_SIZE + 10,
+                y: dungeon.surfaceY - node.y * Dungeons.ROOM_SIZE - 20
+            };
+        };
+
+        const centerPos = getTargetPos(ds.currentNodeKey);
+        this.vx = 0;
+        this.vy = 0;
+
+        let inputX = 0;
+        let inputY = 0;
+        if (keys['KeyA'] || keys['ArrowLeft']) inputX = -1;
+        else if (keys['KeyD'] || keys['ArrowRight']) inputX = 1;
+        else if (keys['KeyS'] || keys['ArrowDown']) inputY = 1;
+        else if (keys['KeyW'] || keys['ArrowUp']) inputY = -1;
+
+        if (inputX !== 0 || inputY !== 0) {
+            // Exit check
+            if (inputY === -1 && currentNode.x === 0 && currentNode.y === 0) {
+                ds.inDungeon = false;
+                this.y = dungeon.surfaceY;
+                return;
+            }
+
+            // identify current active "rail" (nodes we are currently between)
+            let nextNodeKey = null
+            let moveTargetPos = null
+
+            const targetNodeKeys = [...currentNode.connections, ds.currentNodeKey];
+            for (const neighborKey of targetNodeKeys) {
+                let targetPos = getTargetPos(neighborKey)
+                console.log("this: " + this.x + " / " + this.y)
+                console.log("input: " + inputX + "/" + inputY)
+                console.log(targetPos)
+                if (targetPos.y > this.y && Math.abs(targetPos.x - this.x) < 20 && inputY === -1) {
+                    console.log("up")
+                    nextNodeKey = neighborKey
+                } else if (targetPos.y < this.y && Math.abs(targetPos.x - this.x) < 20 && inputY === 1) {
+                    console.log("down")
+                    nextNodeKey = neighborKey
+                } else if (targetPos.x > this.x && Math.abs(targetPos.y - this.y) < 20 && inputX === 1) {
+                    console.log("right")
+                    nextNodeKey = neighborKey
+                } else if (targetPos.x < this.x && Math.abs(targetPos.y - this.y) < 20 && inputX === -1) {
+                    console.log("left")
+                    nextNodeKey = neighborKey
+                }
+            }
+
+            // Perform movement
+            if (nextNodeKey) {
+                console.log('next node')
+                moveTargetPos = getTargetPos(nextNodeKey)
+                const dx = moveTargetPos.x - this.x;
+                const dy = moveTargetPos.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 0) {
+                    const stepSize = Math.min(dist, currentSpeed * dt);
+                    this.vx = (dx / dist) * currentSpeed;
+                    this.vy = (dy / dist) * currentSpeed;
+                    this.x += (dx / dist) * stepSize;
+                    this.y += (dy / dist) * stepSize;
+                    this.state = 'walking';
+                    if (inputX !== 0) this.facing = inputX > 0 ? 1 : -1;
+
+                    if (dist <= stepSize) {
+                        this.x = moveTargetPos.x;
+                        this.y = moveTargetPos.y;
+                        ds.currentNodeKey = nextNodeKey;
+                        // Keep idle at center until next input frame
+                        this.vx = 0;
+                        this.vy = 0;
+                    }
+                }
+            }
+        }
+
+        if (this.vx === 0 && this.vy === 0) {
+            this.state = 'idle';
+        }
+
+        this.finalizeUpdate(dt, false);
     },
 
     updateStats(dt) {

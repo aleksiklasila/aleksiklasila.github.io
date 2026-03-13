@@ -513,13 +513,13 @@ const World = {
 
         // Fishing holes
         for (const hole of this.fishingHoles) {
-            const sx = hole.x - camera.x + canvasW / 2;
-            if (sx < -50 || sx > canvasW + 50) continue;
+            const screen = Game.worldToScreen(hole.x, 0);
+            if (screen.x < -50 || screen.x > canvasW + 50) continue;
             const img = Assets.get('fishing_hole');
-            if (img) ctx.drawImage(img, sx - 24, baseY - 12 + camera.y, 48, 24);
+            if (img) ctx.drawImage(img, screen.x - 24, screen.y - 12, 48, 24);
             else {
                 ctx.fillStyle = '#1a3a5c';
-                ctx.beginPath(); ctx.ellipse(sx, baseY + camera.y, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.ellipse(screen.x, screen.y, 18, 6, 0, 0, Math.PI * 2); ctx.fill();
                 ctx.strokeStyle = '#8ac'; ctx.lineWidth = 2; ctx.stroke();
             }
         }
@@ -528,54 +528,50 @@ const World = {
         for (const bridge of this.bridges) {
             // Add 12px overlap on each side so it sits on the ice
             const bridgePixelWidth = (bridge.endCol - bridge.startCol + 1) * this.TILE_SIZE + 24;
-            // The center of a range [start, end] in tiles is (start + end + 1) / 2
             const bridgeCenterX = ((bridge.startCol + bridge.endCol + 1) / 2) * this.TILE_SIZE;
-            const sx = bridgeCenterX - camera.x + canvasW / 2;
+            const screen = Game.worldToScreen(bridgeCenterX, bridge.surfaceY);
 
-            if (sx + bridgePixelWidth / 2 < -80 || sx - bridgePixelWidth / 2 > canvasW + 80) continue;
+            if (screen.x + bridgePixelWidth / 2 < -80 || screen.x - bridgePixelWidth / 2 > canvasW + 80) continue;
 
             const img = Assets.get('simple_bridge');
-            // Alignment: Deck at surfaceY (6 for ice). Deck is roughly at midpoint of 24px asset.
-            const drawY = baseY - bridge.surfaceY - 12 + camera.y;
+            const drawY = screen.y - 12;
 
             if (img) {
-                ctx.drawImage(img, sx - bridgePixelWidth / 2, drawY, bridgePixelWidth, 24);
+                ctx.drawImage(img, screen.x - bridgePixelWidth / 2, drawY, bridgePixelWidth, 24);
             } else {
                 ctx.fillStyle = '#6a4a2a';
-                ctx.fillRect(sx - bridgePixelWidth / 2, drawY + 12, bridgePixelWidth, 12);
+                ctx.fillRect(screen.x - bridgePixelWidth / 2, drawY + 12, bridgePixelWidth, 12);
             }
         }
 
         // Shop
         if (this.shop) {
-            const sx = this.shop.x - camera.x + canvasW / 2;
-            if (sx > -200 && sx < canvasW + 200) {
+            const screen = Game.worldToScreen(this.shop.x, this.shop.surfaceY);
+            if (screen.x > -200 && screen.x < canvasW + 200) {
                 const img = Assets.get('shop');
                 if (img) {
-                    // Draw the shop so it sits on the ground
-                    ctx.drawImage(img, sx - 64, baseY - this.shop.surfaceY - 128 + camera.y, 128, 128);
+                    ctx.drawImage(img, screen.x - 64, screen.y - 128, 128, 128);
                 } else {
                     ctx.fillStyle = '#6e4c30';
-                    ctx.fillRect(sx - 60, baseY - this.shop.surfaceY - 100 + camera.y, 120, 100);
+                    ctx.fillRect(screen.x - 60, screen.y - 100, 120, 100);
                     ctx.fillStyle = '#8f6e4a';
-                    ctx.fillRect(sx - 20, baseY - this.shop.surfaceY - 40 + camera.y, 40, 40);
+                    ctx.fillRect(screen.x - 20, screen.y - 40, 40, 40);
                 }
             }
         }
 
         // Repair Shop
         if (this.repairShop) {
-            const sx = this.repairShop.x - camera.x + canvasW / 2;
-            if (sx > -200 && sx < canvasW + 200) {
+            const screen = Game.worldToScreen(this.repairShop.x, this.repairShop.surfaceY);
+            if (screen.x > -200 && screen.x < canvasW + 200) {
                 const img = Assets.get('repair_shop');
                 if (img) {
-                    // Draw the repair shop so it sits on the ground
-                    ctx.drawImage(img, sx - 64, baseY - this.repairShop.surfaceY - 128 + camera.y, 128, 128);
+                    ctx.drawImage(img, screen.x - 64, screen.y - 128, 128, 128);
                 } else {
                     ctx.fillStyle = '#4a6e30';
-                    ctx.fillRect(sx - 60, baseY - this.repairShop.surfaceY - 100 + camera.y, 120, 100);
+                    ctx.fillRect(screen.x - 60, screen.y - 100, 120, 100);
                     ctx.fillStyle = '#6a8f4a';
-                    ctx.fillRect(sx - 20, baseY - this.repairShop.surfaceY - 40 + camera.y, 40, 40);
+                    ctx.fillRect(screen.x - 20, screen.y - 40, 40, 40);
                 }
             }
         }
@@ -626,7 +622,7 @@ const World = {
             if (sx < -30 || sx > canvasW + 30) continue;
             const col = this.columns[re.groundCol];
             if (!col) continue;
-            const ry = baseY - col.surfaceY - camera.y;
+            const ry = baseY - col.surfaceY + camera.y;
             const img = Assets.get('rock');
             if (img) {
                 ctx.globalAlpha = 0.6;
@@ -644,7 +640,7 @@ const World = {
         for (const te of this.treeEggs) {
             const sx = te.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderTree(ctx, sx, baseY - te.surfaceY - camera.y, te.type || 0, 0.2);
+            this.renderTree(ctx, sx, baseY - te.surfaceY + camera.y, te.type || 0, 0.2);
         }
 
         // Fish Eggs
@@ -665,28 +661,28 @@ const World = {
         for (const fire of this.campfires) {
             const sx = fire.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderCampfire(ctx, sx, baseY - fire.surfaceY - camera.y, fire);
+            this.renderCampfire(ctx, sx, baseY - fire.surfaceY + camera.y, fire);
         }
 
         // Ground torches
         for (const torch of this.torches) {
             const sx = torch.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            this.renderTorch(ctx, sx, baseY - torch.surfaceY - camera.y, torch);
+            this.renderTorch(ctx, sx, baseY - torch.surfaceY + camera.y, torch);
         }
 
         // Ground Items
         for (const gItem of this.groundItems) {
             const sx = gItem.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY - camera.y - 20, 24);
+            Inventory.renderItemIcon(ctx, gItem.item, sx - 12, baseY - gItem.surfaceY + camera.y - 20, 24);
         }
 
         // Chests
         for (const chest of this.chests) {
             const sx = chest.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            const cy = baseY - chest.surfaceY - camera.y;
+            const cy = baseY - chest.surfaceY + camera.y;
             const img = Assets.get('chest');
             if (img) {
                 ctx.drawImage(img, sx - 16, cy - 28, 32, 28);
@@ -709,7 +705,7 @@ const World = {
         for (const ts of this.tombstones) {
             const sx = ts.x - camera.x + canvasW / 2;
             if (sx < -50 || sx > canvasW + 50) continue;
-            const ty = baseY - ts.surfaceY - camera.y;
+            const ty = baseY - ts.surfaceY + camera.y;
             const img = Assets.get('tombstone');
             if (img) {
                 ctx.drawImage(img, sx - 16, ty - 36, 32, 36);
@@ -740,12 +736,11 @@ const World = {
 
         // Gates
         for (const gate of this.gates) {
-            const sx = gate.x - camera.x + canvasW / 2;
-            if (sx < -100 || sx > canvasW + 100) continue;
-            const gy = baseY - gate.surfaceY - camera.y;
+            const screen = Game.worldToScreen(gate.x, gate.surfaceY);
+            if (screen.x < -100 || screen.x > canvasW + 100) continue;
             const img = Assets.get(gate.open ? 'gate_open' : 'gate_closed');
             if (img) {
-                ctx.drawImage(img, sx - 64, gy - 128, 128, 128);
+                ctx.drawImage(img, screen.x - 64, screen.y - 128, 128, 128);
             }
 
             // Render durability bar if damaged
@@ -753,8 +748,8 @@ const World = {
                 const pct = gate.durability / gate.maxDurability;
                 const barW = 40;
                 const barH = 5;
-                const bx = sx - barW / 2;
-                const by = gy - 140; // above gate
+                const bx = screen.x - barW / 2;
+                const by = screen.y - 140; // above gate
 
                 ctx.fillStyle = 'rgba(0,0,0,0.7)';
                 ctx.fillRect(bx, by, barW, barH);
@@ -767,9 +762,9 @@ const World = {
                 ctx.fillStyle = 'red';
                 ctx.font = '10px monospace';
                 ctx.textAlign = 'center';
-                ctx.fillText("BROKEN", sx, gy - 145);
+                ctx.fillText("BROKEN", screen.x, screen.y - 145);
                 ctx.fillStyle = 'white';
-                ctx.fillText("Click to repair (5 Firewood, 5 Rock)", sx, gy - 130);
+                ctx.fillText("Click to repair (5 Firewood, 5 Rock)", screen.x, screen.y - 130);
                 ctx.textAlign = 'left';
             }
         }
