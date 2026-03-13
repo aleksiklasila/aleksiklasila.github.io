@@ -48,10 +48,28 @@ const Dungeons = {
         let maxWidth = 15 + Math.floor(distFromOrigin / 4000);
 
         let grid = {}; // 'x,y' -> true
+        let nodes = {}; // 'x,y' -> node object {x, y, connections: []}
+
+        // Helper to add a node and link it to its parent
+        const addNode = (gx, gy, parentX, parentY) => {
+            const key = `${gx},${gy}`;
+            if (!nodes[key]) {
+                nodes[key] = { x: gx, y: gy, connections: [] };
+            }
+            if (parentX !== undefined && parentY !== undefined) {
+                const parentKey = `${parentX},${parentY}`;
+                if (nodes[parentKey]) {
+                    // Bidirectional connection
+                    if (!nodes[key].connections.includes(parentKey)) nodes[key].connections.push(parentKey);
+                    if (!nodes[parentKey].connections.includes(key)) nodes[parentKey].connections.push(key);
+                }
+            }
+            this.carveRoom(grid, gx, gy);
+        };
 
         // Start carving (0, 0 is entrance, Y going down is positive here for grid logic)
-        this.carveRoom(grid, 0, 0); // Entrance room
-        this.carveRoom(grid, 0, 1); // Shaft down
+        addNode(0, 0); // Entrance room
+        addNode(0, 1, 0, 0); // Shaft down
 
         // Explore stack: {x, y, depth} for Depth-First Search Maze Generation
         let stack = [{ x: 0, y: 1, depth: 1 }];
@@ -135,7 +153,7 @@ const Dungeons = {
                 }
                 if (!next) next = neighbors[neighbors.length - 1]; // Failsafe
 
-                this.carveRoom(grid, next.x, next.y);
+                addNode(next.x, next.y, curr.x, curr.y);
                 stack.push(next);
                 roomCount++;
             } else {
@@ -147,7 +165,8 @@ const Dungeons = {
         this.dungeons.push({
             worldX: startX,
             surfaceY: surfaceY,
-            grid: grid // The carved out rooms relative to entrance
+            grid: grid, // The carved out rooms relative to entrance
+            nodes: nodes // Graph for traversal
         });
     },
 
