@@ -175,6 +175,92 @@ const Crafting = {
                     return false;
                 }
             }
+        },
+        {
+            id: 'elevator',
+            name: 'Elevator',
+            description: 'Required for vertical shafts.',
+            cost: { firewood: 1, rock: 1 },
+            icon: 'elevator',
+            onBuild: (playerX) => {
+                const ds = Player.dungeonState;
+                if (!ds.inDungeon) {
+                    Game.showMessage("Can only build elevators in dungeons!", 2);
+                    return false;
+                }
+
+                const dungeon = ds.dungeon;
+                const dungeonIdx = Dungeons.dungeons.indexOf(dungeon);
+                const nodeKey = ds.currentNodeKey;
+                const node = dungeon.nodes[nodeKey];
+
+                // Check if this is a room that needs an elevator (has a vertical connection)
+                // Also check nextNodeKey if current is not a shaft, to allow building while "on the rail"
+                const checkNodeForShaft = (nKey) => {
+                    console.log("checkNodeForShaft:")
+                    const n = dungeon.nodes[nKey];
+                    if (!n) return false;
+                    for (const neighborKey of n.connections) {
+                        const neighbor = dungeon.nodes[neighborKey];
+                        if (neighbor.y !== n.y) return true;
+                    }
+                    return false;
+                };
+
+                let isShaft = checkNodeForShaft(nodeKey);
+                let targetNodeKey = nodeKey;
+
+                if (!isShaft && ds.closestNodeKey && ds.closestNodeKey !== nodeKey) {
+                    console.log("checkNodeForShaft:isShaft")
+                    if (checkNodeForShaft(ds.closestNodeKey)) {
+                        isShaft = true;
+                        targetNodeKey = ds.closestNodeKey;
+                    }
+                }
+
+                if (!isShaft) {
+                    Game.showMessage("No shaft here to install an elevator!", 2);
+                    return false;
+                }
+
+                const finalNode = dungeon.nodes[targetNodeKey];
+                const roomCenter = dungeon.worldX + finalNode.x * Dungeons.ROOM_SIZE + 10;
+                const roomBottom = dungeon.surfaceY - finalNode.y * Dungeons.ROOM_SIZE - 20;
+
+                let builtAny = false;
+
+                // Recursive helper to build up/down the shaft
+                const buildShaft = (currentNodeKey) => {
+                    const cNode = dungeon.nodes[currentNodeKey];
+                    const cRoomCenter = dungeon.worldX + cNode.x * Dungeons.ROOM_SIZE + 10;
+                    const cRoomBottom = dungeon.surfaceY - cNode.y * Dungeons.ROOM_SIZE - 20;
+
+                    if (World.addElevator(cRoomCenter, cRoomBottom, dungeonIdx, currentNodeKey)) {
+                        builtAny = true;
+                    }
+
+                    for (const neighborKey of cNode.connections) {
+                        const neighbor = dungeon.nodes[neighborKey];
+                        // If horizontal, ignore
+                        if (neighbor.x !== cNode.x) continue;
+
+                        const hasElevator = World.elevators.some(e => e.dungeonIdx === dungeonIdx && e.nodeKey === neighborKey);
+                        if (!hasElevator) {
+                            buildShaft(neighborKey);
+                        }
+                    }
+                };
+
+                buildShaft(targetNodeKey);
+
+                if (builtAny) {
+                    Game.showMessage('Installed a vertical elevator shaft!', 2);
+                    return true;
+                } else {
+                    Game.showMessage('Elevator already installed here!', 2);
+                    return false;
+                }
+            }
         }
     ],
 

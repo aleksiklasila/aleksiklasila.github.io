@@ -48,6 +48,7 @@ const Player = {
         dungeon: null,
         currentNodeKey: '0,0',
         targetNodeKey: null,
+        closestNodeKey: '0,0',
         transitionTimer: 0,
         transitionDuration: 0.5
     },
@@ -63,6 +64,7 @@ const Player = {
             inDungeon: false,
             dungeon: null,
             currentNodeKey: '0,0',
+            nextNodeKey: '0,0',
             targetNodeKey: null,
             transitionTimer: 0,
             transitionDuration: 0.5
@@ -245,30 +247,48 @@ const Player = {
             // identify current active "rail" (nodes we are currently between)
             let nextNodeKey = null
             let moveTargetPos = null
+            let nodeDist = 999999
 
             const targetNodeKeys = [...currentNode.connections, ds.currentNodeKey];
             for (const neighborKey of targetNodeKeys) {
                 let targetPos = getTargetPos(neighborKey)
-                console.log("this: " + this.x + " / " + this.y)
-                console.log("input: " + inputX + "/" + inputY)
-                console.log(targetPos)
+                let _nodeDist = Math.abs(targetPos.x - this.x) + Math.abs(targetPos.y - this.y)
+                if (_nodeDist < nodeDist && ds.currentNodeKey != neighborKey) {
+                    nodeDist = _nodeDist
+                    ds.closestNodeKey = neighborKey
+                }
                 if (targetPos.y > this.y && Math.abs(targetPos.x - this.x) < 20 && inputY === -1) {
-                    console.log("up")
                     nextNodeKey = neighborKey
                 } else if (targetPos.y < this.y && Math.abs(targetPos.x - this.x) < 20 && inputY === 1) {
-                    console.log("down")
                     nextNodeKey = neighborKey
                 } else if (targetPos.x > this.x && Math.abs(targetPos.y - this.y) < 20 && inputX === 1) {
-                    console.log("right")
                     nextNodeKey = neighborKey
                 } else if (targetPos.x < this.x && Math.abs(targetPos.y - this.y) < 20 && inputX === -1) {
-                    console.log("left")
                     nextNodeKey = neighborKey
                 }
             }
 
             // Perform movement
             if (nextNodeKey) {
+                ds.nextNodeKey = nextNodeKey
+                const nextNode = dungeon.nodes[nextNodeKey];
+                const dungeonIdx = Dungeons.dungeons.indexOf(dungeon);
+
+                // Elevator check: If moving up/down, require an elevator in the higher room (the one with the hole)
+                const isVertical = nextNode.y !== currentNode.y;
+                if (isVertical) {
+                    const shaftNodeKey = nextNode.y > currentNode.y ? ds.currentNodeKey : nextNodeKey;
+                    const hasElevator = World.elevators.some(e => e.dungeonIdx === dungeonIdx && e.nodeKey === shaftNodeKey);
+
+                    if (!hasElevator) {
+                        Game.showMessage("Need to build an elevator with the hammer first!", 2);
+                        this.vx = 0;
+                        this.vy = 0;
+                        this.state = 'idle';
+                        return;
+                    }
+                }
+
                 console.log('next node')
                 moveTargetPos = getTargetPos(nextNodeKey)
                 const dx = moveTargetPos.x - this.x;

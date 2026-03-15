@@ -46,7 +46,8 @@ const Assets = {
         { name: 'shotgun', src: 'assets/shotgun.png' },
         { name: 'hide', src: 'assets/hide.png' },
         { name: 'zombie', src: 'assets/zombie.png' },
-        { name: 'polar_bear', src: 'assets/polar_bear.png' }
+        { name: 'polar_bear', src: 'assets/polar_bear.png' },
+        { name: 'elevator', src: 'assets/elevator.png' }
     ],
     loadedCount: 0,
 

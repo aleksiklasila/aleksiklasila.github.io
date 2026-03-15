@@ -21,6 +21,7 @@ const World = {
     tombstones: null,
     gates: null,
     polarBearEggs: null,
+    elevators: null,
 
     // Smoothly cap terrain Y to stay within voxel grid bounds [-700, 500]
     // Capping at [-650, 450] for a safe buffer
@@ -68,6 +69,7 @@ const World = {
         this.tombstones = SpatialSyncDB.createCollection('tombstones', []);
         this.gates = SpatialSyncDB.createCollection('gates', []);
         this.polarBearEggs = SpatialSyncDB.createCollection('polarBearEggs', []);
+        this.elevators = SpatialSyncDB.createCollection('elevators', []);
 
         // Explicitly clear them so they don't carry over between reloads locally
         this.trees.length = 0;
@@ -81,6 +83,7 @@ const World = {
         this.chests.length = 0;
         this.tombstones.length = 0;
         this.gates.length = 0;
+        this.elevators.length = 0;
 
         const centerCol = Math.floor(this.WORLD_WIDTH / 2);
 
@@ -331,6 +334,21 @@ const World = {
         return true;
     },
 
+    addElevator(worldX, surfaceY, dungeonIdx, nodeKey) {
+        // Prevent duplicate elevators in the same room
+        for (const e of this.elevators) {
+            if (e.dungeonIdx === dungeonIdx && e.nodeKey === nodeKey) return false;
+        }
+        this.elevators.push({
+            id: 'elev_' + dungeonIdx + '_' + nodeKey,
+            x: worldX,
+            surfaceY: surfaceY,
+            dungeonIdx: dungeonIdx,
+            nodeKey: nodeKey
+        });
+        return true;
+    },
+
     isBridgeAt(worldX) {
         const colIdx = Math.round(worldX / this.TILE_SIZE);
         for (const b of this.bridges) {
@@ -541,6 +559,25 @@ const World = {
             } else {
                 ctx.fillStyle = '#6a4a2a';
                 ctx.fillRect(screen.x - bridgePixelWidth / 2, drawY + 12, bridgePixelWidth, 12);
+            }
+        }
+
+        // Elevators
+        for (const elev of this.elevators) {
+            const screen = Game.worldToScreen(elev.x, elev.surfaceY);
+            if (screen.x < -100 || screen.x > canvasW + 100) continue;
+
+            const img = Assets.get('elevator');
+            if (img) {
+                // Resize to 60x60 as requested
+                const size = 75;
+                const sizeY = 60;
+                ctx.drawImage(img, screen.x - size / 2, screen.y - sizeY, size, sizeY);
+                ctx.drawImage(img, screen.x - size / 2, screen.y, size, sizeY);
+            } else {
+                const size = 75;
+                ctx.fillStyle = '#8b4513';
+                ctx.fillRect(screen.x - size / 2, screen.y - 4, size, 8);
             }
         }
 

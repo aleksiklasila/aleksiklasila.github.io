@@ -70,6 +70,7 @@ const Inventory = {
         pickaxe: { id: 'pickaxe', name: 'Pickaxe', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 90 }, maxDurability: 20 },
         anvil: { id: 'anvil', name: 'Anvil', stackable: false, maxStack: 1, usable: true, category: 'tool', cost: { money: 200 }, maxDurability: 50 },
         chest: { id: 'chest', name: 'Chest', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 5 } },
+        elevator: { id: 'elevator', name: 'Elevator', stackable: false, maxStack: 1, usable: true, category: 'building', cost: { firewood: 10, rock: 5 } },
         shotgun: { id: 'shotgun', name: 'Shotgun', stackable: false, maxStack: 1, usable: true, category: 'weapon', cost: { money: 70 }, maxDurability: 10 },
         hide: { id: 'hide', name: 'Hide', stackable: false, maxStack: 1, usable: false, category: 'clothing', cost: { money: 50 }, maxDurability: 100 }
     },
