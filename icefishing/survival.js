@@ -323,9 +323,10 @@ const Survival = {
                     const removed = World.removeChestNear(nearestChest.x);
                     if (removed) {
                         // Drop chest contents on ground
+                        const dropY = Player.dungeonState.inDungeon ? Player.y : null;
                         for (const item of removed.inventory) {
                             if (item) {
-                                World.addGroundItem(removed.x + (Math.random() - 0.5) * 30, item);
+                                World.addGroundItem(removed.x + (Math.random() - 0.5) * 30, item, dropY);
                             }
                         }
                         Inventory.addItem('firewood', 3);
@@ -777,8 +778,9 @@ const Survival = {
                 // Place tent
                 const tentItem = item;
                 const currentDurability = tentItem.durability !== undefined ? tentItem.durability : 5;
+                const dropY = Player.dungeonState.inDungeon ? Player.y : null;
 
-                if (World.addTent(playerX, currentDurability - 1)) {
+                if (World.addTent(playerX, currentDurability - 1, dropY)) {
                     Inventory.removeHandItem(isSecondHand);
                     if (currentDurability - 1 <= 0) {
                         Game.showMessage('Pitched tent! (It looks very fragile...)', 2);
@@ -803,8 +805,9 @@ const Survival = {
                 // For now, placing it is just standard action
                 const fuel = torchItem.durability !== undefined ? torchItem.durability : 100;
                 const isLit = !!torchItem.lit;
+                const dropY = Player.dungeonState.inDungeon ? Player.y : null;
 
-                if (World.addTorch(playerX, fuel, isLit)) {
+                if (World.addTorch(playerX, fuel, isLit, dropY)) {
                     Inventory.removeHandItem(isSecondHand);
                     Game.showMessage('Placed torch on the ground.', 1.5);
                 } else {

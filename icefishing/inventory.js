@@ -757,8 +757,9 @@ const Inventory = {
             if (this.dragSource) {
                 // Determine drop location based on player position and a random offset
                 const dropX = Player.x + (Math.random() - 0.5) * 60;
+                const dropY = Player.dungeonState.inDungeon ? Player.y : null;
                 if (this.dragItem) {
-                    World.addGroundItem(dropX, this.dragItem);
+                    World.addGroundItem(dropX, this.dragItem, dropY);
                     Game.showMessage(`Dropped ${this.dragItem.name}`, 1.5);
                 }
             } else {

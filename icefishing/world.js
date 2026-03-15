@@ -339,19 +339,19 @@ const World = {
         return false;
     },
 
-    addCampfire(playerX, isBlue = false) {
+    addCampfire(playerX, isBlue = false, surfaceY = null) {
         const col = this.getColumnAt(playerX);
         if (!col || col.type === 'water') return false;
-        const surfaceY = this.getSurfaceY(playerX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(playerX);
         const fire = { x: playerX, surfaceY, fuel: 50, lit: false, permanent: false, isBlue: isBlue };
         this.campfires.push(fire);
         return fire;
     },
 
-    addTorch(worldX, fuel = 100, isLit = false) {
+    addTorch(worldX, fuel = 100, isLit = false, surfaceY = null) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
-        const surfaceY = this.getSurfaceY(worldX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(worldX);
         const torch = { x: worldX, surfaceY, fuel, lit: isLit };
         this.torches.push(torch);
         return torch;
@@ -368,10 +368,10 @@ const World = {
         return false;
     },
 
-    addGroundItem(worldX, item) {
+    addGroundItem(worldX, item, surfaceY = null) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
-        const surfaceY = this.getSurfaceY(worldX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(worldX);
         this.groundItems.push({ x: worldX, surfaceY, item: { ...item } });
         return true;
     },
@@ -387,13 +387,13 @@ const World = {
         return false;
     },
 
-    addTent(worldX, durability = 5) {
+    addTent(worldX, durability = 5, surfaceY = null) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
         for (const t of this.tents) {
             if (Math.abs(t.x - worldX) < this.TILE_SIZE * 3) return false;
         }
-        const surfaceY = this.getSurfaceY(worldX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(worldX);
         this.tents.push({ x: worldX, surfaceY, durability });
         return true;
     },
@@ -414,14 +414,14 @@ const World = {
         return false;
     },
 
-    addChest(worldX) {
+    addChest(worldX, surfaceY = null) {
         const col = this.getColumnAt(worldX);
         if (!col || col.type === 'water') return false;
         // prevent placing too close to another chest
         for (const c of this.chests) {
             if (Math.abs(c.x - worldX) < 50) return false;
         }
-        const surfaceY = this.getSurfaceY(worldX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(worldX);
         this.chests.push({ x: worldX, surfaceY, inventory: new Array(40).fill(null) });
         return true;
     },
@@ -444,10 +444,10 @@ const World = {
         return null;
     },
 
-    addTombstone(worldX, items) {
+    addTombstone(worldX, items, surfaceY = null) {
         const col = this.getColumnAt(worldX);
         if (!col) return false;
-        const surfaceY = this.getSurfaceY(worldX);
+        if (surfaceY === null) surfaceY = this.getSurfaceY(worldX);
         const inventory = new Array(40).fill(null);
         for (let i = 0; i < items.length && i < 40; i++) {
             inventory[i] = items[i];
