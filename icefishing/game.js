@@ -495,6 +495,10 @@ const Game = {
         // Add starter money
         Inventory.addItem('money', 100);
 
+        // add wood / rocks
+        Inventory.addItem('firewood', 30);
+        Inventory.addItem('rock', 30);
+
         // Add starter pickaxe, anvil, and tent to bag
         Inventory.bag[1] = Inventory.createItem('pickaxe');
         Inventory.bag[2] = Inventory.createItem('anvil');
