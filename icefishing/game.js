@@ -427,14 +427,15 @@ const Game = {
 
                 // Drop into the world
                 const worldX = this.mouseX + this.camera.x - this.width / 2;
+                const dropY = Player.dungeonState.inDungeon ? Player.y : null;
 
                 if (Inventory.dragItem.id === 'torch' && Inventory.dragItem.lit) {
-                    const placed = World.addTorch(worldX, Inventory.dragItem.durability, true);
+                    const placed = World.addTorch(worldX, Inventory.dragItem.durability, true, dropY);
                     if (!placed) {
-                        World.addGroundItem(worldX, Inventory.dragItem);
+                        World.addGroundItem(worldX, Inventory.dragItem, dropY);
                     }
                 } else {
-                    World.addGroundItem(worldX, Inventory.dragItem);
+                    World.addGroundItem(worldX, Inventory.dragItem, dropY);
                 }
 
                 if (Inventory.dragSource.type !== 'shop_buy') {
@@ -707,7 +708,8 @@ const Game = {
             }
             if (Inventory.secondHand) { items.push(Inventory.secondHand); Inventory.secondHand = null; }
             if (items.length > 0) {
-                World.addTombstone(Player.x, items);
+                const dropY = Player.dungeonState.inDungeon ? Player.y : null;
+                World.addTombstone(Player.x, items, dropY);
             }
             this.gameOver = true;
         }

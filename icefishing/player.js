@@ -230,9 +230,9 @@ const Player = {
         let inputX = 0;
         let inputY = 0;
         if (keys['KeyA'] || keys['ArrowLeft']) inputX = -1;
-        else if (keys['KeyD'] || keys['ArrowRight']) inputX = 1;
-        else if (keys['KeyS'] || keys['ArrowDown']) inputY = 1;
-        else if (keys['KeyW'] || keys['ArrowUp']) inputY = -1;
+        if (keys['KeyD'] || keys['ArrowRight']) inputX = 1;
+        if (keys['KeyS'] || keys['ArrowDown']) inputY = 1;
+        if (keys['KeyW'] || keys['ArrowUp']) inputY = -1;
 
         if (inputX !== 0 || inputY !== 0) {
             // Exit check
