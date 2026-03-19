@@ -827,10 +827,8 @@ const Survival = {
                 NPCs.damageInLine(playerX, 500, Player.facing, dmg);
                 Game.showMessage('BANG!', 0.5);
 
-                // Visual pellets
-                for (let i = 0; i < 5; i++) {
-                    NPCs.spawnPellet(playerX, Player.y - 45, Player.facing, 500);
-                }
+                // Muzzle flash, pellet tracers, and smoke
+                NPCs.spawnShotgunEffects(playerX, Player.y + 30, Player.facing);
 
                 if (item.durability !== undefined) {
                     item.durability -= 1;
