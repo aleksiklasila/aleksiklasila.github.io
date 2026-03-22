@@ -1,0 +1,1429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LIERO REBORN</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Orbitron:wght@700;900&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #0a0a0f;
+  overflow: hidden;
+  font-family: 'Press Start 2P', monospace;
+  color: #eee;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+#ui-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5,5,15,0.95);
+  transition: opacity 0.4s;
+}
+
+#ui-overlay.hidden { opacity: 0; pointer-events: none; }
+
+#editor-header {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 28px;
+  font-weight: 900;
+  color: #ff4444;
+  text-shadow: 0 0 20px rgba(255,60,60,0.5);
+  margin-bottom: 8px;
+  letter-spacing: 4px;
+}
+
+#editor-sub {
+  font-size: 9px;
+  color: #888;
+  margin-bottom: 16px;
+  letter-spacing: 1px;
+}
+
+#editor-container {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+#editor-canvas-wrap {
+  border: 2px solid #333;
+  position: relative;
+  cursor: crosshair;
+}
+
+#editor-canvas { display: block; }
+
+#editor-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.tool-section-title {
+  font-size: 8px;
+  color: #666;
+  margin-top: 6px;
+  letter-spacing: 1px;
+}
+
+.material-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border: 2px solid #333;
+  color: #ccc;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-radius: 3px;
+}
+
+.material-btn:hover { border-color: #666; background: #252545; }
+.material-btn.active { border-color: #ff4444; background: #2a1525; color: #fff; }
+
+.mat-swatch {
+  width: 16px; height: 16px;
+  border-radius: 2px;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+.player-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 3px;
+  font-size: 7px;
+  color: #aaa;
+  margin-bottom: 4px;
+}
+
+.player-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+}
+
+#brush-size-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+#brush-size-wrap label {
+  font-size: 7px;
+  color: #888;
+}
+
+#brush-size {
+  width: 80px;
+  accent-color: #ff4444;
+}
+
+#start-btn {
+  margin-top: 14px;
+  padding: 12px 32px;
+  background: #ff4444;
+  border: none;
+  color: #fff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 3px;
+  transition: all 0.2s;
+  border-radius: 4px;
+}
+
+#start-btn:hover { background: #ff6666; transform: scale(1.05); box-shadow: 0 0 30px rgba(255,60,60,0.4); }
+
+#game-canvas {
+  display: block;
+  image-rendering: pixelated;
+  border: 2px solid #222;
+}
+
+#hud {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 38px;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  background: rgba(0,0,0,0.7);
+  display: none;
+}
+
+.hud-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 8px;
+}
+
+.hud-name {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+.hud-hp-bar {
+  width: 120px;
+  height: 10px;
+  background: #222;
+  border: 1px solid #444;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.hud-hp-fill {
+  height: 100%;
+  transition: width 0.2s;
+  border-radius: 2px;
+}
+
+.hud-weapon {
+  font-size: 7px;
+  color: #aaa;
+  min-width: 100px;
+}
+
+.hud-score {
+  font-size: 10px;
+  color: #ffcc00;
+}
+
+#death-msg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 24px;
+  font-weight: 900;
+  color: #ff4444;
+  text-shadow: 0 0 30px rgba(255,0,0,0.6);
+  display: none;
+  letter-spacing: 3px;
+  pointer-events: none;
+}
+
+#controls-hint {
+  font-size: 7px;
+  color: #555;
+  margin-top: 8px;
+  text-align: center;
+  line-height: 1.8;
+}
+</style>
+</head>
+<body>
+
+<div id="ui-overlay">
+  <div id="editor-header">LIERO REBORN</div>
+  <div id="editor-sub">MAP EDITOR — BOTH PLAYERS PAINT WITH CONTROLLERS (OR MOUSE)</div>
+  <div id="editor-container">
+    <div id="editor-canvas-wrap">
+      <canvas id="editor-canvas" width="800" height="500"></canvas>
+    </div>
+    <div id="editor-tools">
+      <div class="player-indicator"><div class="player-dot" style="background:#44aaff"></div> P1: Left Stick + LT paint</div>
+      <div class="player-indicator"><div class="player-dot" style="background:#ff4466"></div> P2: Left Stick + RT paint</div>
+      <div class="tool-section-title">MATERIALS</div>
+      <button class="material-btn active" data-mat="ground"><div class="mat-swatch" style="background:#8B6914"></div>Ground</button>
+      <button class="material-btn" data-mat="rock"><div class="mat-swatch" style="background:#666"></div>Rock</button>
+      <button class="material-btn" data-mat="water"><div class="mat-swatch" style="background:#2266cc"></div>Water</button>
+      <button class="material-btn" data-mat="lava"><div class="mat-swatch" style="background:#ff4400"></div>Lava</button>
+      <button class="material-btn" data-mat="air"><div class="mat-swatch" style="background:#111; border:1px dashed #555"></div>Eraser</button>
+      <div id="brush-size-wrap">
+        <label>Brush:</label>
+        <input type="range" id="brush-size" min="2" max="30" value="10">
+      </div>
+      <div class="tool-section-title" style="margin-top:8px">PRESETS</div>
+      <button class="material-btn" id="preset-cave">Cave</button>
+      <button class="material-btn" id="preset-arena">Arena</button>
+      <button class="material-btn" id="preset-clear">Clear All</button>
+      <button id="start-btn">FIGHT!</button>
+    </div>
+  </div>
+  <div id="controls-hint">
+    In-game: Left Stick = Move | Right Stick = Aim | LT = Rope | RT = Fire | LB/RB = Prev/Next Weapon | A = Jump<br>
+    Keyboard P1: WASD + QE aim + F fire + G rope + Tab weapon | P2: Arrows + Numpad1,3 aim + Numpad0 fire + NumpadDot rope + Numpad+ weapon
+  </div>
+</div>
+
+<canvas id="game-canvas"></canvas>
+
+<div id="hud">
+  <div class="hud-player">
+    <span class="hud-name" style="color:#44aaff">P1</span>
+    <div class="hud-hp-bar"><div class="hud-hp-fill" id="hp1" style="background:#44aaff;width:100%"></div></div>
+    <span class="hud-weapon" id="wep1">Pistol</span>
+    <span class="hud-score" id="score1">0</span>
+  </div>
+  <div class="hud-player">
+    <span class="hud-score" id="score2">0</span>
+    <span class="hud-weapon" id="wep2">Pistol</span>
+    <div class="hud-hp-bar"><div class="hud-hp-fill" id="hp2" style="background:#ff4466;width:100%"></div></div>
+    <span class="hud-name" style="color:#ff4466">P2</span>
+  </div>
+</div>
+
+<div id="death-msg"></div>
+
+<script>
+// ============ CONSTANTS ============
+const W = 800, H = 500;
+const CELL_AIR = 0, CELL_GROUND = 1, CELL_ROCK = 2, CELL_WATER = 3, CELL_LAVA = 4;
+const GRAVITY = 0.25;
+const PLAYER_W = 6, PLAYER_H = 10;
+const MAX_HP = 100;
+const ROPE_MAX = 140, ROPE_SPEED = 8, ROPE_PULL = 0.45;
+const RESPAWN_TIME = 120;
+const CRATE_INTERVAL = 300;
+const MAX_CRATES = 6;
+
+// ============ TERRAIN ============
+let terrain = new Uint8Array(W * H);
+let terrainDirty = true;
+
+function tGet(x, y) {
+  if (x < 0 || x >= W || y < 0 || y >= H) return CELL_ROCK;
+  return terrain[y * W + x];
+}
+function tSet(x, y, v) {
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  terrain[y * W + x] = v;
+  terrainDirty = true;
+}
+
+const COLORS = {
+  [CELL_AIR]: [10, 10, 20, 255],
+  [CELL_GROUND]: [139, 105, 20, 255],
+  [CELL_ROCK]: [100, 100, 110, 255],
+  [CELL_WATER]: [30, 80, 200, 255],
+  [CELL_LAVA]: [255, 68, 0, 255],
+};
+
+function getTerrainColor(x, y) {
+  const t = tGet(x, y);
+  const base = COLORS[t];
+  // Add noise
+  const n = ((x * 7 + y * 13) % 17) - 8;
+  if (t === CELL_AIR) return base;
+  return [
+    Math.max(0, Math.min(255, base[0] + n * 2)),
+    Math.max(0, Math.min(255, base[1] + n * 2)),
+    Math.max(0, Math.min(255, base[2] + n)),
+    255
+  ];
+}
+
+function isSolid(x, y) {
+  const t = tGet(x, y);
+  return t === CELL_GROUND || t === CELL_ROCK;
+}
+
+function digCircle(cx, cy, r, canDigRock) {
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dy * dy <= r * r) {
+        const x = Math.floor(cx + dx), y = Math.floor(cy + dy);
+        const t = tGet(x, y);
+        if (t === CELL_GROUND || (canDigRock && t === CELL_ROCK)) {
+          tSet(x, y, CELL_AIR);
+        }
+      }
+    }
+  }
+}
+
+function paintCircle(cx, cy, r, mat) {
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dy * dy <= r * r) {
+        tSet(Math.floor(cx + dx), Math.floor(cy + dy), mat);
+      }
+    }
+  }
+}
+
+// ============ WEAPONS ============
+const WEAPONS = [
+  {
+    name: "Pistol", color: "#fff", ammo: Infinity, fireRate: 12, speed: 12, damage: 8, radius: 3,
+    trail: false, gravity: true, bounces: 0, special: null, digRadius: 3, lifetime: 60
+  },
+  {
+    name: "Shotgun", color: "#ffaa00", ammo: 20, fireRate: 25, speed: 10, damage: 6, radius: 2,
+    trail: false, gravity: true, bounces: 0, special: "shotgun", pellets: 6, spread: 0.3, digRadius: 2, lifetime: 40
+  },
+  {
+    name: "Bazooka", color: "#ff2200", ammo: 8, fireRate: 40, speed: 7, damage: 35, radius: 20,
+    trail: true, gravity: true, bounces: 0, special: null, digRadius: 18, lifetime: 120
+  },
+  {
+    name: "Laser", color: "#00ffff", ammo: 50, fireRate: 3, speed: 30, damage: 4, radius: 1,
+    trail: true, gravity: false, bounces: 0, special: "laser", digRadius: 1, lifetime: 30
+  },
+  {
+    name: "Bouncer", color: "#44ff44", ammo: 15, fireRate: 18, speed: 9, damage: 12, radius: 4,
+    trail: false, gravity: true, bounces: 5, special: null, digRadius: 4, lifetime: 180
+  },
+  {
+    name: "Gravity Bomb", color: "#aa44ff", ammo: 5, fireRate: 50, speed: 6, damage: 20, radius: 30,
+    trail: true, gravity: true, bounces: 0, special: "gravity", digRadius: 12, lifetime: 150
+  },
+  {
+    name: "Freeze Ray", color: "#88ddff", ammo: 30, fireRate: 5, speed: 18, damage: 2, radius: 2,
+    trail: true, gravity: false, bounces: 0, special: "freeze", digRadius: 0, lifetime: 25
+  },
+  {
+    name: "Drill", color: "#ffcc00", ammo: 40, fireRate: 4, speed: 5, damage: 3, radius: 2,
+    trail: false, gravity: false, bounces: 0, special: "drill", digRadius: 5, lifetime: 200
+  },
+  {
+    name: "Napalm", color: "#ff6600", ammo: 10, fireRate: 30, speed: 8, damage: 5, radius: 3,
+    trail: true, gravity: true, bounces: 0, special: "napalm", digRadius: 2, lifetime: 90
+  },
+  {
+    name: "Teleporter", color: "#ff44ff", ammo: 3, fireRate: 60, speed: 14, damage: 0, radius: 2,
+    trail: true, gravity: false, bounces: 0, special: "teleport", digRadius: 0, lifetime: 80
+  },
+  {
+    name: "Gatling", color: "#dddddd", ammo: 100, fireRate: 3, speed: 14, damage: 3, radius: 1,
+    trail: false, gravity: true, bounces: 0, special: "gatling", spread: 0.12, digRadius: 2, lifetime: 50
+  },
+  {
+    name: "Mine Layer", color: "#ff8800", ammo: 8, fireRate: 20, speed: 4, damage: 30, radius: 22,
+    trail: false, gravity: true, bounces: 0, special: "mine", digRadius: 16, lifetime: 900
+  }
+];
+
+// ============ GAME STATE ============
+let gameRunning = false;
+let frame = 0;
+let particles = [];
+let projectiles = [];
+let crates = [];
+let players = [];
+let deathMsgTimer = 0;
+
+class Player {
+  constructor(id, color, x, y) {
+    this.id = id;
+    this.color = color;
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+    this.hp = MAX_HP;
+    this.alive = true;
+    this.respawnTimer = 0;
+    this.aimAngle = id === 0 ? 0 : Math.PI;
+    this.weaponIndex = 0;
+    this.ammo = [Infinity, 0,0,0,0,0,0,0,0,0,0,0];
+    this.fireTimer = 0;
+    this.ropeActive = false;
+    this.ropeX = 0; this.ropeY = 0;
+    this.ropeAttached = false;
+    this.ropeLen = 0;
+    this.grounded = false;
+    this.frozen = 0;
+    this.gravityInverted = 0;
+    this.score = 0;
+    this.prevLB = false;
+    this.prevRB = false;
+    this.prevWepSwitch = false;
+  }
+}
+
+// ============ MAP EDITOR ============
+const editorCanvas = document.getElementById('editor-canvas');
+const editorCtx = editorCanvas.getContext('2d');
+let editorMaterial = CELL_GROUND;
+let brushSize = 10;
+let editorImageData;
+let mouseDown = false;
+let editorCursors = [{x: 400, y: 250}, {x: 400, y: 250}];
+
+function initEditor() {
+  // Fill with default cave
+  generateCave();
+  editorImageData = editorCtx.createImageData(W, H);
+  renderEditorTerrain();
+}
+
+function generateCave() {
+  // Simple cave with ground, some rock
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x <= 1 || x >= W-2 || y <= 1 || y >= H-2) {
+        terrain[y * W + x] = CELL_ROCK;
+      } else if (y > H * 0.3) {
+        // Perlin-ish noise
+        const n = Math.sin(x * 0.05) * 20 + Math.sin(x * 0.02 + 1) * 30 + Math.sin(y * 0.04) * 15;
+        if (y + n > H * 0.4) {
+          terrain[y * W + x] = CELL_GROUND;
+        } else {
+          terrain[y * W + x] = CELL_AIR;
+        }
+      } else {
+        terrain[y * W + x] = CELL_AIR;
+      }
+    }
+  }
+  // Carve some tunnels
+  for (let i = 0; i < 8; i++) {
+    let tx = Math.random() * W;
+    let ty = H * 0.4 + Math.random() * H * 0.5;
+    let angle = Math.random() * Math.PI * 2;
+    for (let s = 0; s < 120; s++) {
+      paintCircle(tx, ty, 8 + Math.random() * 6, CELL_AIR);
+      tx += Math.cos(angle) * 5;
+      ty += Math.sin(angle) * 3;
+      angle += (Math.random() - 0.5) * 0.5;
+      if (tx < 10 || tx > W-10) angle = Math.PI - angle;
+      if (ty < 30 || ty > H-10) angle = -angle;
+    }
+  }
+  // Rock borders
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x <= 2 || x >= W-3 || y <= 2 || y >= H-3) {
+        terrain[y * W + x] = CELL_ROCK;
+      }
+    }
+  }
+}
+
+function generateArena() {
+  terrain.fill(CELL_AIR);
+  // Floor and walls
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x <= 3 || x >= W-4 || y <= 3 || y >= H-4) {
+        terrain[y * W + x] = CELL_ROCK;
+      } else if (y > H - 40) {
+        terrain[y * W + x] = CELL_GROUND;
+      }
+    }
+  }
+  // Platforms
+  for (let i = 0; i < 5; i++) {
+    const px = 80 + i * 140;
+    const py = 150 + (i % 2) * 100;
+    for (let dx = -30; dx <= 30; dx++) {
+      for (let dy = 0; dy < 8; dy++) {
+        tSet(px + dx, py + dy, CELL_GROUND);
+      }
+    }
+  }
+  // Center pillar
+  for (let dy = 0; dy < 80; dy++) {
+    for (let dx = -6; dx <= 6; dx++) {
+      tSet(W/2 + dx, H - 40 - dy, CELL_ROCK);
+    }
+  }
+}
+
+function renderEditorTerrain() {
+  const data = editorImageData.data;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const c = getTerrainColor(x, y);
+      data[i] = c[0]; data[i+1] = c[1]; data[i+2] = c[2]; data[i+3] = 255;
+    }
+  }
+  editorCtx.putImageData(editorImageData, 0, 0);
+  // Draw cursors
+  for (let p = 0; p < 2; p++) {
+    editorCtx.strokeStyle = p === 0 ? '#44aaff' : '#ff4466';
+    editorCtx.lineWidth = 1.5;
+    editorCtx.beginPath();
+    editorCtx.arc(editorCursors[p].x, editorCursors[p].y, brushSize, 0, Math.PI * 2);
+    editorCtx.stroke();
+  }
+}
+
+// Mouse editor
+editorCanvas.addEventListener('mousedown', (e) => { mouseDown = true; editorPaint(e); });
+editorCanvas.addEventListener('mousemove', (e) => { if (mouseDown) editorPaint(e); });
+editorCanvas.addEventListener('mouseup', () => mouseDown = false);
+editorCanvas.addEventListener('mouseleave', () => mouseDown = false);
+
+function editorPaint(e) {
+  const rect = editorCanvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (W / rect.width);
+  const y = (e.clientY - rect.top) * (H / rect.height);
+  paintCircle(x, y, brushSize, editorMaterial);
+  renderEditorTerrain();
+}
+
+// Material buttons
+document.querySelectorAll('.material-btn[data-mat]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.material-btn[data-mat]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const mat = btn.dataset.mat;
+    editorMaterial = {ground: CELL_GROUND, rock: CELL_ROCK, water: CELL_WATER, lava: CELL_LAVA, air: CELL_AIR}[mat];
+  });
+});
+
+document.getElementById('brush-size').addEventListener('input', (e) => { brushSize = parseInt(e.target.value); });
+document.getElementById('preset-cave').addEventListener('click', () => { generateCave(); renderEditorTerrain(); });
+document.getElementById('preset-arena').addEventListener('click', () => { generateArena(); renderEditorTerrain(); });
+document.getElementById('preset-clear').addEventListener('click', () => { terrain.fill(CELL_AIR); renderEditorTerrain(); });
+
+// ============ GAME CANVAS SETUP ============
+const gameCanvas = document.getElementById('game-canvas');
+const ctx = gameCanvas.getContext('2d');
+gameCanvas.width = W;
+gameCanvas.height = H;
+let gameImageData = ctx.createImageData(W, H);
+
+function findSpawn(preferLeft) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const x = preferLeft ? 30 + Math.random() * (W/2 - 60) : W/2 + 30 + Math.random() * (W/2 - 60);
+    const y = 20 + Math.random() * (H - 60);
+    // Check if air
+    let ok = true;
+    for (let dy = -PLAYER_H; dy <= 0; dy++) {
+      for (let dx = -PLAYER_W/2; dx <= PLAYER_W/2; dx++) {
+        if (isSolid(Math.floor(x+dx), Math.floor(y+dy))) { ok = false; break; }
+      }
+      if (!ok) break;
+    }
+    if (ok) return {x, y};
+  }
+  return {x: preferLeft ? W*0.25 : W*0.75, y: 50};
+}
+
+// ============ START GAME ============
+document.getElementById('start-btn').addEventListener('click', startGame);
+
+function startGame() {
+  document.getElementById('ui-overlay').classList.add('hidden');
+  document.getElementById('hud').style.display = 'flex';
+  gameRunning = true;
+  frame = 0;
+  particles = [];
+  projectiles = [];
+  crates = [];
+
+  const s1 = findSpawn(true);
+  const s2 = findSpawn(false);
+  players = [
+    new Player(0, '#44aaff', s1.x, s1.y),
+    new Player(1, '#ff4466', s2.x, s2.y)
+  ];
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ============ INPUT ============
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+function getGamepadInput(playerIndex) {
+  const gamepads = navigator.getGamepads();
+  let gp = null;
+  // Try to find gamepad for this player
+  let found = 0;
+  for (let i = 0; i < gamepads.length; i++) {
+    if (gamepads[i] && gamepads[i].connected) {
+      if (found === playerIndex) { gp = gamepads[i]; break; }
+      found++;
+    }
+  }
+  if (!gp) return null;
+  
+  const deadzone = 0.15;
+  const applyDZ = (v) => Math.abs(v) < deadzone ? 0 : v;
+
+  return {
+    lx: applyDZ(gp.axes[0]),
+    ly: applyDZ(gp.axes[1]),
+    rx: applyDZ(gp.axes[2]),
+    ry: applyDZ(gp.axes[3]),
+    lt: gp.buttons[6] ? gp.buttons[6].value : 0,
+    rt: gp.buttons[7] ? gp.buttons[7].value : 0,
+    lb: gp.buttons[4] ? gp.buttons[4].pressed : false,
+    rb: gp.buttons[5] ? gp.buttons[5].pressed : false,
+    a: gp.buttons[0] ? gp.buttons[0].pressed : false,
+    b: gp.buttons[1] ? gp.buttons[1].pressed : false,
+  };
+}
+
+function getKeyboardInput(playerIndex) {
+  if (playerIndex === 0) {
+    return {
+      lx: (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0),
+      ly: (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0),
+      rx: (keys['KeyE'] ? 1 : 0) - (keys['KeyQ'] ? 1 : 0),
+      ry: 0,
+      lt: keys['KeyG'] ? 1 : 0,
+      rt: keys['KeyF'] ? 1 : 0,
+      lb: keys['ShiftLeft'] || false,
+      rb: keys['Tab'] || false,
+      a: keys['Space'] || false,
+    };
+  } else {
+    return {
+      lx: (keys['ArrowRight'] ? 1 : 0) - (keys['ArrowLeft'] ? 1 : 0),
+      ly: (keys['ArrowDown'] ? 1 : 0) - (keys['ArrowUp'] ? 1 : 0),
+      rx: (keys['Numpad3'] ? 1 : 0) - (keys['Numpad1'] ? 1 : 0),
+      ry: 0,
+      lt: keys['NumpadDecimal'] ? 1 : 0,
+      rt: keys['Numpad0'] ? 1 : 0,
+      lb: keys['NumpadSubtract'] || false,
+      rb: keys['NumpadAdd'] || false,
+      a: keys['NumpadEnter'] || false,
+    };
+  }
+}
+
+function getInput(pi) {
+  const gp = getGamepadInput(pi);
+  const kb = getKeyboardInput(pi);
+  if (gp) {
+    return {
+      lx: Math.abs(gp.lx) > Math.abs(kb.lx) ? gp.lx : kb.lx,
+      ly: Math.abs(gp.ly) > Math.abs(kb.ly) ? gp.ly : kb.ly,
+      rx: Math.abs(gp.rx) > Math.abs(kb.rx) ? gp.rx : kb.rx,
+      ry: Math.abs(gp.ry) > Math.abs(kb.ry||0) ? gp.ry : (kb.ry||0),
+      lt: Math.max(gp.lt, kb.lt),
+      rt: Math.max(gp.rt, kb.rt),
+      lb: gp.lb || kb.lb,
+      rb: gp.rb || kb.rb,
+      a: gp.a || kb.a,
+    };
+  }
+  return kb;
+}
+
+// ============ EDITOR GAMEPAD POLLING ============
+function editorGamepadPoll() {
+  if (gameRunning) return;
+  for (let pi = 0; pi < 2; pi++) {
+    const gp = getGamepadInput(pi);
+    if (!gp) continue;
+    editorCursors[pi].x = Math.max(0, Math.min(W, editorCursors[pi].x + gp.lx * 5));
+    editorCursors[pi].y = Math.max(0, Math.min(H, editorCursors[pi].y + gp.ly * 5));
+    const trigger = pi === 0 ? gp.lt : gp.rt;
+    if (trigger > 0.3) {
+      paintCircle(editorCursors[pi].x, editorCursors[pi].y, brushSize, editorMaterial);
+    }
+  }
+  renderEditorTerrain();
+  requestAnimationFrame(editorGamepadPoll);
+}
+
+// ============ PHYSICS ============
+function movePlayer(p, input) {
+  if (!p.alive) return;
+  if (p.frozen > 0) { p.frozen--; return; }
+
+  const grav = p.gravityInverted > 0 ? -GRAVITY : GRAVITY;
+  if (p.gravityInverted > 0) p.gravityInverted--;
+
+  // Movement
+  p.vx += input.lx * 0.4;
+  p.vx *= 0.88;
+
+  // Jump
+  if (input.a && p.grounded) {
+    p.vy = grav > 0 ? -5 : 5;
+  }
+
+  // Gravity
+  p.vy += grav;
+  p.vy = Math.max(-10, Math.min(10, p.vy));
+
+  // Aim
+  if (Math.abs(input.rx) > 0.1 || Math.abs(input.ry) > 0.1) {
+    p.aimAngle = Math.atan2(input.ry, input.rx);
+  } else if (input.rx !== 0) {
+    p.aimAngle += input.rx * 0.06;
+  }
+
+  // Rope
+  if (input.lt > 0.3) {
+    if (!p.ropeActive) {
+      p.ropeActive = true;
+      p.ropeAttached = false;
+      p.ropeX = p.x;
+      p.ropeY = p.y - PLAYER_H / 2;
+      p.ropeLen = 0;
+    }
+    if (!p.ropeAttached) {
+      // Extend rope
+      for (let i = 0; i < ROPE_SPEED; i++) {
+        p.ropeX += Math.cos(p.aimAngle);
+        p.ropeY += Math.sin(p.aimAngle);
+        p.ropeLen++;
+        if (p.ropeLen > ROPE_MAX) { p.ropeActive = false; break; }
+        if (isSolid(Math.floor(p.ropeX), Math.floor(p.ropeY))) {
+          p.ropeAttached = true;
+          break;
+        }
+      }
+    }
+    if (p.ropeAttached) {
+      // Pull toward attachment
+      const dx = p.ropeX - p.x;
+      const dy = p.ropeY - (p.y - PLAYER_H/2);
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > 5) {
+        p.vx += (dx / dist) * ROPE_PULL;
+        p.vy += (dy / dist) * ROPE_PULL;
+      }
+      // Rope up/down with left stick Y
+      if (input.ly < -0.3 && dist > 20) {
+        p.vx += (dx / dist) * 0.3;
+        p.vy += (dy / dist) * 0.3;
+      }
+      if (input.ly > 0.3) {
+        p.vx -= (dx / dist) * 0.15;
+        p.vy -= (dy / dist) * 0.15;
+      }
+    }
+  } else {
+    p.ropeActive = false;
+  }
+
+  // Move with collision
+  const steps = Math.ceil(Math.max(Math.abs(p.vx), Math.abs(p.vy)));
+  const svx = p.vx / (steps || 1);
+  const svy = p.vy / (steps || 1);
+  p.grounded = false;
+
+  for (let s = 0; s < steps; s++) {
+    // X
+    p.x += svx;
+    if (playerCollides(p)) {
+      p.x -= svx;
+      p.vx = 0;
+    }
+    // Y
+    p.y += svy;
+    if (playerCollides(p)) {
+      p.y -= svy;
+      if (p.vy > 0) p.grounded = true;
+      p.vy = 0;
+    }
+  }
+
+  // Dig around player while moving
+  if (Math.abs(input.lx) > 0.5) {
+    const digX = p.x + Math.sign(input.lx) * (PLAYER_W/2 + 2);
+    const digY = p.y - PLAYER_H/2;
+    for (let dy = -PLAYER_H/2-1; dy <= 1; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const tx = Math.floor(digX + dx);
+        const ty = Math.floor(digY + dy);
+        if (tGet(tx, ty) === CELL_GROUND) tSet(tx, ty, CELL_AIR);
+      }
+    }
+  }
+
+  // Lava/water damage
+  const footT = tGet(Math.floor(p.x), Math.floor(p.y));
+  if (footT === CELL_LAVA) {
+    p.hp -= 0.5;
+    if (frame % 4 === 0) spawnParticle(p.x, p.y, Math.random()*2-1, -2, '#ff4400', 15);
+  }
+  if (footT === CELL_WATER) {
+    p.vx *= 0.92;
+    p.vy *= 0.92;
+  }
+
+  // Fire weapon
+  if (p.fireTimer > 0) p.fireTimer--;
+  if (input.rt > 0.3 && p.fireTimer <= 0) {
+    fireWeapon(p);
+  }
+
+  // Weapon switch
+  const lbNow = input.lb;
+  const rbNow = input.rb;
+  if (rbNow && !p.prevRB) {
+    do { p.weaponIndex = (p.weaponIndex + 1) % WEAPONS.length; }
+    while (WEAPONS[p.weaponIndex].ammo !== Infinity && p.ammo[p.weaponIndex] <= 0 && p.weaponIndex !== 0);
+  }
+  if (lbNow && !p.prevLB) {
+    do { p.weaponIndex = (p.weaponIndex - 1 + WEAPONS.length) % WEAPONS.length; }
+    while (WEAPONS[p.weaponIndex].ammo !== Infinity && p.ammo[p.weaponIndex] <= 0 && p.weaponIndex !== 0);
+  }
+  p.prevLB = lbNow;
+  p.prevRB = rbNow;
+
+  // Clamp
+  p.x = Math.max(5, Math.min(W-5, p.x));
+  p.y = Math.max(5, Math.min(H-5, p.y));
+
+  // Check death
+  if (p.hp <= 0) {
+    killPlayer(p);
+  }
+}
+
+function playerCollides(p) {
+  for (let dy = -PLAYER_H; dy <= 0; dy++) {
+    for (let dx = -PLAYER_W/2; dx <= PLAYER_W/2; dx++) {
+      if (isSolid(Math.floor(p.x + dx), Math.floor(p.y + dy))) return true;
+    }
+  }
+  return false;
+}
+
+function killPlayer(p) {
+  p.alive = false;
+  p.respawnTimer = RESPAWN_TIME;
+  const other = players[1 - p.id];
+  other.score++;
+  // Explosion particles
+  for (let i = 0; i < 30; i++) {
+    spawnParticle(p.x, p.y - PLAYER_H/2, (Math.random()-0.5)*6, (Math.random()-0.5)*6, p.color, 30);
+  }
+  showDeathMsg(`P${other.id+1} SCORES!`);
+}
+
+function respawnPlayer(p) {
+  const s = findSpawn(p.id === 0);
+  p.x = s.x; p.y = s.y;
+  p.vx = 0; p.vy = 0;
+  p.hp = MAX_HP;
+  p.alive = true;
+  p.frozen = 0;
+  p.gravityInverted = 0;
+  p.ropeActive = false;
+}
+
+// ============ WEAPONS FIRING ============
+function fireWeapon(p) {
+  const w = WEAPONS[p.weaponIndex];
+  if (w.ammo !== Infinity && p.ammo[p.weaponIndex] <= 0) return;
+  if (w.ammo !== Infinity) p.ammo[p.weaponIndex]--;
+  p.fireTimer = w.fireRate;
+
+  const fire = (angleOffset) => {
+    const a = p.aimAngle + angleOffset;
+    const sx = p.x + Math.cos(a) * 8;
+    const sy = p.y - PLAYER_H/2 + Math.sin(a) * 8;
+    projectiles.push({
+      x: sx, y: sy,
+      vx: Math.cos(a) * w.speed + (w.special === 'gatling' ? (Math.random()-0.5)*w.spread*w.speed : 0),
+      vy: Math.sin(a) * w.speed + (w.special === 'gatling' ? (Math.random()-0.5)*w.spread*w.speed : 0),
+      owner: p.id,
+      weapon: p.weaponIndex,
+      life: w.lifetime,
+      bounces: w.bounces,
+      armed: w.special === 'mine' ? 30 : 0,
+    });
+  };
+
+  if (w.special === 'shotgun') {
+    for (let i = 0; i < w.pellets; i++) {
+      fire((Math.random() - 0.5) * w.spread);
+    }
+  } else {
+    fire(0);
+  }
+  // Recoil
+  p.vx -= Math.cos(p.aimAngle) * (w.speed * 0.05);
+  p.vy -= Math.sin(p.aimAngle) * (w.speed * 0.05);
+}
+
+// ============ PROJECTILES ============
+function updateProjectiles() {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const pr = projectiles[i];
+    const w = WEAPONS[pr.weapon];
+
+    if (w.gravity && w.special !== 'mine') {
+      pr.vy += GRAVITY * 0.5;
+    }
+
+    // Mine: settle
+    if (w.special === 'mine') {
+      if (pr.armed > 0) { pr.armed--; }
+      pr.vy += GRAVITY * 0.3;
+      if (isSolid(Math.floor(pr.x), Math.floor(pr.y + 1))) {
+        pr.vy = 0; pr.vx *= 0.8;
+      }
+      // Check proximity to enemy
+      if (pr.armed <= 0) {
+        const enemy = players[1 - pr.owner];
+        if (enemy.alive) {
+          const dx = enemy.x - pr.x, dy = (enemy.y - PLAYER_H/2) - pr.y;
+          if (dx*dx + dy*dy < 25*25) {
+            explodeProjectile(pr, i);
+            continue;
+          }
+        }
+      }
+    }
+
+    // Drill: always go through ground
+    if (w.special === 'drill') {
+      digCircle(pr.x, pr.y, w.digRadius, true);
+    }
+
+    pr.x += pr.vx;
+    pr.y += pr.vy;
+    pr.life--;
+
+    // Trail
+    if (w.trail && frame % 2 === 0) {
+      spawnParticle(pr.x, pr.y, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, w.color, 10);
+    }
+
+    // Gravity bomb: pull players
+    if (w.special === 'gravity') {
+      for (const p of players) {
+        if (!p.alive) continue;
+        const dx = pr.x - p.x, dy = pr.y - (p.y - PLAYER_H/2);
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 80 && dist > 5) {
+          p.vx += (dx / dist) * 0.6;
+          p.vy += (dy / dist) * 0.6;
+        }
+      }
+    }
+
+    // Hit terrain
+    if (isSolid(Math.floor(pr.x), Math.floor(pr.y)) && w.special !== 'drill') {
+      if (pr.bounces > 0) {
+        // Bounce
+        pr.bounces--;
+        // Simple bounce
+        if (isSolid(Math.floor(pr.x - pr.vx), Math.floor(pr.y))) {
+          pr.vy = -pr.vy * 0.7;
+        } else {
+          pr.vx = -pr.vx * 0.7;
+        }
+      } else if (w.special !== 'mine' || pr.life < w.lifetime - 5) {
+        explodeProjectile(pr, i);
+        continue;
+      }
+    }
+
+    // Hit players
+    for (const p of players) {
+      if (!p.alive || (p.id === pr.owner && pr.life > w.lifetime - 8)) continue;
+      const dx = p.x - pr.x, dy = (p.y - PLAYER_H/2) - pr.y;
+      if (Math.abs(dx) < PLAYER_W && Math.abs(dy) < PLAYER_H) {
+        if (w.special === 'mine' && pr.armed > 0) continue;
+        // Special effects
+        if (w.special === 'freeze') {
+          p.frozen = 90;
+          for (let j = 0; j < 10; j++) spawnParticle(p.x, p.y-PLAYER_H/2, (Math.random()-0.5)*3, (Math.random()-0.5)*3, '#88ddff', 20);
+        }
+        if (w.special === 'gravity') {
+          p.gravityInverted = 180;
+        }
+        if (w.special === 'teleport') {
+          // Teleport owner to projectile location
+          const owner = players[pr.owner];
+          owner.x = pr.x;
+          owner.y = pr.y + PLAYER_H/2;
+          owner.vx = 0; owner.vy = 0;
+          projectiles.splice(i, 1);
+          for (let j = 0; j < 15; j++) spawnParticle(owner.x, owner.y-PLAYER_H/2, (Math.random()-0.5)*4, (Math.random()-0.5)*4, '#ff44ff', 20);
+          continue;
+        }
+        if (w.special === 'napalm') {
+          // Set nearby ground on fire (turn to lava)
+          for (let fy = -8; fy <= 8; fy++) {
+            for (let fx = -8; fx <= 8; fx++) {
+              if (fx*fx+fy*fy < 64 && tGet(Math.floor(pr.x+fx), Math.floor(pr.y+fy)) === CELL_GROUND) {
+                tSet(Math.floor(pr.x+fx), Math.floor(pr.y+fy), CELL_LAVA);
+              }
+            }
+          }
+        }
+        p.hp -= w.damage;
+        p.vx += pr.vx * 0.15;
+        p.vy += pr.vy * 0.15;
+        if (w.special !== 'laser' && w.special !== 'freeze' && w.special !== 'gatling') {
+          explodeProjectile(pr, i);
+        } else {
+          projectiles.splice(i, 1);
+        }
+        break;
+      }
+    }
+
+    // Teleport projectile hitting terrain = teleport owner
+    if (w.special === 'teleport' && isSolid(Math.floor(pr.x), Math.floor(pr.y))) {
+      const owner = players[pr.owner];
+      // Find nearest air above
+      let ty = Math.floor(pr.y);
+      while (isSolid(Math.floor(pr.x), ty) && ty > 5) ty--;
+      owner.x = pr.x;
+      owner.y = ty + PLAYER_H;
+      owner.vx = 0; owner.vy = 0;
+      for (let j = 0; j < 15; j++) spawnParticle(owner.x, owner.y-PLAYER_H/2, (Math.random()-0.5)*4, (Math.random()-0.5)*4, '#ff44ff', 20);
+      projectiles.splice(i, 1);
+      continue;
+    }
+
+    // Out of bounds or expired
+    if (pr.life <= 0 || pr.x < 0 || pr.x >= W || pr.y < 0 || pr.y >= H) {
+      if (w.special === 'napalm') {
+        // Napalm explodes into fire
+        for (let j = 0; j < 8; j++) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = Math.random() * 15;
+          const fx = Math.floor(pr.x + Math.cos(angle)*dist);
+          const fy = Math.floor(pr.y + Math.sin(angle)*dist);
+          if (tGet(fx, fy) === CELL_GROUND) tSet(fx, fy, CELL_LAVA);
+          if (tGet(fx, fy) === CELL_AIR) { /* flames particle */ }
+        }
+      }
+      if (pr.life <= 0 && w.radius > 5) {
+        explodeProjectile(pr, i);
+      } else {
+        projectiles.splice(i, 1);
+      }
+    }
+  }
+}
+
+function explodeProjectile(pr, index) {
+  const w = WEAPONS[pr.weapon];
+  digCircle(pr.x, pr.y, w.digRadius, w.special === 'drill');
+  // Damage players in radius
+  for (const p of players) {
+    if (!p.alive) continue;
+    const dx = p.x - pr.x, dy = (p.y - PLAYER_H/2) - pr.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < w.radius) {
+      const factor = 1 - dist / w.radius;
+      p.hp -= w.damage * factor;
+      if (dist > 1) {
+        p.vx += (dx / dist) * factor * 5;
+        p.vy += (dy / dist) * factor * 5;
+      }
+      if (w.special === 'gravity') p.gravityInverted = 180;
+      if (w.special === 'freeze') p.frozen = 90;
+    }
+  }
+  // Particles
+  const count = Math.min(w.radius * 2, 30);
+  for (let j = 0; j < count; j++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = Math.random() * 4;
+    spawnParticle(pr.x, pr.y, Math.cos(a)*sp, Math.sin(a)*sp, w.color, 15 + Math.random()*10);
+  }
+  projectiles.splice(index, 1);
+}
+
+// ============ CRATES ============
+function updateCrates() {
+  if (frame % CRATE_INTERVAL === 0 && crates.length < MAX_CRATES) {
+    // Find air spot
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const cx = 20 + Math.random() * (W - 40);
+      const cy = 20 + Math.random() * (H - 40);
+      if (!isSolid(Math.floor(cx), Math.floor(cy))) {
+        crates.push({x: cx, y: cy, vy: 0, weapon: 1 + Math.floor(Math.random() * (WEAPONS.length - 1))});
+        break;
+      }
+    }
+  }
+
+  for (let i = crates.length - 1; i >= 0; i--) {
+    const c = crates[i];
+    c.vy += GRAVITY * 0.3;
+    c.y += c.vy;
+    if (isSolid(Math.floor(c.x), Math.floor(c.y + 6))) {
+      c.y -= c.vy;
+      c.vy = 0;
+    }
+
+    // Player pickup
+    for (const p of players) {
+      if (!p.alive) continue;
+      const dx = p.x - c.x, dy = (p.y - PLAYER_H/2) - c.y;
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
+        p.ammo[c.weapon] = (p.ammo[c.weapon] || 0) + Math.ceil(WEAPONS[c.weapon].ammo * 0.5);
+        p.weaponIndex = c.weapon;
+        for (let j = 0; j < 8; j++) spawnParticle(c.x, c.y, (Math.random()-0.5)*3, (Math.random()-0.5)*3, '#ffcc00', 15);
+        crates.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+// ============ WATER SIMULATION (simple) ============
+function updateWater() {
+  if (frame % 3 !== 0) return;
+  for (let y = H - 3; y >= 3; y--) {
+    for (let x = 3; x < W - 3; x++) {
+      const t = tGet(x, y);
+      if (t === CELL_WATER || t === CELL_LAVA) {
+        // Fall
+        if (tGet(x, y+1) === CELL_AIR) {
+          tSet(x, y+1, t);
+          tSet(x, y, CELL_AIR);
+        } else {
+          // Spread
+          const dir = Math.random() < 0.5 ? -1 : 1;
+          if (tGet(x+dir, y) === CELL_AIR) {
+            tSet(x+dir, y, t);
+            tSet(x, y, CELL_AIR);
+          } else if (tGet(x-dir, y) === CELL_AIR) {
+            tSet(x-dir, y, t);
+            tSet(x, y, CELL_AIR);
+          }
+        }
+      }
+    }
+  }
+}
+
+// ============ PARTICLES ============
+function spawnParticle(x, y, vx, vy, color, life) {
+  if (particles.length > 500) return;
+  const r = parseInt(color.substr(1,2),16);
+  const g = parseInt(color.substr(3,2),16);
+  const b = parseInt(color.substr(5,2),16);
+  particles.push({x, y, vx, vy, r, g, b, life, maxLife: life});
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += GRAVITY * 0.15;
+    p.vx *= 0.98;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ============ RENDERING ============
+function renderGame() {
+  const data = gameImageData.data;
+
+  // Render terrain
+  if (terrainDirty) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const c = getTerrainColor(x, y);
+        data[i] = c[0]; data[i+1] = c[1]; data[i+2] = c[2]; data[i+3] = 255;
+      }
+    }
+    terrainDirty = false;
+  }
+
+  ctx.putImageData(gameImageData, 0, 0);
+
+  // Crates
+  for (const c of crates) {
+    const wobble = Math.sin(frame * 0.1 + c.x) * 1.5;
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(c.x - 5, c.y - 5 + wobble, 10, 10);
+    ctx.strokeStyle = '#aa8800';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(c.x - 5, c.y - 5 + wobble, 10, 10);
+    ctx.fillStyle = '#fff';
+    ctx.font = '6px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(WEAPONS[c.weapon].name.charAt(0), c.x, c.y + 3 + wobble);
+  }
+
+  // Projectiles
+  for (const pr of projectiles) {
+    const w = WEAPONS[pr.weapon];
+    ctx.fillStyle = w.color;
+    if (w.special === 'mine') {
+      ctx.beginPath();
+      ctx.arc(pr.x, pr.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      if (pr.armed <= 0 && frame % 20 < 10) {
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.arc(pr.x, pr.y - 4, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (w.special === 'laser') {
+      ctx.strokeStyle = w.color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(pr.x - pr.vx * 2, pr.y - pr.vy * 2);
+      ctx.lineTo(pr.x, pr.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      const size = Math.min(w.radius * 0.3, 4);
+      ctx.fillRect(pr.x - size/2, pr.y - size/2, size, size);
+    }
+  }
+
+  // Particles
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.fillStyle = `rgba(${p.r},${p.g},${p.b},${alpha})`;
+    ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+  }
+
+  // Players
+  for (const p of players) {
+    if (!p.alive) continue;
+
+    // Rope
+    if (p.ropeActive) {
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - PLAYER_H/2);
+      ctx.lineTo(p.ropeX, p.ropeY);
+      ctx.stroke();
+      if (p.ropeAttached) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(p.ropeX, p.ropeY, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Body
+    let bodyColor = p.color;
+    if (p.frozen > 0) bodyColor = '#88ddff';
+    if (p.gravityInverted > 0) bodyColor = '#aa44ff';
+
+    ctx.fillStyle = bodyColor;
+    // Head
+    ctx.beginPath();
+    ctx.arc(p.x, p.y - PLAYER_H + 3, 3, 0, Math.PI * 2);
+    ctx.fill();
+    // Body
+    ctx.fillRect(p.x - 2, p.y - PLAYER_H + 6, 4, 5);
+    // Legs
+    ctx.fillRect(p.x - 3, p.y - 3, 2, 3);
+    ctx.fillRect(p.x + 1, p.y - 3, 2, 3);
+
+    // Aim line
+    ctx.strokeStyle = p.frozen > 0 ? '#88ddff' : p.color;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - PLAYER_H/2);
+    ctx.lineTo(p.x + Math.cos(p.aimAngle) * 14, p.y - PLAYER_H/2 + Math.sin(p.aimAngle) * 14);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Frozen effect
+    if (p.frozen > 0) {
+      ctx.strokeStyle = '#88ddff';
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.4;
+      ctx.strokeRect(p.x - 5, p.y - PLAYER_H - 1, 10, PLAYER_H + 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // HUD update
+  for (const p of players) {
+    const hpPct = Math.max(0, p.hp / MAX_HP * 100);
+    document.getElementById(`hp${p.id+1}`).style.width = hpPct + '%';
+    const w = WEAPONS[p.weaponIndex];
+    const ammoStr = w.ammo === Infinity ? '∞' : p.ammo[p.weaponIndex];
+    document.getElementById(`wep${p.id+1}`).textContent = `${w.name} [${ammoStr}]`;
+    document.getElementById(`score${p.id+1}`).textContent = p.score;
+  }
+}
+
+// ============ DEATH MESSAGE ============
+function showDeathMsg(msg) {
+  const el = document.getElementById('death-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  deathMsgTimer = 90;
+}
+
+// ============ GAME LOOP ============
+function gameLoop() {
+  if (!gameRunning) return;
+
+  frame++;
+
+  // Input & movement
+  for (const p of players) {
+    if (p.alive) {
+      const input = getInput(p.id);
+      movePlayer(p, input);
+    } else {
+      p.respawnTimer--;
+      if (p.respawnTimer <= 0) respawnPlayer(p);
+    }
+  }
+
+  updateProjectiles();
+  updateCrates();
+  updateWater();
+  updateParticles();
+
+  if (deathMsgTimer > 0) {
+    deathMsgTimer--;
+    if (deathMsgTimer <= 0) document.getElementById('death-msg').style.display = 'none';
+  }
+
+  renderGame();
+  requestAnimationFrame(gameLoop);
+}
+
+// ============ SIZING ============
+function resize() {
+  const maxW = window.innerWidth - 20;
+  const maxH = window.innerHeight - 20;
+  const scale = Math.min(maxW / W, maxH / H, 2);
+  gameCanvas.style.width = (W * scale) + 'px';
+  gameCanvas.style.height = (H * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Prevent tab from switching focus
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Tab' || e.code === 'Space') e.preventDefault();
+});
+
+// ============ INIT ============
+initEditor();
+editorGamepadPoll();
+</script>
+</body>
+</html>
