@@ -1185,41 +1185,8 @@
             // Better Click Handling: separate function
             function handleCastleClick() {
                 if (isMultiplayer) {
-                    // Logic Split
-                    if (gameState.waveTimer <= 0) {
-                        // CASE A: Timer is 0. FREE.
-                        // Action: Start Next Wave Cycle LOCALLY only.
-                        // - Reset Timer to 30s.
-                        // - Reset Click Count to 0.
-                        // - Reset Price Base.
-
-                        startWave();
-                        gameState.mpStartTime = Date.now();
-                        gameState.nextWaveClickCount = 0;
-
-                        // REMOVED: Broadcasting to others. Wave is now local.
-                    } else {
-                        // CASE B: Timer > 0. PAID EXTRA WAVE.
-                        // Action: Spawn Wave IMMEDIATELY, but keep timer running.
-
-                        // Calculate Cost
-                        let base = Math.floor(45 * (gameState.shopLevel || 1));
-                        let count = gameState.nextWaveClickCount || 0;
-                        let cost = Math.pow(base, count + 1);
-
-                        if (gameState.money >= cost) {
-                            gameState.money -= cost;
-
-                            // Increment Count
-                            gameState.nextWaveClickCount = (gameState.nextWaveClickCount || 0) + 1;
-
-                            // Trigger Spawn (Locally)
-                            startWave();
-
-                            // REMOVED: Broadcasting EXTRA WAVE.
-                        }
-                    }
-                    updateUI(); // Immediate feedback
+                    startWave();
+                    updateUI();
                     return;
                 }
                 // Singleplayer
@@ -1647,34 +1614,9 @@
             if (gameState.gameOver) return;
             let uiDirty = false;
 
-            // Multiplayer Auto-Wave Timer (SYNCED)
+            // Multiplayer: No wave timer, waves are always free to start
             if (isMultiplayer) {
-                if (!gameState.mpStartTime) gameState.mpStartTime = Date.now();
-
-                let now = Date.now();
-                let elapsed = now - gameState.mpStartTime;
-
-                // Host Sync Broadcast (Every 5s) - REMOVED for Independent Waves
-                // if (isHost) {
-                //     if (!gameState.lastSyncTime || now - gameState.lastSyncTime > 5000) {
-                //         gameState.lastSyncTime = now;
-                //         connections.forEach(c => c.send({ type: 'sync_timer', elapsed: elapsed }));
-                //     }
-                // }
-
-                // Manual Wave Start (30s -> 0s, then Wait)
-                // Timer now represents time since *this specific wave* started.
-                // We do NOT wrap around automatically.
-                let secondsLeft = 30 - (elapsed / 1000);
-                if (secondsLeft < 0) {
-                    secondsLeft = 0;
-                    gameState.nextWaveClickCount = 0; // Reset if timer runs out naturally
-                }
-
-                gameState.waveTimer = Math.ceil(secondsLeft * 60);
-
-                // No Auto Trigger. User must click "Castle" (Start Wave) button.
-
+                gameState.waveTimer = 0;
                 uiDirty = true;
             } else {
                 // Reset timer if active or generating
@@ -2412,36 +2354,6 @@
                 }
             }
 
-            // GUARANTEE BARRACK IN MULTIPLAYER
-            if (isMultiplayer) {
-                // Check if we already have one (locked)
-                let hasBarrack = newCards.some(c => c && c.type === 'barrack' && !c.bought);
-                if (!hasBarrack && generatedIndices.length > 0) {
-                    // Replace one random card
-                    let replaceIdx = generatedIndices[Math.floor(Math.random() * generatedIndices.length)];
-
-                    // Generate Barrack Card
-                    let uType = get_random_enemy_type(gameState.shopLevel);
-
-                    let price = CARD_TYPES['barrack'].price;
-                    if (uType.includes('boss')) price *= 5;
-                    price *= (gameState.reshufflePriceMultiplier || 1);
-
-                    let level = 1;
-                    let isAlly = (gameState.shopLevel % 2) === 0;
-
-                    newCards[replaceIdx] = {
-                        type: 'barrack',
-                        barrackType: isAlly ? 'ally' : 'enemy',
-                        unitType: uType,
-                        bought: false,
-                        locked: false,
-                        level: level,
-                        price: price,
-                        canYield: canYieldMoney
-                    };
-                }
-            }
             marketCards = newCards;
 
             // Also Generate Remote Markets
@@ -2456,58 +2368,54 @@
 
         function generateRemoteMarkets(canYield, allowReroll) {
             let peers = connectedPlayers.map(p => p.id);
+            let REMOTE_MARKET_SIZE = 6;
 
             peers.forEach(pid => {
-                let cards = new Array(MARKET_SIZE).fill(null);
+                let cards = new Array(REMOTE_MARKET_SIZE).fill(null);
                 // Preserve locked?
                 let existing = remoteMarkets[pid] || [];
-                for (let i = 0; i < MARKET_SIZE; i++) {
+                for (let i = 0; i < REMOTE_MARKET_SIZE; i++) {
                     if (existing[i] && existing[i].locked && !existing[i].bought) {
                         cards[i] = existing[i];
                     }
                 }
 
-                // Fill
-                for (let i = 0; i < MARKET_SIZE; i++) {
+                // Always 3 enemies + 3 friendlies
+                let enemyCount = 3, friendlyCount = 3;
+
+                // Build ordered list: enemies first, then friendlies
+                let barrackTypes = [];
+                for (let j = 0; j < enemyCount; j++) barrackTypes.push('enemy');
+                for (let j = 0; j < friendlyCount; j++) barrackTypes.push('ally');
+                // Shuffle the order
+                for (let j = barrackTypes.length - 1; j > 0; j--) {
+                    let k = Math.floor(Math.random() * (j + 1));
+                    [barrackTypes[j], barrackTypes[k]] = [barrackTypes[k], barrackTypes[j]];
+                }
+
+                // Fill empty slots with barrack cards
+                let typeIdx = 0;
+                for (let i = 0; i < REMOTE_MARKET_SIZE; i++) {
                     if (cards[i] === null) {
-                        // Only Remote Cards
-                        let selectedType = 'spawn_enemy';
-
-                        // If we had more remote types, we'd pick here.
                         let level = gameState.shopLevel;
-                        let price = 50; // Base
+                        let uType = get_random_enemy_type(level);
+                        let bType = barrackTypes[typeIdx++] || 'enemy';
 
-                        // Logic from before
+                        let price = CARD_TYPES['barrack'].price;
+                        if (uType.includes('boss')) price *= 5;
                         price = Math.floor(price * (1 + (level - 1) * 0.4));
                         price *= (gameState.reshufflePriceMultiplier || 1);
 
-                        let newCard = {
-                            type: selectedType,
+                        cards[i] = {
+                            type: 'barrack',
+                            barrackType: bType,
+                            unitType: uType,
                             bought: false,
                             locked: false,
                             level: level,
                             price: price,
-                            enemyType: get_random_enemy_type(level)
+                            canYield: canYield
                         };
-
-                        // Count
-                        let budget = 10 + (level * 2);
-                        let cost = 5;
-                        let type = newCard.enemyType;
-                        if (type === 'boss') cost = 100;
-                        else if (type === 'tank') cost = 15;
-                        else if (type === 'fast') cost = 8;
-                        else if (type.includes('snake_boss')) cost = 200;
-                        else if (type === 'snake') cost = 25;
-                        else if (type === 'mole') cost = 5;
-                        else if (type.includes('resistant')) cost = 10;
-                        else if (type.includes('bird')) cost = 12;
-
-                        let count = Math.max(1, Math.floor(budget / cost));
-                        if (count > 10) count = 10;
-                        newCard.count = count;
-
-                        cards[i] = newCard;
                     }
                 }
                 remoteMarkets[pid] = cards;
@@ -2593,6 +2501,9 @@
             // Buying something? Deselect entity
             selectedEntity = null;
             updateStatsPanel();
+
+            // Deselect any remote market card
+            selectedRemoteCard = null;
 
             selectedMarketIndex = (selectedMarketIndex === index) ? -1 : index;
             updateUI();
@@ -4752,6 +4663,21 @@
                 return;
             }
 
+            // 1b. Placing a Remote Market Card locally?
+            if (selectedRemoteCard) {
+                let markets = remoteMarkets[selectedRemoteCard.peerId];
+                if (markets) {
+                    let card = markets[selectedRemoteCard.index];
+                    if (card && !card.bought) {
+                        handlePlacement(gx, gy, x, y, false, card);
+                        if (card.bought) {
+                            selectedRemoteCard = null;
+                        }
+                        return;
+                    }
+                }
+            }
+
             // 2. Clicked Spawner for Money? (Immediate Action on Press)
             let cell = grid[gy][gx];
             if (cell && cell.item && cell.item.type === 'spawner') {
@@ -4856,8 +4782,14 @@
             if (gameState.gameOver) return;
 
             let marketCard;
+            let isRemoteMarketCard = false;
             if (isRemote) {
                 marketCard = remoteCardData;
+            } else if (remoteCardData) {
+                // Remote market card being placed locally
+                marketCard = remoteCardData;
+                isRemoteMarketCard = true;
+                if (marketCard.bought) return;
             } else {
                 marketCard = marketCards[selectedMarketIndex];
                 if (marketCard.bought) return;
@@ -5108,27 +5040,26 @@
             }
 
             if (actionTaken) {
-                if (data.hpCost) {
-                    // HP cost applied via logic above
-                    // Ensure we don't deduct money if price is 0
-                    if (data.price > 0) gameState.money -= actualPrice;
-                } else {
-                    gameState.money -= actualPrice;
+                if (!isRemote) {
+                    if (data.hpCost) {
+                        if (data.price > 0) gameState.money -= actualPrice;
+                    } else {
+                        gameState.money -= actualPrice;
+                    }
                 }
                 marketCard.locked = false; // Unlock on use
                 marketCard.bought = true;
 
-                // Check if all cards are sold (bought)
-                if (marketCards.every(c => c.bought)) {
-                    // Auto-Reshuffle
-                    gameState.reshufflePriceMultiplier = (gameState.reshufflePriceMultiplier || 1) * 2;
-                    generateMarket(false, true); // No Yield, Allow Reroll
+                if (!isRemoteMarketCard) {
+                    // Check if all local cards are sold (bought)
+                    if (marketCards.every(c => c.bought)) {
+                        // Auto-Reshuffle
+                        gameState.reshufflePriceMultiplier = (gameState.reshufflePriceMultiplier || 1) * 2;
+                        generateMarket(false, true); // No Yield, Allow Reroll
+                    }
+                    selectedMarketIndex = -1;
                 }
-
-                selectedMarketIndex = -1;
                 updateUI();
-            } else if (data.target === 'remote') {
-
             }
         }
 
@@ -5148,16 +5079,30 @@
                 }
             }
 
-            let payload = {
-                type: 'action',
-                action: 'card',
-                name: 'spawn_enemy',
-                enemyType: card.enemyType || 'norm',
-                count: card.count || 1,
-                level: card.level || 1, // Sender's Shop Level (or Card Level)
-                x: 0.5, y: 0.5
-            };
-            conn.send(payload);
+            if (card.type === 'barrack') {
+                // Send barrack placement to the remote player
+                let payload = {
+                    type: 'action',
+                    action: 'card',
+                    name: 'barrack',
+                    barrackType: card.barrackType || 'enemy',
+                    unitType: card.unitType || 'norm',
+                    level: card.level || 1
+                };
+                conn.send(payload);
+            } else {
+                // Legacy: spawn_enemy or other
+                let payload = {
+                    type: 'action',
+                    action: 'card',
+                    name: 'spawn_enemy',
+                    enemyType: card.enemyType || 'norm',
+                    count: card.count || 1,
+                    level: card.level || 1,
+                    x: 0.5, y: 0.5
+                };
+                conn.send(payload);
+            }
 
             // Deduct Money
             gameState.money -= card.price;
@@ -5180,23 +5125,38 @@
             }
 
             updateUI();
-
-            // Visual Feedback?
-            // "Sent!"
         }
 
         function handleIncomingCard(data) {
-            // data: { enemyType, count, level, ... }
-            // Spawn Enemies
-            let count = data.count || 1;
-            let type = data.enemyType || 'norm';
-            let level = data.level || 1;
+            if (data.name === 'barrack') {
+                // Received a barrack card from remote player
+                // Place barrack at a random floor tile
+                let floorTiles = [];
+                for (let gy = 0; gy < GRID_H; gy++) {
+                    for (let gx = 0; gx < GRID_W; gx++) {
+                        if (grid[gy][gx] === 0 && !towers.some(t => t.gx === gx && t.gy === gy) && !barracks.some(b => b.gx === gx && b.gy === gy)) {
+                            floorTiles.push({ gx, gy });
+                        }
+                    }
+                }
+                if (floorTiles.length > 0) {
+                    let tile = floorTiles[Math.floor(Math.random() * floorTiles.length)];
+                    let bType = data.barrackType || 'enemy';
+                    let uType = data.unitType || 'norm';
+                    let level = data.level || 1;
+                    let stacks = Math.pow(2, level - 1);
+                    new Barrack(tile.gx, tile.gy, stacks, bType, uType);
+                }
+            } else {
+                // Legacy: spawn_enemy
+                let count = data.count || 1;
+                let type = data.enemyType || 'norm';
+                let level = data.level || 1;
 
-            for (let i = 0; i < count; i++) {
-                gameState.spawnQueue.push({ type: type, waveIndex: level });
+                for (let i = 0; i < count; i++) {
+                    gameState.spawnQueue.push({ type: type, waveIndex: level });
+                }
             }
-
-            // (Msg removed as requested)
         }
 
         function get_random_enemy_type(level) {
@@ -5364,40 +5324,13 @@
             btn.style.background = `hsl(${hue}, 80%, 40%)`;
             btn.style.display = gameState.generating ? 'none' : 'flex';
 
-            if (isMultiplayer && typeof gameState.waveTimer !== 'undefined') {
+            if (isMultiplayer) {
                 btn.style.flexDirection = 'column';
                 btn.style.lineHeight = '1';
-                // Calculate Cost
-                let base = Math.floor(45 * (gameState.shopLevel || 1));
-                let count = gameState.nextWaveClickCount || 0;
-                let cost = Math.pow(base, count + 1);
-
-                // If Timer is 0, allow click for free (or just 'GO'?)
-                // User said: "if nextwave countdown timer is 0, set the price to 0"
-                if (gameState.waveTimer <= 0) {
-                    cost = 0;
-                }
-
-                // Color Logic
-                if (gameState.money >= cost) {
-                    // Greenish
-                    btn.style.background = `hsl(120, 80%, 40%)`;
-                    btn.style.borderColor = '#fff';
-                    btn.style.color = '#fff';
-                } else {
-                    // Reddish
-                    btn.style.background = `hsl(0, 80%, 40%)`;
-                    btn.style.borderColor = '#fa0';
-                    btn.style.color = '#ccc';
-                }
-
-                let sec = Math.ceil(gameState.waveTimer / 60);
-                let costText = cost > 0 ? `$${formatBigNumber(cost)}` : "FREE";
-
-                btn.innerHTML = `
-                    <span style="font-size:10px;font-weight:bold;margin-bottom:2px;pointer-events:none;">${sec}s</span>
-                    <span style="font-size:9px;color:${cost > 0 && gameState.money < cost ? '#f88' : '#ffea00'};pointer-events:none;">${costText}</span>
-                `;
+                btn.style.background = `hsl(120, 80%, 40%)`;
+                btn.style.borderColor = '#fff';
+                btn.style.color = '#fff';
+                btn.innerHTML = `<span style="font-size:10px;font-weight:bold;pointer-events:none;">GO</span>`;
             } else { }
         }
 
@@ -6150,20 +6083,7 @@
             let videoContainer = document.createElement('div');
             videoContainer.className = 'remote-video-box';
 
-            // CLICK LISTENER FOR VIDEO (EXECUTE ATTACK)
-            videoContainer.onclick = function () {
-                // Check if we have a selected card for THIS peer
-                if (selectedRemoteCard && selectedRemoteCard.peerId === peerId) {
-                    let markets = remoteMarkets[peerId];
-                    if (markets) {
-                        let card = markets[selectedRemoteCard.index];
-                        if (card && !card.bought) {
-                            // EXECUTE
-                            useRemoteCard(peerId, card);
-                        }
-                    }
-                }
-            };
+            // Remote cards are now placed on local board, no video click needed
 
             let vid = document.createElement('video');
             vid.autoplay = true;
@@ -6227,6 +6147,9 @@
                 // Blink red? (TODO)
                 return;
             }
+
+            // Deselect any local market card
+            selectedMarketIndex = -1;
 
             // Select
             if (selectedRemoteCard && selectedRemoteCard.peerId === peerId && selectedRemoteCard.index === index) {
@@ -6294,13 +6217,17 @@
 
                     // Name
                     let nameHtml = "";
-                    if (card.type === 'spawn_enemy') {
+                    if (card.type === 'barrack') {
+                        let label = card.barrackType === 'ally' ? 'ALLY' : 'ENEMY';
+                        let labelColor = card.barrackType === 'ally' ? '#0f0' : '#f44';
+                        nameHtml = `<span style="color:${labelColor}">${label}</span><br><span style="color:#fff">${(card.unitType || 'norm').toUpperCase()}</span>`;
+                    } else if (card.type === 'spawn_enemy') {
                         nameHtml = `${card.enemyType.toUpperCase()}<br><span style="color:#fff">${card.count}x</span>`;
                     } else {
                         nameHtml = data.name;
                     }
                     d.querySelector('.m-name').innerHTML = nameHtml;
-                    d.querySelector('.m-name').style.color = card.bought ? '#555' : data.color;
+                    d.querySelector('.m-name').style.color = card.bought ? '#555' : (card.type === 'barrack' ? (card.barrackType === 'ally' ? '#0f0' : '#f44') : data.color);
 
                     // Cost
                     d.querySelector('.m-cost').innerHTML = `$${formatBigNumber(card.price)}`;
