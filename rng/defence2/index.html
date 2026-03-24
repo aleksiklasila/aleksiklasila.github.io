@@ -1628,7 +1628,7 @@
 
 
 
-            if (gameState.active && gameState.spawnQueue.length > 0) {
+            if ((gameState.active || isMultiplayer) && gameState.spawnQueue.length > 0) {
                 gameState.spawnTimer++;
 
                 // Exponential Rate: 
@@ -1676,7 +1676,7 @@
                     }
                 }
                 uiDirty = true;
-            } else if (gameState.active && gameState.spawnQueue.length === 0 && enemies.length === 0) {
+            } else if (gameState.active && !isMultiplayer && gameState.spawnQueue.length === 0 && enemies.length === 0) {
                 // Wave Fully Cleared
                 if (gameState.active) {
                     gameState.fullyClearedWave = gameState.wave;
@@ -2380,26 +2380,11 @@
                     }
                 }
 
-                // Always 3 enemies + 3 friendlies
-                let enemyCount = 3, friendlyCount = 3;
-
-                // Build ordered list: enemies first, then friendlies
-                let barrackTypes = [];
-                for (let j = 0; j < enemyCount; j++) barrackTypes.push('enemy');
-                for (let j = 0; j < friendlyCount; j++) barrackTypes.push('ally');
-                // Shuffle the order
-                for (let j = barrackTypes.length - 1; j > 0; j--) {
-                    let k = Math.floor(Math.random() * (j + 1));
-                    [barrackTypes[j], barrackTypes[k]] = [barrackTypes[k], barrackTypes[j]];
-                }
-
-                // Fill empty slots with barrack cards
-                let typeIdx = 0;
+                // Fill empty slots with barrack cards (each spawns both allies & enemies)
                 for (let i = 0; i < REMOTE_MARKET_SIZE; i++) {
                     if (cards[i] === null) {
                         let level = gameState.shopLevel;
                         let uType = get_random_enemy_type(level);
-                        let bType = barrackTypes[typeIdx++] || 'enemy';
 
                         let price = CARD_TYPES['barrack'].price;
                         if (uType.includes('boss')) price *= 5;
@@ -2408,7 +2393,6 @@
 
                         cards[i] = {
                             type: 'barrack',
-                            barrackType: bType,
                             unitType: uType,
                             bought: false,
                             locked: false,
@@ -3764,6 +3748,46 @@
         let barracks = [];
         let allies = [];
 
+        // Barrack spawn cooldown config per unit type
+        // baseTime: seconds at level 1, reduction: % removed per level (compounding)
+        const BARRACK_SPAWN_CONFIG = {
+            norm:             { baseTime: 30,  reduction: 0.10 },
+            fast:             { baseTime: 25,  reduction: 0.10 },
+            tank:             { baseTime: 45,  reduction: 0.08 },
+            boss:             { baseTime: 90,  reduction: 0.06 },
+            mole:             { baseTime: 20,  reduction: 0.12 },
+            snake:            { baseTime: 120, reduction: 0.05 },
+            flying:           { baseTime: 35,  reduction: 0.09 },
+            poison_resistant: { baseTime: 40,  reduction: 0.08 },
+            fire_resistant:   { baseTime: 40,  reduction: 0.08 },
+            water_resistant:  { baseTime: 35,  reduction: 0.09 },
+            ice_resistant:    { baseTime: 40,  reduction: 0.08 },
+            laser_resistant:  { baseTime: 40,  reduction: 0.08 },
+            fly_bird:         { baseTime: 35,  reduction: 0.09 },
+            ice_bird:         { baseTime: 40,  reduction: 0.08 },
+            water_bird:       { baseTime: 40,  reduction: 0.08 },
+            fire_bird:        { baseTime: 40,  reduction: 0.08 },
+            poison_bird:      { baseTime: 45,  reduction: 0.07 },
+            sand_bird:        { baseTime: 40,  reduction: 0.08 },
+            snake_boss_poison:{ baseTime: 180, reduction: 0.04 },
+            snake_boss_water: { baseTime: 180, reduction: 0.04 },
+            snake_boss_fire:  { baseTime: 180, reduction: 0.04 },
+            snake_boss_ice:   { baseTime: 180, reduction: 0.04 },
+            snake_boss_laser: { baseTime: 180, reduction: 0.04 },
+        };
+
+        function getBarrackSpawnCooldown(unitType, level) {
+            let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG['norm'];
+            // Each level reduces time by reduction% (compounding)
+            let time = cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1);
+            return Math.max(1, time); // minimum 1 second
+        }
+
+        function getBarrackReduction(unitType) {
+            let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG['norm'];
+            return cfg.reduction;
+        }
+
         class Barrack {
             constructor(gx, gy, stacks = 1, type = 'ally', unitType = 'norm') {
                 this.gx = gx; this.gy = gy;
@@ -3771,15 +3795,16 @@
                 this.stacks = stacks;
                 this.hp = 100; this.maxHp = 100;
                 this.type = 'barrack';
-                this.barrackType = type; // 'ally' or 'enemy'
-                this.unitType = unitType; // Specific unit to spawn
-                console.log("Barrack Created:", { gx, gy, type, unitType, stacks });
+                this.barrackType = type;
+                this.unitType = unitType;
+                console.log("Barrack Created:", { gx, gy, unitType, stacks });
 
                 this.effectiveStacks = stacks;
                 this.level = Math.floor(Math.log2(this.stacks)) + 1;
 
+                // Auto-spawn timer (in frames, 60fps)
                 this.spawnTimer = 0;
-                // this.spawnCooldown = 300; // Removed periodic spawn
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level) * 60);
 
                 barracks.push(this);
                 this.markedForSalvage = false;
@@ -3795,52 +3820,47 @@
                 let properVisualLevel = Math.floor(Math.log2(this.stacks)) + 1;
                 if (this.level !== properVisualLevel) {
                     this.level = properVisualLevel;
+                    this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, this.level) * 60);
                     updateItemTextCache(this);
+                }
+
+                // Auto-spawn loop
+                this.spawnTimer++;
+                if (this.spawnTimer >= this.spawnCooldown) {
+                    this.spawnTimer = 0;
+                    this.spawnUnit();
                 }
             }
 
             spawnUnit() {
                 let lvl = this.effectiveLevel || this.level || 1;
-                console.log(`Barrack Spawning: ${this.barrackType} ${this.unitType} (Level ${lvl})`);
-
-                // Spawn 'lvl' number of units
-                // "Each stack spawns 1 unit" effectively, since Count = Level, and Level ~ log2(Stacks)
-                // Wait, user said: "Make the barrack level dependent on the stack size... Increase the number of spawned allies/enemies to match the spawner's level."
-                // So count = lvl.
-
-                let count = lvl;
-                let spawnLevel = Math.pow(2, lvl); // "level calculated as 2 to the power of the spawner's level"
-
+                let spawnLevel = Math.pow(2, lvl);
                 let uType = this.unitType || 'norm';
 
-                for (let i = 0; i < count; i++) {
-                    if (this.barrackType === 'ally') {
-                        gameState.spawnQueue.push({
-                            type: 'ally',
-                            subtype: uType,
-                            level: spawnLevel, // Ally constructor uses level for power
-                            x: this.x,
-                            y: this.y
-                        });
-                    } else {
-                        gameState.spawnQueue.push({
-                            type: uType,
-                            waveIndex: gameState.wave,
-                            gx: this.gx,
-                            gy: this.gy,
-                            level: spawnLevel // Used for stat boosting in update()
-                        });
-                    }
-                }
+                // Spawn 1 ally and 1 enemy
+                gameState.spawnQueue.push({
+                    type: 'ally',
+                    subtype: uType,
+                    level: spawnLevel,
+                    x: this.x,
+                    y: this.y
+                });
+                gameState.spawnQueue.push({
+                    type: uType,
+                    waveIndex: gameState.wave,
+                    gx: this.gx,
+                    gy: this.gy,
+                    level: spawnLevel
+                });
             }
             draw(ctx) {
-                // Outline
-                ctx.strokeStyle = this.barrackType === 'ally' ? '#4f4' : '#f44';
+                // Outline - neutral color (spawns both)
+                ctx.strokeStyle = '#fa0';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
 
                 // Tent (Background)
-                ctx.fillStyle = this.barrackType === 'ally' ? '#46f' : '#844';
+                ctx.fillStyle = '#664';
                 ctx.beginPath();
                 ctx.moveTo(this.x - 12, this.y - 12);
                 ctx.lineTo(this.x + 12, this.y - 12);
@@ -3849,7 +3869,20 @@
 
                 let type = this.unitType || 'norm';
 
-                drawUnitPreview(ctx, this.x, this.y + 4, type, this.barrackType === 'ally');
+                drawUnitPreview(ctx, this.x, this.y + 4, type, true);
+
+                // Spawn timer progress bar
+                if (this.spawnCooldown > 0) {
+                    let pct = this.spawnTimer / this.spawnCooldown;
+                    let barW = 24;
+                    let barH = 3;
+                    let bx = this.x - barW / 2;
+                    let by = this.y + 12;
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(bx, by, barW, barH);
+                    ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0';
+                    ctx.fillRect(bx, by, barW * pct, barH);
+                }
 
                 if (this.markedForSalvage) {
                     ctx.strokeStyle = '#f00'; ctx.lineWidth = 2;
@@ -4185,14 +4218,23 @@
             // dir: -1 (Left), 1 (Right)
             if (connections.length === 0) return;
 
-            // Send to ALL peers (or random/round-robin in future)
+            // Mirror corner: TR(1)->TL(0), BR(3)->BL(2), TL(0)->TR(1), BL(2)->BR(3)
+            let mirroredCorner;
+            if (cornerId === 0) mirroredCorner = 1;
+            else if (cornerId === 1) mirroredCorner = 0;
+            else if (cornerId === 2) mirroredCorner = 3;
+            else mirroredCorner = 2;
+
+            // Allies are converted to enemies when sent to remote player
             connections.forEach(conn => {
                 conn.send({
-                    type: 'action', // Generic Action
+                    type: 'action',
                     action: 'card',
+                    name: 'spawn_enemy',
                     enemyType: type || 'norm',
                     count: 1,
                     level: level,
+                    cornerId: mirroredCorner
                 });
             });
         }
@@ -4746,19 +4788,8 @@
             let tower = towers.find(t => t.gx === gx && t.gy === gy);
             if (tower) return tower;
 
-            // 2. Item
-            let cell = grid[gy][gx];
-            if (cell && cell.item) {
-                // Ensure x/y are set for visuals
-                cell.item.gx = gx;
-                cell.item.gy = gy;
-                cell.item.x = gx * TILE_SIZE + 16;
-                cell.item.y = gy * TILE_SIZE + 16;
-                return cell.item;
-            }
-
-            // 3. Enemy
-            let minDist = 30;
+            // 2. Enemy or Ally (check first — moving units take priority)
+            let minDist = 20;
             let closest = null;
             for (let e of enemies) {
                 let d = Math.hypot(e.x - x, e.y - y);
@@ -4767,7 +4798,25 @@
                     closest = e;
                 }
             }
-            return closest;
+            for (let a of allies) {
+                let d = Math.hypot(a.x - x, a.y - y);
+                if (d < minDist) {
+                    minDist = d;
+                    closest = a;
+                }
+            }
+            if (closest) return closest;
+
+            // 3. Item (static, on grid cell)
+            let cell = grid[gy][gx];
+            if (cell && cell.item) {
+                cell.item.gx = gx;
+                cell.item.gy = gy;
+                cell.item.x = gx * TILE_SIZE + 16;
+                cell.item.y = gy * TILE_SIZE + 16;
+                return cell.item;
+            }
+            return null;
         }
 
         function collectSpawner(spawner) {
@@ -5128,13 +5177,30 @@
         }
 
         function handleIncomingCard(data) {
-            if (data.name === 'barrack') {
+            if (data.name === 'ally') {
+                // Received an ally from remote player — spawn at the specified corner
+                let corners = [
+                    { x: 0, y: 0 },                     // TL (0)
+                    { x: GRID_W - 1, y: 0 },            // TR (1)
+                    { x: 0, y: GRID_H - 1 },            // BL (2)
+                    { x: GRID_W - 1, y: GRID_H - 1 }    // BR (3)
+                ];
+                let corner = corners[data.cornerId] || corners[0];
+                let px = corner.x * TILE_SIZE + 16;
+                let py = corner.y * TILE_SIZE + 16;
+                let level = data.level || 1;
+                let unitType = data.unitType || 'norm';
+
+                let ally = new Ally(px, py, level, unitType);
+                allies.push(ally);
+                createExplosion(px, py, '#4af', 8);
+            } else if (data.name === 'barrack') {
                 // Received a barrack card from remote player
-                // Place barrack at a random floor tile
                 let floorTiles = [];
                 for (let gy = 0; gy < GRID_H; gy++) {
                     for (let gx = 0; gx < GRID_W; gx++) {
-                        if (grid[gy][gx] === 0 && !towers.some(t => t.gx === gx && t.gy === gy) && !barracks.some(b => b.gx === gx && b.gy === gy)) {
+                        let t = grid[gy][gx];
+                        if (t && t.type === TYPE_FLOOR && !t.item && !towers.some(tw => tw.gx === gx && tw.gy === gy)) {
                             floorTiles.push({ gx, gy });
                         }
                     }
@@ -5148,13 +5214,23 @@
                     new Barrack(tile.gx, tile.gy, stacks, bType, uType);
                 }
             } else {
-                // Legacy: spawn_enemy
+                // spawn_enemy — spawn at specific corner if provided
                 let count = data.count || 1;
                 let type = data.enemyType || 'norm';
                 let level = data.level || 1;
 
+                let gx, gy;
+                if (data.cornerId !== undefined) {
+                    let corners = [[0, 0], [GRID_W - 1, 0], [0, GRID_H - 1], [GRID_W - 1, GRID_H - 1]];
+                    let corner = corners[data.cornerId] || corners[0];
+                    gx = corner[0];
+                    gy = corner[1];
+                }
+
                 for (let i = 0; i < count; i++) {
-                    gameState.spawnQueue.push({ type: type, waveIndex: level });
+                    let entry = { type: type, waveIndex: level };
+                    if (gx !== undefined) { entry.gx = gx; entry.gy = gy; }
+                    gameState.spawnQueue.push(entry);
                 }
             }
         }
@@ -5205,12 +5281,8 @@
 
             updateUI(); // Updates button text
 
-            // Barrack Spawns (Start of Wave) - RUN ALWAYS regardless of Boss
-            // ONLY in Multiplayer (User Request)
-            if (isMultiplayer) {
-                console.log("Multiplayer StartWave: Spawning Barracks...", barracks.length);
-                barracks.forEach(b => b.spawnUnit());
-            } else {
+            // Barracks auto-spawn on their own timer now
+            if (!isMultiplayer) {
                 // BOSS WAVE CHECK (Every 12 waves)
                 if (gameState.wave % 12 === 0) {
                     // Cycle: 12->Poison(1), 24->Water(2), 36->Fire(3), 48->Ice(4), 60->Laser(0) ...
@@ -5570,6 +5642,12 @@
                     panel.style.display = 'none';
                     return;
                 }
+            } else if (selectedEntity instanceof Ally) {
+                if (selectedEntity.dead || selectedEntity.reachedGoal || !allies.includes(selectedEntity)) {
+                    selectedEntity = null;
+                    panel.style.display = 'none';
+                    return;
+                }
             }
 
             panel.style.display = 'flex';
@@ -5608,6 +5686,15 @@
                     if (t.baseStats.desc) {
                         contentEl.innerHTML += `<div class="stat-row" style="margin-top:8px; font-style:italic; color:#aaa; font-size:11px; line-height:1.2; white-space:normal;">${t.baseStats.desc}</div>`;
                     }
+                }
+                else if (selectedEntity instanceof Ally) {
+                    let a = selectedEntity;
+                    nameEl.innerText = `${a.type.toUpperCase()} ALLY`;
+                    iconEl.innerText = "🛡️";
+
+                    contentEl.innerHTML += `<div class="stat-row"><span>Health</span><span id="stat-hp" class="stat-val">...</span></div>`;
+                    contentEl.innerHTML += `<div class="stat-row"><span>Speed</span><span id="stat-speed" class="stat-val">...</span></div>`;
+                    contentEl.innerHTML += `<div class="stat-row"><span>Level</span><span id="stat-level" class="stat-val">...</span></div>`;
                 }
                 else if (selectedEntity instanceof Enemy) {
                     let e = selectedEntity;
@@ -5674,6 +5761,11 @@
                     if (item.type === 'poison_puddle') contentEl.innerHTML += createDualStatRow("Poison DPS", "stat-dmg");
                     if (item.type === 'ice_patch') contentEl.innerHTML += createDualStatRow("Freeze DPS", "stat-dmg");
                     if (item.type === 'water_puddle') contentEl.innerHTML += createDualStatRow("Damage", "stat-dmg");
+                    if (item.type === 'barrack') {
+                        contentEl.innerHTML += createDualStatRow("Spawn Time", "stat-spawn-time");
+                        contentEl.innerHTML += createDualStatRow("Reduction/Lvl", "stat-spawn-red");
+                        contentEl.innerHTML += createDualStatRow("Next Spawn", "stat-spawn-next");
+                    }
                     contentEl.innerHTML += createDualStatRow("Value", "stat-value");
 
                     if (data && data.desc) {
@@ -5700,6 +5792,16 @@
                 let origVal = basePrice * t.stacks;
                 let marketVal = Math.floor(basePrice * (1 + (gameState.shopLevel - 1) * 0.5));
                 updateDualStat('stat-value', formatBigNumber(origVal), formatBigNumber(marketVal), '$');
+            }
+            else if (selectedEntity instanceof Ally) {
+                let a = selectedEntity;
+                let el;
+                if (el = document.getElementById('stat-hp')) {
+                    el.innerText = `${formatBigNumber(Math.ceil(a.hp))}/${formatBigNumber(Math.ceil(a.maxHp))}`;
+                    el.style.color = (a.hp / a.maxHp) < 0.3 ? '#f44' : '#4f4';
+                }
+                if (el = document.getElementById('stat-speed')) el.innerText = a.speed.toFixed(2);
+                if (el = document.getElementById('stat-level')) el.innerText = a.level;
             }
             else if (selectedEntity instanceof Enemy) {
                 let e = selectedEntity;
@@ -5775,13 +5877,24 @@
                 }
 
                 if (item.type === 'mine') {
-                    // Use stored level-based damage
                     let d = item.damage || 135;
                     updateDualStat('stat-dmg', formatBigNumber(d));
                 } else if (item.type === 'lava') {
                     let dPerTick = item.damage || 0.1;
                     let dps = (dPerTick * 30).toFixed(1);
                     updateDualStat('stat-dmg', formatBigNumber(dps, 1));
+                }
+
+                if (item.type === 'barrack') {
+                    let lvl = item.effectiveLevel || item.level || 1;
+                    let cooldownSec = getBarrackSpawnCooldown(item.unitType, lvl);
+                    let reductionPct = Math.round(getBarrackReduction(item.unitType) * 100);
+                    let nextSec = Math.max(0, Math.ceil((item.spawnCooldown - item.spawnTimer) / 60));
+                    let count = lvl;
+
+                    updateDualStat('stat-spawn-time', cooldownSec.toFixed(1) + 's');
+                    updateDualStat('stat-spawn-red', reductionPct + '%/lvl');
+                    updateDualStat('stat-spawn-next', nextSec + 's');
                 }
 
                 // Value Calculation
@@ -6218,16 +6331,14 @@
                     // Name
                     let nameHtml = "";
                     if (card.type === 'barrack') {
-                        let label = card.barrackType === 'ally' ? 'ALLY' : 'ENEMY';
-                        let labelColor = card.barrackType === 'ally' ? '#0f0' : '#f44';
-                        nameHtml = `<span style="color:${labelColor}">${label}</span><br><span style="color:#fff">${(card.unitType || 'norm').toUpperCase()}</span>`;
+                        nameHtml = `<span style="color:#fa0">BARRACK</span><br><span style="color:#fff">${(card.unitType || 'norm').toUpperCase()}</span>`;
                     } else if (card.type === 'spawn_enemy') {
                         nameHtml = `${card.enemyType.toUpperCase()}<br><span style="color:#fff">${card.count}x</span>`;
                     } else {
                         nameHtml = data.name;
                     }
                     d.querySelector('.m-name').innerHTML = nameHtml;
-                    d.querySelector('.m-name').style.color = card.bought ? '#555' : (card.type === 'barrack' ? (card.barrackType === 'ally' ? '#0f0' : '#f44') : data.color);
+                    d.querySelector('.m-name').style.color = card.bought ? '#555' : (card.type === 'barrack' ? '#fa0' : data.color);
 
                     // Cost
                     d.querySelector('.m-cost').innerHTML = `$${formatBigNumber(card.price)}`;
