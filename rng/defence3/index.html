@@ -117,7 +117,7 @@
         /* LEFT PANEL (minimap + shop) */
         #left-panel {
             width: 220px;
-            background: rgba(0,0,0,0.95);
+            background: rgba(0, 0, 0, 0.95);
             border-right: 2px solid #333;
             display: flex;
             flex-direction: column;
@@ -129,7 +129,7 @@
         /* RIGHT PANEL (info/unit menu) */
         #right-panel {
             width: 220px;
-            background: rgba(0,0,0,0.95);
+            background: rgba(0, 0, 0, 0.95);
             border-left: 2px solid #333;
             display: flex;
             flex-direction: column;
@@ -145,14 +145,50 @@
             flex: 1;
             display: none;
         }
-        .subgroup-toggle:hover { filter: brightness(1.3); }
-        .subgroup-all:hover { background: #2a2a2a !important; }
-        #info-panel .info-title { color: #4af; font-size: 13px; font-weight: bold; margin-bottom: 4px; }
-        #info-panel .info-row { display: flex; padding: 1px 0; }
-        #info-panel .info-label { color: #888; flex: 1; text-align: left; }
-        #info-panel .info-base { color: #fd0; flex: 0 0 50px; text-align: center; }
-        #info-panel .info-eff { color: #4f4; flex: 0 0 50px; text-align: center; }
-        #info-panel .info-value { color: #fff; flex: 0 0 100px; text-align: center; }
+
+        .subgroup-toggle:hover {
+            filter: brightness(1.3);
+        }
+
+        .subgroup-all:hover {
+            background: #2a2a2a !important;
+        }
+
+        #info-panel .info-title {
+            color: #4af;
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        #info-panel .info-row {
+            display: flex;
+            padding: 1px 0;
+        }
+
+        #info-panel .info-label {
+            color: #888;
+            flex: 1;
+            text-align: left;
+        }
+
+        #info-panel .info-base {
+            color: #fd0;
+            flex: 0 0 50px;
+            text-align: center;
+        }
+
+        #info-panel .info-eff {
+            color: #4f4;
+            flex: 0 0 50px;
+            text-align: center;
+        }
+
+        #info-panel .info-value {
+            color: #fff;
+            flex: 0 0 100px;
+            text-align: center;
+        }
 
         /* BUILD MENU (inside left panel) */
         #build-bar {
@@ -161,12 +197,14 @@
             flex-direction: column;
             overflow: hidden;
         }
+
         #build-tabs {
             display: flex;
             height: 28px;
             border-bottom: 1px solid #333;
             flex-shrink: 0;
         }
+
         .build-tab {
             flex: 1;
             display: flex;
@@ -179,8 +217,17 @@
             color: #888;
             transition: background 0.15s;
         }
-        .build-tab:hover { background: #2a2a2a; }
-        .build-tab.active { background: #335; color: #fff; border-bottom: 2px solid #4af; }
+
+        .build-tab:hover {
+            background: #2a2a2a;
+        }
+
+        .build-tab.active {
+            background: #335;
+            color: #fff;
+            border-bottom: 2px solid #4af;
+        }
+
         #build-items {
             flex: 1;
             display: flex;
@@ -190,6 +237,7 @@
             padding: 4px;
             overflow-y: auto;
         }
+
         .build-item {
             width: 48px;
             height: 52px;
@@ -206,13 +254,44 @@
             gap: 1px;
             transition: border-color 0.15s;
         }
-        .build-item:hover { border-color: #4af; background: #222; }
-        .build-item.selected { border-color: #4f4; background: #1a2a1a; }
-        .build-item.cant-afford { opacity: 0.4; }
-        .build-item .bi-icon { display: flex; align-items: center; justify-content: center; }
-        .build-item .bi-icon img { display: block; }
-        .build-item .bi-name { font-size: 7px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44px; }
-        .build-item .bi-price { color: #fd0; font-size: 8px; }
+
+        .build-item:hover {
+            border-color: #4af;
+            background: #222;
+        }
+
+        .build-item.selected {
+            border-color: #4f4;
+            background: #1a2a1a;
+        }
+
+        .build-item.cant-afford {
+            opacity: 0.4;
+        }
+
+        .build-item .bi-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .build-item .bi-icon img {
+            display: block;
+        }
+
+        .build-item .bi-name {
+            font-size: 7px;
+            color: #aaa;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 44px;
+        }
+
+        .build-item .bi-price {
+            color: #fd0;
+            font-size: 8px;
+        }
 
         /* MINIMAP (inside left panel, bottom) */
         #minimap-wrap {
@@ -220,7 +299,13 @@
             padding: 4px;
             flex-shrink: 0;
         }
-        #minimapCanvas { display: block; margin: 0 auto; cursor: pointer; border: 1px solid #444; }
+
+        #minimapCanvas {
+            display: block;
+            margin: 0 auto;
+            cursor: pointer;
+            border: 1px solid #444;
+        }
 
         /* WIN/LOSS OVERLAY */
         #game-over {
@@ -2337,6 +2422,8 @@
             // Don't allow building on gold mines
             for (let m of goldMines) { if (m.gx === gx && m.gy === gy) return false; }
             // Check within 5 tiles of any fully-built owned building
+            /*
+            // distance thing disabled for now.
             for (let t of towers) { if (t.owner === playerId && !t.underConstruction && Math.abs(t.gx - gx) + Math.abs(t.gy - gy) <= 5) return true; }
             for (let b of barracks) { if (b.owner === playerId && !b.underConstruction && Math.abs(b.gx - gx) + Math.abs(b.gy - gy) <= 5) return true; }
             for (let s of collectorSpawners) { if (s.owner === playerId && !s.underConstruction && Math.abs(s.gx - gx) + Math.abs(s.gy - gy) <= 5) return true; }
@@ -2345,6 +2432,8 @@
                 if (grid[y2][x2].item && !grid[y2][x2].item.underConstruction && grid[y2][x2].owner === playerId && Math.abs(x2 - gx) + Math.abs(y2 - gy) <= 5) return true;
             }
             return false;
+            */
+            return true
         }
 
         function canStackAt(gx, gy, itemKey, playerId) {
@@ -3617,8 +3706,8 @@
                         }
                     }
                 } else if (a.action === 'setRally') {
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) || 
-                            collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
+                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
                     if (b) { b.rallyX = a.targetX; b.rallyY = a.targetY; }
                 } else if (a.action === 'dequeueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
@@ -3897,22 +3986,24 @@
             html += infoRow('Level', e.level, e.effectiveLevel !== e.level ? e.effectiveLevel : undefined);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             if (!e.underConstruction) {
-                html += infoRow('Queue', `${e.spawnQueue.length}/20`);
                 html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
                 html += infoRow('Unit HP', us.hp || '?');
                 html += infoRow('Unit Atk', us.atk || '?');
                 html += infoRow('Unit Spd', us.speed || '?');
                 if (e.owner === localPlayerId) {
-                    let cost = e.getUnitCost();
-                    let canAfford = players[localPlayerId].money >= cost;
-                    html += `<div style="margin-top:4px;text-align:center">
-                        <span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span>
-                        <span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:#533;padding:3px 8px;border:1px solid #744;border-radius:3px;font-size:10px;color:#eaa;margin-left:4px">Dequeue (+${Math.floor(cost*0.1)}g)</span>
-                        </div>`;
-                    html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
+                    html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 }
             }
-            if (e.owner === localPlayerId) html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
+            if (e.owner === localPlayerId && e.underConstruction) {
+                html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
+            } else if (e.owner === localPlayerId && !e.underConstruction) {
+                let cost = e.getUnitCost();
+                let canAfford = players[localPlayerId].money >= cost;
+                let subBtn = `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                let addBtn = `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;margin-left:6px;" title="${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}">${e.markedForSalvage ? '❌' : '🗑️'}</span>`;
+                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${e.spawnQueue.length}/20</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+            }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
         }
@@ -3928,23 +4019,22 @@
             html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
             html += infoRow('Level', e.level, e.effectiveLevel !== e.level ? e.effectiveLevel : undefined);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
-            html += infoRow('Queue', `${totalQueue}/${group.length * 20}`);
             html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Unit HP', us.hp || '?');
             html += infoRow('Unit Atk', us.atk || '?');
             html += infoRow('Unit Spd', us.speed || '?');
             if (e.owner === localPlayerId) {
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                let coordList = group.map(b => `${b.gx},${b.gy}`).join(';');
-                html += `<div style="margin-top:4px;text-align:center">
-                    <span class="info-buy-group-btn" data-coords="${coordList}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span></div>`;
-                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
             }
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(b => b.markedForSalvage);
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
-                html += `<div style="margin-top:3px;text-align:center"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span></div>`;
+                let cost = e.getUnitCost();
+                let canAfford = players[localPlayerId].money >= cost;
+                let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                let addBtn = `<span class="info-buy-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;margin-left:6px;" title="${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}">${anyMarked ? '❌' : '🗑️'}</span>`;
+                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${totalQueue}/${group.length * 20}</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -4014,7 +4104,6 @@
 
         function renderSpawnerInfo(e) {
             let html = '';
-            let label = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : 'Salvager';
             let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : 'Salvager';
             let baseStacks = e.stacks || 1;
             let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
@@ -4026,19 +4115,18 @@
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
-            if (e.owner === localPlayerId && !e.underConstruction) {
-                html += infoRow('Queue', `${(e.spawnQueue || []).length}/10`);
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                html += `<div style="margin-top:4px;text-align:center">
-                    <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${unitLabel} (${cost}g)</span>
-                    <span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:#533;padding:3px 8px;border:1px solid #744;border-radius:3px;font-size:10px;color:#eaa;margin-left:4px">Dequeue (+${Math.floor(cost*0.1)}g)</span>
-                    </div>`;
-                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
-                html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
-            } else if (e.owner === localPlayerId) {
-                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
-                html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
+            if (e.owner === localPlayerId) {
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+                if (e.underConstruction) {
+                    html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
+                } else {
+                    let cost = e.getUnitCost();
+                    let canAfford = players[localPlayerId].money >= cost;
+                    let subBtn = `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                    let addBtn = `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                    let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;margin-left:6px;" title="${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}">${e.markedForSalvage ? '❌' : '🗑️'}</span>`;
+                    html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${(e.spawnQueue || []).length}/10</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+                }
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -4195,18 +4283,17 @@
             html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
             html += infoRow('Level', sLevel, effLevel !== sLevel ? effLevel : undefined);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
-            html += infoRow('Queue', `${totalQueue}/${group.length * 10}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
             if (e.owner === localPlayerId) {
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                let coordList = group.map(s => `${s.gx},${s.gy}`).join(';');
-                html += `<div style="margin-top:4px;text-align:center">
-                    <span class="info-buy-worker-group-btn" data-coords="${coordList}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${unitLabel} (${cost}g)</span></div>`;
                 let anyMarked = group.some(s => s.markedForSalvage);
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
-                html += `<div style="margin-top:3px;text-align:center"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span></div>`;
+                let cost = e.getUnitCost();
+                let canAfford = players[localPlayerId].money >= cost;
+                let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;margin-left:6px;" title="${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}">${anyMarked ? '❌' : '🗑️'}</span>`;
+                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${totalQueue}/${group.length * 10}</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -4380,7 +4467,7 @@
             // Wire up group buy buttons - dynamically find barrack with lowest queue
             panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
                 btn.onclick = () => {
-                    let coords = btn.dataset.coords.split(';').map(c => { let [x,y] = c.split(','); return {gx:parseInt(x),gy:parseInt(y)}; });
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
                         let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0);
@@ -4400,11 +4487,11 @@
             // Wire up worker group buy buttons - distribute to lowest queue
             panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
                 btn.onclick = () => {
-                    let coords = btn.dataset.coords.split(';').map(c => { let [x,y] = c.split(','); return {gx:parseInt(x),gy:parseInt(y)}; });
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
                         let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0);
-                        if (s && (s.spawnQueue||[]).length < 10 && (s.spawnQueue||[]).length < bestQueue) { best = s; bestQueue = (s.spawnQueue||[]).length; }
+                        if (s && (s.spawnQueue || []).length < 10 && (s.spawnQueue || []).length < bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
                     }
                     if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy });
                 };
@@ -4416,6 +4503,27 @@
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
                     queueAction({ action: type, gx, gy });
+                };
+            });
+
+            // Wire up dequeue group buttons (removes from building with highest queue)
+            panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
+                btn.onclick = () => {
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+                    let best = null, bestQueue = -1;
+                    let isWorker = btn.dataset.type === 'worker';
+                    for (let c of coords) {
+                        if (isWorker) {
+                            let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0);
+                            if (s && (s.spawnQueue || []).length > bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
+                        } else {
+                            let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0);
+                            if (b && b.spawnQueue.length > bestQueue) { best = b; bestQueue = b.spawnQueue.length; }
+                        }
+                    }
+                    if (best && bestQueue > 0) {
+                        queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy });
+                    }
                 };
             });
 
@@ -4451,7 +4559,7 @@
             // Wire up salvage group buttons
             panel.querySelectorAll('.info-salvage-group-btn').forEach(btn => {
                 btn.onclick = () => {
-                    let coords = btn.dataset.coords.split(';').map(c => { let [x,y] = c.split(','); return {gx:parseInt(x),gy:parseInt(y)}; });
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     for (let c of coords) queueAction({ action: 'markSalvage', gx: c.gx, gy: c.gy });
                     setTimeout(updateInfoPanel, 50);
                 };
