@@ -362,6 +362,10 @@
                 <label>Mine Spread (%):</label>
                 <input id="cfg-gold-area" type="number" min="30" max="100" value="85" style="width:50px">
             </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <label>Full Map Visibility:</label>
+                <input id="cfg-full-vis" type="checkbox" style="width:auto; height:auto; cursor:pointer;" title="Disable Fog of War">
+            </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
@@ -474,15 +478,15 @@
         // ============================================================
         const CARD_TYPES = {
             // Towers (target: wall)
-            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", range: 1.86, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
-            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", range: 1.86, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
-            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", range: 1.75, cd: 35, damage: 10, target: 'wall', towerHp: 150 },
-            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", range: 1.5, cd: 50, damage: 3, target: 'wall', towerHp: 200 },
-            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", range: 2.5, cd: 110, damage: 45, target: 'wall', towerHp: 350 },
-            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", range: 1.75, cd: 150, damage: 5, target: 'wall', towerHp: 180 },
-            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", range: 2.5, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
-            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", range: 2, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
-            laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", range: 0, damage: 750, target: 'wall', towerHp: 300 },
+            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 1.86, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
+            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 1.86, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
+            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 1.75, cd: 35, damage: 10, target: 'wall', towerHp: 150 },
+            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 1.5, cd: 50, damage: 3, target: 'wall', towerHp: 200 },
+            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 2.5, cd: 110, damage: 45, target: 'wall', towerHp: 350 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 1.75, cd: 150, damage: 5, target: 'wall', towerHp: 180 },
+            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 2.5, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
+            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 2, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
+            laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
 
             // Floor items
             sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", target: 'floor' },
@@ -607,21 +611,21 @@
 
         // Unit combat stats
         const UNIT_STATS = {
-            norm: { hp: 40, speed: 2.6, atk: 5, range: 0.5, atkCd: 30, color: '#fff', r: 8, vis: 'circle' },
-            fast: { hp: 20, speed: 4.8, atk: 3, range: 0.5, atkCd: 20, color: '#eee', r: 6, vis: 'circle' },
-            tank: { hp: 80, speed: 1.4, atk: 8, range: 0.5, atkCd: 45, color: '#555', r: 10, vis: 'circle' },
-            boss: { hp: 400, speed: 1.2, atk: 20, range: 0.5, atkCd: 60, color: '#222', r: 12, vis: 'circle' },
-            flying: { hp: 45, speed: 3.0, atk: 4, range: 1.5, atkCd: 35, color: '#dd0', r: 7, vis: 'triangle', isFlying: true },
-            mole: { hp: 10, speed: 1.6, atk: 2, range: 0.5, atkCd: 25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-            poison_resistant: { hp: 60, speed: 2.4, atk: 6, range: 0.5, atkCd: 35, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true },
-            fire_resistant: { hp: 70, speed: 2.0, atk: 7, range: 0.5, atkCd: 40, color: '#f50', r: 10, vis: 'circle', fireResistant: true },
-            water_resistant: { hp: 50, speed: 3.2, atk: 5, range: 0.5, atkCd: 30, color: '#4af', r: 8, vis: 'circle', waterResistant: true },
-            ice_resistant: { hp: 65, speed: 2.2, atk: 6, range: 0.5, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true },
-            laser_resistant: { hp: 55, speed: 2.3, atk: 5, range: 0.5, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true },
-            snake: { hp: 800, speed: 3.2, atk: 15, range: 0.5, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20 },
-            collector: { hp: 15, speed: 2.0, atk: 0, range: 0, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { hp: 20, speed: 1.8, atk: 0, range: 0, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { hp: 25, speed: 1.9, atk: 0, range: 0, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#fff', r: 8, vis: 'circle' },
+            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 20, color: '#eee', r: 6, vis: 'circle' },
+            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 45, color: '#555', r: 10, vis: 'circle' },
+            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 60, color: '#222', r: 12, vis: 'circle' },
+            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 35, color: '#dd0', r: 7, vis: 'triangle', isFlying: true },
+            mole: { hp: 10, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true },
+            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 0.5, visionRange: 4, atkCd: 40, color: '#f50', r: 10, vis: 'circle', fireResistant: true },
+            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 0.5, visionRange: 5, atkCd: 30, color: '#4af', r: 8, vis: 'circle', waterResistant: true },
+            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true },
+            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true },
+            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20 },
+            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
         };
 
         // ============================================================
@@ -629,6 +633,8 @@
         // ============================================================
         let canvas, ctx, minimapCanvas, minimapCtx;
         let dirtyGrid = true, dirtyAreas = true;
+        let visibilityGrid = [];
+        let fullVisibility = false;
 
         let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
         let areas = [];
@@ -1028,16 +1034,16 @@
                 s.damage = this.baseStats.damage * m;
                 if (this.type === 'water' || this.type === 'smg' || this.type === 'pistol') {
                     s.cd = Math.max(5, this.baseStats.cd * (1 - (lvl - 1) * 0.1));
-                    s.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
+                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
                 } else if (this.type === 'fire' || this.type === 'poison') {
-                    s.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
+                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
                 } else if (this.type === 'sand_gun') {
-                    s.range = this.baseStats.range * (1 + (lvl - 1) * 0.1);
+                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
                     s.cd = this.baseStats.cd * Math.pow(0.9, lvl);
                 }
                 if (!s.cd) s.cd = this.baseStats.cd;
-                if (!s.range) s.range = this.baseStats.range;
-                if (s.range > 4) s.range = 4;
+                if (!s.visionRange) s.visionRange = this.baseStats.visionRange;
+                if (s.visionRange > 4) s.visionRange = 4;
                 return s;
             }
 
@@ -1085,7 +1091,7 @@
 
             shoot() {
                 if (this.cd > 0) return;
-                let rangePx = this.currentStats.range * TILE;
+                let rangePx = this.currentStats.visionRange * TILE;
                 let nearUnits = getUnitsInRange(this.x, this.y, rangePx);
 
                 let bestPrimary = null, bestSecondary = null, bestImmune = null;
@@ -1294,7 +1300,8 @@
                 this.hp = s.hp; this.maxHp = s.hp;
                 this.speed = s.speed;
                 this.attackDamage = s.atk;
-                this.attackRange = s.range * TILE;
+                this.attackRange = s.attackRange * TILE;
+                this.visionRange = s.visionRange || 4;
                 this.attackCooldown = s.atkCd;
                 this.attackTimer = 0;
                 this.color = s.color; this.r = s.r;
@@ -1435,7 +1442,7 @@
 
             doIdle(spd) {
                 // Auto-aggro nearby enemies
-                let aggroRange = 3 * TILE;
+                let aggroRange = this.visionRange * TILE;
                 let near = getUnitsInRange(this.x, this.y, aggroRange);
                 let closest = null, closestD = aggroRange;
                 for (let u of near) {
@@ -1458,7 +1465,7 @@
 
             doAttackMoving(spd) {
                 // Check for nearby enemies first
-                let aggroRange = 3 * TILE;
+                let aggroRange = this.visionRange * TILE;
                 let near = getUnitsInRange(this.x, this.y, aggroRange);
                 let closest = null, closestD = aggroRange;
                 for (let u of near) {
@@ -2824,21 +2831,21 @@
             ctx.fillStyle = C_FLOOR;
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type !== TYPE_WALL) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+                    if (grid[y][x].type !== TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
                 }
             }
             // Wall shadow
             ctx.fillStyle = '#222';
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) ctx.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+                    if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
                 }
             }
             // Wall face
             ctx.fillStyle = C_WALL;
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) ctx.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+                    if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
                 }
             }
             // Wall border (batched)
@@ -2846,7 +2853,7 @@
             ctx.beginPath();
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) {
+                    if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
                         let px = x * TILE, py = y * TILE;
                         ctx.rect(px, py, TILE, TILE - 4);
                     }
@@ -2863,6 +2870,7 @@
             let batches = new Map();
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
+                    if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
                     let aid = grid[y][x].areaId; if (aid === -1) continue;
                     let color = _areaColorCache.get(aid);
                     if (!color) continue;
@@ -2911,6 +2919,7 @@
             // Gold mines
             for (let m of goldMines) {
                 if (m.gx < minGx || m.gx > maxGx || m.gy < minGy || m.gy > maxGy) continue;
+                if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
                 let alpha = m.gold > 0 ? 1 : 0.3;
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = '#fd0'; ctx.fillRect(m.gx * TILE + 4, m.gy * TILE + 4, TILE - 8, TILE - 8);
@@ -2923,13 +2932,14 @@
             // Floor items
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].item) drawFloorItem(ctx, grid[y][x], x * TILE, y * TILE);
+                    if (grid[y][x].item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) drawFloorItem(ctx, grid[y][x], x * TILE, y * TILE);
                 }
             }
 
             // Dropped money
             for (let d of droppedItems) {
                 if (d.gx < minGx || d.gx > maxGx || d.gy < minGy || d.gy > maxGy) continue;
+                if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
                 ctx.fillStyle = '#fd0'; ctx.font = "900 20px Arial"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
                 ctx.fillText('$', d.x, d.y);
             }
@@ -2937,14 +2947,23 @@
             // Towers
             for (let t of towers) {
                 if (t.gx < minGx - 2 || t.gx > maxGx + 2 || t.gy < minGy - 2 || t.gy > maxGy + 2) continue;
+                if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
                 t.draw(ctx);
             }
 
             // Collector/Salvager spawners
-            collectorSpawners.forEach(s => { if (s.gx >= minGx && s.gx <= maxGx && s.gy >= minGy && s.gy <= maxGy) s.draw(ctx); });
+            collectorSpawners.forEach(s => { 
+                if (s.gx >= minGx && s.gx <= maxGx && s.gy >= minGy && s.gy <= maxGy) {
+                    if (fullVisibility || (visibilityGrid[s.gy] && visibilityGrid[s.gy][s.gx] > 0)) s.draw(ctx);
+                } 
+            });
 
             // Barracks
-            barracks.forEach(b => { if (b.gx >= minGx && b.gx <= maxGx && b.gy >= minGy && b.gy <= maxGy) b.draw(ctx); });
+            barracks.forEach(b => { 
+                if (b.gx >= minGx && b.gx <= maxGx && b.gy >= minGy && b.gy <= maxGy) {
+                    if (fullVisibility || (visibilityGrid[b.gy] && visibilityGrid[b.gy][b.gx] > 0)) b.draw(ctx);
+                } 
+            });
 
             // Units (interpolated positions for smooth rendering)
             let alpha = tickAlpha;
@@ -2955,7 +2974,7 @@
                 u.y = u.prevY + (u.y - u.prevY) * alpha;
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 if (ugx < minGx - 2 || ugx > maxGx + 2 || ugy < minGy - 2 || ugy > maxGy + 2) { u.x = rx; u.y = ry; continue; }
-                u.draw(ctx);
+                if (fullVisibility || (visibilityGrid[ugy] && visibilityGrid[ugy][ugx] > 0)) u.draw(ctx);
                 u.x = rx; u.y = ry;
             }
 
@@ -2964,14 +2983,16 @@
                 let rx = p.x, ry = p.y;
                 p.x = p.prevX + (p.x - p.prevX) * alpha;
                 p.y = p.prevY + (p.y - p.prevY) * alpha;
-                p.draw(ctx);
+                let cgy = Math.floor(p.y/TILE), cgx = Math.floor(p.x/TILE);
+                if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
                 p.x = rx; p.y = ry;
             }
             for (let p of particles) {
                 let rx = p.x, ry = p.y;
                 p.x = p.prevX + (p.x - p.prevX) * alpha;
                 p.y = p.prevY + (p.y - p.prevY) * alpha;
-                p.draw(ctx);
+                let cgy = Math.floor(p.y/TILE), cgx = Math.floor(p.x/TILE);
+                if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
                 p.x = rx; p.y = ry;
             }
 
@@ -3115,12 +3136,26 @@
             minimapCtx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
             let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
 
+            // Unknown areas
+            if (!fullVisibility && visibilityGrid.length > 0) {
+                minimapCtx.fillStyle = '#000';
+                for (let y = 0; y < GRID_H; y++) {
+                    for (let x = 0; x < GRID_W; x++) {
+                        if (!visibilityGrid[y] || visibilityGrid[y][x] === 0) {
+                            minimapCtx.fillRect(x * scale, y * scale, Math.max(1, scale), Math.max(1, scale));
+                        }
+                    }
+                }
+            }
+
             // Walls/buildings
             for (let t of towers) {
+                if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
                 minimapCtx.fillStyle = PLAYER_COLORS[t.owner];
                 minimapCtx.fillRect(t.gx * scale, t.gy * scale, Math.max(1, scale), Math.max(1, scale));
             }
             for (let b of barracks) {
+                if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
                 minimapCtx.fillStyle = PLAYER_COLORS[b.owner];
                 minimapCtx.fillRect(b.gx * scale, b.gy * scale, Math.max(1, scale), Math.max(1, scale));
             }
@@ -3128,6 +3163,7 @@
             // Gold mines
             for (let m of goldMines) {
                 if (m.gold <= 0) continue;
+                if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
                 minimapCtx.fillStyle = '#fd0';
                 minimapCtx.fillRect(m.gx * scale, m.gy * scale, Math.max(1, scale), Math.max(1, scale));
             }
@@ -3135,6 +3171,8 @@
             // Units
             for (let u of units) {
                 if (u.dead) continue;
+                let cgy = Math.floor(u.y/TILE), cgx = Math.floor(u.x/TILE);
+                if (!fullVisibility && (!visibilityGrid[cgy] || visibilityGrid[cgy][cgx] === 0)) continue;
                 minimapCtx.fillStyle = PLAYER_COLORS[u.owner];
                 let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
                 minimapCtx.fillRect(ux, uy, 2, 2);
@@ -3172,6 +3210,62 @@
         }
 
         let lastDesyncWarning = 0;
+
+        function updateVisibility(playerId) {
+            // Check fullVisibility toggle
+            if (fullVisibility) return;
+
+            // Allocate or reset grid
+            if (visibilityGrid.length !== GRID_H || visibilityGrid[0].length !== GRID_W) {
+                visibilityGrid = new Array(GRID_H);
+                for (let y = 0; y < GRID_H; y++) visibilityGrid[y] = new Float32Array(GRID_W);
+            } else {
+                for (let y = 0; y < GRID_H; y++) visibilityGrid[y].fill(0);
+            }
+
+            let setVis = (gx, gy, r) => {
+                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                    if (r > visibilityGrid[gy][gx]) visibilityGrid[gy][gx] = r;
+                }
+            };
+
+            for (let u of units) if (u.owner === playerId && !u.dead) {
+                setVis(Math.floor(u.x/TILE), Math.floor(u.y/TILE), u.visionRange || 4);
+            }
+            for (let t of towers) if (t.owner === playerId && t.hp > 0) {
+                setVis(t.gx, t.gy, t.currentStats.visionRange || 3);
+            }
+            for (let b of barracks) if (b.owner === playerId && b.hp > 0) setVis(b.gx, b.gy, 4);
+            for (let s of collectorSpawners) if (s.owner === playerId && s.hp > 0) setVis(s.gx, s.gy, 4);
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    if (cell.item && cell.owner === playerId && cell.item.hp > 0) setVis(x, y, 3);
+                }
+            }
+
+            // 2-pass DP flood fill (Euclidean approximation)
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let v = visibilityGrid[y][x];
+                    if (x > 0) v = Math.max(v, visibilityGrid[y][x-1] - 1);
+                    if (y > 0) v = Math.max(v, visibilityGrid[y-1][x] - 1);
+                    if (x > 0 && y > 0) v = Math.max(v, visibilityGrid[y-1][x-1] - 1.414);
+                    if (x < GRID_W - 1 && y > 0) v = Math.max(v, visibilityGrid[y-1][x+1] - 1.414);
+                    visibilityGrid[y][x] = v;
+                }
+            }
+            for (let y = GRID_H - 1; y >= 0; y--) {
+                for (let x = GRID_W - 1; x >= 0; x--) {
+                    let v = visibilityGrid[y][x];
+                    if (x < GRID_W - 1) v = Math.max(v, visibilityGrid[y][x+1] - 1);
+                    if (y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x] - 1);
+                    if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x+1] - 1.414);
+                    if (x > 0 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x-1] - 1.414);
+                    visibilityGrid[y][x] = v;
+                }
+            }
+        }
 
         // ============================================================
         // GAME TICK
@@ -3272,6 +3366,8 @@
 
             // Particles
             for (let i = particles.length - 1; i >= 0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
+
+            updateVisibility(localPlayerId);
         }
 
         // ============================================================
@@ -4052,7 +4148,7 @@
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
             if (e.type !== 'laser') {
-                html += infoRow('Range', bs ? `${(bs.range || 0).toFixed(1)}` : `${(s.range || 0).toFixed(1)}`, bs && s.range !== bs.range ? `${(s.range || 0).toFixed(1)}` : undefined);
+                html += infoRow('Range', bs ? `${(bs.visionRange || 0).toFixed(1)}` : `${(s.visionRange || 0).toFixed(1)}`, bs && s.visionRange !== bs.visionRange ? `${(s.visionRange || 0).toFixed(1)}` : undefined);
                 html += infoRow('Cooldown', bs ? `${((bs.cd || 0) / TICK_RATE).toFixed(2)}s` : `${((s.cd || 0) / TICK_RATE).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${((s.cd || 0) / TICK_RATE).toFixed(2)}s` : undefined);
                 html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
             } else {
@@ -4083,7 +4179,7 @@
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
             if (e.type !== 'laser') {
-                html += infoRow('Range', bs ? `${(bs.range || 0).toFixed(1)}` : `${(s.range || 0).toFixed(1)}`, bs && s.range !== bs.range ? `${(s.range || 0).toFixed(1)}` : undefined);
+                html += infoRow('Range', bs ? `${(bs.visionRange || 0).toFixed(1)}` : `${(s.visionRange || 0).toFixed(1)}`, bs && s.visionRange !== bs.visionRange ? `${(s.visionRange || 0).toFixed(1)}` : undefined);
                 html += infoRow('Cooldown', bs ? `${((bs.cd || 0) / TICK_RATE).toFixed(2)}s` : `${((s.cd || 0) / TICK_RATE).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${((s.cd || 0) / TICK_RATE).toFixed(2)}s` : undefined);
                 html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
             } else {
@@ -4614,6 +4710,7 @@
                         GOLD_MINE_MIN = data.cfg.goldMin;
                         GOLD_MINE_MAX = data.cfg.goldMax;
                         GOLD_MINE_AREA = data.cfg.goldArea;
+                        fullVisibility = data.cfg.fullVis || false;
                     }
                     startGame();
                 } else if (data.type === 'TICK_INPUT') {
@@ -4641,7 +4738,7 @@
                         isMultiplayer = true;
                         connections.forEach(c => c.send({
                             type: 'START_GAME', seed: gameSeed, playerId: 1,
-                            cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA }
+                            cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility }
                         }));
                         startGame();
                     }, 500);
@@ -4700,6 +4797,7 @@
             GOLD_MINE_MAX = parseInt(document.getElementById('cfg-gold-max').value) || 1500;
             let areaPct = parseInt(document.getElementById('cfg-gold-area').value) || 85;
             GOLD_MINE_AREA = Math.floor(size * areaPct / 100);
+            fullVisibility = document.getElementById('cfg-full-vis').checked;
         }
 
         function startSoloGame() {
