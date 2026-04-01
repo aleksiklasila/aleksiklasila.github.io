@@ -1048,11 +1048,16 @@
                 // Under construction overlay
                 if (this.underConstruction) {
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 14, this.y - 14, 28, 28);
+                    // Draw tower icon at low alpha behind the construction text
+                    ctx.globalAlpha = 0.35;
+                    drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, 0, this.level, this.type, false);
+                    ctx.globalAlpha = 1;
                     let pct = this.hp / this.maxHp;
-                    ctx.fillStyle = '#333'; ctx.fillRect(this.x - 10, this.y + 8, 20, 3);
-                    ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 10, this.y + 8, 20 * pct, 3);
+                    // BUILD label above the progress bar
                     ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('BUILD', this.x, this.y);
+                    ctx.fillText('BUILD', this.x, this.y + 4);
+                    ctx.fillStyle = '#333'; ctx.fillRect(this.x - 10, this.y + 11, 20, 3);
+                    ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 10, this.y + 11, 20 * pct, 3);
                     return;
                 }
 
@@ -1632,11 +1637,12 @@
 
                 if (this.underConstruction) {
                     let pct = this.hp / this.maxHp;
-                    let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 12;
+                    let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 14;
+                    // BUILD label above progress bar
+                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText('BUILD', this.x, this.y + 8);
                     ctx.fillStyle = '#333'; ctx.fillRect(bx, by, bw, bh);
                     ctx.fillStyle = '#fa0'; ctx.fillRect(bx, by, bw * pct, bh);
-                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('BUILD', this.x, this.y + 22);
                 } else {
                     // Spawn progress (only show when queue has items)
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
@@ -1704,10 +1710,11 @@
                 ctx.closePath(); ctx.fill();
                 if (this.underConstruction) {
                     let pct = this.hp / this.maxHp;
+                    // BUILD label above progress bar
+                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText('BUILD', this.x, this.y + 3);
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
                     ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('BUILD', this.x, this.y + 20);
                 } else {
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
@@ -1768,10 +1775,11 @@
                 ctx.closePath(); ctx.fill();
                 if (this.underConstruction) {
                     let pct = this.hp / this.maxHp;
+                    // BUILD label above progress bar
+                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText('BUILD', this.x, this.y + 3);
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
                     ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('BUILD', this.x, this.y + 20);
                 } else {
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
@@ -1838,10 +1846,11 @@
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect(this.x - 7, this.y - 5, 14, 10);
                 if (this.underConstruction) {
                     let pct = this.hp / this.maxHp;
+                    // BUILD label above the progress bar
+                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText('BUILD', this.x, this.y + 3);
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
                     ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                    ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
-                    ctx.fillText('BUILD', this.x, this.y + 22);
                 } else if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                     let pct = this.spawnTimer / this.spawnCooldown;
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
@@ -2140,7 +2149,7 @@
         function _findClosestSpawner(u, type) {
             let closest = null, bestDist = Infinity;
             for (let s of collectorSpawners) {
-                if (s.type === type && s.owner === u.owner && s.hp > 0) {
+                if (s.type === type && s.owner === u.owner && s.hp > 0 && !s.underConstruction) {
                     let d = Math.hypot(s.x - u.x, s.y - u.y);
                     if (d < bestDist) { bestDist = d; closest = s; }
                 }
@@ -2286,13 +2295,13 @@
             if (grid[gy][gx].item) return false;
             // Don't allow building on gold mines
             for (let m of goldMines) { if (m.gx === gx && m.gy === gy) return false; }
-            // Check within 5 tiles of any owned building
-            for (let t of towers) { if (t.owner === playerId && Math.abs(t.gx - gx) + Math.abs(t.gy - gy) <= 5) return true; }
-            for (let b of barracks) { if (b.owner === playerId && Math.abs(b.gx - gx) + Math.abs(b.gy - gy) <= 5) return true; }
-            for (let s of collectorSpawners) { if (s.owner === playerId && Math.abs(s.gx - gx) + Math.abs(s.gy - gy) <= 5) return true; }
-            // Check floor items too
+            // Check within 5 tiles of any fully-built owned building
+            for (let t of towers) { if (t.owner === playerId && !t.underConstruction && Math.abs(t.gx - gx) + Math.abs(t.gy - gy) <= 5) return true; }
+            for (let b of barracks) { if (b.owner === playerId && !b.underConstruction && Math.abs(b.gx - gx) + Math.abs(b.gy - gy) <= 5) return true; }
+            for (let s of collectorSpawners) { if (s.owner === playerId && !s.underConstruction && Math.abs(s.gx - gx) + Math.abs(s.gy - gy) <= 5) return true; }
+            // Check floor items too (exclude under-construction)
             for (let y2 = 0; y2 < GRID_H; y2++) for (let x2 = 0; x2 < GRID_W; x2++) {
-                if (grid[y2][x2].item && grid[y2][x2].owner === playerId && Math.abs(x2 - gx) + Math.abs(y2 - gy) <= 5) return true;
+                if (grid[y2][x2].item && !grid[y2][x2].item.underConstruction && grid[y2][x2].owner === playerId && Math.abs(x2 - gx) + Math.abs(y2 - gy) <= 5) return true;
             }
             return false;
         }
@@ -3177,10 +3186,10 @@
                         // If no units selected, just update and return
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
                     }
-                    // Right-click own barrack to queue unit
+                    // Right-click own barrack to queue unit (only if no workers or combat units selected)
                     if (selBarracks.length === 0) {
                         for (let b of barracks) {
-                            if (b.owner === localPlayerId && b.hp > 0 && Math.hypot(b.x - world.x, b.y - world.y) < 20) {
+                            if (b.owner === localPlayerId && b.hp > 0 && !b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 20) {
                                 queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy });
                                 return;
                             }
@@ -3189,30 +3198,94 @@
                     let activeUnits = getActiveUnits();
                     if (activeUnits.length > 0) {
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
-                        let targetUnit = null, targetBuilding = null;
-                        for (let u of units) {
-                            if (u.owner === localPlayerId || u.dead) continue;
-                            if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 8) { targetUnit = u; break; }
-                        }
-                        if (!targetUnit) {
-                            for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
-                            if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
-                            if (!targetBuilding) for (let s of collectorSpawners) { if (s.owner !== localPlayerId && s.hp > 0 && Math.hypot(s.x - world.x, s.y - world.y) < 20) { targetBuilding = s; break; } }
-                            if (!targetBuilding && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+
+                        // --- Worker targeting logic ---
+                        let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
+                        let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
+                        let workerIds = [...builderUnits, ...collectorUnits].map(u => u.id);
+
+                        if (builderUnits.length > 0) {
+                            // Check if right-clicking a building under construction (own)
+                            let buildTarget = null;
+                            // Check towers
+                            for (let t of towers) {
+                                if (t.owner === localPlayerId && t.underConstruction && Math.hypot(t.x - world.x, t.y - world.y) < 22) {
+                                    buildTarget = t; break;
+                                }
+                            }
+                            // Check barracks
+                            if (!buildTarget) for (let b of barracks) {
+                                if (b.owner === localPlayerId && b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 22) {
+                                    buildTarget = b; break;
+                                }
+                            }
+                            // Check spawners
+                            if (!buildTarget) for (let s of collectorSpawners) {
+                                if (s.owner === localPlayerId && s.underConstruction && Math.hypot(s.x - world.x, s.y - world.y) < 22) {
+                                    buildTarget = s; break;
+                                }
+                            }
+                            // Check floor items
+                            if (!buildTarget && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
                                 let cell = grid[gy][gx];
-                                if (cell.item && cell.owner !== localPlayerId && cell.item.hp > 0) targetBuilding = cell.item;
+                                if (cell.item && cell.item.underConstruction && cell.owner === localPlayerId) buildTarget = cell.item;
+                            }
+                            if (buildTarget) {
+                                queueAction({ action: 'workerAssign', unitIds: builderUnits.map(u => u.id), targetType: 'build', targetGx: buildTarget.gx, targetGy: buildTarget.gy });
+                                updateInfoPanel();
+                                // If no non-worker units, return
+                                let nonWorkers = activeUnits.filter(u => !u.workerType);
+                                if (nonWorkers.length === 0) return;
                             }
                         }
-                        let unitIds = activeUnits.map(u => u.id);
-                        if (targetUnit) {
-                            queueAction({ action: 'attack', unitIds, targetId: targetUnit.id });
-                        } else if (targetBuilding) {
-                            queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuilding.gx, targetGy: targetBuilding.gy });
-                        } else if (attackMoveMode) {
-                            queueAction({ action: 'attackMove', unitIds, targetX: world.x, targetY: world.y });
-                            attackMoveMode = false;
-                        } else {
-                            queueAction({ action: 'move', unitIds, targetX: world.x, targetY: world.y });
+
+                        if (collectorUnits.length > 0) {
+                            // Check if right-clicking a gold mine
+                            let mine = null;
+                            for (let m of goldMines) {
+                                if (m.gold > 0 && Math.hypot(m.x - world.x, m.y - world.y) < 22) { mine = m; break; }
+                            }
+                            if (mine) {
+                                queueAction({ action: 'workerAssign', unitIds: collectorUnits.map(u => u.id), targetType: 'mine', targetGx: mine.gx, targetGy: mine.gy });
+                                updateInfoPanel();
+                                let nonWorkers = activeUnits.filter(u => !u.workerType);
+                                if (nonWorkers.length === 0) return;
+                            }
+                        }
+
+                        // --- Normal combat unit targeting ---
+                        let combatUnits = activeUnits.filter(u => !u.workerType);
+                        if (combatUnits.length > 0) {
+                            let targetUnit = null, targetBuilding = null;
+                            for (let u of units) {
+                                if (u.owner === localPlayerId || u.dead) continue;
+                                if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 8) { targetUnit = u; break; }
+                            }
+                            if (!targetUnit) {
+                                for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
+                                if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
+                                if (!targetBuilding) for (let s of collectorSpawners) { if (s.owner !== localPlayerId && s.hp > 0 && Math.hypot(s.x - world.x, s.y - world.y) < 20) { targetBuilding = s; break; } }
+                                if (!targetBuilding && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                                    let cell = grid[gy][gx];
+                                    if (cell.item && cell.owner !== localPlayerId && cell.item.hp > 0) targetBuilding = cell.item;
+                                }
+                            }
+                            let unitIds = combatUnits.map(u => u.id);
+                            if (targetUnit) {
+                                queueAction({ action: 'attack', unitIds, targetId: targetUnit.id });
+                            } else if (targetBuilding) {
+                                queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuilding.gx, targetGy: targetBuilding.gy });
+                            } else if (attackMoveMode) {
+                                queueAction({ action: 'attackMove', unitIds, targetX: world.x, targetY: world.y });
+                                attackMoveMode = false;
+                            } else {
+                                // Workers also move to the position if no special target found
+                                let allIds = activeUnits.map(u => u.id);
+                                queueAction({ action: 'move', unitIds: allIds, targetX: world.x, targetY: world.y });
+                            }
+                        } else if (workerIds.length > 0) {
+                            // Only workers selected and no special target — move them
+                            queueAction({ action: 'move', unitIds: workerIds, targetX: world.x, targetY: world.y });
                         }
                     }
                     updateInfoPanel();
@@ -3461,7 +3534,7 @@
                     }
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
-                    if (b && b.hp > 0) {
+                    if (b && b.hp > 0 && !b.underConstruction) {
                         let cost = b.getUnitCost();
                         if (players[playerId].money >= cost && b.spawnQueue.length < 20) {
                             players[playerId].money -= cost;
@@ -3470,11 +3543,34 @@
                     }
                 } else if (a.action === 'queueWorker') {
                     let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (s && s.hp > 0) {
+                    if (s && s.hp > 0 && !s.underConstruction) {
                         let cost = s.getUnitCost();
                         if (players[playerId].money >= cost && s.spawnQueue.length < 10) {
                             players[playerId].money -= cost;
                             s.spawnQueue.push(s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : 'salvager');
+                        }
+                    }
+                } else if (a.action === 'workerAssign') {
+                    // Assign selected worker units to a specific target
+                    for (let u of units) {
+                        if (!a.unitIds.includes(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
+                        let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
+                        if (u.workerType === 'builder' && a.targetType === 'build') {
+                            // Find the target building
+                            let target = towers.find(t => t.gx === a.targetGx && t.gy === a.targetGy && t.underConstruction) ||
+                                barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.underConstruction) ||
+                                collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.underConstruction) ||
+                                (grid[a.targetGy] && grid[a.targetGy][a.targetGx] && grid[a.targetGy][a.targetGx].item && grid[a.targetGy][a.targetGx].item.underConstruction ? grid[a.targetGy][a.targetGx].item : null);
+                            if (target) {
+                                u.workerTarget = null; // clear old target
+                                _builderAssignTarget(u, target, myGx, myGy);
+                            }
+                        } else if (u.workerType === 'collector' && a.targetType === 'mine') {
+                            let mine = goldMines.find(m => m.gx === a.targetGx && m.gy === a.targetGy && m.gold > 0);
+                            if (mine) {
+                                u.workerTarget = null;
+                                _collectorAssignMine(u, mine, myGx, myGy);
+                            }
                         }
                     }
                 } else if (a.action === 'setRally') {
@@ -3538,41 +3634,70 @@
             if (_hudCache.fps !== _fpsDisplay) { _hudCache.fps = _fpsDisplay; _hudEls.fps.textContent = `${_fpsDisplay} FPS (v3)`; }
         }
 
+        let _buildMenuTab = null;
+        let _buildMenuItems = {}; // key -> div element
+
         function updateBuildMenu() {
             let container = document.getElementById('build-items');
-            container.innerHTML = '';
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
             let money = players[localPlayerId].money;
-            for (let key of items) {
-                let def = CARD_TYPES[key]; if (!def) continue;
-                let div = document.createElement('div');
-                div.className = 'build-item';
-                let displayPrice = def.price;
-                if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
-                if (money < displayPrice) div.classList.add('cant-afford');
-                if (selectedBuildItem === key) div.classList.add('selected');
-                let thumbUrl = getItemThumbnail(key, 28);
-                let iconWrap = document.createElement('span');
-                iconWrap.className = 'bi-icon';
-                let img = document.createElement('img');
-                img.src = thumbUrl; img.width = 28; img.height = 28;
-                iconWrap.appendChild(img);
-                div.appendChild(iconWrap);
-                let nameSpan = document.createElement('span');
-                nameSpan.className = 'bi-name';
-                nameSpan.textContent = def.name;
-                div.appendChild(nameSpan);
-                let priceSpan = document.createElement('span');
-                priceSpan.className = 'bi-price';
-                priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
-                div.appendChild(priceSpan);
-                div.onclick = () => {
-                    selectedBuildItem = selectedBuildItem === key ? null : key;
-                    updateBuildMenu();
-                };
-                container.appendChild(div);
+
+            // Full rebuild only when tab changes
+            if (_buildMenuTab !== activeBuildTab) {
+                _buildMenuTab = activeBuildTab;
+                _buildMenuItems = {};
+                container.innerHTML = '';
+                for (let key of items) {
+                    let def = CARD_TYPES[key]; if (!def) continue;
+                    let div = document.createElement('div');
+                    div.className = 'build-item';
+                    div.dataset.key = key;
+                    let displayPrice = def.price;
+                    if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
+                    if (money < displayPrice) div.classList.add('cant-afford');
+                    if (selectedBuildItem === key) div.classList.add('selected');
+                    let thumbUrl = getItemThumbnail(key, 28);
+                    let iconWrap = document.createElement('span');
+                    iconWrap.className = 'bi-icon';
+                    let img = document.createElement('img');
+                    img.src = thumbUrl; img.width = 28; img.height = 28;
+                    iconWrap.appendChild(img);
+                    div.appendChild(iconWrap);
+                    let nameSpan = document.createElement('span');
+                    nameSpan.className = 'bi-name';
+                    nameSpan.textContent = def.name;
+                    div.appendChild(nameSpan);
+                    let priceSpan = document.createElement('span');
+                    priceSpan.className = 'bi-price';
+                    priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
+                    div.appendChild(priceSpan);
+                    div.addEventListener('click', () => {
+                        selectedBuildItem = selectedBuildItem === key ? null : key;
+                        _patchBuildMenuClasses(players[localPlayerId].money);
+                    });
+                    container.appendChild(div);
+                    _buildMenuItems[key] = div;
+                }
+            } else {
+                // Stable update: just patch classes and prices
+                _patchBuildMenuClasses(money);
             }
         }
+
+        function _patchBuildMenuClasses(money) {
+            let items = BUILD_CATEGORIES[activeBuildTab] || [];
+            for (let key of items) {
+                let def = CARD_TYPES[key]; if (!def) continue;
+                let div = _buildMenuItems[key]; if (!div) continue;
+                let displayPrice = def.price;
+                if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
+                div.classList.toggle('cant-afford', money < displayPrice);
+                div.classList.toggle('selected', selectedBuildItem === key);
+                let priceSpan = div.querySelector('.bi-price');
+                if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
+            }
+        }
+
 
         function initBuildTabs() {
             document.querySelectorAll('.build-tab').forEach(tab => {
@@ -3710,19 +3835,22 @@
             let bKey = 'barrack_' + e.unitType;
             let us = UNIT_STATS[e.unitType] || {};
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : '✓ Ready');
             html += infoRow('Level', e.level, e.effectiveLevel !== e.level ? e.effectiveLevel : undefined);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
-            html += infoRow('Queue', `${e.spawnQueue.length}/20`);
-            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-            html += infoRow('Unit HP', us.hp || '?');
-            html += infoRow('Unit Atk', us.atk || '?');
-            html += infoRow('Unit Spd', us.speed || '?');
-            if (e.owner === localPlayerId) {
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                html += `<div style="margin-top:4px;text-align:center">
-                    <span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span></div>`;
-                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
+            if (!e.underConstruction) {
+                html += infoRow('Queue', `${e.spawnQueue.length}/20`);
+                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+                html += infoRow('Unit HP', us.hp || '?');
+                html += infoRow('Unit Atk', us.atk || '?');
+                html += infoRow('Unit Spd', us.speed || '?');
+                if (e.owner === localPlayerId) {
+                    let cost = e.getUnitCost();
+                    let canAfford = players[localPlayerId].money >= cost;
+                    html += `<div style="margin-top:4px;text-align:center">
+                        <span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span></div>`;
+                    html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
+                }
             }
             if (e.owner === localPlayerId) html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -3769,6 +3897,7 @@
             let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : '✓ Ready');
             html += infoRow('Level', e.level, e.effectiveLevel !== e.level ? e.effectiveLevel : undefined);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
@@ -3832,16 +3961,19 @@
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = e.effectiveLevel || sLevel;
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : '✓ Ready');
             html += infoRow('Level', sLevel, effLevel !== sLevel ? effLevel : undefined);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
-            html += infoRow('Queue', `${(e.spawnQueue || []).length}/10`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
-            if (e.owner === localPlayerId) {
+            if (e.owner === localPlayerId && !e.underConstruction) {
+                html += infoRow('Queue', `${(e.spawnQueue || []).length}/10`);
                 let cost = e.getUnitCost();
                 let canAfford = players[localPlayerId].money >= cost;
                 html += `<div style="margin-top:4px;text-align:center">
                     <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${unitLabel} (${cost}g)</span></div>`;
+                html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
+            } else if (e.owner === localPlayerId) {
                 html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
