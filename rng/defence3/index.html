@@ -1550,7 +1550,16 @@
                     ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * Math.max(0, this.hp / this.maxHp), bh);
                 }
                 // Carrying value indicator for workers
-                if (this.carryingValue > 0) { ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9); }
+                if (this.carryingValue > 0) {
+                    ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                } else if (this.workerType === 'builder' && this.workerState) {
+                    // Builder visual: hammer when building, $ when fetching gold
+                    if (this.workerState === 'RETURNING_FOR_GOLD') {
+                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                    } else if (this.workerState === 'MOVING_TO_BUILD' || this.workerState === 'BUILDING_IN_PLACE') {
+                        ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('🔨', this.x, this.y - this.r - 9);
+                    }
+                }
             }
         }
 
@@ -1647,11 +1656,12 @@
                     // Spawn progress (only show when queue has items)
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
-                        let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 12;
+                        let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 15;
+                        // Q label above the progress bar
+                        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 9);
                         ctx.fillStyle = '#333'; ctx.fillRect(bx, by, bw, bh);
                         ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(bx, by, bw * pct, bh);
-                        ctx.fillStyle = '#fff'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 22);
                     }
                     // HP bar
                     if (this.hp < this.maxHp) {
@@ -1697,6 +1707,14 @@
                             let u = new Unit('collector', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
                             units.push(u); players[this.owner].popCount++;
+                            if (this.rallyX !== null && this.rallyY !== null) {
+                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
+                                    pathfindBudget++;
+                                }
+                            }
                         }
                     }
                 } else { this.spawnTimer = 0; }
@@ -1718,10 +1736,10 @@
                 } else {
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
-                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
-                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                        ctx.fillStyle = '#fff'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 22);
+                        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 3);
+                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 9, 24, 3);
+                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 9, 24 * pct, 3);
                     }
                     if (this.hp < this.maxHp) {
                         ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
@@ -1762,6 +1780,14 @@
                             let u = new Unit('salvager_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
                             units.push(u); players[this.owner].popCount++;
+                            if (this.rallyX !== null && this.rallyY !== null) {
+                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
+                                    pathfindBudget++;
+                                }
+                            }
                         }
                     }
                 } else { this.spawnTimer = 0; }
@@ -1832,6 +1858,14 @@
                             // builder DPS based on spawner's effective level
                             u.builderDps = this.getBuilderDps();
                             units.push(u); players[this.owner].popCount++;
+                            if (this.rallyX !== null && this.rallyY !== null) {
+                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
+                                    pathfindBudget++;
+                                }
+                            }
                         }
                     }
                 } else { this.spawnTimer = 0; }
@@ -1853,10 +1887,10 @@
                     ctx.fillStyle = '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
                 } else if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                     let pct = this.spawnTimer / this.spawnCooldown;
-                    ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
-                    ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                    ctx.fillStyle = '#fff'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-                    ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 22);
+                    ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 3);
+                    ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 9, 24, 3);
+                    ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 9, 24 * pct, 3);
                 }
                 if (this.hp < this.maxHp && !this.underConstruction) {
                     ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
@@ -1871,6 +1905,13 @@
             if (!u.workerState) return;
             let owner = u.owner;
             let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
+
+            if (u.workerState === 'MANUAL_MOVE') {
+                if (!u.path || u.pathIndex >= u.path.length) {
+                    u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
+                }
+                return; // Suppress auto-AI while manually moving
+            }
 
             if (u.workerType === 'collector') {
                 if (u.workerState === 'IDLE') {
@@ -2867,8 +2908,8 @@
                 let ey = ent.y || (ent.gy * TILE + 16);
                 ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2;
                 ctx.strokeRect(ex - 18, ey - 18, 36, 36);
-                // Rally point for barracks
-                if (ent.type === 'barrack' && ent.rallyX !== null) {
+                // Rally point for barracks and spawners
+                if (['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(ent.type) && ent.rallyX !== null) {
                     let rx = ent.rallyX, ry = ent.rallyY;
                     ctx.setLineDash([6, 4]);
                     ctx.strokeStyle = '#4f4'; ctx.lineWidth = 1.5;
@@ -3176,10 +3217,10 @@
                 } else if (e.button === 2) { // Right click
                     e.preventDefault();
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
-                    // Set rally for active selected barracks
-                    let selBarracks = getActiveEntities().filter(e => e.type === 'barrack' && e.owner === localPlayerId);
-                    if (selBarracks.length > 0) {
-                        for (let b of selBarracks) {
+                    // Set rally for active selected barracks and spawners
+                    let selSpawners = getActiveEntities().filter(e => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(e.type) && e.owner === localPlayerId);
+                    if (selSpawners.length > 0) {
+                        for (let b of selSpawners) {
                             queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: world.x, targetY: world.y });
                             b.rallyX = world.x; b.rallyY = world.y;
                         }
@@ -3187,7 +3228,7 @@
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
                     }
                     // Right-click own barrack to queue unit (only if no workers or combat units selected)
-                    if (selBarracks.length === 0) {
+                    if (selSpawners.length === 0) {
                         for (let b of barracks) {
                             if (b.owner === localPlayerId && b.hp > 0 && !b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 20) {
                                 queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy });
@@ -3463,6 +3504,7 @@
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                             u.targetUnit = null; u.targetBuilding = null;
                             u.commandState = CMD_MOVING;
+                            if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 u.path = findPathAStar(ugx, ugy, targetGx, targetGy, u.isFlying);
@@ -3482,6 +3524,7 @@
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                             u.targetUnit = null; u.targetBuilding = null;
                             u.commandState = CMD_ATTACK_MOVING;
+                            if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 u.path = findPathAStar(ugx, ugy, targetGx, targetGy, u.isFlying);
@@ -3574,8 +3617,23 @@
                         }
                     }
                 } else if (a.action === 'setRally') {
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
+                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) || 
+                            collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
                     if (b) { b.rallyX = a.targetX; b.rallyY = a.targetY; }
+                } else if (a.action === 'dequeueUnit') {
+                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
+                    if (b && b.spawnQueue.length > 0) {
+                        let cost = b.getUnitCost();
+                        b.spawnQueue.shift();
+                        players[playerId].money += cost * 0.1;
+                    }
+                } else if (a.action === 'dequeueWorker') {
+                    let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    if (s && s.spawnQueue.length > 0) {
+                        let cost = s.getUnitCost();
+                        s.spawnQueue.shift();
+                        players[playerId].money += cost * 0.1;
+                    }
                 } else if (a.action === 'markSalvage') {
                     // Toggle salvage mark on a building at gx,gy
                     let t = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId);
@@ -3848,7 +3906,9 @@
                     let cost = e.getUnitCost();
                     let canAfford = players[localPlayerId].money >= cost;
                     html += `<div style="margin-top:4px;text-align:center">
-                        <span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span></div>`;
+                        <span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${e.unitType} (${cost}g)</span>
+                        <span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:#533;padding:3px 8px;border:1px solid #744;border-radius:3px;font-size:10px;color:#eaa;margin-left:4px">Dequeue (+${Math.floor(cost*0.1)}g)</span>
+                        </div>`;
                     html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
                 }
             }
@@ -3971,9 +4031,13 @@
                 let cost = e.getUnitCost();
                 let canAfford = players[localPlayerId].money >= cost;
                 html += `<div style="margin-top:4px;text-align:center">
-                    <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${unitLabel} (${cost}g)</span></div>`;
+                    <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${canAfford ? '#353' : '#333'};padding:3px 8px;border:1px solid ${canAfford ? '#4f4' : '#555'};border-radius:3px;font-size:10px;color:${canAfford ? '#4f4' : '#666'}">Buy ${unitLabel} (${cost}g)</span>
+                    <span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:#533;padding:3px 8px;border:1px solid #744;border-radius:3px;font-size:10px;color:#eaa;margin-left:4px">Dequeue (+${Math.floor(cost*0.1)}g)</span>
+                    </div>`;
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
                 html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
             } else if (e.owner === localPlayerId) {
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX/TILE)},${Math.floor(e.rallyY/TILE)})` : 'None');
                 html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
@@ -4343,6 +4407,15 @@
                         if (s && (s.spawnQueue||[]).length < 10 && (s.spawnQueue||[]).length < bestQueue) { best = s; bestQueue = (s.spawnQueue||[]).length; }
                     }
                     if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy });
+                };
+            });
+
+            // Wire up dequeue buttons
+            panel.querySelectorAll('.info-dequeue-btn').forEach(btn => {
+                btn.onclick = () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
+                    queueAction({ action: type, gx, gy });
                 };
             });
 
