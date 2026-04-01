@@ -4076,6 +4076,7 @@
                 // Income per spawn
                 // gameState.money += effLvl;
                 gameState.money += Math.floor(10 * Math.pow(1.2, effLvl))
+                updateUI();
             }
             draw(ctx) {
                 // Outline - neutral color (spawns both)
@@ -5508,6 +5509,7 @@
         function startWave() {
             if (isMultiplayer) {
                 // Multiplayer: wave == shopLevel, button just reshuffles cards
+                // gameState.shopLevel += 1;
                 gameState.wave = gameState.shopLevel;
                 resolveMarket();
                 updateUI();
@@ -6650,7 +6652,7 @@
                     // Name
                     let nameHtml = "";
                     if (card.type === 'barrack') {
-                        let uName = (card.unitType || 'norm').toUpperCase();
+                        let uName = (card.unitType || 'norm').toUpperCase().replace("_RESISTANT", "");
                         nameHtml = `<span style="font-size:12px">${uName}</span>`;
                         nameHtml += `<br><span style="font-size:10px;color:#fff">L${card.level}</span>`;
                     } else if (card.type === 'spawn_enemy') {
