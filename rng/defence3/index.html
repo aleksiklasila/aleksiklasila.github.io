@@ -3379,6 +3379,18 @@
                     ctx.fillStyle = us.color; ctx.beginPath();
                     ctx.moveTo(cx, cy + tr); ctx.lineTo(cx - tr, cy - tr); ctx.lineTo(cx + tr, cy - tr);
                     ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+                } else if (us.vis === 'star') {
+                    ctx.fillStyle = us.color; ctx.beginPath();
+                    for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); }
+                    ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+                } else if (us.vis === 'triangle_down') {
+                    ctx.fillStyle = us.color; ctx.beginPath();
+                    let tr = r;
+                    ctx.moveTo(cx, cy + tr); ctx.lineTo(cx - tr, cy - tr * 0.5); ctx.lineTo(cx + tr, cy - tr * 0.5);
+                    ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+                } else if (us.vis === 'rect') {
+                    ctx.fillStyle = us.color; ctx.fillRect(cx - r, cy - r * 0.7, r * 2, r * 1.4);
+                    ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(cx - r, cy - r * 0.7, r * 2, r * 1.4);
                 } else if (us.vis === 'mole') {
                     ctx.fillStyle = us.color; ctx.beginPath();
                     ctx.ellipse(cx, cy, r * 0.8, r * 1.1, 0, 0, Math.PI * 2);
