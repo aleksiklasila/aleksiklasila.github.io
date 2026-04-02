@@ -792,15 +792,21 @@
             }
         }
 
-        function findPathAStar(sx, sy, ex, ey, ignoreWalls = false) {
+        function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null) {
             if (sx === ex && sy === ey) return [{ x: ex, y: ey }];
+            let isWalkable = (nx, ny) => {
+                if (ignoreWalls) return true;
+                if (grid[ny][nx].type !== TYPE_WALL) return true;
+                if (canWalk && canWalk(nx, ny)) return true;
+                return false;
+            };
             if (!ignoreWalls && sx >= 0 && sx < GRID_W && sy >= 0 && sy < GRID_H) {
-                if (grid[ey] && grid[ey][ex] && grid[ey][ex].type === TYPE_WALL) {
+                if (grid[ey] && grid[ey][ex] && !isWalkable(ex, ey)) {
                     // Find nearest walkable neighbor of target
                     let best = null, bestD = 9999;
                     for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
                         let nx = ex + dx, ny = ey + dy;
-                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H && grid[ny][nx].type !== TYPE_WALL) {
+                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H && isWalkable(nx, ny)) {
                             let d = Math.abs(nx - sx) + Math.abs(ny - sy);
                             if (d < bestD) { bestD = d; best = { x: nx, y: ny }; }
                         }
@@ -840,7 +846,7 @@
                 for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
                     let nx = cur.x + dx, ny = cur.y + dy;
                     if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-                    if (!ignoreWalls && grid[ny][nx].type === TYPE_WALL) continue;
+                    if (!isWalkable(nx, ny)) continue;
                     let nKey = ny * GRID_W + nx;
                     if (visited.has(nKey)) continue;
                     let ng = cur.g + 1;
@@ -856,8 +862,17 @@
             return null;
         }
 
-        function findNearestWalkable(gx, gy) {
-            for (let [dx, dy] of [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        function findNearestWalkable(gx, gy, fromGx, fromGy) {
+            if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].type !== TYPE_WALL) return { x: gx, y: gy };
+            let neighbors = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+            if (fromGx !== undefined && fromGy !== undefined) {
+                neighbors.sort((a, b) => {
+                    let da = Math.hypot(gx + a[0] - fromGx, gy + a[1] - fromGy);
+                    let db = Math.hypot(gx + b[0] - fromGx, gy + b[1] - fromGy);
+                    return da - db;
+                });
+            }
+            for (let [dx, dy] of neighbors) {
                 let nx = gx + dx, ny = gy + dy;
                 if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H && grid[ny][nx].type !== TYPE_WALL) return { x: nx, y: ny };
             }
@@ -936,6 +951,7 @@
                         let goldRange = Math.max(0, GOLD_MINE_MAX - GOLD_MINE_MIN);
                         let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
                         goldMines.push({ gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
+                        grid[gy][gx].type = TYPE_WALL;
                         break;
                     }
                     attempts++;
@@ -1468,7 +1484,7 @@
                     this.x += pushX; this.y += pushY;
                     // Clamp to walkable area
                     let ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-                    if (!this.isFlying && ngx >= 0 && ngx < GRID_W && ngy >= 0 && ngy < GRID_H && grid[ngy][ngx].type === TYPE_WALL) {
+                    if (!this.isFlying && (ngx < 0 || ngx >= GRID_W || ngy < 0 || ngy >= GRID_H || grid[ngy][ngx].type === TYPE_WALL)) {
                         this.x -= pushX; this.y -= pushY;
                     }
                 }
@@ -1628,7 +1644,7 @@
                             let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                let dest = findNearestWalkable(tgx, tgy);
+                                let dest = findNearestWalkable(tgx, tgy, ugx, ugy);
                                 this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
@@ -1666,7 +1682,7 @@
                             let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                let dest = findNearestWalkable(tgx, tgy);
+                                let dest = findNearestWalkable(tgx, tgy, ugx, ugy);
                                 this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
@@ -2297,7 +2313,7 @@
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                        if (dist <= 48) {
+                        if (dist <= 24) {
                             if (u.workerTargetType === 'drop') {
                                 u.carryingValue = u.workerTarget.value;
                                 let idx = droppedItems.indexOf(u.workerTarget);
@@ -2310,6 +2326,12 @@
                                 let extract = Math.min(10, u.workerTarget.gold);
                                 u.workerTarget.gold -= extract;
                                 u.carryingValue = extract;
+                                if (u.workerTarget.gold <= 0) {
+                                    let mine = u.workerTarget;
+                                    grid[mine.gy][mine.gx].type = TYPE_FLOOR;
+                                    let idx = goldMines.indexOf(mine);
+                                    if (idx >= 0) goldMines.splice(idx, 1);
+                                }
                             }
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
@@ -2344,7 +2366,7 @@
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                        if (dist <= 48) {
+                        if (dist <= 24) {
                             let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
                             let p = CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
                             u.carryingValue = refund;
@@ -2376,7 +2398,7 @@
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                        if (dist <= 48) {
+                        if (dist <= 24) {
                             // Add HP to building
                             let dps = u.builderDps || 5;
                             u.workerTarget.hp = Math.min(u.workerTarget.maxHp, u.workerTarget.hp + dps);
@@ -2411,14 +2433,14 @@
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let spawner = u._builderSpawnerTarget || _findClosestBuilderSpawner(u);
                         let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
-                        if (!spawner || dist <= 48) {
+                        if (!spawner || dist <= 24) {
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
                             }
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
-                            let dest = findNearestWalkable(u.workerTarget.gx, u.workerTarget.gy);
-                            u.path = findPathAStar(myGx, myGy, dest.x, dest.y);
+                            let canWalk = _builderCanWalk(u.owner);
+                            u.path = findPathAStar(myGx, myGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk);
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                         }
                     }
@@ -2470,11 +2492,26 @@
             }
         }
 
+        function _collectorCanWalk(nx, ny) {
+            return goldMines.some(m => m.gx === nx && m.gy === ny && m.gold > 0);
+        }
+
+        function _builderCanWalk(owner) {
+            return (nx, ny) => {
+                let cell = grid[ny][nx];
+                if (cell.owner === owner && cell.item && cell.item.underConstruction) return true;
+                // Check towers, barracks, spawners under construction
+                for (let t of towers) { if (t.gx === nx && t.gy === ny && t.owner === owner && t.underConstruction) return true; }
+                for (let b of barracks) { if (b.gx === nx && b.gy === ny && b.owner === owner && b.underConstruction) return true; }
+                for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && s.owner === owner && s.underConstruction) return true; }
+                return false;
+            };
+        }
+
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
             u.workerTarget = target; u.workerTargetType = targetType;
-            let dest = { x: target.gx, y: target.gy };
-            if (grid[dest.y][dest.x].type === TYPE_WALL) dest = findNearestWalkable(dest.x, dest.y);
-            u.path = findPathAStar(myGx, myGy, dest.x, dest.y);
+            let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
+            u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
             if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
             else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
@@ -2493,8 +2530,8 @@
             for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !collectorSpawners.includes(c.item)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
             if (bestItem) {
                 u.workerTarget = bestItem;
-                let dest = findNearestWalkable(bestItem.gx, bestItem.gy);
-                u.path = findPathAStar(myGx, myGy, dest.x, dest.y);
+                let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
+                u.path = findPathAStar(myGx, myGy, bestItem.gx, bestItem.gy, false, canWalk);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
                 else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
@@ -2514,6 +2551,7 @@
 
         function _builderAssignTarget(u, target, myGx, myGy) {
             u.workerTarget = target;
+            let canWalk = _builderCanWalk(u.owner);
             let spawner = _findClosestBuilderSpawner(u);
             if (spawner && players[u.owner].money >= 1) {
                 u.workerState = 'RETURNING_FOR_GOLD';
@@ -2523,8 +2561,7 @@
             } else {
                 // No spawner or no money — go build directly (slow mode)
                 u.workerState = 'MOVING_TO_BUILD';
-                let dest = findNearestWalkable(target.gx, target.gy);
-                u.path = findPathAStar(myGx, myGy, dest.x, dest.y);
+                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
         }
@@ -3599,7 +3636,8 @@
                 if (pathfindBudget >= MAX_PATHS_PER_TICK) break;
                 let pt = u._pendingPathTarget;
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                u.path = findPathAStar(ugx, ugy, pt.gx, pt.gy, u.isFlying);
+                let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy);
+                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                 u.commandState = pt.cmd;
                 u._pendingPathTarget = null;
@@ -3647,10 +3685,12 @@
                     if (u.workerTarget && u.workerTarget.lockedBy === u) {
                         u.workerTarget.lockedBy = null;
                     }
+                    if (u.isKing) checkWinCondition();
                     removeUnitSpatial(u);
                     players[u.owner].popCount--;
                     selectedUnits = selectedUnits.filter(su => su !== u);
                     units.splice(i, 1);
+                    if (gameOver) return;
                 }
             }
 
@@ -4014,7 +4054,8 @@
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                                u.path = findPathAStar(ugx, ugy, targetGx, targetGy, u.isFlying);
+                                let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
+                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
@@ -4034,7 +4075,8 @@
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                                u.path = findPathAStar(ugx, ugy, targetGx, targetGy, u.isFlying);
+                                let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
+                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
@@ -4048,11 +4090,11 @@
                     let target = units.find(u => u.id === a.targetId);
                     if (target) {
                         let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
-                        let dest = findNearestWalkable(targetGx, targetGy);
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                                 u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null;
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                                let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
                                     u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
@@ -4071,12 +4113,13 @@
                         collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.hp > 0) ||
                         (grid[a.targetGy] && grid[a.targetGy][a.targetGx] && grid[a.targetGy][a.targetGx].item && grid[a.targetGy][a.targetGx].item.hp > 0 ? grid[a.targetGy][a.targetGx].item : null);
                     if (tb) {
-                        let dest = findNearestWalkable(tb.gx, tb.gy);
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                                 u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null;
+                                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                                let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(Math.floor(u.x / TILE), Math.floor(u.y / TILE), dest.x, dest.y, u.isFlying);
+                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
                                     u.pathIndex = 0; u._pendingPathTarget = null;
                                     pathfindBudget++;
                                 } else {
