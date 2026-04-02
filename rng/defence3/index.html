@@ -469,7 +469,7 @@
         let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
 
         // Gold mine config (adjustable from menu)
-        let GOLD_MINE_COUNT = 18;  // base count
+        let GOLD_MINE_COUNT = 18;  // total mine tiles distributed across veins
         let GOLD_MINE_MIN = 500;
         let GOLD_MINE_MAX = 1500;
         let GOLD_MINE_AREA = 70;   // area within which mines spawn (centered)
@@ -933,28 +933,73 @@
 
         function generateGoldMines() {
             goldMines = [];
-            let count = GOLD_MINE_COUNT;
+            let totalMines = GOLD_MINE_COUNT;
             let margin = Math.max(3, Math.floor((GRID_W - GOLD_MINE_AREA) / 2));
             let spawnDist = Math.max(8, Math.floor(GRID_W * 0.1));
             let p0gx = 5, p0gy = 5, p1gx = GRID_W - 6, p1gy = GRID_H - 6;
             let placed = new Set();
-            for (let i = 0; i < count; i++) {
-                let attempts = 0;
-                while (attempts < 50) {
+            let goldRange = Math.max(0, GOLD_MINE_MAX - GOLD_MINE_MIN);
+            let remaining = totalMines;
+
+            // Split into veins: ~3-6 tiles each
+            let veinSeeds = [];
+            while (remaining > 0) {
+                let veinSize = Math.min(remaining, 3 + Math.floor(rng() * 4));
+                veinSeeds.push(veinSize);
+                remaining -= veinSize;
+            }
+
+            for (let veinSize of veinSeeds) {
+                // Find a valid seed point
+                let seedGx = -1, seedGy = -1;
+                for (let att = 0; att < 80; att++) {
                     let gx = margin + Math.floor(rng() * (GRID_W - margin * 2));
                     let gy = margin + Math.floor(rng() * (GRID_H - margin * 2));
-                    let key = `${gx},${gy}`;
                     let d0 = Math.abs(gx - p0gx) + Math.abs(gy - p0gy);
                     let d1 = Math.abs(gx - p1gx) + Math.abs(gy - p1gy);
-                    if (!placed.has(key) && d0 > spawnDist && d1 > spawnDist) {
-                        placed.add(key);
-                        let goldRange = Math.max(0, GOLD_MINE_MAX - GOLD_MINE_MIN);
-                        let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
-                        goldMines.push({ gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
-                        grid[gy][gx].type = TYPE_WALL;
+                    if (!placed.has(`${gx},${gy}`) && d0 > spawnDist && d1 > spawnDist &&
+                        grid[gy][gx].type === TYPE_FLOOR) {
+                        seedGx = gx; seedGy = gy;
                         break;
                     }
-                    attempts++;
+                }
+                if (seedGx < 0) continue;
+
+                // Grow vein from seed
+                let frontier = [{ x: seedGx, y: seedGy }];
+                let placed_count = 0;
+
+                while (placed_count < veinSize && frontier.length > 0) {
+                    let idx = Math.floor(rng() * Math.min(frontier.length, 3));
+                    idx = frontier.length - 1 - idx;
+                    let tile = frontier[idx];
+                    let key = `${tile.x},${tile.y}`;
+
+                    if (placed.has(key) || grid[tile.y][tile.x].type !== TYPE_FLOOR) {
+                        frontier.splice(idx, 1);
+                        continue;
+                    }
+
+                    let d0 = Math.abs(tile.x - p0gx) + Math.abs(tile.y - p0gy);
+                    let d1 = Math.abs(tile.x - p1gx) + Math.abs(tile.y - p1gy);
+                    if (d0 <= spawnDist || d1 <= spawnDist) {
+                        frontier.splice(idx, 1);
+                        continue;
+                    }
+
+                    placed.add(key);
+                    placed_count++;
+
+                    let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
+                    goldMines.push({ gx: tile.x, gy: tile.y, gold, maxGold: gold, x: tile.x * TILE + 16, y: tile.y * TILE + 16 });
+                    grid[tile.y][tile.x].type = TYPE_WALL;
+
+                    for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+                        let nx = tile.x + dx, ny = tile.y + dy;
+                        if (nx >= margin && nx < GRID_W - margin && ny >= margin && ny < GRID_H - margin) {
+                            frontier.push({ x: nx, y: ny });
+                        }
+                    }
                 }
             }
         }
