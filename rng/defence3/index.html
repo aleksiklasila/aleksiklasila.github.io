@@ -339,6 +339,14 @@
         <div id="lobby-settings" style="display:flex;flex-direction:column;gap:6px;font-size:12px">
             <div style="color:#888;font-weight:bold">Game Settings</div>
             <div style="display:flex;gap:8px;align-items:center">
+                <label>Game Mode:</label>
+                <select id="cfg-gamemode"
+                    style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
+                    <option value="destroy" selected>Destroy Everything</option>
+                    <option value="killking">Kill King</option>
+                </select>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
                 <label>Map Size:</label>
                 <select id="cfg-mapsize"
                     style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
@@ -364,7 +372,8 @@
             </div>
             <div style="display:flex;gap:8px;align-items:center">
                 <label>Full Map Visibility:</label>
-                <input id="cfg-full-vis" type="checkbox" style="width:auto; height:auto; cursor:pointer;" title="Disable Fog of War">
+                <input id="cfg-full-vis" type="checkbox" style="width:auto; height:auto; cursor:pointer;"
+                    title="Disable Fog of War">
             </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
@@ -581,12 +590,12 @@
             boss: "Super-heavy unit. Extremely tough and powerful.",
             flying: "Air unit. Ignores walls, has ranged attack.",
             mole: "Stealth unit. Immune to tower fire, very fragile.",
-            poison_resistant: "Poison-immune infantry. Good vs poison towers.",
-            fire_resistant: "Fire-immune infantry. Good vs fire towers.",
-            water_resistant: "Water-immune infantry. Fast, good vs water.",
-            ice_resistant: "Ice-immune infantry. Good vs ice towers.",
-            laser_resistant: "Laser-immune infantry. Good vs laser beams.",
-            snake: "Massive HP serpent. Leaves a visual trail.",
+            poison_resistant: "Poison-immune. Attacks with toxic clouds.",
+            fire_resistant: "Fire-immune. Attacks with flame bursts.",
+            water_resistant: "Water-immune. Attacks with water jets.",
+            ice_resistant: "Ice-immune. Attacks with frost shards.",
+            laser_resistant: "Laser-immune. Shoots laser beams from range.",
+            snake: "Massive serpent. Rams targets, takes self-damage.",
         };
 
         // Build menu categories
@@ -611,21 +620,22 @@
 
         // Unit combat stats
         const UNIT_STATS = {
-            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#fff', r: 8, vis: 'circle' },
-            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 20, color: '#eee', r: 6, vis: 'circle' },
-            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 45, color: '#555', r: 10, vis: 'circle' },
-            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 60, color: '#222', r: 12, vis: 'circle' },
-            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 35, color: '#dd0', r: 7, vis: 'triangle', isFlying: true },
+            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 20, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 45, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 60, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 35, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
             mole: { hp: 10, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true },
-            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 0.5, visionRange: 4, atkCd: 40, color: '#f50', r: 10, vis: 'circle', fireResistant: true },
-            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 0.5, visionRange: 5, atkCd: 30, color: '#4af', r: 8, vis: 'circle', waterResistant: true },
-            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true },
-            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true },
-            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20 },
+            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 35, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 40, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 30, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
             collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
             salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 40, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
         // ============================================================
@@ -660,6 +670,7 @@
         let gameStarted = false;
         let gameOver = false;
         let winner = -1;
+        let gameMode = 'destroy'; // 'destroy' or 'killking'
         let gameTime = 0; // in ticks
 
         // Camera
@@ -1282,6 +1293,22 @@
             if (particles.length > 500) return;
             for (let i = 0; i < n; i++) particles.push(new Particle(x, y, c));
         }
+        function createDirectedParticles(fromX, fromY, toX, toY, c, n) {
+            if (particles.length > 500) return;
+            let dx = toX - fromX, dy = toY - fromY;
+            let d = Math.hypot(dx, dy) || 1;
+            let nx = dx / d, ny = dy / d;
+            let r = visualRng || rng;
+            for (let i = 0; i < n; i++) {
+                let p = new Particle(fromX, fromY, c);
+                let spd = 1.5 + r() * 2.5;
+                let spread = (r() - 0.5) * 0.6;
+                p.vx = (nx + spread * -ny) * spd;
+                p.vy = (ny + spread * nx) * spd;
+                p.life = 12 + r() * 10;
+                particles.push(p);
+            }
+        }
 
         // ============================================================
         // UNIT CLASS
@@ -1316,6 +1343,10 @@
                 this.iceResistant = s.iceResistant || false;
                 this.laserResistant = s.laserResistant || false;
                 this.sandResistant = s.sandResistant || false;
+                this.attackStyle = s.attackStyle || 'melee';
+                this.isKing = (unitType === 'king');
+                this.attackTarget = null; // visual: current attack target for draw effects
+                this.attackFlash = 0; // visual: flash timer for attack animation
 
                 this.commandState = CMD_IDLE;
                 this.targetUnit = null;
@@ -1365,7 +1396,7 @@
                 let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
                 if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
                     let cell = grid[gy][gx];
-                    if (cell.item && cell.owner !== this.owner) {
+                    if (cell.item && cell.owner !== this.owner && !cell.item.underConstruction) {
                         let item = cell.item;
                         if (item.type === 'sand') { this.sandy = Math.max(this.sandy, 10); }
                         else if (item.type === 'lava') { this.burning = Math.max(this.burning, 30); let d = item.damage || 1; if (d > this.burnTickDamage) this.burnTickDamage = d; }
@@ -1399,6 +1430,7 @@
 
                 // Attack timer
                 if (this.attackTimer > 0) this.attackTimer--;
+                if (this.attackFlash > 0) this.attackFlash--;
 
                 // Worker AI (collector/salvager units)
                 if (this.workerState) {
@@ -1495,49 +1527,156 @@
                 }
             }
 
+            _performAttackOnUnit(target) {
+                target.hp -= this.attackDamage;
+                this.attackTimer = this.attackCooldown;
+                this.attackTarget = target;
+                this.attackFlash = 8;
+                let style = this.attackStyle;
+                if (style === 'fire') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#f50', 3);
+                    target.burning = Math.max(target.burning, 45);
+                    target.burnTickDamage = Math.max(target.burnTickDamage, this.attackDamage * 0.04);
+                } else if (style === 'water') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#4af', 3);
+                    target.wet = Math.max(target.wet, 60);
+                } else if (style === 'ice') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#afe', 3);
+                    target.frozen = Math.max(target.frozen, 40);
+                } else if (style === 'poison') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#2d2', 3);
+                    target.poisoned = Math.max(target.poisoned, 50);
+                    target.poisonTickDamage = Math.max(target.poisonTickDamage, this.attackDamage * 0.04);
+                } else if (style === 'laser') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#f0f', 2);
+                } else if (style === 'swoop') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#dd0', 2);
+                } else if (style === 'ram') {
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#0f0', 3);
+                    createDirectedParticles(target.x, target.y, this.x, this.y, '#f00', 2);
+                    this.hp -= this.maxHp * 0.03;
+                    if (this.hp <= 0) { this.dead = true; }
+                } else {
+                    // Default melee
+                    createDirectedParticles(this.x, this.y, target.x, target.y, '#f88', 2);
+                }
+                if (target.hp <= 0) { target.dead = true; return true; }
+                return false;
+            }
+
+            _performAttackOnBuilding(tb) {
+                tb.hp -= this.attackDamage;
+                this.attackTimer = this.attackCooldown;
+                this.attackTarget = tb;
+                this.attackFlash = 8;
+                let style = this.attackStyle;
+                if (style === 'fire') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f50', 3);
+                } else if (style === 'water') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#4af', 3);
+                } else if (style === 'ice') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#afe', 3);
+                } else if (style === 'poison') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#2d2', 3);
+                } else if (style === 'laser') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f0f', 2);
+                } else if (style === 'swoop') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#dd0', 2);
+                } else if (style === 'ram') {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#0f0', 3);
+                    createDirectedParticles(tb.x, tb.y, this.x, this.y, '#f00', 2);
+                    this.hp -= this.maxHp * 0.03;
+                    if (this.hp <= 0) { this.dead = true; }
+                } else {
+                    createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f88', 2);
+                }
+                if (tb.hp <= 0) { destroyBuilding(tb); return true; }
+                return false;
+            }
+
             doAttacking(spd) {
                 // Attack unit target
                 if (this.targetUnit) {
-                    if (this.targetUnit.dead) { this.targetUnit = null; this.commandState = CMD_IDLE; return; }
+                    if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
                     if (d <= this.attackRange) {
+                        this.attackTarget = this.targetUnit;
+                        this.path = null;
                         // In range - attack
                         if (this.attackTimer <= 0) {
-                            this.targetUnit.hp -= this.attackDamage;
-                            this.attackTimer = this.attackCooldown;
-                            createExplosion(this.targetUnit.x, this.targetUnit.y, '#f88', 2);
-                            if (this.targetUnit.hp <= 0) { this.targetUnit.dead = true; this.targetUnit = null; this.commandState = CMD_IDLE; }
+                            if (this._performAttackOnUnit(this.targetUnit)) {
+                                this.targetUnit = null; this.attackTarget = null; this.commandState = CMD_IDLE;
+                            }
                         }
-                    } else if (d > 5 * TILE) {
+                    } else if (d > 8 * TILE) {
                         // Leash
-                        this.targetUnit = null; this.commandState = CMD_IDLE;
+                        this.targetUnit = null; this.attackTarget = null; this.path = null; this.commandState = CMD_IDLE;
                     } else {
-                        // Move toward target
-                        let dx = this.targetUnit.x - this.x, dy = this.targetUnit.y - this.y;
-                        let dist = Math.hypot(dx, dy);
-                        this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                        // Move toward target using path if available, direct if close
+                        if (this.path && this.pathIndex < this.path.length) {
+                            this.followPath(spd);
+                        } else if (d < 2 * TILE || this.isFlying) {
+                            // Close enough or flying - direct move
+                            let dx = this.targetUnit.x - this.x, dy = this.targetUnit.y - this.y;
+                            let dist = Math.hypot(dx, dy);
+                            this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                        } else {
+                            // Need a new path toward target
+                            let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
+                            let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                            if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                let dest = findNearestWalkable(tgx, tgy);
+                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
+                                this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
+                                pathfindBudget++;
+                            } else {
+                                // Direct move as fallback when pathfind budget exhausted
+                                let dx = this.targetUnit.x - this.x, dy = this.targetUnit.y - this.y;
+                                let dist = Math.hypot(dx, dy);
+                                this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                            }
+                        }
                     }
                     return;
                 }
                 // Attack building target
                 if (this.targetBuilding) {
                     let tb = this.targetBuilding;
-                    if (tb.hp <= 0) { this.targetBuilding = null; this.commandState = CMD_IDLE; return; }
+                    if (tb.hp <= 0) { this.targetBuilding = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(tb.x - this.x, tb.y - this.y);
                     if (d <= this.attackRange + TILE) {
+                        this.attackTarget = tb;
+                        this.path = null;
                         if (this.attackTimer <= 0) {
-                            tb.hp -= this.attackDamage;
-                            this.attackTimer = this.attackCooldown;
-                            createExplosion(tb.x, tb.y, '#f88', 2);
-                            if (tb.hp <= 0) destroyBuilding(tb);
+                            if (this._performAttackOnBuilding(tb)) {
+                                this.targetBuilding = null; this.attackTarget = null; this.commandState = CMD_IDLE;
+                            }
                         }
                     } else {
-                        let dx = tb.x - this.x, dy = tb.y - this.y;
-                        let dist = Math.hypot(dx, dy);
-                        this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                        if (this.path && this.pathIndex < this.path.length) {
+                            this.followPath(spd);
+                        } else if (d < 2 * TILE || this.isFlying) {
+                            let dx = tb.x - this.x, dy = tb.y - this.y;
+                            let dist = Math.hypot(dx, dy);
+                            this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                        } else {
+                            let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
+                            let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                            if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                let dest = findNearestWalkable(tgx, tgy);
+                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
+                                this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
+                                pathfindBudget++;
+                            } else {
+                                let dx = tb.x - this.x, dy = tb.y - this.y;
+                                let dist = Math.hypot(dx, dy);
+                                this.x += (dx / dist) * spd; this.y += (dy / dist) * spd;
+                            }
+                        }
                     }
                     return;
                 }
+                this.attackTarget = null;
                 this.commandState = CMD_IDLE;
             }
 
@@ -1547,10 +1686,7 @@
                     if (u.owner === this.owner || u.dead) continue;
                     if (Math.hypot(u.x - this.x, u.y - this.y) <= this.attackRange) {
                         if (this.attackTimer <= 0) {
-                            u.hp -= this.attackDamage;
-                            this.attackTimer = this.attackCooldown;
-                            createExplosion(u.x, u.y, '#f88', 2);
-                            if (u.hp <= 0) u.dead = true;
+                            this._performAttackOnUnit(u);
                             return;
                         }
                     }
@@ -1626,6 +1762,24 @@
                     let rr = this.r;
                     ctx.fillStyle = this.color; ctx.fillRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
                     ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.strokeRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
+                } else if (this.vis === 'king') {
+                    let rr = this.r;
+                    // Crown shape
+                    ctx.fillStyle = this.color; ctx.beginPath();
+                    ctx.moveTo(this.x - rr, this.y + rr * 0.4);
+                    ctx.lineTo(this.x - rr, this.y - rr * 0.2);
+                    ctx.lineTo(this.x - rr * 0.5, this.y + rr * 0.1);
+                    ctx.lineTo(this.x, this.y - rr * 0.7);
+                    ctx.lineTo(this.x + rr * 0.5, this.y + rr * 0.1);
+                    ctx.lineTo(this.x + rr, this.y - rr * 0.2);
+                    ctx.lineTo(this.x + rr, this.y + rr * 0.4);
+                    ctx.closePath(); ctx.fill();
+                    ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+                    // Jewel dots on crown tips
+                    ctx.fillStyle = '#f00';
+                    ctx.beginPath(); ctx.arc(this.x - rr, this.y - rr * 0.2, 2, 0, 6.28); ctx.fill();
+                    ctx.beginPath(); ctx.arc(this.x, this.y - rr * 0.7, 2, 0, 6.28); ctx.fill();
+                    ctx.beginPath(); ctx.arc(this.x + rr, this.y - rr * 0.2, 2, 0, 6.28); ctx.fill();
                 } else {
                     ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
                     ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
@@ -1641,6 +1795,126 @@
                     ctx.fillStyle = '#600'; ctx.fillRect(bx, by, bw, bh);
                     ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * Math.max(0, this.hp / this.maxHp), bh);
                 }
+                // Attack visual effects
+                if (this.attackTarget && this.attackFlash > 0) {
+                    let tx = this.attackTarget.x, ty = this.attackTarget.y;
+                    ctx.save();
+                    let style = this.attackStyle;
+                    if (style === 'laser') {
+                        // Laser beam from unit to target
+                        let grad = ctx.createLinearGradient(this.x, this.y, tx, ty);
+                        grad.addColorStop(0, '#f0f');
+                        grad.addColorStop(0.5, '#fff');
+                        grad.addColorStop(1, '#d0f');
+                        ctx.strokeStyle = grad;
+                        ctx.lineWidth = 2 + this.attackFlash * 0.4;
+                        ctx.shadowColor = '#f0f'; ctx.shadowBlur = 8 + this.attackFlash;
+                        ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(tx, ty); ctx.stroke();
+                        // Core beam
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+                        ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(tx, ty); ctx.stroke();
+                        ctx.shadowBlur = 0;
+                    } else if (style === 'fire') {
+                        // Fire burst toward target
+                        let dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy);
+                        let nx = dx / d, ny = dy / d;
+                        ctx.strokeStyle = '#f50'; ctx.lineWidth = 3;
+                        ctx.shadowColor = '#f80'; ctx.shadowBlur = 10;
+                        ctx.beginPath();
+                        ctx.moveTo(this.x + nx * this.r, this.y + ny * this.r);
+                        // Wavy flame path
+                        let steps = 4;
+                        for (let i = 1; i <= steps; i++) {
+                            let t = i / steps;
+                            let mx = this.x + dx * t, my = this.y + dy * t;
+                            let perp = (Math.sin(i * 3 + gameTime * 0.5)) * 4;
+                            ctx.lineTo(mx + ny * perp, my - nx * perp);
+                        }
+                        ctx.stroke();
+                        ctx.shadowBlur = 0;
+                    } else if (style === 'water') {
+                        // Water stream arc
+                        let mx = (this.x + tx) / 2, my = (this.y + ty) / 2 - 8;
+                        ctx.strokeStyle = '#4af'; ctx.lineWidth = 2.5;
+                        ctx.shadowColor = '#08f'; ctx.shadowBlur = 6;
+                        ctx.beginPath(); ctx.moveTo(this.x, this.y);
+                        ctx.quadraticCurveTo(mx, my, tx, ty); ctx.stroke();
+                        // Droplets along arc
+                        ctx.fillStyle = '#8cf';
+                        for (let i = 0; i < 3; i++) {
+                            let t = (i + 1) / 4;
+                            let px = this.x * (1 - t) * (1 - t) + 2 * mx * t * (1 - t) + tx * t * t;
+                            let py = this.y * (1 - t) * (1 - t) + 2 * my * t * (1 - t) + ty * t * t;
+                            ctx.beginPath(); ctx.arc(px, py, 1.5, 0, 6.28); ctx.fill();
+                        }
+                        ctx.shadowBlur = 0;
+                    } else if (style === 'ice') {
+                        // Ice shard line with sparkles
+                        ctx.strokeStyle = '#afe'; ctx.lineWidth = 2;
+                        ctx.shadowColor = '#fff'; ctx.shadowBlur = 8;
+                        ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(tx, ty); ctx.stroke();
+                        // Ice crystals along path
+                        ctx.fillStyle = '#fff';
+                        let dx = tx - this.x, dy = ty - this.y;
+                        for (let i = 1; i <= 3; i++) {
+                            let t = i / 4;
+                            let px = this.x + dx * t, py = this.y + dy * t;
+                            ctx.save(); ctx.translate(px, py); ctx.rotate(gameTime * 0.2 + i);
+                            ctx.fillRect(-2, -1, 4, 2); ctx.fillRect(-1, -2, 2, 4);
+                            ctx.restore();
+                        }
+                        ctx.shadowBlur = 0;
+                    } else if (style === 'poison') {
+                        // Poison cloud trail
+                        let dx = tx - this.x, dy = ty - this.y;
+                        ctx.globalAlpha = 0.5 + this.attackFlash * 0.05;
+                        for (let i = 1; i <= 5; i++) {
+                            let t = i / 6;
+                            let px = this.x + dx * t, py = this.y + dy * t;
+                            let sz = 3 + Math.sin(gameTime * 0.3 + i) * 1.5;
+                            ctx.fillStyle = i % 2 === 0 ? '#2d2' : '#0a0';
+                            ctx.beginPath(); ctx.arc(px, py, sz, 0, 6.28); ctx.fill();
+                        }
+                        ctx.globalAlpha = 1;
+                    } else if (style === 'swoop') {
+                        // Flying swoop - expanding ring around target on hit
+                        let swoopR = (8 - this.attackFlash) * 2 + 4;
+                        ctx.strokeStyle = '#dd0'; ctx.lineWidth = 2;
+                        ctx.globalAlpha = this.attackFlash / 8;
+                        ctx.beginPath(); ctx.arc(tx, ty, swoopR, 0, 6.28); ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    } else if (style === 'ram') {
+                        // Snake ram - impact shockwave ring
+                        let shockR = (8 - this.attackFlash) * 3;
+                        ctx.strokeStyle = '#ff0'; ctx.lineWidth = 2;
+                        ctx.globalAlpha = this.attackFlash / 8;
+                        ctx.beginPath(); ctx.arc(tx, ty, shockR, 0, 6.28); ctx.stroke();
+                        // Impact lines radiating from target
+                        ctx.strokeStyle = '#f00'; ctx.lineWidth = 1.5;
+                        for (let i = 0; i < 6; i++) {
+                            let a = i * Math.PI / 3 + gameTime * 0.1;
+                            ctx.beginPath();
+                            ctx.moveTo(tx + Math.cos(a) * 4, ty + Math.sin(a) * 4);
+                            ctx.lineTo(tx + Math.cos(a) * (shockR + 4), ty + Math.sin(a) * (shockR + 4));
+                            ctx.stroke();
+                        }
+                        ctx.globalAlpha = 1;
+                    } else if (this.attackFlash > 4) {
+                        // Default melee: quick slash line
+                        let dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy) || 1;
+                        let nx = dx / d, ny = dy / d;
+                        let perpX = -ny * 5, perpY = nx * 5;
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+                        ctx.globalAlpha = (this.attackFlash - 4) / 4;
+                        ctx.beginPath();
+                        ctx.moveTo(tx + perpX, ty + perpY);
+                        ctx.lineTo(tx - perpX, ty - perpY);
+                        ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    }
+                    ctx.restore();
+                }
+
                 // Carrying value indicator for workers
                 if (this.carryingValue > 0) {
                     ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
@@ -1682,9 +1956,11 @@
             }
 
             getUnitCost() {
-                // Cost to queue one unit from this barrack
+                // Cost scales linearly with effective level
                 let cfg = BARRACK_SPAWN_CONFIG[this.unitType];
-                return cfg ? Math.round(cfg.baseTime * 0.5) : 10;
+                let baseCost = cfg ? Math.round(cfg.baseTime * 0.5) : 10;
+                let lvl = this.effectiveLevel || this.level || 1;
+                return Math.round(baseCost * (1 + (lvl - 1) * 0.5));
             }
 
             update() {
@@ -1749,9 +2025,9 @@
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
                         let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 15;
-                        // Q label above the progress bar
+                        // Q label with price above the progress bar
                         ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 9);
+                        ctx.fillText('Q:' + this.spawnQueue.length + ' $' + this.getUnitCost(), this.x, this.y + 9);
                         ctx.fillStyle = '#333'; ctx.fillRect(bx, by, bw, bh);
                         ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(bx, by, bw * pct, bh);
                     }
@@ -1784,7 +2060,7 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { return 15; }
+            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(15 * (1 + (lvl - 1) * 0.5)); }
             update() {
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
@@ -1829,7 +2105,7 @@
                     if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                         let pct = this.spawnTimer / this.spawnCooldown;
                         ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 3);
+                        ctx.fillText('Q:' + this.spawnQueue.length + ' $' + this.getUnitCost(), this.x, this.y + 3);
                         ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 9, 24, 3);
                         ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 9, 24 * pct, 3);
                     }
@@ -1857,7 +2133,7 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { return 20; }
+            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(20 * (1 + (lvl - 1) * 0.5)); }
             update() {
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
@@ -1903,8 +2179,8 @@
                         let pct = this.spawnTimer / this.spawnCooldown;
                         ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 10, 24, 3);
                         ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 10, 24 * pct, 3);
-                        ctx.fillStyle = '#fff'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
-                        ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 22);
+                        ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
+                        ctx.fillText('Q:' + this.spawnQueue.length + ' $' + this.getUnitCost(), this.x, this.y + 22);
                     }
                     if (this.hp < this.maxHp) {
                         ctx.fillStyle = '#f00'; ctx.fillRect(this.x - 10, this.y + 6, 20, 3);
@@ -1931,7 +2207,7 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { return 18; }
+            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
             // Builder DPS per unit: scales with effective level
             getBuilderDps() { return 5 * (this.effectiveLevel || this.level || 1); }
             update() {
@@ -1980,7 +2256,7 @@
                 } else if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
                     let pct = this.spawnTimer / this.spawnCooldown;
                     ctx.fillStyle = '#fff'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText('Q:' + this.spawnQueue.length, this.x, this.y + 3);
+                    ctx.fillText('Q:' + this.spawnQueue.length + ' $' + this.getUnitCost(), this.x, this.y + 3);
                     ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 9, 24, 3);
                     ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 9, 24 * pct, 3);
                 }
@@ -2044,7 +2320,6 @@
                         if (u.carryingValue > 0) {
                             let closest = _findClosestSpawner(u, 'spawner');
                             players[owner].money += u.carryingValue;
-                            if (closest) createExplosion(closest.x, closest.y, '#fd0', 8);
                         }
                         u.carryingValue = 0;
                         // Immediately find next target (prefer the mine we were just at if it still has gold)
@@ -2081,7 +2356,6 @@
                         if (u.carryingValue > 0) {
                             let closest = _findClosestSpawner(u, 'salvager');
                             players[owner].money += u.carryingValue;
-                            if (closest) createExplosion(closest.x, closest.y, '#fd0', 8);
                         }
                         u.carryingValue = 0;
                         _salvagerFindTarget(u, myGx, myGy);
@@ -2575,11 +2849,12 @@
                     let level = Math.floor(Math.log2(cell.item.stacks)) + 1;
                     let stats = calculateItemStats(itemKey, level);
                     cell.item.maxHp = stats.maxHp; cell.item.hp = stats.maxHp;
+                    cell.item.underConstruction = false;
                     if (stats.damage) cell.item.damage = stats.damage;
                     updateItemTextCache(cell.item);
                 } else {
                     let stats = calculateItemStats(itemKey, 1);
-                    let item = { type: itemKey, stacks: 1, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true };
+                    let item = { type: itemKey, stacks: 1, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId };
                     cell.item = item;
                     cell.owner = playerId;
                     updateItemTextCache(item);
@@ -2619,21 +2894,34 @@
         }
 
         function checkWinCondition() {
-            for (let pid = 0; pid < 2; pid++) {
-                let has = false;
-                for (let t of towers) { if (t.owner === pid) { has = true; break; } }
-                if (!has) for (let b of barracks) { if (b.owner === pid) { has = true; break; } }
-                if (!has) for (let s of collectorSpawners) { if (s.owner === pid) { has = true; break; } }
-                if (!has) {
-                    // Check floor items
-                    for (let y = 0; y < GRID_H && !has; y++) for (let x = 0; x < GRID_W && !has; x++) {
-                        if (grid[y][x].item && grid[y][x].owner === pid) has = true;
+            if (gameMode === 'killking') {
+                for (let pid = 0; pid < 2; pid++) {
+                    let hasKing = false;
+                    for (let u of units) { if (u.owner === pid && u.isKing && !u.dead) { hasKing = true; break; } }
+                    if (!hasKing) {
+                        gameOver = true;
+                        winner = 1 - pid;
+                        showGameOver();
+                        return;
                     }
                 }
-                if (!has) {
-                    gameOver = true;
-                    winner = 1 - pid;
-                    showGameOver();
+            } else {
+                for (let pid = 0; pid < 2; pid++) {
+                    let has = false;
+                    for (let t of towers) { if (t.owner === pid) { has = true; break; } }
+                    if (!has) for (let b of barracks) { if (b.owner === pid) { has = true; break; } }
+                    if (!has) for (let s of collectorSpawners) { if (s.owner === pid) { has = true; break; } }
+                    if (!has) {
+                        // Check floor items
+                        for (let y = 0; y < GRID_H && !has; y++) for (let x = 0; x < GRID_W && !has; x++) {
+                            if (grid[y][x].item && grid[y][x].owner === pid) has = true;
+                        }
+                    }
+                    if (!has) {
+                        gameOver = true;
+                        winner = 1 - pid;
+                        showGameOver();
+                    }
                 }
             }
         }
@@ -2690,6 +2978,14 @@
             } else if (item.type === 'mine') {
                 ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.28); ctx.fill();
                 ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.28); ctx.fill();
+            }
+            if (item.underConstruction) {
+                let pct = item.maxHp > 0 ? item.hp / item.maxHp : 0;
+                ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+                ctx.fillStyle = '#fa0'; ctx.font = '7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('BUILD', x, y - 4);
+                ctx.fillStyle = '#333'; ctx.fillRect(px + 4, y + 2, TILE - 8, 3);
+                ctx.fillStyle = '#fa0'; ctx.fillRect(px + 4, y + 2, (TILE - 8) * pct, 3);
             }
             if (item.textCanvas) ctx.drawImage(item.textCanvas, x - 16, y - 24);
         }
@@ -2796,6 +3092,17 @@
                     ctx.fillStyle = us.color; ctx.beginPath();
                     ctx.ellipse(cx, cy, r * 0.8, r * 1.1, 0, 0, Math.PI * 2);
                     ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+                } else if (us.vis === 'king') {
+                    ctx.fillStyle = us.color; ctx.beginPath();
+                    ctx.moveTo(cx - r, cy + r * 0.4);
+                    ctx.lineTo(cx - r, cy - r * 0.2);
+                    ctx.lineTo(cx - r * 0.5, cy + r * 0.1);
+                    ctx.lineTo(cx, cy - r * 0.7);
+                    ctx.lineTo(cx + r * 0.5, cy + r * 0.1);
+                    ctx.lineTo(cx + r, cy - r * 0.2);
+                    ctx.lineTo(cx + r, cy + r * 0.4);
+                    ctx.closePath(); ctx.fill();
+                    ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
                 } else {
                     ctx.fillStyle = us.color; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 6.28); ctx.fill();
                     ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
@@ -2952,17 +3259,17 @@
             }
 
             // Collector/Salvager spawners
-            collectorSpawners.forEach(s => { 
+            collectorSpawners.forEach(s => {
                 if (s.gx >= minGx && s.gx <= maxGx && s.gy >= minGy && s.gy <= maxGy) {
                     if (fullVisibility || (visibilityGrid[s.gy] && visibilityGrid[s.gy][s.gx] > 0)) s.draw(ctx);
-                } 
+                }
             });
 
             // Barracks
-            barracks.forEach(b => { 
+            barracks.forEach(b => {
                 if (b.gx >= minGx && b.gx <= maxGx && b.gy >= minGy && b.gy <= maxGy) {
                     if (fullVisibility || (visibilityGrid[b.gy] && visibilityGrid[b.gy][b.gx] > 0)) b.draw(ctx);
-                } 
+                }
             });
 
             // Units (interpolated positions for smooth rendering)
@@ -2983,7 +3290,7 @@
                 let rx = p.x, ry = p.y;
                 p.x = p.prevX + (p.x - p.prevX) * alpha;
                 p.y = p.prevY + (p.y - p.prevY) * alpha;
-                let cgy = Math.floor(p.y/TILE), cgx = Math.floor(p.x/TILE);
+                let cgy = Math.floor(p.y / TILE), cgx = Math.floor(p.x / TILE);
                 if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
                 p.x = rx; p.y = ry;
             }
@@ -2991,7 +3298,7 @@
                 let rx = p.x, ry = p.y;
                 p.x = p.prevX + (p.x - p.prevX) * alpha;
                 p.y = p.prevY + (p.y - p.prevY) * alpha;
-                let cgy = Math.floor(p.y/TILE), cgx = Math.floor(p.x/TILE);
+                let cgy = Math.floor(p.y / TILE), cgx = Math.floor(p.x / TILE);
                 if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
                 p.x = rx; p.y = ry;
             }
@@ -3118,7 +3425,7 @@
                             }
                         } else { canBuild = false; }
                     } else {
-                        canBuild = canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId);
+                        canBuild = isTileVisible(gx, gy) && (canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId));
                     }
                     ctx.fillStyle = canBuild ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
                     ctx.fillRect(gx * TILE, gy * TILE, TILE, TILE);
@@ -3171,7 +3478,7 @@
             // Units
             for (let u of units) {
                 if (u.dead) continue;
-                let cgy = Math.floor(u.y/TILE), cgx = Math.floor(u.x/TILE);
+                let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
                 if (!fullVisibility && (!visibilityGrid[cgy] || visibilityGrid[cgy][cgx] === 0)) continue;
                 minimapCtx.fillStyle = PLAYER_COLORS[u.owner];
                 let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
@@ -3211,6 +3518,10 @@
 
         let lastDesyncWarning = 0;
 
+        function isTileVisible(gx, gy) {
+            return fullVisibility || (visibilityGrid[gy] && visibilityGrid[gy][gx] > 0);
+        }
+
         function updateVisibility(playerId) {
             // Check fullVisibility toggle
             if (fullVisibility) return;
@@ -3230,17 +3541,17 @@
             };
 
             for (let u of units) if (u.owner === playerId && !u.dead) {
-                setVis(Math.floor(u.x/TILE), Math.floor(u.y/TILE), u.visionRange || 4);
+                setVis(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
             }
-            for (let t of towers) if (t.owner === playerId && t.hp > 0) {
+            for (let t of towers) if (t.owner === playerId && t.hp > 0 && !t.underConstruction) {
                 setVis(t.gx, t.gy, t.currentStats.visionRange || 3);
             }
-            for (let b of barracks) if (b.owner === playerId && b.hp > 0) setVis(b.gx, b.gy, 4);
-            for (let s of collectorSpawners) if (s.owner === playerId && s.hp > 0) setVis(s.gx, s.gy, 4);
+            for (let b of barracks) if (b.owner === playerId && b.hp > 0 && !b.underConstruction) setVis(b.gx, b.gy, 4);
+            for (let s of collectorSpawners) if (s.owner === playerId && s.hp > 0 && !s.underConstruction) setVis(s.gx, s.gy, 4);
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let cell = grid[y][x];
-                    if (cell.item && cell.owner === playerId && cell.item.hp > 0) setVis(x, y, 3);
+                    if (cell.item && cell.owner === playerId && cell.item.hp > 0 && !cell.item.underConstruction) setVis(x, y, 3);
                 }
             }
 
@@ -3248,20 +3559,20 @@
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let v = visibilityGrid[y][x];
-                    if (x > 0) v = Math.max(v, visibilityGrid[y][x-1] - 1);
-                    if (y > 0) v = Math.max(v, visibilityGrid[y-1][x] - 1);
-                    if (x > 0 && y > 0) v = Math.max(v, visibilityGrid[y-1][x-1] - 1.414);
-                    if (x < GRID_W - 1 && y > 0) v = Math.max(v, visibilityGrid[y-1][x+1] - 1.414);
+                    if (x > 0) v = Math.max(v, visibilityGrid[y][x - 1] - 1);
+                    if (y > 0) v = Math.max(v, visibilityGrid[y - 1][x] - 1);
+                    if (x > 0 && y > 0) v = Math.max(v, visibilityGrid[y - 1][x - 1] - 1.414);
+                    if (x < GRID_W - 1 && y > 0) v = Math.max(v, visibilityGrid[y - 1][x + 1] - 1.414);
                     visibilityGrid[y][x] = v;
                 }
             }
             for (let y = GRID_H - 1; y >= 0; y--) {
                 for (let x = GRID_W - 1; x >= 0; x--) {
                     let v = visibilityGrid[y][x];
-                    if (x < GRID_W - 1) v = Math.max(v, visibilityGrid[y][x+1] - 1);
-                    if (y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x] - 1);
-                    if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x+1] - 1.414);
-                    if (x > 0 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y+1][x-1] - 1.414);
+                    if (x < GRID_W - 1) v = Math.max(v, visibilityGrid[y][x + 1] - 1);
+                    if (y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x] - 1);
+                    if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x + 1] - 1.414);
+                    if (x > 0 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x - 1] - 1.414);
                     visibilityGrid[y][x] = v;
                 }
             }
@@ -3323,7 +3634,7 @@
                     let fgx = Math.floor(u.x / TILE), fgy = Math.floor(u.y / TILE);
                     if (fgx >= 0 && fgx < GRID_W && fgy >= 0 && fgy < GRID_H) {
                         let cell = grid[fgy][fgx];
-                        if (cell.item && cell.item.type === 'farm' && cell.owner !== u.owner) {
+                        if (cell.item && cell.item.type === 'farm' && cell.owner !== u.owner && !cell.item.underConstruction) {
                             let stacks = cell.item.stacks || 1;
                             let level = Math.floor(Math.log2(stacks)) + 1;
                             players[cell.owner].money += Math.floor(10 * Math.pow(1.5, level - 1));
@@ -3390,8 +3701,9 @@
 
                 if (e.button === 0) { // Left click
                     if (selectedBuildItem) {
-                        // Place building
+                        // Place building (only on visible tiles)
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
+                        if (!isTileVisible(gx, gy)) return;
                         queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem });
                         updateBuildMenu();
                         return;
@@ -3542,6 +3854,8 @@
                             let clicked = null;
                             for (let u of units) {
                                 if (u.owner !== localPlayerId || u.dead) continue;
+                                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                                if (!isTileVisible(ugx, ugy)) continue;
                                 if (Math.hypot(u.x - selectionBox.sx, u.y - selectionBox.sy) < u.r + 8) { clicked = u; break; }
                             }
                             if (clicked) {
@@ -3554,17 +3868,17 @@
                                 // Check if clicking any entity: barrack, tower, floor item, gold mine, collector
                                 let cx = selectionBox.sx, cy = selectionBox.sy;
                                 let clickedEntity = null;
-                                for (let b of barracks) { if (b.hp > 0 && Math.hypot(b.x - cx, b.y - cy) < 20) { clickedEntity = b; break; } }
-                                if (!clickedEntity) for (let t of towers) { if (t.hp > 0 && Math.hypot(t.x - cx, t.y - cy) < 20) { clickedEntity = t; break; } }
-                                if (!clickedEntity) for (let s of collectorSpawners) { if (s.hp > 0 && Math.hypot(s.x - cx, s.y - cy) < 20) { clickedEntity = s; break; } }
+                                for (let b of barracks) { if (b.hp > 0 && isTileVisible(b.gx, b.gy) && Math.hypot(b.x - cx, b.y - cy) < 20) { clickedEntity = b; break; } }
+                                if (!clickedEntity) for (let t of towers) { if (t.hp > 0 && isTileVisible(t.gx, t.gy) && Math.hypot(t.x - cx, t.y - cy) < 20) { clickedEntity = t; break; } }
+                                if (!clickedEntity) for (let s of collectorSpawners) { if (s.hp > 0 && isTileVisible(s.gx, s.gy) && Math.hypot(s.x - cx, s.y - cy) < 20) { clickedEntity = s; break; } }
                                 if (!clickedEntity) {
                                     let gx = Math.floor(cx / TILE), gy = Math.floor(cy / TILE);
-                                    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].item) {
+                                    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].item && isTileVisible(gx, gy)) {
                                         clickedEntity = grid[gy][gx].item;
                                         clickedEntity._gx = gx; clickedEntity._gy = gy; clickedEntity._cell = grid[gy][gx];
                                     }
                                 }
-                                if (!clickedEntity) for (let m of goldMines) { if (Math.hypot(m.x - cx, m.y - cy) < 20) { clickedEntity = m; clickedEntity._isGoldMine = true; break; } }
+                                if (!clickedEntity) for (let m of goldMines) { if (isTileVisible(m.gx, m.gy) && Math.hypot(m.x - cx, m.y - cy) < 20) { clickedEntity = m; clickedEntity._isGoldMine = true; break; } }
                                 if (clickedEntity) {
                                     if (e.shiftKey) {
                                         let idx = selectedEntities.indexOf(clickedEntity);
@@ -3579,22 +3893,25 @@
                             let newEntities = [];
                             for (let u of units) {
                                 if (u.owner !== localPlayerId || u.dead) continue;
+                                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                                if (!isTileVisible(ugx, ugy)) continue;
                                 if (u.x >= sx && u.x <= ex && u.y >= sy && u.y <= ey) newUnits.push(u);
                             }
                             for (let b of barracks) {
-                                if (b.hp > 0 && b.owner === localPlayerId && b.x >= sx && b.x <= ex && b.y >= sy && b.y <= ey) newEntities.push(b);
+                                if (b.hp > 0 && b.owner === localPlayerId && isTileVisible(b.gx, b.gy) && b.x >= sx && b.x <= ex && b.y >= sy && b.y <= ey) newEntities.push(b);
                             }
                             for (let t of towers) {
-                                if (t.hp > 0 && t.owner === localPlayerId && t.x >= sx && t.x <= ex && t.y >= sy && t.y <= ey) newEntities.push(t);
+                                if (t.hp > 0 && t.owner === localPlayerId && isTileVisible(t.gx, t.gy) && t.x >= sx && t.x <= ex && t.y >= sy && t.y <= ey) newEntities.push(t);
                             }
                             for (let s of collectorSpawners) {
-                                if (s.hp > 0 && s.owner === localPlayerId && s.x >= sx && s.x <= ex && s.y >= sy && s.y <= ey) newEntities.push(s);
+                                if (s.hp > 0 && s.owner === localPlayerId && isTileVisible(s.gx, s.gy) && s.x >= sx && s.x <= ex && s.y >= sy && s.y <= ey) newEntities.push(s);
                             }
                             // Floor items within box
                             let minGx = Math.max(0, Math.floor(sx / TILE)), maxGx = Math.min(GRID_W - 1, Math.floor(ex / TILE));
                             let minGy = Math.max(0, Math.floor(sy / TILE)), maxGy = Math.min(GRID_H - 1, Math.floor(ey / TILE));
                             for (let gy = minGy; gy <= maxGy; gy++) {
                                 for (let gx = minGx; gx <= maxGx; gx++) {
+                                    if (!isTileVisible(gx, gy)) continue;
                                     let cell = grid[gy][gx];
                                     if (cell.item && cell.owner === localPlayerId && !newEntities.includes(cell.item)) {
                                         cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
@@ -3604,6 +3921,7 @@
                             }
                             // Gold mines within box
                             for (let m of goldMines) {
+                                if (!isTileVisible(m.gx, m.gy)) continue;
                                 if (m.x >= sx && m.x <= ex && m.y >= sy && m.y <= ey) { m._isGoldMine = true; newEntities.push(m); }
                             }
                             if (e.shiftKey) {
@@ -3725,9 +4043,21 @@
                 } else if (a.action === 'attack') {
                     let target = units.find(u => u.id === a.targetId);
                     if (target) {
+                        let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
+                        let dest = findNearestWalkable(targetGx, targetGy);
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                                 u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null;
+                                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                                    u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                                    u._pendingPathTarget = null;
+                                    pathfindBudget++;
+                                } else {
+                                    u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING };
+                                    u.path = null; u.pathIndex = 0;
+                                }
                             }
                         }
                     }
@@ -3831,7 +4161,7 @@
                     if (cell.item && cell.owner === playerId && !t && !b && !s) { cell.item.markedForSalvage = !cell.item.markedForSalvage; }
                 } else if (a.action === 'killUnit') {
                     let u = units.find(u => u.id === a.unitId && u.owner === playerId);
-                    if (u && !u.dead) { u.hp = 0; u.dead = true; players[playerId].popCount--; }
+                    if (u && !u.dead && !u.isKing) { u.hp = 0; u.dead = true; players[playerId].popCount--; }
                 }
             }
         }
@@ -4098,7 +4428,7 @@
                 let subBtn = `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;margin-left:6px;" title="${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}">${e.markedForSalvage ? '❌' : '🗑️'}</span>`;
-                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${e.spawnQueue.length}/20</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${e.spawnQueue.length}/20</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}${salvBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -4130,7 +4460,7 @@
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;margin-left:6px;" title="${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}">${anyMarked ? '❌' : '🗑️'}</span>`;
-                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${totalQueue}/${group.length * 20}</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${totalQueue}/${group.length * 20}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}${salvBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -4221,7 +4551,7 @@
                     let subBtn = `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                     let addBtn = `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                     let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;margin-left:6px;" title="${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}">${e.markedForSalvage ? '❌' : '🗑️'}</span>`;
-                    html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${(e.spawnQueue || []).length}/10</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${(e.spawnQueue || []).length}/10</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}${salvBtn}</div></div>`;
                 }
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
@@ -4389,7 +4719,7 @@
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;margin-left:6px;" title="${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}">${anyMarked ? '❌' : '🗑️'}</span>`;
-                html += `<div class="info-row"><span class="info-label">Q:</span><div style="display:flex;align-items:center;"><span class="info-value" style="margin-right:4px;">${totalQueue}/${group.length * 10}</span>${subBtn}${addBtn}${salvBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${totalQueue}/${group.length * 10}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}${salvBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -4711,6 +5041,7 @@
                         GOLD_MINE_MAX = data.cfg.goldMax;
                         GOLD_MINE_AREA = data.cfg.goldArea;
                         fullVisibility = data.cfg.fullVis || false;
+                        gameMode = data.cfg.gameMode || 'destroy';
                     }
                     startGame();
                 } else if (data.type === 'TICK_INPUT') {
@@ -4738,7 +5069,7 @@
                         isMultiplayer = true;
                         connections.forEach(c => c.send({
                             type: 'START_GAME', seed: gameSeed, playerId: 1,
-                            cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility }
+                            cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode }
                         }));
                         startGame();
                     }, 500);
@@ -4798,6 +5129,7 @@
             let areaPct = parseInt(document.getElementById('cfg-gold-area').value) || 85;
             GOLD_MINE_AREA = Math.floor(size * areaPct / 100);
             fullVisibility = document.getElementById('cfg-full-vis').checked;
+            gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
         }
 
         function startSoloGame() {
@@ -4842,6 +5174,14 @@
                     u.builderDps = spawner.getBuilderDps();
                     units.push(u); players[pid].popCount++;
                 }
+            }
+
+            // Spawn kings for each player
+            for (let pid = 0; pid < 2; pid++) {
+                let bgx = pid === 0 ? p0gx : p1gx, bgy = pid === 0 ? p0gy : p1gy;
+                let sp = findNearestWalkable(bgx, bgy);
+                let king = new Unit('king', pid, sp.x * TILE + 16, sp.y * TILE + 16);
+                units.push(king); players[pid].popCount++;
             }
 
             // Center camera on own base
