@@ -398,8 +398,9 @@
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
         <span class="hud-time" style="margin-left: auto; margin-right: 15px; display:inline-flex; align-items:center;">
-            <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;" checked>
-            <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range Outlines</label>
+            <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;">
+            <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range
+                Outlines</label>
         </span>
     </div>
 
@@ -1021,7 +1022,7 @@
         function calculateItemStats(type, level) {
             let mult = Math.pow(1.5, level - 1);
             let stats = { maxHp: 0, damage: 0 };
-            if (type === 'farm') { stats.maxHp = Math.floor(30000 * mult); }
+            if (type === 'farm') { stats.maxHp = Math.floor(1000 * mult); }
             else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
             else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner') { stats.maxHp = Math.floor(60 * mult); }
             else if (type === 'lava') { stats.maxHp = Math.floor(700 * mult); stats.damage = mult; }
@@ -1176,7 +1177,7 @@
                                     if (b.owner === this.owner || b.hp <= 0 || b.underConstruction) continue;
                                     let hit = false;
                                     if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
-                                    else {  hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
+                                    else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
                                     if (hit) {
                                         hitAny = true;
                                         b.hp -= dmg / 60;
@@ -1360,7 +1361,7 @@
             update() {
                 this.x += this.vx; this.y += this.vy;
                 this.life--;
-                
+
                 let checkHits = () => {
                     let near = getUnitsInRange(this.x, this.y, 16);
                     for (let u of near) {
@@ -2634,7 +2635,7 @@
                                 if (t.upgradeHp >= t.upgradeMaxHp) {
                                     if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                     t.effectiveLevel++;
-                                    
+
                                     if (t.effectiveLevel < (t.potentialEffectiveLevel || 1)) {
                                         t.upgradeHp = 1;
                                         t.upgradeMaxHp = getUpgradeMaxHp(t, t.effectiveLevel + 1);
@@ -2648,7 +2649,7 @@
                                     _builderFindTarget(u, myGx, myGy);
                                 }
                             }
-                            
+
                             if (u.workerTarget) {
                                 // Not done yet — loop back to spawner for more gold, then come back
                                 let spawner = _findClosestBuilderSpawner(u);
@@ -2715,7 +2716,7 @@
                             if (t.upgradeHp >= t.upgradeMaxHp) {
                                 if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                 t.effectiveLevel++;
-                                
+
                                 if (t.effectiveLevel < (t.potentialEffectiveLevel || 1)) {
                                     t.upgradeHp = 1;
                                     t.upgradeMaxHp = getUpgradeMaxHp(t, t.effectiveLevel + 1);
@@ -2940,7 +2941,7 @@
                             if (isTower) {
                                 if (nc.type === TYPE_WALL) { let nt = towers.find(t => t.gx === nx && t.gy === ny); if (nt && nt.owner === ownerCheck) { nType = nt.type; nObj = nt; } }
                             } else { if (nc.item && nc.owner === ownerCheck) { nType = nc.item.type; nObj = nc.item; } }
-                            
+
                             if (nObj && rootObj) {
                                 let cState = rootObj.underConstruction ? 1 : 0;
                                 let nState = nObj.underConstruction ? 1 : 0;
@@ -2996,16 +2997,16 @@
                         let baseStacks = actualStacks;
 
                         obj.effectiveStacks = baseStacks * groupSize * areaMult;
-                        
+
                         let potentialLevel = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
                         obj.potentialEffectiveLevel = potentialLevel;
 
                         if (obj.effectiveLevel === undefined) obj.effectiveLevel = 1;
-                        
+
                         // Drop effectiveLevel if potential drops below it
                         if (obj.potentialEffectiveLevel < obj.effectiveLevel) {
                             obj.effectiveLevel = obj.potentialEffectiveLevel;
-                            obj.isUpgrading = false; 
+                            obj.isUpgrading = false;
                         }
 
                         // Trigger upgrade if we can reach a higher level
@@ -4776,7 +4777,7 @@
             let actualLvl = Math.floor(Math.log2(obj.stacks || 1)) + 1;
             let effLvl = obj.effectiveLevel || actualLvl;
             let potLvl = obj.potentialEffectiveLevel || obj.effectiveLevel || actualLvl;
-            
+
             let html = `<span style="color:#888">L${actualLvl}</span>`;
             if (effLvl !== actualLvl || potLvl !== actualLvl) {
                 html += ` <span style="color:#4f4">L${effLvl}</span>`;
