@@ -397,6 +397,10 @@
         <span class="hud-pop" id="hud-pop">Pop: 0/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
+        <span class="hud-time" style="margin-left: auto; margin-right: 15px; display:inline-flex; align-items:center;">
+            <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;" checked>
+            <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range Outlines</label>
+        </span>
     </div>
 
     <!-- MAIN CONTENT ROW -->
@@ -1166,6 +1170,21 @@
                                     }
                                 }
                             }
+                            // Check Buildings
+                            for (let list of [towers, barracks, collectorSpawners]) {
+                                for (let b of list) {
+                                    if (b.owner === this.owner || b.hp <= 0 || b.underConstruction) continue;
+                                    let hit = false;
+                                    if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
+                                    else {  hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
+                                    if (hit) {
+                                        hitAny = true;
+                                        b.hp -= dmg / 60;
+                                        if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
+                                        if (b.hp <= 0) destroyBuilding(b);
+                                    }
+                                }
+                            }
                             if (hitAny) this.laserState = 1;
                         }
                     }
@@ -1340,22 +1359,25 @@
             }
             update() {
                 this.x += this.vx; this.y += this.vy;
-                if (Math.hypot(this.x - this.startX, this.y - this.startY) >= this.maxRange) return false;
                 this.life--;
-                if (this.life <= 0) return false;
-                let near = getUnitsInRange(this.x, this.y, 16);
-                for (let u of near) {
-                    if (u.owner === this.sourceOwner) continue;
-                    if (u.dead) continue;
-                    if (Math.hypot(u.x - this.x, u.y - this.y) <= u.r + 8) { this.hit(u); return false; }
-                }
-                // Check building hits (towers, barracks, spawners)
-                for (let list of [towers, barracks, collectorSpawners]) {
-                    for (let b of list) {
-                        if (b.owner === this.sourceOwner || b.hp <= 0 || b.underConstruction) continue;
-                        if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return false; }
+                
+                let checkHits = () => {
+                    let near = getUnitsInRange(this.x, this.y, 16);
+                    for (let u of near) {
+                        if (u.owner === this.sourceOwner || u.dead) continue;
+                        if (Math.hypot(u.x - this.x, u.y - this.y) <= u.r + 8) { this.hit(u); return true; }
                     }
-                }
+                    for (let list of [towers, barracks, collectorSpawners]) {
+                        for (let b of list) {
+                            if (b.owner === this.sourceOwner || b.hp <= 0 || b.underConstruction) continue;
+                            if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
+                        }
+                    }
+                    return false;
+                };
+
+                if (checkHits()) return false;
+                if (Math.hypot(this.x - this.startX, this.y - this.startY) >= this.maxRange || this.life <= 0) return false;
                 return true;
             }
             hit(t) {
@@ -1413,7 +1435,11 @@
             }
             hitBuilding(b) {
                 // Apply damage to a building (tower, barrack, spawner)
-                b.hp -= this.dmg;
+                let actualDmg = this.dmg;
+                if (this.type === 'fire' || this.type === 'ice' || this.type === 'poison' || this.type === 'water' || this.type === 'sand_gun' || this.type === 'elements') {
+                    actualDmg += (this.level * 2); // Elements apply burst damage to buildings
+                }
+                b.hp -= actualDmg;
                 createExplosion(this.x, this.y, "#f84", 4);
                 if (b.hp <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }
             }
@@ -2823,6 +2849,7 @@
         function _findNearestUnderConstruction(u) {
             let owner = u.owner, bestDist = Infinity, best = null;
             let check = (b) => {
+                if (b.markedForSalvage) return;
                 if ((!b.underConstruction && !b.isUpgrading) || b.owner !== owner) return;
                 let d = Math.hypot(b.x - u.x, b.y - u.y);
                 if (d < bestDist) { bestDist = d; best = b; }
@@ -3701,6 +3728,27 @@
                     ctx.beginPath(); ctx.moveTo(rx, ry - 12); ctx.lineTo(rx + 8, ry - 8); ctx.lineTo(rx, ry - 4); ctx.fill();
                     ctx.strokeStyle = '#4f4'; ctx.lineWidth = 1.5;
                     ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx, ry - 12); ctx.stroke();
+                }
+            }
+
+            // Range Outlines
+            let showRangeEl = document.getElementById('setting-range-outlines');
+            if (showRangeEl && showRangeEl.checked) {
+                ctx.lineWidth = 1;
+                for (let ent of selectedEntities) {
+                    if (ent.hp !== undefined && ent.hp <= 0) continue;
+                    let rr = 0;
+                    if (ent.currentStats && ent.currentStats.visionRange !== undefined) {
+                        rr = ent.currentStats.visionRange * TILE;
+                    } else if (ent.visionRange !== undefined) {
+                        rr = ent.visionRange * TILE;
+                    }
+                    if (rr > 0) {
+                        let ex = ent.x || (ent.gx * TILE + 16);
+                        let ey = ent.y || (ent.gy * TILE + 16);
+                        ctx.strokeStyle = (ent.owner === players.findIndex(p => p.id === myPeerId) || !isMultiplayer) ? `rgba(0,255,0,0.15)` : `rgba(255,0,0,0.15)`;
+                        ctx.beginPath(); ctx.arc(ex, ey, rr, 0, 6.28); ctx.stroke();
+                    }
                 }
             }
 
