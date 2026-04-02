@@ -397,10 +397,17 @@
         <span class="hud-pop" id="hud-pop">Pop: 0/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
-        <span class="hud-time" style="margin-left: auto; margin-right: 15px; display:inline-flex; align-items:center;">
-            <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;">
-            <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range
-                Outlines</label>
+        <span class="hud-time"
+            style="margin-left: auto; display:inline-flex; align-items:center; gap:14px; margin-right:15px;">
+            <span style="display:inline-flex; align-items:center;">
+                <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;">
+                <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range
+                    Outlines</label>
+            </span>
+            <span style="display:inline-flex; align-items:center;">
+                <input type="checkbox" id="setting-audio" style="margin-right:4px; cursor:pointer;">
+                <label for="setting-audio" style="cursor:pointer; font-size:12px; color:#ddd;">Audio</label>
+            </span>
         </span>
     </div>
 
@@ -495,14 +502,14 @@
         // ============================================================
         const CARD_TYPES = {
             // Towers (target: wall)
-            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 1.86, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
-            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 1.86, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
-            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 1.75, cd: 35, damage: 10, target: 'wall', towerHp: 150 },
-            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 1.5, cd: 50, damage: 3, target: 'wall', towerHp: 200 },
-            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 2.5, cd: 110, damage: 45, target: 'wall', towerHp: 350 },
-            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 1.75, cd: 150, damage: 5, target: 'wall', towerHp: 180 },
-            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 2.5, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
-            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 2, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
+            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
+            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
+            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 35, damage: 10, target: 'wall', towerHp: 150 },
+            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 50, damage: 3, target: 'wall', towerHp: 200 },
+            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 110, damage: 45, target: 'wall', towerHp: 350 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 150, damage: 5, target: 'wall', towerHp: 180 },
+            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
+            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
             laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
 
             // Floor items
@@ -714,6 +721,211 @@
         // Multiplayer
         let peer = null, myPeerId = null, connections = [], connectedPlayers = [];
         let isHost = false, isMultiplayer = false;
+
+        // ============================================================
+        // AUDIO ENGINE
+        // ============================================================
+        let audioCtx = null;
+        let masterGain = null;
+        let audioEnabled = true;
+        let _laserAudioNodes = null; // {osc, gain} for sustained laser buzz
+        let _laserAudioActive = false;
+        let _kingHurtTimer = 0;
+
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0.18;
+                masterGain.connect(audioCtx.destination);
+            } catch (e) { audioCtx = null; }
+        }
+
+        // Spatial attenuation: volume based on distance from camera viewport center
+        function _audioVol(worldX, worldY) {
+            if (!gameStarted) return 1;
+            let cx = camera.x + viewW / camera.zoom / 2;
+            let cy = camera.y + viewH / camera.zoom / 2;
+            let dist = Math.hypot(worldX - cx, worldY - cy);
+            let maxDist = Math.max(viewW, viewH) / camera.zoom * 1.2;
+            return Math.max(0.04, 1 - dist / maxDist);
+        }
+
+        function _createGainNode(vol) {
+            let g = audioCtx.createGain();
+            g.gain.value = vol;
+            g.connect(masterGain);
+            return g;
+        }
+
+        // Play a simple tone: type=waveform, freq (hz or array for sequence), dur (s), vol
+        function _playTone(freq, dur, vol, wave, detune) {
+            if (!audioCtx) return;
+            let g = _createGainNode(vol);
+            let o = audioCtx.createOscillator();
+            o.type = wave || 'triangle';
+            let t = audioCtx.currentTime;
+            if (detune) o.detune.value = detune;
+            if (Array.isArray(freq)) {
+                let step = dur / freq.length;
+                freq.forEach((f, i) => o.frequency.setValueAtTime(f, t + i * step));
+            } else {
+                o.frequency.value = freq;
+            }
+            o.connect(g);
+            g.gain.setValueAtTime(vol, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+            o.start(t);
+            o.stop(t + dur + 0.05);
+        }
+
+        // Play a noise burst (white noise filtered)
+        function _playNoise(dur, vol, hpFreq, lpFreq) {
+            if (!audioCtx) return;
+            let bufLen = Math.ceil(audioCtx.sampleRate * dur);
+            let buf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+            let data = buf.getChannelData(0);
+            for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
+            let src = audioCtx.createBufferSource();
+            src.buffer = buf;
+            let g = _createGainNode(vol);
+            let t = audioCtx.currentTime;
+            g.gain.setValueAtTime(vol, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+            if (lpFreq) {
+                let lp = audioCtx.createBiquadFilter();
+                lp.type = 'lowpass'; lp.frequency.value = lpFreq;
+                src.connect(lp); lp.connect(g);
+            } else {
+                src.connect(g);
+            }
+            src.start(t); src.stop(t + dur);
+        }
+
+        function playSound(type, worldX, worldY) {
+            if (!audioCtx || !audioEnabled) return;
+            console.log("Audio trigger:", type, worldX, worldY);
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            let vol = (worldX !== undefined) ? _audioVol(worldX, worldY) : 1;
+            if (vol < 0.02) return;
+
+            switch (type) {
+                // --- Turret shoot sounds ---
+                case 'shoot_pistol':
+                    _playTone(320, 0.07, vol * 0.7, 'square');
+                    _playNoise(0.06, vol * 0.3, 0, 3000);
+                    break;
+                case 'shoot_smg':
+                    _playTone(380, 0.05, vol * 0.5, 'square', -200);
+                    _playNoise(0.04, vol * 0.25, 0, 4000);
+                    break;
+                case 'shoot_fire':
+                    _playNoise(0.12, vol * 0.5, 0, 1200);
+                    _playTone(80, 0.1, vol * 0.4, 'sawtooth');
+                    break;
+                case 'shoot_water':
+                    _playNoise(0.09, vol * 0.4, 0, 2500);
+                    _playTone(500, 0.08, vol * 0.3, 'sine');
+                    break;
+                case 'shoot_poison':
+                    _playTone([180, 160, 140], 0.12, vol * 0.4, 'sawtooth');
+                    break;
+                case 'shoot_ice':
+                    _playTone([800, 1200, 900], 0.1, vol * 0.45, 'sine');
+                    break;
+                case 'shoot_sand_gun':
+                    _playNoise(0.1, vol * 0.45, 0, 1800);
+                    _playTone(120, 0.09, vol * 0.25, 'sawtooth');
+                    break;
+                case 'shoot_elements':
+                    _playTone([400, 500, 600, 700], 0.12, vol * 0.35, 'triangle');
+                    break;
+                case 'shoot_generic':
+                    _playTone(260, 0.07, vol * 0.5, 'triangle');
+                    _playNoise(0.06, vol * 0.2, 0, 3500);
+                    break;
+
+                // --- Laser beam sounds (use sustained osc, started/stopped separately) ---
+                case 'laser_tick':
+                    _playTone(55, 0.05, vol * 0.15, 'sawtooth', 0);
+                    break;
+
+                // --- Building events ---
+                case 'place':
+                    _playTone([300, 420], 0.12, vol * 0.55, 'triangle');
+                    break;
+                case 'cant_place':
+                    _playTone([180, 140], 0.18, 0.45, 'square');
+                    break;
+                case 'build_complete':
+                    _playTone([440, 550, 660], 0.22, vol * 0.6, 'triangle');
+                    break;
+                case 'upgrade_complete':
+                    _playTone([440, 550, 660, 880], 0.28, vol * 0.65, 'triangle');
+                    break;
+                case 'building_destroyed':
+                    _playNoise(0.3, vol * 0.6, 0, 800);
+                    _playTone([90, 70, 55], 0.3, vol * 0.5, 'sawtooth');
+                    break;
+
+                // --- Worker events ---
+                case 'gold_collected':
+                    _playTone([880, 1100], 0.07, vol * 0.5, 'sine');
+                    break;
+                case 'salvage_collected':
+                    _playTone([440, 550], 0.08, vol * 0.4, 'sine');
+                    break;
+
+                // --- Combat events ---
+                case 'mine_explode':
+                    _playNoise(0.35, vol * 0.8, 0, 600);
+                    _playTone([55, 45, 35], 0.3, vol * 0.6, 'sawtooth');
+                    break;
+                case 'unit_death':
+                    _playTone([160, 110], 0.1, vol * 0.4, 'triangle');
+                    _playNoise(0.07, vol * 0.2, 0, 1500);
+                    break;
+                case 'king_hurt':
+                    _playTone([220, 180, 150], 0.25, 0.7, 'square');
+                    _playNoise(0.15, 0.4, 0, 500);
+                    break;
+
+                // --- Game over ---
+                case 'victory':
+                    setTimeout(() => _playTone([523, 659, 784, 1047], 0.8, 0.55, 'triangle'), 0);
+                    break;
+                case 'defeat':
+                    setTimeout(() => _playTone([523, 440, 349, 262], 0.8, 0.5, 'sawtooth'), 0);
+                    break;
+            }
+        }
+
+        // Laser: start/stop sustained buzz
+        function startLaserSound() {
+            if (!audioCtx || !audioEnabled || _laserAudioActive) return;
+            _laserAudioActive = true;
+            if (_laserAudioNodes) { try { _laserAudioNodes.osc.stop(); } catch (e) { } }
+            let osc = audioCtx.createOscillator();
+            let g = audioCtx.createGain();
+            osc.type = 'sawtooth'; osc.frequency.value = 60;
+            osc.detune.value = 15;
+            g.gain.value = 0;
+            osc.connect(g); g.connect(masterGain);
+            osc.start();
+            g.gain.linearRampToValueAtTime(0.06, audioCtx.currentTime + 0.05);
+            _laserAudioNodes = { osc, gain: g };
+        }
+        function stopLaserSound() {
+            if (!_laserAudioActive || !_laserAudioNodes) return;
+            _laserAudioActive = false;
+            let { gain, osc } = _laserAudioNodes;
+            let t = audioCtx.currentTime;
+            gain.gain.setValueAtTime(gain.gain.value, t);
+            gain.gain.linearRampToValueAtTime(0, t + 0.15);
+            setTimeout(() => { try { osc.stop(); } catch (e) { } }, 200);
+            _laserAudioNodes = null;
+        }
 
         // Spatial hash (10x10 tile chunks)
         const CHUNK_SIZE = 10;
@@ -1163,6 +1375,7 @@
                                 else { hit = Math.abs(u.y - sy) < u.r + 4 && u.x >= mn && u.x <= mx; }
                                 if (hit) {
                                     hitAny = true;
+                                    if (gameTime % 40 === 0) playSound('laser_tick', (this.x + other.x) / 2, (this.y + other.y) / 2);
                                     if (u.laserResistant) { if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#888", 1); }
                                     else {
                                         u.hp -= dmg / 60;
@@ -1274,6 +1487,13 @@
                     this.cd = this.currentStats.cd || 30;
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
+                    if (this.owner === localPlayerId || true) {
+                        let sndType = 'shoot_' + this.type;
+                        if (!['shoot_pistol', 'shoot_smg', 'shoot_fire', 'shoot_water', 'shoot_poison', 'shoot_ice', 'shoot_sand_gun', 'shoot_elements'].includes(sndType))
+                            sndType = 'shoot_generic';
+                        if (this.owner === localPlayerId) playSound(sndType, this.x, this.y);
+                        else if (Math.random() < 0.3) playSound(sndType, this.x, this.y); // sparsify enemy turret sounds
+                    }
                 }
             }
 
@@ -1581,6 +1801,7 @@
                         else if (item.type === 'mine') {
                             this.hp -= item.damage || 135;
                             createExplosion(this.x, this.y, "#f80", 15);
+                            playSound('mine_explode', this.x, this.y);
                             cell.item = null;
                             if (this.hp <= 0) this.dead = true;
                             return;
@@ -1707,6 +1928,13 @@
                 this.attackTimer = this.attackCooldown;
                 this.attackTarget = target;
                 this.attackFlash = 8;
+                // King taking damage (killking mode)
+                if (target.isKing && gameMode === 'killking' && target.owner === localPlayerId) {
+                    if (!_kingHurtTimer || gameTime > _kingHurtTimer + TICK_RATE * 0.5) {
+                        _kingHurtTimer = gameTime;
+                        playSound('king_hurt');
+                    }
+                }
                 let style = this.attackStyle;
                 if (style === 'fire') {
                     createDirectedParticles(this.x, this.y, target.x, target.y, '#f50', 3);
@@ -2556,6 +2784,7 @@
                         if (u.carryingValue > 0) {
                             let closest = _findClosestSpawner(u, 'spawner');
                             players[owner].money += u.carryingValue;
+                            if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
                         // Immediately find next target (prefer the mine we were just at if it still has gold)
@@ -2592,6 +2821,7 @@
                         if (u.carryingValue > 0) {
                             let closest = _findClosestSpawner(u, 'salvager');
                             players[owner].money += u.carryingValue;
+                            if (owner === localPlayerId) playSound('salvage_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
                         _salvagerFindTarget(u, myGx, myGy);
@@ -2626,6 +2856,7 @@
                                         if (t.type && (t.type === 'spawner' || t.type === 'salvager' || t.type === 'builder_spawner')) t.upgradeMaxHp = 50 * ((t.level || 1) + 1);
                                     }
                                     createExplosion(t.x, t.y, '#8f8', 8);
+                                    if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                     recalculateAdjacency();
                                     u.workerTarget = null;
                                     _builderFindTarget(u, myGx, myGy);
@@ -2643,6 +2874,7 @@
                                         t.isUpgrading = false;
                                     }
                                     createExplosion(t.x, t.y, '#8f8', 8);
+                                    if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                     recalculateAdjacency();
                                     u.workerTarget = null;
@@ -2707,6 +2939,7 @@
                                     if (t.type && (t.type === 'spawner' || t.type === 'salvager' || t.type === 'builder_spawner')) t.upgradeMaxHp = 50 * ((t.level || 1) + 1);
                                 }
                                 createExplosion(t.x, t.y, '#8f8', 8);
+                                if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                 recalculateAdjacency();
                                 u.workerTarget = null;
                                 _builderFindTarget(u, myGx, myGy);
@@ -2724,6 +2957,7 @@
                                     t.isUpgrading = false;
                                 }
                                 createExplosion(t.x, t.y, '#8f8', 8);
+                                if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                 recalculateAdjacency();
                                 u.workerTarget = null;
@@ -3235,6 +3469,7 @@
                 }
                 recalculateAdjacency();
             }
+            if (playerId === localPlayerId) playSound('place', gx * TILE + 16, gy * TILE + 16);
             return true;
         }
 
@@ -3264,6 +3499,7 @@
                 grid[building.gy][building.gx].owner = -1;
             }
             createExplosion(building.x, building.y, '#f44', 10);
+            playSound('building_destroyed', building.x, building.y);
             checkWinCondition();
         }
 
@@ -4034,6 +4270,7 @@
                 let u = units[i];
                 u.update();
                 if (u.dead) {
+                    if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y);
                     // Drop money on death (bounty)
                     let cost = UNIT_STATS[u.unitType] ? UNIT_STATS[u.unitType].hp * 0.5 : 5;
                     let bounty = Math.floor(cost * 0.1);
@@ -4095,6 +4332,12 @@
             // Particles
             for (let i = particles.length - 1; i >= 0; i--) { if (!particles[i].update()) particles.splice(i, 1); }
 
+            // Laser buzzer sound control
+            let anyLaserActive = false;
+            for (let t of towers) { if (t.type === 'laser' && t.laserState === 1 && !t.underConstruction) { anyLaserActive = true; break; } }
+            if (anyLaserActive) startLaserSound();
+            else stopLaserSound();
+
             updateVisibility(localPlayerId);
         }
 
@@ -4120,7 +4363,12 @@
                     if (selectedBuildItem) {
                         // Place building (only on visible tiles)
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
-                        if (!isTileVisible(gx, gy)) return;
+                        if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
+                        // Short-circuit for immediate cant_place feedback (affordability / validity)
+                        let _cd = CARD_TYPES[selectedBuildItem];
+                        let _canPlace = _cd && players[localPlayerId].money >= _cd.price &&
+                            (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
+                        if (!_canPlace) { playSound('cant_place'); return; }
                         queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem });
                         updateBuildMenu();
                         return;
@@ -4439,6 +4687,16 @@
                 }
             });
             document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
+
+            // HUD Settings
+            const audioToggle = document.getElementById('setting-audio');
+            if (audioToggle) {
+                audioEnabled = audioToggle.checked;
+                audioToggle.addEventListener('change', () => {
+                    audioEnabled = audioToggle.checked;
+                    if (!audioEnabled) stopLaserSound();
+                });
+            }
         }
 
         function queueAction(action) {
@@ -5498,6 +5756,7 @@
             document.getElementById('go-title').style.color = winner === localPlayerId ? '#4f4' : '#f44';
             let secs = Math.floor(gameTime / TICK_RATE);
             document.getElementById('go-stats').textContent = `Game lasted ${Math.floor(secs / 60)}m ${secs % 60}s`;
+            playSound(winner === localPlayerId ? 'victory' : 'defeat');
         }
 
         // ============================================================
@@ -5534,6 +5793,7 @@
                         fullVisibility = data.cfg.fullVis || false;
                         gameMode = data.cfg.gameMode || 'destroy';
                     }
+                    initAudio();
                     startGame();
                 } else if (data.type === 'TICK_INPUT') {
                     if (!remoteInputBuffer[data.tick]) remoteInputBuffer[data.tick] = [];
@@ -5628,6 +5888,7 @@
             isMultiplayer = false;
             gameSeed = Date.now();
             localPlayerId = 0;
+            initAudio();
             startGame();
         }
 
