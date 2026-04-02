@@ -1079,7 +1079,15 @@
             }
 
             upgrade() {
+                let nextLevel = Math.floor(Math.log2(this.stacks + 1)) + 1;
+                if (nextLevel > (this.level || 1)) {
+                    this.isUpgrading = true;
+                    this.upgradeHp = 1;
+                    this.upgradeMaxHp = 100 * nextLevel;
+                }
                 this.stacks++;
+                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.updateTextCache();
             }
 
             updateTextCache() {
@@ -1201,6 +1209,46 @@
                 }
 
                 let target = bestPrimary || bestSecondary || bestImmune;
+
+                // If no unit target, try preferred target first, then closest enemy building
+                if (!target) {
+                    // Check preferred (right-clicked) target
+                    if (this.preferredTarget) {
+                        let pt = this.preferredTarget;
+                        let ptDead = (pt.hp !== undefined && pt.hp <= 0) || (pt.dead);
+                        let ptDist = Math.hypot(pt.x - this.x, pt.y - this.y);
+                        if (ptDead || ptDist > rangePx) {
+                            this.preferredTarget = null; // out of range or dead, clear
+                        } else {
+                            target = pt;
+                        }
+                    }
+
+                    // Auto-find nearest enemy building: towers first, then barracks/spawners
+                    if (!target) {
+                        let bestDist = rangePx;
+                        // Try towers (higher priority)
+                        for (let t of towers) {
+                            if (t === this || t.owner === this.owner || t.hp <= 0 || t.underConstruction) continue;
+                            let d = Math.hypot(t.x - this.x, t.y - this.y);
+                            if (d < bestDist) { bestDist = d; target = t; }
+                        }
+                        // Try barracks and spawners (lower priority, only if no tower found)
+                        if (!target) {
+                            for (let b of barracks) {
+                                if (b.owner === this.owner || b.hp <= 0 || b.underConstruction) continue;
+                                let d = Math.hypot(b.x - this.x, b.y - this.y);
+                                if (d < bestDist) { bestDist = d; target = b; }
+                            }
+                            for (let s of collectorSpawners) {
+                                if (s.owner === this.owner || s.hp <= 0 || s.underConstruction) continue;
+                                let d = Math.hypot(s.x - this.x, s.y - this.y);
+                                if (d < bestDist) { bestDist = d; target = s; }
+                            }
+                        }
+                    }
+                }
+
                 if (target) {
                     projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.effectiveLevel || this.level, this, rangePx));
                     this.cd = this.currentStats.cd || 30;
@@ -1301,6 +1349,13 @@
                     if (u.dead) continue;
                     if (Math.hypot(u.x - this.x, u.y - this.y) <= u.r + 8) { this.hit(u); return false; }
                 }
+                // Check building hits (towers, barracks, spawners)
+                for (let list of [towers, barracks, collectorSpawners]) {
+                    for (let b of list) {
+                        if (b.owner === this.sourceOwner || b.hp <= 0 || b.underConstruction) continue;
+                        if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return false; }
+                    }
+                }
                 return true;
             }
             hit(t) {
@@ -1355,6 +1410,12 @@
                     createExplosion(this.x, this.y, "#fff", 4);
                 }
                 if (t.hp <= 0 && !t.dead) { t.dead = true; createExplosion(t.x, t.y, "#e44", 6); }
+            }
+            hitBuilding(b) {
+                // Apply damage to a building (tower, barrack, spawner)
+                b.hp -= this.dmg;
+                createExplosion(this.x, this.y, "#f84", 4);
+                if (b.hp <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }
             }
             draw(ctx) {
                 ctx.fillStyle = CARD_TYPES[this.type] ? CARD_TYPES[this.type].color : '#fff';
@@ -1488,7 +1549,7 @@
                         if (item.type === 'sand') { this.sandy = Math.max(this.sandy, 10); }
                         else if (item.type === 'lava') { this.burning = Math.max(this.burning, 30); let d = item.damage || 1; if (d > this.burnTickDamage) this.burnTickDamage = d; }
                         else if (item.type === 'poison_puddle') { this.poisoned = Math.max(this.poisoned, 30); let d = item.damage || 1; if (d > this.poisonTickDamage) this.poisonTickDamage = d; }
-                        else if (item.type === 'ice_patch') { this.frozen = Math.max(this.frozen, 30); }
+                        else if (item.type === 'ice_patch') { this.frozen = Math.max(this.frozen, 30); let d = item.damage || 1; if (d > this.iceTickDamage) this.iceTickDamage = d; }
                         else if (item.type === 'water_puddle') { this.wet = Math.max(this.wet, 60); }
                         else if (item.type === 'mine') {
                             this.hp -= item.damage || 135;
@@ -1686,7 +1747,7 @@
                 if (this.targetUnit) {
                     if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
-                    if (d <= this.attackRange) {
+                    if (d <= this.attackRange + this.r + this.targetUnit.r) {
                         this.attackTarget = this.targetUnit;
                         this.path = null;
                         // In range - attack
@@ -1731,7 +1792,7 @@
                     let tb = this.targetBuilding;
                     if (tb.hp <= 0) { this.targetBuilding = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(tb.x - this.x, tb.y - this.y);
-                    if (d <= this.attackRange + TILE) {
+                    if (d <= this.attackRange + this.r + 16) {
                         this.attackTarget = tb;
                         this.path = null;
                         if (this.attackTimer <= 0) {
@@ -2822,7 +2883,7 @@
         function recalculateAdjacency() {
             areas.forEach(a => a.active = false);
             dirtyAreas = true;
-            towers.forEach(t => { t.effectiveStacks = t.stacks; t.effectiveLevel = Math.floor(Math.log2(t.stacks)) + 1; });
+            towers.forEach(t => { t.effectiveStacks = t.stacks; });
             for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { if (grid[y][x].item) grid[y][x].item.effectiveStacks = grid[y][x].item.stacks || 1; }
 
             let visited = new Set();
@@ -2857,6 +2918,7 @@
                                 let cState = rootObj.underConstruction ? 1 : 0;
                                 let nState = nObj.underConstruction ? 1 : 0;
                                 if (cState !== nState) nType = null; // Do not group different states
+                                if (type === 'barrack' && nType === 'barrack' && nObj.unitType !== rootObj.unitType) nType = null;
                             }
 
                             if (!visited.has(key) && nType === type) {
@@ -2895,7 +2957,7 @@
                         for (let cp of area.cells) {
                             let c = grid[cp.y][cp.x], occ = false;
                             if (isTower) { if (c.type === TYPE_WALL) { let t = towers.find(t => t.gx === cp.x && t.gy === cp.y); if (t && t.type === type && t.owner === ownerCheck) occ = true; } }
-                            else { if (c.item && c.item.type === type && c.owner === ownerCheck) occ = true; }
+                            else { if (c.item && c.item.type === type && c.owner === ownerCheck) { if (type !== 'barrack' || c.item.unitType === rootObj.unitType) occ = true; } }
                             if (!occ) { filled = false; break; }
                         }
                         if (filled) { area.active = true; let power = (area.multiplierLevel || 0) + 1; areaMult *= Math.pow(area.cells.length, power); }
@@ -3244,7 +3306,7 @@
 
         function drawFloorItem(ctx, cell, px, py) {
             let item = cell.item;
-            if (!item) return;
+            if (!item || item.draw) return;
             let x = px + 16, y = py + 16;
             // Owner border
             if (cell.owner >= 0) {
@@ -4030,6 +4092,43 @@
                         // If no units selected, just update and return
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
                     }
+                    // Set preferred target for selected own towers
+                    let selTowers = getActiveEntities().filter(e => e instanceof Tower && e.owner === localPlayerId && e.hp > 0);
+                    if (selTowers.length > 0) {
+                        // Find what was right-clicked: enemy unit, tower, barrack, spawner
+                        let towerTarget = null;
+                        for (let u of units) {
+                            if (u.owner === localPlayerId || u.dead) continue;
+                            if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 10) { towerTarget = { type: 'unit', id: u.id }; break; }
+                        }
+                        if (!towerTarget) {
+                            for (let t of towers) {
+                                if (t.owner === localPlayerId || t.hp <= 0) continue;
+                                if (Math.hypot(t.x - world.x, t.y - world.y) < 20) { towerTarget = { type: 'tower', gx: t.gx, gy: t.gy }; break; }
+                            }
+                        }
+                        if (!towerTarget) {
+                            for (let b of barracks) {
+                                if (b.owner === localPlayerId || b.hp <= 0) continue;
+                                if (Math.hypot(b.x - world.x, b.y - world.y) < 20) { towerTarget = { type: 'barrack', gx: b.gx, gy: b.gy }; break; }
+                            }
+                        }
+                        if (!towerTarget) {
+                            for (let s of collectorSpawners) {
+                                if (s.owner === localPlayerId || s.hp <= 0) continue;
+                                if (Math.hypot(s.x - world.x, s.y - world.y) < 20) { towerTarget = { type: 'spawner', gx: s.gx, gy: s.gy }; break; }
+                            }
+                        }
+                        if (towerTarget) {
+                            let towerCoords = selTowers.map(t => ({ gx: t.gx, gy: t.gy }));
+                            queueAction({ action: 'towerTarget', towerCoords, target: towerTarget });
+                            updateInfoPanel(); return;
+                        }
+                        // Right-click on ground: clear preferred target for selected towers
+                        let towerCoords = selTowers.map(t => ({ gx: t.gx, gy: t.gy }));
+                        queueAction({ action: 'towerTarget', towerCoords, target: null });
+                        if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
+                    }
                     // Right-click own barrack to queue unit (only if no workers or combat units selected)
                     if (selSpawners.length === 0) {
                         for (let b of barracks) {
@@ -4472,6 +4571,23 @@
                 } else if (a.action === 'killUnit') {
                     let u = units.find(u => u.id === a.unitId && u.owner === playerId);
                     if (u && !u.dead && !u.isKing) { u.hp = 0; u.dead = true; players[playerId].popCount--; }
+                } else if (a.action === 'towerTarget') {
+                    // Set preferredTarget on own towers
+                    for (let tc of (a.towerCoords || [])) {
+                        let t = towers.find(t => t.gx === tc.gx && t.gy === tc.gy && t.owner === playerId);
+                        if (!t) continue;
+                        if (!a.target) { t.preferredTarget = null; continue; }
+                        if (a.target.type === 'unit') {
+                            let tu = units.find(u => u.id === a.target.id && !u.dead);
+                            t.preferredTarget = tu || null;
+                        } else if (a.target.type === 'tower') {
+                            t.preferredTarget = towers.find(tb => tb.gx === a.target.gx && tb.gy === a.target.gy && tb.hp > 0) || null;
+                        } else if (a.target.type === 'barrack') {
+                            t.preferredTarget = barracks.find(b => b.gx === a.target.gx && b.gy === a.target.gy && b.hp > 0) || null;
+                        } else if (a.target.type === 'spawner') {
+                            t.preferredTarget = collectorSpawners.find(s => s.gx === a.target.gx && s.gy === a.target.gy && s.hp > 0) || null;
+                        }
+                    }
                 }
             }
         }
