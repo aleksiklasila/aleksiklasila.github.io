@@ -106,6 +106,8 @@
             flex: 1;
             position: relative;
             overflow: hidden;
+            border-left: 2px solid #333;
+            border-right: 2px solid #333;
         }
 
         #gameCanvas {
@@ -3949,8 +3951,9 @@
                 let screenX = e.clientX - rect.left;
                 let screenY = e.clientY - rect.top;
                 let oldZoom = camera.zoom;
+                let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
                 if (e.deltaY < 0) camera.zoom = Math.min(2, camera.zoom * 1.2);
-                else camera.zoom = Math.max(0.4, camera.zoom / 1.2);
+                else camera.zoom = Math.max(minZoom, camera.zoom / 1.2);
                 // Adjust camera so world point under cursor stays under cursor
                 camera.x = worldBeforeX - screenX / camera.zoom;
                 camera.y = worldBeforeY - screenY / camera.zoom;
