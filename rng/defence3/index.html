@@ -1387,7 +1387,7 @@
                             // Check Buildings
                             for (let list of [towers, barracks, collectorSpawners]) {
                                 for (let b of list) {
-                                    if (b.owner === this.owner || b.hp <= 0 || b.underConstruction) continue;
+                                    if (b.owner === this.owner || b.hp <= 0) continue;
                                     let hit = false;
                                     if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
                                     else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
@@ -1462,19 +1462,19 @@
                         let bestDist = rangePx;
                         // Try towers (higher priority)
                         for (let t of towers) {
-                            if (t === this || t.owner === this.owner || t.hp <= 0 || t.underConstruction) continue;
+                            if (t === this || t.owner === this.owner || t.hp <= 0) continue;
                             let d = Math.hypot(t.x - this.x, t.y - this.y);
                             if (d < bestDist) { bestDist = d; target = t; }
                         }
                         // Try barracks and spawners (lower priority, only if no tower found)
                         if (!target) {
                             for (let b of barracks) {
-                                if (b.owner === this.owner || b.hp <= 0 || b.underConstruction) continue;
+                                if (b.owner === this.owner || b.hp <= 0) continue;
                                 let d = Math.hypot(b.x - this.x, b.y - this.y);
                                 if (d < bestDist) { bestDist = d; target = b; }
                             }
                             for (let s of collectorSpawners) {
-                                if (s.owner === this.owner || s.hp <= 0 || s.underConstruction) continue;
+                                if (s.owner === this.owner || s.hp <= 0) continue;
                                 let d = Math.hypot(s.x - this.x, s.y - this.y);
                                 if (d < bestDist) { bestDist = d; target = s; }
                             }
@@ -1590,7 +1590,7 @@
                     }
                     for (let list of [towers, barracks, collectorSpawners]) {
                         for (let b of list) {
-                            if (b.owner === this.sourceOwner || b.hp <= 0 || b.underConstruction) continue;
+                            if (b.owner === this.sourceOwner || b.hp <= 0) continue;
                             if (Math.hypot(b.x - this.x, b.y - this.y) <= 18) { this.hitBuilding(b); return true; }
                         }
                     }
