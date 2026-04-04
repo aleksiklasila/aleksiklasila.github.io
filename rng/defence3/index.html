@@ -330,6 +330,96 @@
             font-size: 14px;
             color: #aaa;
         }
+
+        /* ===== MOBILE PANEL TOGGLE BUTTONS ===== */
+        #mobile-panel-toggles {
+            display: none;
+            position: absolute;
+            top: 4px;
+            left: 0;
+            right: 0;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .mobile-toggle-btn {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.75);
+            color: #4af;
+            border: 1px solid #4af;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            pointer-events: all;
+            touch-action: manipulation;
+        }
+
+        #btn-toggle-left { left: 4px; }
+        #btn-toggle-right { right: 4px; }
+
+        /* ===== MOBILE RESPONSIVE LAYOUT ===== */
+        @media (max-width: 767px) {
+            #left-panel {
+                position: fixed;
+                top: 40px;
+                left: 0;
+                bottom: 0;
+                width: 220px;
+                transform: translateX(-220px);
+                transition: transform 0.2s ease;
+                z-index: 100;
+            }
+
+            #left-panel.panel-open {
+                transform: translateX(0);
+            }
+
+            #right-panel {
+                position: fixed;
+                top: 40px;
+                right: 0;
+                bottom: 0;
+                width: 220px;
+                transform: translateX(220px);
+                transition: transform 0.2s ease;
+                z-index: 100;
+            }
+
+            #right-panel.panel-open {
+                transform: translateX(0);
+            }
+
+            #mobile-panel-toggles {
+                display: block;
+            }
+
+            #hud {
+                height: 36px;
+                font-size: 12px;
+                padding: 0 8px;
+                gap: 8px;
+            }
+
+            #hud-fps {
+                display: none;
+            }
+
+            #lobby {
+                padding: 16px;
+                overflow-y: auto;
+            }
+
+            #lobby h1 {
+                font-size: 22px;
+            }
+
+            #lobby-settings {
+                width: 100%;
+                max-width: 340px;
+            }
+        }
     </style>
 </head>
 
@@ -415,6 +505,11 @@
     <div id="main-row" style="flex:1;display:flex;overflow:hidden">
         <!-- GAME AREA -->
         <div id="game-area">
+            <!-- Mobile panel toggle buttons (hidden on desktop) -->
+            <div id="mobile-panel-toggles">
+                <button id="btn-toggle-left" class="mobile-toggle-btn">🏗 Build</button>
+                <button id="btn-toggle-right" class="mobile-toggle-btn">ℹ Info</button>
+            </div>
             <canvas id="gameCanvas"></canvas>
         </div>
 
@@ -4671,6 +4766,160 @@
                 clampCamera();
             });
 
+            // Minimap touch
+            minimapCanvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                let t = e.touches[0];
+                let rect = minimapCanvas.getBoundingClientRect();
+                let mx = (t.clientX - rect.left) * (MINIMAP_SIZE / rect.width);
+                let my = (t.clientY - rect.top) * (MINIMAP_SIZE / rect.height);
+                let scale = MINIMAP_SIZE / GRID_W;
+                camera.x = (mx / scale) * TILE - viewW / camera.zoom / 2;
+                camera.y = (my / scale) * TILE - viewH / camera.zoom / 2;
+                clampCamera();
+            }, { passive: false });
+
+            // ===== TOUCH INPUT =====
+            let _touchMoved = false;
+            let _touchStartX = 0, _touchStartY = 0;
+            let _touchPanLastX = 0, _touchPanLastY = 0;
+            let _longPressTimer = null;
+            let _pinchLastDist = 0;
+            let _pinchLastCenterX = 0, _pinchLastCenterY = 0;
+            const TOUCH_TAP_THRESHOLD = 10;
+            const TOUCH_LONG_PRESS_MS = 500;
+
+            function getTouchPinchDist(touches) {
+                let dx = touches[0].clientX - touches[1].clientX;
+                let dy = touches[0].clientY - touches[1].clientY;
+                return Math.hypot(dx, dy);
+            }
+
+            gameArea.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                if (!gameStarted || gameOver) return;
+                if (e.touches.length === 1) {
+                    let t = e.touches[0];
+                    _touchStartX = t.clientX;
+                    _touchStartY = t.clientY;
+                    _touchPanLastX = t.clientX;
+                    _touchPanLastY = t.clientY;
+                    _touchMoved = false;
+                    // Update mouse world position for hover/preview effects
+                    let world = screenToWorld(t.clientX, t.clientY);
+                    mouseWorldX = world.x; mouseWorldY = world.y;
+                    mouseScreenX = t.clientX; mouseScreenY = t.clientY;
+                    // Long-press timer simulates right-click
+                    _longPressTimer = setTimeout(() => {
+                        _longPressTimer = null;
+                        if (!_touchMoved) {
+                            // Mark as moved so touchend does not also fire a tap
+                            _touchMoved = true;
+                            let downEvt = new MouseEvent('mousedown', {
+                                bubbles: true, cancelable: true,
+                                clientX: _touchStartX, clientY: _touchStartY,
+                                button: 2, buttons: 2
+                            });
+                            gameArea.dispatchEvent(downEvt);
+                            let upEvt = new MouseEvent('mouseup', {
+                                bubbles: true, cancelable: true,
+                                clientX: _touchStartX, clientY: _touchStartY,
+                                button: 2, buttons: 0
+                            });
+                            gameArea.dispatchEvent(upEvt);
+                        }
+                    }, TOUCH_LONG_PRESS_MS);
+                } else if (e.touches.length === 2) {
+                    // Cancel any pending long press / tap when second finger arrives
+                    if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+                    _touchMoved = true;
+                    _pinchLastDist = getTouchPinchDist(e.touches);
+                    _pinchLastCenterX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    _pinchLastCenterY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (!gameStarted || gameOver) return;
+                if (e.touches.length === 1) {
+                    let t = e.touches[0];
+                    let dx = t.clientX - _touchStartX;
+                    let dy = t.clientY - _touchStartY;
+                    if (!_touchMoved && Math.hypot(dx, dy) > TOUCH_TAP_THRESHOLD) {
+                        _touchMoved = true;
+                        if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+                    }
+                    if (_touchMoved) {
+                        // Single-finger drag: pan the camera
+                        camera.x -= (t.clientX - _touchPanLastX) / camera.zoom;
+                        camera.y -= (t.clientY - _touchPanLastY) / camera.zoom;
+                        clampCamera();
+                    }
+                    _touchPanLastX = t.clientX;
+                    _touchPanLastY = t.clientY;
+                    let world = screenToWorld(t.clientX, t.clientY);
+                    mouseWorldX = world.x; mouseWorldY = world.y;
+                    mouseScreenX = t.clientX; mouseScreenY = t.clientY;
+                } else if (e.touches.length === 2) {
+                    // Two-finger pinch: zoom + pan
+                    let dist = getTouchPinchDist(e.touches);
+                    let centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    let centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    if (_pinchLastDist > 0) {
+                        // Zoom around pinch center
+                        let worldBefore = screenToWorld(centerX, centerY);
+                        let rect = gameArea.getBoundingClientRect();
+                        let screenX = centerX - rect.left;
+                        let screenY = centerY - rect.top;
+                        let scale = dist / _pinchLastDist;
+                        let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+                        camera.zoom = Math.max(minZoom, Math.min(2, camera.zoom * scale));
+                        camera.x = worldBefore.x - screenX / camera.zoom;
+                        camera.y = worldBefore.y - screenY / camera.zoom;
+                        // Also pan with pinch center movement
+                        camera.x -= (centerX - _pinchLastCenterX) / camera.zoom;
+                        camera.y -= (centerY - _pinchLastCenterY) / camera.zoom;
+                        clampCamera();
+                    }
+                    _pinchLastDist = dist;
+                    _pinchLastCenterX = centerX;
+                    _pinchLastCenterY = centerY;
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+                if (!gameStarted || gameOver) return;
+                if (!_touchMoved && e.changedTouches.length > 0) {
+                    // Tap: simulate mousedown + mouseup (left click)
+                    let t = e.changedTouches[0];
+                    let downEvt = new MouseEvent('mousedown', {
+                        bubbles: true, cancelable: true,
+                        clientX: t.clientX, clientY: t.clientY,
+                        button: 0, buttons: 1
+                    });
+                    gameArea.dispatchEvent(downEvt);
+                    let upEvt = new MouseEvent('mouseup', {
+                        bubbles: true, cancelable: true,
+                        clientX: t.clientX, clientY: t.clientY,
+                        button: 0, buttons: 0
+                    });
+                    gameArea.dispatchEvent(upEvt);
+                }
+                if (e.touches.length === 0) {
+                    _pinchLastDist = 0;
+                    _touchMoved = false;
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchcancel', () => {
+                if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+                _touchMoved = true;
+                _pinchLastDist = 0;
+            }, { passive: false });
+
             // Keyboard
             document.addEventListener('keydown', (e) => {
                 keysDown[e.key.toLowerCase()] = true;
@@ -4697,6 +4946,11 @@
                     if (!audioEnabled) stopLaserSound();
                 });
             }
+        }
+
+        function togglePanel(side) {
+            let panel = document.getElementById(side + '-panel');
+            panel.classList.toggle('panel-open');
         }
 
         function queueAction(action) {
@@ -6083,6 +6337,12 @@
             initInput();
             initBuildTabs();
             updateBuildMenu();
+
+            // Wire up mobile panel toggle buttons
+            let btnLeft = document.getElementById('btn-toggle-left');
+            let btnRight = document.getElementById('btn-toggle-right');
+            if (btnLeft) btnLeft.addEventListener('click', () => togglePanel('left'));
+            if (btnRight) btnRight.addEventListener('click', () => togglePanel('right'));
 
             // Auto-join if URL has ?game=xxx
             let params = new URLSearchParams(window.location.search);
