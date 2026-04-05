@@ -402,7 +402,7 @@
             </div>
             <div style="display:flex;gap:8px;align-items:center">
                 <label>Gold Mines:</label>
-                <input id="cfg-gold-count" type="number" min="5" max="50" value="4000" style="width:50px">
+                <input id="cfg-gold-count" type="number" min="5" max="50" value="2200" style="width:50px">
             </div>
             <div style="display:flex;gap:8px;align-items:center">
                 <label>Gold per Mine:</label>
@@ -425,10 +425,16 @@
             <button onclick="hostOnlineGame()" id="btn-online" style="font-size:16px;padding:10px 24px">Play
                 Online</button>
         </div>
-        <div id="lobby-waiting" style="display:none;text-align:center;margin-top:12px">
-            <div style="color:#4af;font-size:14px;margin-bottom:8px" id="lobby-status">Creating game...</div>
-            <button onclick="copyGameLink()" id="btn-copy-link" style="display:none">Copy Invite Link</button>
-            <div id="invite-msg" style="display:none;color:#4f4;font-size:12px;margin-top:4px">Link copied!</div>
+        <div id="lobby-waiting" style="display:none;text-align:left;margin-top:12px;border:1px solid #333;background:#0d0d0d;padding:10px;border-radius:6px;min-width:420px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                <div style="color:#4af;font-size:14px;margin-bottom:0" id="lobby-status">Creating game...</div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button onclick="copyGameLink()" id="btn-copy-link" style="display:none">Copy Invite Link</button>
+                    <button onclick="startHostedGame()" id="btn-start-online" style="display:none">Start Game</button>
+                </div>
+            </div>
+            <div id="lobby-players" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+            <div id="invite-msg" style="display:none;color:#4f4;font-size:12px;margin-top:8px">Link copied!</div>
         </div>
     </div>
 
@@ -708,6 +714,62 @@
             king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 40, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
+        const UNIT_LEVEL_SCALING = {
+            _default: { hpExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 8, visionExp: 1.02, visionCapBonus: 1.2 },
+            boss: { hpExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 18, visionExp: 1.015, visionCapBonus: 1.0 },
+            flying: { hpExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 10, visionExp: 1.03, visionCapBonus: 1.8 },
+            snake: { hpExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 14, visionExp: 1.02, visionCapBonus: 1.3 },
+            tank: { hpExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 12, visionExp: 1.02, visionCapBonus: 1.0 },
+            collector: { hpExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
+            salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
+            builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
+            king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 12, visionExp: 1.02, visionCapBonus: 1.2 },
+        };
+
+        function applyUnitLevelScaling(unit, level) {
+            if (!unit) return;
+            let lvl = Math.max(1, Math.floor(level || 1));
+            unit.unitLevel = lvl;
+
+            let baseHp = unit.baseHp || unit.maxHp || 1;
+            let baseAtk = unit.baseAttackDamage || unit.attackDamage || 0;
+            let baseSpeed = unit.baseSpeed || unit.speed || 1;
+            let baseCd = unit.baseAttackCooldown || unit.attackCooldown || 30;
+            let baseVision = unit.baseVisionRange || unit.visionRange || 4;
+
+            unit.baseHp = baseHp;
+            unit.baseAttackDamage = baseAtk;
+            unit.baseSpeed = baseSpeed;
+            unit.baseAttackCooldown = baseCd;
+            unit.baseVisionRange = baseVision;
+
+            let cfg = UNIT_LEVEL_SCALING[unit.unitType] || UNIT_LEVEL_SCALING._default;
+
+            let hpMult = Math.pow(cfg.hpExp || 1, lvl - 1);
+            let dmgMult = Math.pow(cfg.dmgExp || 1, lvl - 1);
+            let speedMult = Math.pow(cfg.speedExp || 1, lvl - 1);
+            let cdMult = Math.pow(cfg.cdExp || 1, lvl - 1);
+            let visionMult = Math.pow(cfg.visionExp || 1, lvl - 1);
+
+            let hpRatio = unit.maxHp > 0 ? (unit.hp / unit.maxHp) : 1;
+            unit.maxHp = Math.max(1, Math.floor(baseHp * hpMult));
+            unit.hp = Math.max(1, Math.floor(unit.maxHp * hpRatio));
+
+            if (baseAtk > 0) unit.attackDamage = Math.max(1, Math.round(baseAtk * dmgMult));
+
+            if (baseCd < 900) unit.attackCooldown = Math.max(cfg.minCd || 8, Math.round(baseCd * cdMult));
+
+            let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
+            unit.speed = Math.min(speedCap, baseSpeed * speedMult);
+
+            let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
+            unit.visionRange = Math.min(visionCap, baseVision * visionMult);
+
+            if (unit.workerType === 'builder') {
+                unit.builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+            }
+        }
+
         // ============================================================
         // GLOBAL STATE
         // ============================================================
@@ -732,11 +794,11 @@
         let collectors = []; // deprecated - worker units now in units array
         let droppedItems = [];
 
-        let players = [
-            { money: 2000, popCount: 0 },
-            { money: 2000, popCount: 0 },
-        ];
+        const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
+        let players = Array.from({ length: 8 }, () => ({ money: 2000, popCount: 0 }));
         let localPlayerId = 0;
+        let activeTeamIds = [0, 1];
+        let teamColorById = {};
         let gameStarted = false;
         let gameOver = false;
         let winner = -1;
@@ -774,8 +836,9 @@
         let visualRng = null; // separate RNG for particles/visual effects (not synced)
 
         // Multiplayer
-        let peer = null, myPeerId = null, connections = [], connectedPlayers = [];
+    let peer = null, myPeerId = null, connections = [], connectedPlayers = [];
         let isHost = false, isMultiplayer = false;
+    let lobbyPlayers = [];
         let longPressRallyEnabled = window.innerWidth <= 800;
 
         // ============================================================
@@ -1207,14 +1270,19 @@
         }
 
         function generateGoldMines() {
+            let spawnTiles = arguments.length > 0 && arguments[0] ? arguments[0] : [];
             goldMines = [];
             let totalMines = GOLD_MINE_COUNT;
-            let margin = Math.max(3, Math.floor((GRID_W - GOLD_MINE_AREA) / 2));
-            let spawnDist = Math.max(8, Math.floor(GRID_W * 0.1));
-            let p0gx = 5, p0gy = 5, p1gx = GRID_W - 6, p1gy = GRID_H - 6;
+            let margin = 1;
+            let spawnSafeRadius = 3;
             let placed = new Set();
             let goldRange = Math.max(0, GOLD_MINE_MAX - GOLD_MINE_MIN);
             let remaining = totalMines;
+
+            let nearAnySpawn = (gx, gy) => {
+                if (!spawnTiles || spawnTiles.length === 0) return false;
+                return spawnTiles.some(s => Math.hypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
+            };
 
             // Split into veins: ~3-6 tiles each
             let veinSeeds = [];
@@ -1230,9 +1298,7 @@
                 for (let att = 0; att < 80; att++) {
                     let gx = margin + Math.floor(rng() * (GRID_W - margin * 2));
                     let gy = margin + Math.floor(rng() * (GRID_H - margin * 2));
-                    let d0 = Math.abs(gx - p0gx) + Math.abs(gy - p0gy);
-                    let d1 = Math.abs(gx - p1gx) + Math.abs(gy - p1gy);
-                    if (!placed.has(`${gx},${gy}`) && d0 > spawnDist && d1 > spawnDist &&
+                    if (!placed.has(`${gx},${gy}`) && !nearAnySpawn(gx, gy) &&
                         grid[gy][gx].type === TYPE_FLOOR) {
                         seedGx = gx; seedGy = gy;
                         break;
@@ -1255,9 +1321,7 @@
                         continue;
                     }
 
-                    let d0 = Math.abs(tile.x - p0gx) + Math.abs(tile.y - p0gy);
-                    let d1 = Math.abs(tile.x - p1gx) + Math.abs(tile.y - p1gy);
-                    if (d0 <= spawnDist || d1 <= spawnDist) {
+                    if (nearAnySpawn(tile.x, tile.y)) {
                         frontier.splice(idx, 1);
                         continue;
                     }
@@ -1279,13 +1343,52 @@
             }
         }
 
+        function pickRandomPlayerSpawns(teamCount = 2) {
+            teamCount = Math.max(2, Math.min(8, Math.floor(teamCount || 2)));
+            let margin = 2;
+            let minSpawnSeparation = Math.max(8, Math.floor(Math.min(GRID_W, GRID_H) * (teamCount <= 3 ? 0.28 : 0.18)));
+
+            function randomFloorTile() {
+                for (let i = 0; i < 120; i++) {
+                    let gx = margin + Math.floor(rng() * Math.max(1, GRID_W - margin * 2));
+                    let gy = margin + Math.floor(rng() * Math.max(1, GRID_H - margin * 2));
+                    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].type === TYPE_FLOOR) {
+                        return { gx, gy };
+                    }
+                }
+                return null;
+            }
+
+            for (let att = 0; att < 240; att++) {
+                let picks = [];
+                let ok = true;
+                for (let i = 0; i < teamCount; i++) {
+                    let tile = randomFloorTile();
+                    if (!tile) { ok = false; break; }
+                    let tooClose = picks.some(p => (Math.abs(p.gx - tile.gx) + Math.abs(p.gy - tile.gy)) < minSpawnSeparation);
+                    if (tooClose) { ok = false; break; }
+                    picks.push(tile);
+                }
+                if (ok && picks.length === teamCount) return picks;
+            }
+
+            let fallback = [];
+            for (let i = 0; i < teamCount; i++) {
+                let t = i / teamCount;
+                let gx = Math.max(1, Math.min(GRID_W - 2, Math.floor((GRID_W - 2) * t) + 1));
+                let gy = (i % 2 === 0) ? Math.max(1, Math.min(GRID_H - 2, 3)) : Math.max(1, Math.min(GRID_H - 2, GRID_H - 4));
+                fallback.push({ gx, gy });
+            }
+            return fallback;
+        }
+
         // ============================================================
         // ITEM STATS
         // ============================================================
         function getUpgradeMaxHp(item, nextLevel) {
             if (item.type === 'barrack' || (item.type && item.type.startsWith('barrack'))) return 100 * nextLevel;
             if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner') return 50 * nextLevel;
-            if (item instanceof Tower) return item.baseStats.towerHp ? Math.floor(item.baseStats.towerHp * Math.pow(1.3, nextLevel - 1)) : 100 * nextLevel;
+            if (item instanceof Tower) return item.baseStats.towerHp ? Math.floor(item.baseStats.towerHp * Math.pow(1.4, nextLevel - 1)) : 100 * nextLevel;
             return 80 * nextLevel; // floor items
         }
 
@@ -1295,6 +1398,16 @@
             if (item.effectiveLevel !== undefined) return item.effectiveLevel;
             if (item.level !== undefined) return item.level;
             return Math.floor(Math.log2(item.stacks || 1)) + 1;
+        }
+
+        function getLevelLabelText(item) {
+            let currentLevel = Math.max(0, Math.floor(getDisplayLevel(item) || 0));
+            let potentialLevel = item && item.potentialEffectiveLevel !== undefined
+                ? Math.max(0, Math.floor(item.potentialEffectiveLevel || 0))
+                : currentLevel;
+            return potentialLevel !== currentLevel
+                ? `L${currentLevel}->L${potentialLevel}`
+                : `L${currentLevel}`;
         }
 
         function markConstructionComplete(item) {
@@ -1326,7 +1439,7 @@
         }
 
         function calculateItemStats(type, level) {
-            let mult = Math.pow(1.5, level - 1);
+            let mult = Math.pow(1.6, level - 1);
             let stats = { maxHp: 0, damage: 0 };
             if (type === 'farm') { stats.maxHp = Math.floor(1000 * mult); }
             else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
@@ -1353,7 +1466,7 @@
             let req = Math.pow(2, level);
             c.fillStyle = "white"; c.font = "bold 9px Arial"; c.textAlign = "center";
             c.shadowColor = "black"; c.shadowBlur = 3;
-            c.fillText(`L${level}`, 16, 12);
+            c.fillText(getLevelLabelText(item), 16, 12);
             c.font = "8px Arial"; c.fillStyle = "#aaa";
             c.fillText(`${formatBigNumber(stacks)}/${formatBigNumber(req)}`, 16, 40);
             c.shadowBlur = 0;
@@ -1409,7 +1522,7 @@
                 let req = Math.pow(2, displayLevel);
                 c.fillStyle = "white"; c.font = "bold 9px Arial"; c.textAlign = "center";
                 c.shadowColor = "black"; c.shadowBlur = 3;
-                c.fillText(`L${displayLevel}`, 16, 12);
+                c.fillText(getLevelLabelText(this), 16, 12);
                 c.font = "8px Arial"; c.fillStyle = "#aaa";
                 c.fillText(`${formatBigNumber(this.effectiveStacks || this.stacks)}/${formatBigNumber(req)}`, 16, 40);
                 c.shadowBlur = 0;
@@ -1420,7 +1533,7 @@
                 this.currentStats = this.calcStats(effLevel);
 
                 let baseHp = this.baseStats.towerHp || 100;
-                let newMaxHp = Math.floor(baseHp * Math.pow(1.3, effLevel - 1));
+                let newMaxHp = Math.floor(baseHp * Math.pow(1.4, effLevel - 1));
                 let ratio = this.maxHp > 0 ? this.hp / this.maxHp : 1;
                 this.maxHp = newMaxHp;
                 this.hp = Math.floor(newMaxHp * ratio);
@@ -1429,7 +1542,7 @@
 
             calcStats(lvl) {
                 let s = { ...this.baseStats };
-                let m = Math.pow(1.3, lvl - 1);
+                let m = Math.pow(1.4, lvl - 1);
                 s.damage = this.baseStats.damage * m;
                 if (this.type === 'water' || this.type === 'smg' || this.type === 'pistol') {
                     s.cd = Math.max(5, this.baseStats.cd * (1 - (lvl - 1) * 0.1));
@@ -1442,7 +1555,7 @@
                 }
                 if (!s.cd) s.cd = this.baseStats.cd;
                 if (!s.visionRange) s.visionRange = this.baseStats.visionRange;
-                if (s.visionRange > 4) s.visionRange = 4;
+                if (s.visionRange > 5) s.visionRange = 5;
                 return s;
             }
 
@@ -2494,12 +2607,7 @@
                             this.spawnQueue.shift();
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
                             let u = new Unit(this.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            // Scale unit by barrack effective level
-                            let lvlMult = Math.pow(1.3, effLvl - 1);
-                            u.maxHp = Math.floor(u.maxHp * lvlMult);
-                            u.hp = u.maxHp;
-                            u.attackDamage = Math.round(u.attackDamage * lvlMult);
-                            u.unitLevel = effLvl;
+                            applyUnitLevelScaling(u, effLvl);
                             units.push(u);
                             players[this.owner].popCount++;
                             // Send to rally point if set
@@ -2605,10 +2713,7 @@
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
                             let u = new Unit('collector', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
-                            let lvlMult = Math.pow(1.3, effLvl - 1);
-                            u.maxHp = Math.floor(u.maxHp * lvlMult);
-                            u.hp = u.maxHp;
-                            u.unitLevel = effLvl;
+                            applyUnitLevelScaling(u, effLvl);
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2693,10 +2798,7 @@
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
                             let u = new Unit('salvager_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
-                            let lvlMult = Math.pow(1.3, effLvl - 1);
-                            u.maxHp = Math.floor(u.maxHp * lvlMult);
-                            u.hp = u.maxHp;
-                            u.unitLevel = effLvl;
+                            applyUnitLevelScaling(u, effLvl);
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2770,7 +2872,10 @@
             }
             getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
             // Builder DPS per unit: scales with effective level
-            getBuilderDps() { return 5 * (this.effectiveLevel || this.level || 1); }
+            getBuilderDps() {
+                let lvl = this.effectiveLevel || this.level || 1;
+                return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+            }
             update() {
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
@@ -2785,12 +2890,9 @@
                             let u = new Unit('builder_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
                             u.builderHasMaterial = false;
-                            // builder DPS based on spawner's effective level
+                            applyUnitLevelScaling(u, effLvl);
+                            // Keep builder DPS tied to spawner level baseline
                             u.builderDps = this.getBuilderDps();
-                            let lvlMult = Math.pow(1.3, effLvl - 1);
-                            u.maxHp = Math.floor(u.maxHp * lvlMult);
-                            u.hp = u.maxHp;
-                            u.unitLevel = effLvl;
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2964,7 +3066,8 @@
                                 let spawner = _findClosestBuilderSpawner(u);
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy);
+                                    let canWalk = _builderCanWalk(u.owner);
+                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                     return;
@@ -3023,7 +3126,8 @@
                                 let spawner = _findClosestBuilderSpawner(u);
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy);
+                                    let canWalk = _builderCanWalk(u.owner);
+                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                 } else {
@@ -3104,7 +3208,8 @@
                     let spawner = _findClosestBuilderSpawner(u);
                     if (spawner && players[owner].money >= 1 && u.workerTarget) {
                         u.workerState = 'RETURNING_FOR_GOLD';
-                        u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy);
+                        let canWalk = _builderCanWalk(u.owner);
+                        u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._builderSpawnerTarget = spawner;
                     }
@@ -3138,11 +3243,11 @@
         function _builderCanWalk(owner) {
             return (nx, ny) => {
                 let cell = grid[ny][nx];
-                if (cell.owner === owner && cell.item && (cell.item.underConstruction || cell.item.isUpgrading)) return true;
-                // Check towers, barracks, spawners under construction
-                for (let t of towers) { if (t.gx === nx && t.gy === ny && t.owner === owner && (t.underConstruction || t.isUpgrading)) return true; }
-                for (let b of barracks) { if (b.gx === nx && b.gy === ny && b.owner === owner && (b.underConstruction || b.isUpgrading)) return true; }
-                for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && s.owner === owner && (s.underConstruction || s.isUpgrading)) return true; }
+                if (cell.item && (cell.item.underConstruction || cell.item.isUpgrading)) return true;
+                // Check towers, barracks, spawners under construction/upgrading (any owner)
+                for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading)) return true; }
+                for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading)) return true; }
+                for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading)) return true; }
                 return false;
             };
         }
@@ -3206,7 +3311,7 @@
             let spawner = _findClosestBuilderSpawner(u);
             if (spawner && players[u.owner].money >= 1) {
                 u.workerState = 'RETURNING_FOR_GOLD';
-                u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy);
+                u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = spawner;
             } else {
@@ -3295,6 +3400,14 @@
             towers.forEach(t => { t.effectiveStacks = t.stacks; });
             for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { if (grid[y][x].item) grid[y][x].item.effectiveStacks = grid[y][x].item.stacks || 1; }
 
+            const isOperationalEntity = (obj) => {
+                if (!obj) return false;
+                if (obj.underConstruction) return false;
+                let lvl = (obj.effectiveLevel !== undefined ? obj.effectiveLevel : obj.level);
+                if (lvl !== undefined && lvl <= 0) return false;
+                return true;
+            };
+
             let visited = new Set();
             const gid = (x, y) => `${x},${y}`;
 
@@ -3303,14 +3416,15 @@
                     let cell = grid[y][x], type = null, isTower = false, ownerCheck = -1;
                     if (cell.type === TYPE_WALL) {
                         let t = towers.find(t => t.gx === x && t.gy === y);
-                        if (t) { type = t.type; isTower = true; ownerCheck = t.owner; }
-                    } else if (cell.item) { type = cell.item.type; ownerCheck = cell.owner; }
+                        if (t && isOperationalEntity(t)) { type = t.type; isTower = true; ownerCheck = t.owner; }
+                    } else if (cell.item && isOperationalEntity(cell.item)) { type = cell.item.type; ownerCheck = cell.owner; }
                     if (!type || visited.has(gid(x, y))) continue;
 
                     let group = [], queue = [{ x, y }], rootObj = null;
                     visited.add(gid(x, y));
-                    if (isTower) { let t = towers.find(t => t.gx === x && t.gy === y); if (t) { group.push(t); rootObj = t; } }
-                    else { group.push(cell.item); rootObj = cell.item; }
+                    if (isTower) { let t = towers.find(t => t.gx === x && t.gy === y); if (t && isOperationalEntity(t)) { group.push(t); rootObj = t; } }
+                    else if (isOperationalEntity(cell.item)) { group.push(cell.item); rootObj = cell.item; }
+                    if (!rootObj) continue;
                     let touchedAreas = new Set([cell.areaId]);
 
                     while (queue.length > 0) {
@@ -3320,13 +3434,10 @@
                             if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
                             let key = gid(nx, ny), nc = grid[ny][nx], nType = null, nObj = null;
                             if (isTower) {
-                                if (nc.type === TYPE_WALL) { let nt = towers.find(t => t.gx === nx && t.gy === ny); if (nt && nt.owner === ownerCheck) { nType = nt.type; nObj = nt; } }
-                            } else { if (nc.item && nc.owner === ownerCheck) { nType = nc.item.type; nObj = nc.item; } }
+                                if (nc.type === TYPE_WALL) { let nt = towers.find(t => t.gx === nx && t.gy === ny); if (nt && nt.owner === ownerCheck && isOperationalEntity(nt)) { nType = nt.type; nObj = nt; } }
+                            } else { if (nc.item && nc.owner === ownerCheck && isOperationalEntity(nc.item)) { nType = nc.item.type; nObj = nc.item; } }
 
                             if (nObj && rootObj) {
-                                let cState = rootObj.underConstruction ? 1 : 0;
-                                let nState = nObj.underConstruction ? 1 : 0;
-                                if (cState !== nState) nType = null; // Do not group different states
                                 if (type === 'barrack' && nType === 'barrack' && nObj.unitType !== rootObj.unitType) nType = null;
                             }
 
@@ -3344,9 +3455,7 @@
                                         let k2 = gid(nx2, ny2);
                                         if (!visited.has(k2) && grid[ny2][nx2].type === TYPE_WALL) {
                                             let nt2 = towers.find(t => t.gx === nx2 && t.gy === ny2);
-                                            let nt2State = nt2 ? (nt2.underConstruction ? 1 : 0) : -1;
-                                            let cState = rootObj.underConstruction ? 1 : 0;
-                                            if (nt2 && nt2.type === type && nt2.owner === ownerCheck && nt2State === cState) {
+                                            if (nt2 && isOperationalEntity(nt2) && nt2.type === type && nt2.owner === ownerCheck) {
                                                 visited.add(k2); queue.push({ x: nx2, y: ny2 }); group.push(nt2); touchedAreas.add(grid[ny2][nx2].areaId);
                                             }
                                         }
@@ -3365,8 +3474,8 @@
                         let filled = true;
                         for (let cp of area.cells) {
                             let c = grid[cp.y][cp.x], occ = false;
-                            if (isTower) { if (c.type === TYPE_WALL) { let t = towers.find(t => t.gx === cp.x && t.gy === cp.y); if (t && t.type === type && t.owner === ownerCheck) occ = true; } }
-                            else { if (c.item && c.item.type === type && c.owner === ownerCheck) { if (type !== 'barrack' || c.item.unitType === rootObj.unitType) occ = true; } }
+                            if (isTower) { if (c.type === TYPE_WALL) { let t = towers.find(t => t.gx === cp.x && t.gy === cp.y); if (t && isOperationalEntity(t) && t.type === type && t.owner === ownerCheck) occ = true; } }
+                            else { if (c.item && isOperationalEntity(c.item) && c.item.type === type && c.owner === ownerCheck) { if (type !== 'barrack' || c.item.unitType === rootObj.unitType) occ = true; } }
                             if (!occ) { filled = false; break; }
                         }
                         if (filled) { area.active = true; let power = (area.multiplierLevel || 0) + 1; areaMult *= Math.pow(area.cells.length, power); }
@@ -3490,10 +3599,15 @@
                 // Check if ALL cells in area are occupied by any building/item (any owner)
                 let allFilled = area.cells.every(cp => {
                     let c = grid[cp.y][cp.x];
-                    if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) return true;
-                    if (c.item) return true;
-                    if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) return true;
-                    if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) return true;
+                    if (c.type === TYPE_WALL) {
+                        let t = towers.find(t => t.gx === cp.x && t.gy === cp.y);
+                        if (t && !t.underConstruction && (t.effectiveLevel || t.level || 0) > 0) return true;
+                    }
+                    if (c.item && !c.item.underConstruction && (c.item.effectiveLevel || c.item.level || 0) > 0) return true;
+                    let b = barracks.find(b => b.gx === cp.x && b.gy === cp.y);
+                    if (b && !b.underConstruction && (b.effectiveLevel || b.level || 0) > 0) return true;
+                    let s = collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y);
+                    if (s && !s.underConstruction && (s.effectiveLevel || s.level || 0) > 0) return true;
                     return false;
                 });
                 if (!allFilled) return false;
@@ -3673,19 +3787,18 @@
         }
 
         function checkWinCondition() {
+            let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
             if (gameMode === 'killking') {
-                for (let pid = 0; pid < 2; pid++) {
-                    let hasKing = false;
-                    for (let u of units) { if (u.owner === pid && u.isKing && !u.dead) { hasKing = true; break; } }
-                    if (!hasKing) {
-                        gameOver = true;
-                        winner = 1 - pid;
-                        showGameOver();
-                        return;
-                    }
+                let alive = teams.filter(pid => units.some(u => u.owner === pid && u.isKing && !u.dead));
+                if (alive.length <= 1 && teams.length > 1) {
+                    gameOver = true;
+                    winner = alive.length === 1 ? alive[0] : -1;
+                    showGameOver();
+                    return;
                 }
             } else {
-                for (let pid = 0; pid < 2; pid++) {
+                let alive = [];
+                for (let pid of teams) {
                     let has = false;
                     for (let t of towers) { if (t.owner === pid) { has = true; break; } }
                     if (!has) for (let b of barracks) { if (b.owner === pid) { has = true; break; } }
@@ -3696,11 +3809,12 @@
                             if (grid[y][x].item && grid[y][x].owner === pid) has = true;
                         }
                     }
-                    if (!has) {
-                        gameOver = true;
-                        winner = 1 - pid;
-                        showGameOver();
-                    }
+                    if (has) alive.push(pid);
+                }
+                if (alive.length <= 1 && teams.length > 1) {
+                    gameOver = true;
+                    winner = alive.length === 1 ? alive[0] : -1;
+                    showGameOver();
                 }
             }
         }
@@ -5223,11 +5337,12 @@
         function queueAction(action) {
             let tick = currentTick + INPUT_DELAY;
             if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
-            localInputBuffer[tick].push(action);
+            let finalAction = { ...action, teamId: localPlayerId };
+            localInputBuffer[tick].push(finalAction);
 
             // In multiplayer, send to peer (individual action, tick confirmation sent separately in tick loop)
             if (isMultiplayer && connections.length > 0) {
-                connections.forEach(c => c.send({ type: 'TICK_INPUT', tick, actions: [action] }));
+                connections.forEach(c => c.send({ type: 'TICK_INPUT', tick, actions: [finalAction] }));
             }
         }
 
@@ -5725,7 +5840,7 @@
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
-            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
+            // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             if (!e.underConstruction) {
                 html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
                 html += infoRow('Unit HP', us.hp || '?');
@@ -5813,7 +5928,7 @@
             if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
-            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
+            // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
             if (e.owner === localPlayerId) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
@@ -5873,7 +5988,7 @@
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
-            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
+            // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
             if (e.owner === localPlayerId) {
@@ -5926,7 +6041,7 @@
                 let effInc = Math.max(1, effLevel);
                 html += infoRow('Income', `${baseInc}g/s`, baseInc !== effInc ? `${effInc}g/s` : undefined);
             }
-            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
+            // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `${def.price || '?'}g`);
             let fgx = e.gx !== undefined ? e.gx : e._gx, fgy = e.gy !== undefined ? e.gy : e._gy;
             if (fgx !== undefined && fgy !== undefined) {
@@ -6384,6 +6499,104 @@
         // ============================================================
         // MULTIPLAYER (PeerJS)
         // ============================================================
+        function _escapeHtml(v) {
+            return String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\'': '&#39;', '"': '&quot;' }[c]));
+        }
+
+        function normalizeLobbyColor(color) {
+            let c = String(color || '').toLowerCase();
+            if (!TEAM_PRESET_COLORS.includes(c)) return TEAM_PRESET_COLORS[0];
+            return c;
+        }
+
+        function defaultLobbyName(peerId) {
+            if (!peerId) return 'Player';
+            return `Player-${String(peerId).slice(0, 4)}`;
+        }
+
+        function computeTeamSetupFromLobby() {
+            let teamByPeer = {};
+            let activeSet = new Set();
+            let colorByTeam = {};
+            for (let lp of lobbyPlayers) {
+                let color = normalizeLobbyColor(lp.color);
+                let teamId = TEAM_PRESET_COLORS.indexOf(color);
+                if (teamId < 0) teamId = 0;
+                teamByPeer[lp.peerId] = teamId;
+                activeSet.add(teamId);
+                colorByTeam[teamId] = color;
+            }
+            let active = Array.from(activeSet).sort((a, b) => a - b);
+            if (active.length === 0) active = [0, 1];
+            return { teamByPeer, activeTeamIds: active, teamColorById: colorByTeam };
+        }
+
+        function renderOnlineLobby() {
+            let list = document.getElementById('lobby-players');
+            if (!list) return;
+            let rows = '';
+            for (let lp of lobbyPlayers) {
+                let isSelf = lp.peerId === myPeerId;
+                let teamId = TEAM_PRESET_COLORS.indexOf(normalizeLobbyColor(lp.color));
+                let colorOpts = TEAM_PRESET_COLORS.map(c => `<option value="${c}" ${c === normalizeLobbyColor(lp.color) ? 'selected' : ''}>${c.toUpperCase()}</option>`).join('');
+                rows += `<div style="display:flex;align-items:center;gap:8px;border:1px solid #2b2b2b;background:#141414;padding:6px;border-radius:4px;">
+                    <div style="width:14px;height:14px;border-radius:50%;background:${normalizeLobbyColor(lp.color)};border:1px solid #666"></div>
+                    <div style="color:#777;font-size:11px;min-width:52px">Team ${teamId >= 0 ? teamId + 1 : '?'}</div>
+                    <input class="lobby-name-input" data-peer="${lp.peerId}" value="${_escapeHtml(lp.name || '')}" ${isSelf ? '' : 'disabled'} style="flex:1;min-width:110px;background:#111;color:${isSelf ? '#fff' : '#888'};border:1px solid #444;border-radius:3px;padding:3px 6px" />
+                    <select class="lobby-color-select" data-peer="${lp.peerId}" ${isSelf ? '' : 'disabled'} style="background:#111;color:${isSelf ? '#fff' : '#888'};border:1px solid #444;border-radius:3px;padding:3px 6px">${colorOpts}</select>
+                </div>`;
+            }
+            list.innerHTML = rows || '<div style="color:#777">No players yet.</div>';
+
+            list.querySelectorAll('.lobby-name-input').forEach(inp => {
+                inp.onchange = () => {
+                    if (inp.dataset.peer !== myPeerId) return;
+                    let me = lobbyPlayers.find(p => p.peerId === myPeerId);
+                    if (!me) return;
+                    me.name = (inp.value || '').trim().slice(0, 24) || defaultLobbyName(myPeerId);
+                    if (isHost) {
+                        broadcastLobbyState();
+                        renderOnlineLobby();
+                    } else if (connections[0]) {
+                        connections[0].send({ type: 'LOBBY_UPDATE_SELF', name: me.name, color: me.color });
+                    }
+                };
+            });
+
+            list.querySelectorAll('.lobby-color-select').forEach(sel => {
+                sel.onchange = () => {
+                    if (sel.dataset.peer !== myPeerId) return;
+                    let me = lobbyPlayers.find(p => p.peerId === myPeerId);
+                    if (!me) return;
+                    me.color = normalizeLobbyColor(sel.value);
+                    if (isHost) {
+                        broadcastLobbyState();
+                        renderOnlineLobby();
+                    } else if (connections[0]) {
+                        connections[0].send({ type: 'LOBBY_UPDATE_SELF', name: me.name, color: me.color });
+                    }
+                };
+            });
+
+            let setup = computeTeamSetupFromLobby();
+            let status = document.getElementById('lobby-status');
+            if (status && status.textContent.indexOf('Starting') === -1 && status.textContent.indexOf('Connecting') === -1 && status.textContent.indexOf('Creating') === -1) {
+                status.textContent = `${lobbyPlayers.length} player(s), ${setup.activeTeamIds.length} team(s)`;
+            }
+
+            let startBtn = document.getElementById('btn-start-online');
+            if (startBtn) {
+                startBtn.style.display = isHost ? 'inline-block' : 'none';
+                startBtn.disabled = !isHost || lobbyPlayers.length < 2 || setup.activeTeamIds.length < 2;
+            }
+        }
+
+        function broadcastLobbyState() {
+            if (!isHost) return;
+            let payload = lobbyPlayers.map(p => ({ peerId: p.peerId, name: (p.name || '').slice(0, 24), color: normalizeLobbyColor(p.color) }));
+            connections.forEach(c => c.send({ type: 'LOBBY_STATE', players: payload }));
+        }
+
         function initPeer(cb) {
             if (peer) return;
             peer = new Peer();
@@ -6403,7 +6616,11 @@
             conn.on('data', data => {
                 if (data.type === 'START_GAME') {
                     gameSeed = data.seed;
-                    localPlayerId = data.playerId;
+                    lobbyPlayers = Array.isArray(data.lobbyPlayers) ? data.lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) })) : [];
+                    let setup = computeTeamSetupFromLobby();
+                    activeTeamIds = setup.activeTeamIds;
+                    teamColorById = setup.teamColorById;
+                    localPlayerId = setup.teamByPeer[myPeerId] ?? 0;
                     isMultiplayer = true;
                     if (data.cfg) {
                         GRID_W = data.cfg.gridW; GRID_H = data.cfg.gridW;
@@ -6417,7 +6634,41 @@
                     }
                     initAudio();
                     startGame();
+                } else if (data.type === 'LOBBY_JOIN' && isHost) {
+                    let used = new Set(lobbyPlayers.map(p => normalizeLobbyColor(p.color)));
+                    let firstFree = TEAM_PRESET_COLORS.find(c => !used.has(c)) || TEAM_PRESET_COLORS[(lobbyPlayers.length) % TEAM_PRESET_COLORS.length];
+                    let existing = lobbyPlayers.find(p => p.peerId === conn.peer);
+                    if (existing) {
+                        existing.name = (data.name || existing.name || defaultLobbyName(conn.peer)).slice(0, 24);
+                        existing.color = normalizeLobbyColor(data.color || existing.color || firstFree);
+                    } else {
+                        lobbyPlayers.push({ peerId: conn.peer, name: (data.name || defaultLobbyName(conn.peer)).slice(0, 24), color: normalizeLobbyColor(data.color || firstFree) });
+                    }
+                    document.getElementById('lobby-status').textContent = 'Lobby updated';
+                    broadcastLobbyState();
+                    renderOnlineLobby();
+                } else if (data.type === 'LOBBY_UPDATE_SELF' && isHost) {
+                    let lp = lobbyPlayers.find(p => p.peerId === conn.peer);
+                    if (lp) {
+                        lp.name = (data.name || lp.name || defaultLobbyName(conn.peer)).slice(0, 24);
+                        lp.color = normalizeLobbyColor(data.color || lp.color);
+                        broadcastLobbyState();
+                        renderOnlineLobby();
+                    }
+                } else if (data.type === 'LOBBY_STATE' && !isHost) {
+                    lobbyPlayers = Array.isArray(data.players) ? data.players.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) })) : [];
+                    renderOnlineLobby();
                 } else if (data.type === 'TICK_INPUT') {
+                    if (isHost) {
+                        let setup = computeTeamSetupFromLobby();
+                        let senderTeam = setup.teamByPeer[conn.peer] ?? 0;
+                        let forwarded = (data.actions || []).map(a => ({ ...a, teamId: senderTeam }));
+                        if (!remoteInputBuffer[data.tick]) remoteInputBuffer[data.tick] = [];
+                        remoteInputBuffer[data.tick].push(...forwarded);
+                        connections.filter(c => c !== conn).forEach(c => c.send({ type: 'TICK_INPUT', tick: data.tick, actions: forwarded }));
+                        remoteTickConfirmed[data.tick] = true;
+                        return;
+                    }
                     if (!remoteInputBuffer[data.tick]) remoteInputBuffer[data.tick] = [];
                     remoteInputBuffer[data.tick].push(...data.actions);
                     remoteTickConfirmed[data.tick] = true;
@@ -6433,22 +6684,25 @@
             });
             conn.on('open', () => {
                 if (isHost) {
-                    // Opponent connected - auto-start the game
-                    document.getElementById('lobby-status').textContent = 'Opponent connected! Starting...';
-                    setTimeout(() => {
-                        readConfigFromMenu();
-                        gameSeed = Date.now();
-                        localPlayerId = 0;
-                        isMultiplayer = true;
-                        connections.forEach(c => c.send({
-                            type: 'START_GAME', seed: gameSeed, playerId: 1,
-                            cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode }
-                        }));
-                        startGame();
-                    }, 500);
+                    if (!lobbyPlayers.find(p => p.peerId === conn.peer)) {
+                        let used = new Set(lobbyPlayers.map(p => normalizeLobbyColor(p.color)));
+                        let firstFree = TEAM_PRESET_COLORS.find(c => !used.has(c)) || TEAM_PRESET_COLORS[(lobbyPlayers.length) % TEAM_PRESET_COLORS.length];
+                        lobbyPlayers.push({ peerId: conn.peer, name: defaultLobbyName(conn.peer), color: firstFree });
+                    }
+                    document.getElementById('lobby-status').textContent = 'Player joined lobby';
+                    broadcastLobbyState();
+                    renderOnlineLobby();
                 }
             });
-            conn.on('close', () => { connections = connections.filter(c => c !== conn); });
+            conn.on('close', () => {
+                connections = connections.filter(c => c !== conn);
+                if (isHost) {
+                    lobbyPlayers = lobbyPlayers.filter(p => p.peerId !== conn.peer);
+                    document.getElementById('lobby-status').textContent = 'Player disconnected from lobby';
+                    broadcastLobbyState();
+                    renderOnlineLobby();
+                }
+            });
         }
 
         function copyGameLink() {
@@ -6464,16 +6718,52 @@
             isHost = true;
             let waitDiv = document.getElementById('lobby-waiting');
             waitDiv.style.display = 'block';
+            document.getElementById('lobby-settings').style.display = 'none';
+            document.getElementById('lobby-buttons').style.display = 'none';
             document.getElementById('lobby-status').textContent = 'Creating game...';
             document.getElementById('btn-online').disabled = true;
+            let startBtn = document.getElementById('btn-start-online');
+            startBtn.style.display = 'inline-block';
+            startBtn.disabled = true;
             initPeer(id => {
+                lobbyPlayers = [{ peerId: id, name: defaultLobbyName(id), color: TEAM_PRESET_COLORS[0] }];
                 // Update URL with game ID (without reloading)
                 let url = new URL(window.location);
                 url.searchParams.set('game', id);
                 window.history.replaceState({}, '', url);
-                document.getElementById('lobby-status').textContent = 'Waiting for opponent...';
+                document.getElementById('lobby-status').textContent = 'Lobby created. Waiting for players...';
                 document.getElementById('btn-copy-link').style.display = 'inline-block';
+                renderOnlineLobby();
             });
+        }
+
+        function startHostedGame() {
+            if (!isHost || connections.length === 0) return;
+            let preSetup = computeTeamSetupFromLobby();
+            if (preSetup.activeTeamIds.length < 2) {
+                document.getElementById('lobby-status').textContent = 'Need at least 2 different team colors to start.';
+                return;
+            }
+            let startBtn = document.getElementById('btn-start-online');
+            startBtn.disabled = true;
+            document.getElementById('lobby-status').textContent = 'Starting game...';
+
+            readConfigFromMenu();
+            gameSeed = Date.now();
+            let setup = preSetup;
+            activeTeamIds = setup.activeTeamIds;
+            teamColorById = setup.teamColorById;
+            localPlayerId = setup.teamByPeer[myPeerId] ?? 0;
+            isMultiplayer = true;
+
+            connections.forEach(c => c.send({
+                type: 'START_GAME', seed: gameSeed,
+                lobbyPlayers: lobbyPlayers,
+                cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode }
+            }));
+
+            initAudio();
+            startGame();
         }
 
         function joinGame(hostId) {
@@ -6483,10 +6773,15 @@
             document.getElementById('lobby-settings').style.display = 'none';
             document.getElementById('lobby-buttons').style.display = 'none';
             document.getElementById('lobby-status').textContent = 'Connecting to host...';
+            document.getElementById('btn-copy-link').style.display = 'none';
+            document.getElementById('btn-start-online').style.display = 'none';
             initPeer(() => {
+                lobbyPlayers = [{ peerId: myPeerId, name: defaultLobbyName(myPeerId), color: TEAM_PRESET_COLORS[1] }];
+                renderOnlineLobby();
                 let conn = peer.connect(hostId);
                 setupConnection(conn);
                 conn.on('open', () => {
+                    conn.send({ type: 'LOBBY_JOIN', name: lobbyPlayers[0].name, color: lobbyPlayers[0].color });
                     document.getElementById('lobby-status').textContent = 'Connected! Waiting for host to start...';
                 });
             });
@@ -6520,48 +6815,62 @@
         function startGame() {
             document.getElementById('lobby').style.display = 'none';
 
+            for (let p of players) { p.money = 2000; p.popCount = 0; }
 
             rng = mulberry32(gameSeed);
             visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
             initSpatialHash();
             initGrid();
             generateAreas();
-            generateGoldMines();
+            let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+            let spawns = pickRandomPlayerSpawns(teams.length);
+            generateGoldMines(spawns);
 
-            // Place starting builder spawner + 3 builder units for each player
-            let p0gx = 5, p0gy = 5, p1gx = GRID_W - 6, p1gy = GRID_H - 6;
-            let s0 = new BuilderSpawner(p0gx, p0gy, 0);
-            s0.underConstruction = false; // starts ready
-            collectorSpawners.push(s0); grid[p0gy][p0gx].item = s0; grid[p0gy][p0gx].owner = 0;
-            let s1 = new BuilderSpawner(p1gx, p1gy, 1);
-            s1.underConstruction = false;
-            collectorSpawners.push(s1); grid[p1gy][p1gx].item = s1; grid[p1gy][p1gx].owner = 1;
+            let teamSpawners = {};
+            let teamSpawnPos = {};
 
-            // Spawn 3 builder units for each player
-            for (let pid = 0; pid < 2; pid++) {
-                let bgx = pid === 0 ? p0gx : p1gx, bgy = pid === 0 ? p0gy : p1gy;
-                let spawner = pid === 0 ? s0 : s1;
+            for (let i = 0; i < teams.length; i++) {
+                let pid = teams[i];
+                let pos = spawns[i] || spawns[0];
+                teamSpawnPos[pid] = pos;
+                let s = new BuilderSpawner(pos.gx, pos.gy, pid);
+                s.underConstruction = false;
+                teamSpawners[pid] = s;
+                collectorSpawners.push(s);
+                grid[pos.gy][pos.gx].item = s;
+                grid[pos.gy][pos.gx].owner = pid;
+            }
+
+            // Spawn 3 builder units for each team
+            for (let pid of teams) {
+                let pos = teamSpawnPos[pid];
+                let bgx = pos.gx, bgy = pos.gy;
+                let spawner = teamSpawners[pid];
                 for (let i = 0; i < 3; i++) {
                     let sp = findNearestWalkable(bgx, bgy);
                     let u = new Unit('builder_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
                     u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
                     u.builderHasMaterial = false;
+                    applyUnitLevelScaling(u, spawner.effectiveLevel || spawner.level || 1);
                     u.builderDps = spawner.getBuilderDps();
                     units.push(u); players[pid].popCount++;
                 }
             }
 
-            // Spawn kings for each player
-            for (let pid = 0; pid < 2; pid++) {
-                let bgx = pid === 0 ? p0gx : p1gx, bgy = pid === 0 ? p0gy : p1gy;
+            // Spawn kings for each team
+            for (let pid of teams) {
+                let pos = teamSpawnPos[pid];
+                let bgx = pos.gx, bgy = pos.gy;
                 let sp = findNearestWalkable(bgx, bgy);
                 let king = new Unit('king', pid, sp.x * TILE + 16, sp.y * TILE + 16);
+                applyUnitLevelScaling(king, 1);
                 units.push(king); players[pid].popCount++;
             }
 
             // Center camera on own base
-            if (localPlayerId === 0) { camera.x = p0gx * TILE - viewW / 2; camera.y = p0gy * TILE - viewH / 2; }
-            else { camera.x = p1gx * TILE - viewW / 2; camera.y = p1gy * TILE - viewH / 2; }
+            let localSpawn = teamSpawnPos[localPlayerId] || spawns[0];
+            camera.x = localSpawn.gx * TILE - viewW / 2;
+            camera.y = localSpawn.gy * TILE - viewH / 2;
             clampCamera();
 
             recalculateAdjacency();
@@ -6604,17 +6913,15 @@
             // Reset pathfinding budget before processing actions
             pathfindBudget = 0;
 
-            // CRITICAL: Both players must process actions in the same order (player 0 first, then player 1)
-            let p0Actions, p1Actions;
-            if (localPlayerId === 0) {
-                p0Actions = localInputBuffer[currentTick] || [];
-                p1Actions = remoteInputBuffer[currentTick] || [];
-            } else {
-                p0Actions = remoteInputBuffer[currentTick] || [];
-                p1Actions = localInputBuffer[currentTick] || [];
+            // Process in deterministic team order for 2..8 teams
+            let localActs = localInputBuffer[currentTick] || [];
+            let remoteActs = remoteInputBuffer[currentTick] || [];
+            let allActs = localActs.concat(remoteActs);
+            let teams = (activeTeamIds && activeTeamIds.length > 0) ? [...activeTeamIds].sort((a, b) => a - b) : [0, 1];
+            for (let teamId of teams) {
+                let acts = allActs.filter(a => (a.teamId ?? 0) === teamId);
+                if (acts.length > 0) processActions(acts, teamId);
             }
-            processActions(p0Actions, 0);
-            processActions(p1Actions, 1);
 
             delete localInputBuffer[currentTick];
             delete remoteInputBuffer[currentTick];
