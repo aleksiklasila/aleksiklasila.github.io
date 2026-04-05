@@ -449,6 +449,8 @@
             <button id="btn-fullscreen"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">⛶
                 FS</button>
+            <button id="btn-level-visibility"
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
             <span style="display:inline-flex; align-items:center;">
                 <input type="checkbox" id="setting-long-press" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
@@ -826,6 +828,12 @@
         // Input
         let keysDown = {};
         let attackMoveMode = false;
+
+    const LEVEL_VISIBILITY_ALL = 0;
+    const LEVEL_VISIBILITY_BUILDINGS = 1;
+    const LEVEL_VISIBILITY_NONE = 2;
+    // Default keeps existing behavior (building labels only)
+    let levelVisibilityMode = LEVEL_VISIBILITY_BUILDINGS;
 
         // Tick system
         let currentTick = 0;
@@ -1410,6 +1418,36 @@
                 : `L${currentLevel}`;
         }
 
+        function getUnitLevelLabelText(unit) {
+            let lvl = Math.max(1, Math.floor((unit && unit.unitLevel) || 1));
+            return `L${lvl}`;
+        }
+
+        function shouldShowBuildingLevels() {
+            return levelVisibilityMode === LEVEL_VISIBILITY_ALL || levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS;
+        }
+
+        function shouldShowUnitLevels() {
+            return levelVisibilityMode === LEVEL_VISIBILITY_ALL;
+        }
+
+        function getLevelVisibilityButtonText() {
+            if (levelVisibilityMode === LEVEL_VISIBILITY_ALL) return 'Levels: Everything';
+            if (levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS) return 'Levels: Buildings';
+            return 'Levels: Off';
+        }
+
+        function updateLevelVisibilityButton() {
+            let btn = document.getElementById('btn-level-visibility');
+            if (!btn) return;
+            btn.textContent = getLevelVisibilityButtonText();
+        }
+
+        function cycleLevelVisibilityMode() {
+            levelVisibilityMode = (levelVisibilityMode + 1) % 3;
+            updateLevelVisibilityButton();
+        }
+
         function markConstructionComplete(item) {
             if (!item) return;
             item.underConstruction = false;
@@ -1761,7 +1799,7 @@
                         drawTowerIcon(ctx, this.x, this.y, this.baseStats.color, this.angle, this.level, this.type);
                     }
                 }
-                ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+                if (shouldShowBuildingLevels()) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
 
                 // HP bar if damaged
                 if (this.hp < this.maxHp) {
@@ -2546,6 +2584,21 @@
                     ctx.restore();
                 }
 
+                if (shouldShowUnitLevels()) {
+                    ctx.save();
+                    ctx.font = 'bold 8px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillStyle = '#ddd';
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    let txt = getUnitLevelLabelText(this);
+                    let ty = this.y - this.r - 7;
+                    ctx.strokeText(txt, this.x, ty);
+                    ctx.fillText(txt, this.x, ty);
+                    ctx.restore();
+                }
+
                 // Carrying value indicator for workers
                 if (this.carryingValue > 0) {
                     ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
@@ -2566,6 +2619,19 @@
         function getBarrackSpawnCooldown(unitType, level) {
             let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
             return Math.max(1, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
+        }
+
+        function getQueuedSpawnInfo(entry, fallbackType, fallbackLevel) {
+            if (entry && typeof entry === 'object') {
+                return {
+                    unitType: entry.unitType || fallbackType,
+                    level: Math.max(1, entry.level || fallbackLevel || 1)
+                };
+            }
+            return {
+                unitType: entry || fallbackType,
+                level: Math.max(1, fallbackLevel || 1)
+            };
         }
 
         class Barrack {
@@ -2604,10 +2670,11 @@
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
                         if (players[this.owner].popCount < POP_LIMIT) {
-                            this.spawnQueue.shift();
+                            let queued = this.spawnQueue.shift();
+                            let spawnInfo = getQueuedSpawnInfo(queued, this.unitType, effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(this.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            applyUnitLevelScaling(u, effLvl);
+                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+                            applyUnitLevelScaling(u, spawnInfo.level);
                             units.push(u);
                             players[this.owner].popCount++;
                             // Send to rally point if set
@@ -2676,7 +2743,7 @@
                         ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * (this.hp / this.maxHp), bh);
                     }
                 }
-                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+                if (this.textCanvas && shouldShowBuildingLevels()) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -2709,11 +2776,12 @@
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
                         if (players[this.owner].popCount < POP_LIMIT) {
-                            this.spawnQueue.shift();
+                            let queued = this.spawnQueue.shift();
+                            let spawnInfo = getQueuedSpawnInfo(queued, 'collector', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit('collector', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
-                            applyUnitLevelScaling(u, effLvl);
+                            applyUnitLevelScaling(u, spawnInfo.level);
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2764,7 +2832,7 @@
                         ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6 + yOffset, 20 * (this.hp / this.maxHp), 3);
                     }
                 }
-                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+                if (this.textCanvas && shouldShowBuildingLevels()) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -2794,11 +2862,12 @@
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
                         if (players[this.owner].popCount < POP_LIMIT) {
-                            this.spawnQueue.shift();
+                            let queued = this.spawnQueue.shift();
+                            let spawnInfo = getQueuedSpawnInfo(queued, 'salvager_unit', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit('salvager_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
-                            applyUnitLevelScaling(u, effLvl);
+                            applyUnitLevelScaling(u, spawnInfo.level);
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2849,7 +2918,7 @@
                         ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6 + yOffset, 20 * (this.hp / this.maxHp), 3);
                     }
                 }
-                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+                if (this.textCanvas && shouldShowBuildingLevels()) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -2885,14 +2954,15 @@
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
                         if (players[this.owner].popCount < POP_LIMIT) {
-                            this.spawnQueue.shift();
+                            let queued = this.spawnQueue.shift();
+                            let spawnInfo = getQueuedSpawnInfo(queued, 'builder_unit', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit('builder_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
                             u.builderHasMaterial = false;
-                            applyUnitLevelScaling(u, effLvl);
+                            applyUnitLevelScaling(u, spawnInfo.level);
                             // Keep builder DPS tied to spawner level baseline
-                            u.builderDps = this.getBuilderDps();
+                            u.builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, spawnInfo.level - 1)));
                             units.push(u); players[this.owner].popCount++;
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
@@ -2944,7 +3014,7 @@
                         ctx.fillStyle = '#0f0'; ctx.fillRect(this.x - 10, this.y + 6 + yOffset, 20 * (this.hp / this.maxHp), 3);
                     }
                 }
-                if (this.textCanvas) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
+                if (this.textCanvas && shouldShowBuildingLevels()) ctx.drawImage(this.textCanvas, this.x - 16, this.y - 24);
             }
         }
 
@@ -3887,7 +3957,7 @@
                 ctx.fillStyle = '#333'; ctx.fillRect(px + 4, y + 2, TILE - 8, 3);
                 ctx.fillStyle = '#fa0'; ctx.fillRect(px + 4, y + 2, (TILE - 8) * pct, 3);
             }
-            if (item.textCanvas) ctx.drawImage(item.textCanvas, x - 16, y - 24);
+            if (item.textCanvas && shouldShowBuildingLevels()) ctx.drawImage(item.textCanvas, x - 16, y - 24);
         }
 
         // Thumbnail cache for build menu and sub-group icons
@@ -5171,6 +5241,14 @@
                 });
             }
 
+            const btnLevelVisibility = document.getElementById('btn-level-visibility');
+            if (btnLevelVisibility) {
+                updateLevelVisibilityButton();
+                btnLevelVisibility.addEventListener('click', () => {
+                    cycleLevelVisibilityMode();
+                });
+            }
+
             // Minimap toggle
             const btnMap = document.getElementById('btn-minimap');
             const mapCont = document.getElementById('minimap-container');
@@ -5448,7 +5526,8 @@
                         let cost = b.getUnitCost();
                         if (players[playerId].money >= cost && b.spawnQueue.length < 20) {
                             players[playerId].money -= cost;
-                            b.spawnQueue.push(b.unitType);
+                            let queuedLevel = b.effectiveLevel || b.level || 1;
+                            b.spawnQueue.push({ unitType: b.unitType, level: queuedLevel });
                         }
                     }
                 } else if (a.action === 'queueWorker') {
@@ -5457,7 +5536,9 @@
                         let cost = s.getUnitCost();
                         if (players[playerId].money >= cost && s.spawnQueue.length < 10) {
                             players[playerId].money -= cost;
-                            s.spawnQueue.push(s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : 'salvager');
+                            let queuedLevel = s.effectiveLevel || s.level || 1;
+                            let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : 'salvager_unit';
+                            s.spawnQueue.push({ unitType: queuedType, level: queuedLevel });
                         }
                     }
                 } else if (a.action === 'workerAssign') {
@@ -5765,7 +5846,7 @@
         // Returns units filtered by active sub-group toggles
         function getActiveUnits() {
             if (selectedUnits.length === 0) return [];
-            return selectedUnits.filter(u => !u.dead && activeSubGroups['unit_' + u.unitType] !== false);
+            return selectedUnits.filter(u => !u.dead && activeSubGroups['unit_' + u.unitType + '_L' + (u.unitLevel || 1)] !== false);
         }
 
         // Returns selected entities filtered by active sub-group toggles
@@ -5822,7 +5903,7 @@
 
         function getGroupLevel(key, grp) {
             let e = grp.items[0];
-            if (grp.isUnit) return null;
+            if (grp.isUnit) return e.unitLevel || 1;
             if (e._isGoldMine) return null;
             if (e.underConstruction) return 0;
             if (e.effectiveLevel !== undefined) return e.effectiveLevel;
@@ -6256,7 +6337,7 @@
             // Group units by type
             let unitGroups = {};
             for (let u of selectedUnits) {
-                let key = 'unit_' + u.unitType;
+                let key = 'unit_' + u.unitType + '_L' + (u.unitLevel || 1);
                 if (!unitGroups[key]) unitGroups[key] = { label: u.unitType.toUpperCase(), items: [], isUnit: true };
                 unitGroups[key].items.push(u);
             }
