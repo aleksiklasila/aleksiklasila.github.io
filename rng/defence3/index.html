@@ -619,7 +619,7 @@
             ice_patch: "Freezes enemies walking over it.",
             water_puddle: "Soaks enemies walking over it.",
             mine: "Explodes once when an enemy walks over it.",
-            farm: "Earns gold when enemy units die on this tile.",
+            farm: "Generates gold per second equal to its level.",
             // Special
             spawner: "Spawns collectors that gather gold from mines.",
             salvager: "Spawns salvagers that recycle marked buildings.",
@@ -1282,6 +1282,38 @@
             return 80 * nextLevel; // floor items
         }
 
+        function getDisplayLevel(item) {
+            if (!item) return 1;
+            if (item.underConstruction) return 0;
+            if (item.effectiveLevel !== undefined) return item.effectiveLevel;
+            if (item.level !== undefined) return item.level;
+            return Math.floor(Math.log2(item.stacks || 1)) + 1;
+        }
+
+        function markConstructionComplete(item) {
+            if (!item) return;
+            item.underConstruction = false;
+            if ((item.level || 0) < 1) item.level = 1;
+            if ((item.effectiveLevel || 0) < 1) item.effectiveLevel = 1;
+            if ((item.potentialEffectiveLevel || 0) < 1) item.potentialEffectiveLevel = 1;
+            if (item.updateTextCache) item.updateTextCache();
+            else updateItemTextCache(item);
+        }
+
+        function getNextLevelUpgradeInfo(item) {
+            let stacks = Math.max(1, item.stacks || 1);
+            let level = Math.max(0, Math.floor(Math.log2(stacks)) + 1);
+            let nextLevel = Math.max(1, level + 1);
+            let nextStacksNeeded = Math.pow(2, nextLevel - 1);
+            let missingStacks = Math.max(0, nextStacksNeeded - stacks);
+            let key = item instanceof Tower ? item.type : (item.type === 'barrack' ? 'barrack_' + item.unitType : item.type);
+            let def = CARD_TYPES[key] || { price: 0 };
+            let goldCost = missingStacks * (def.price || 0);
+            let hpNow = item.maxHp || 0;
+            let hpNext = item instanceof Tower ? getUpgradeMaxHp(item, nextLevel) : (calculateItemStats(item.type || 'farm', nextLevel).maxHp || hpNow);
+            return { nextLevel, missingStacks, goldCost, hpNow, hpNext };
+        }
+
         function calculateItemStats(type, level) {
             let mult = Math.pow(1.5, level - 1);
             let stats = { maxHp: 0, damage: 0 };
@@ -1306,7 +1338,7 @@
             let c = item.textCtx;
             c.clearRect(0, 0, 32, 48);
             let stacks = item.effectiveStacks || item.stacks || 1;
-            let level = item.effectiveLevel || (Math.floor(Math.log2(item.stacks || 1)) + 1);
+            let level = getDisplayLevel(item);
             let req = Math.pow(2, level);
             c.fillStyle = "white"; c.font = "bold 9px Arial"; c.textAlign = "center";
             c.shadowColor = "black"; c.shadowBlur = 3;
@@ -1348,7 +1380,7 @@
 
             upgrade() {
                 let nextLevel = Math.floor(Math.log2(this.stacks + 1)) + 1;
-                if (nextLevel > (this.level || 1)) {
+                if (nextLevel > (this.level || 1) && !this.isUpgrading) {
                     this.isUpgrading = true;
                     this.upgradeHp = 1;
                     this.upgradeMaxHp = 100 * nextLevel;
@@ -1361,7 +1393,7 @@
             updateTextCache() {
                 let c = this.textCtx;
                 c.clearRect(0, 0, 32, 48);
-                let displayLevel = this.effectiveLevel || 1;
+                let displayLevel = getDisplayLevel(this);
                 let req = Math.pow(2, displayLevel);
                 c.fillStyle = "white"; c.font = "bold 9px Arial"; c.textAlign = "center";
                 c.shadowColor = "black"; c.shadowBlur = 3;
@@ -1817,6 +1849,12 @@
                 updateUnitSpatial(this);
             }
 
+            getCollisionLayer() {
+                if (this.isFlying) return 'air';
+                if (this.unitType === 'mole') return 'mole';
+                return 'ground';
+            }
+
             update() {
                 if (this.dead) return;
 
@@ -1897,8 +1935,10 @@
                 let sepRange = this.r * 2;
                 let nearby = getUnitsInRange(this.x, this.y, sepRange);
                 let pushX = 0, pushY = 0;
+                let myLayer = this.getCollisionLayer();
                 for (let other of nearby) {
                     if (other === this || other.dead) continue;
+                    if (other.getCollisionLayer() !== myLayer) continue;
                     let dx = this.x - other.x, dy = this.y - other.y;
                     let d = Math.hypot(dx, dy);
                     let minDist = this.r + other.r;
@@ -2909,14 +2949,12 @@
                             if (t.underConstruction) {
                                 t.hp = Math.min(t.maxHp, t.hp + dps);
                                 if (t.hp >= t.maxHp) {
-                                    t.underConstruction = false;
+                                    markConstructionComplete(t);
                                     let targetLvl = Math.floor(Math.log2(t.stacks || 1)) + 1;
                                     if (targetLvl > (t.level || 1)) {
+                                        if (!t.isUpgrading) t.upgradeHp = 1;
                                         t.isUpgrading = true;
-                                        t.upgradeHp = 1;
-                                        t.upgradeMaxHp = 80 * ((t.level || 1) + 1);
-                                        if (t.type && (t.type === 'barrack' || t.type.startsWith('barrack_') || t instanceof Tower)) t.upgradeMaxHp = 100 * ((t.level || 1) + 1);
-                                        if (t.type && (t.type === 'spawner' || t.type === 'salvager' || t.type === 'builder_spawner')) t.upgradeMaxHp = 50 * ((t.level || 1) + 1);
+                                        t.upgradeMaxHp = getUpgradeMaxHp(t, (t.level || 1) + 1);
                                     }
                                     createExplosion(t.x, t.y, '#8f8', 8);
                                     if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
@@ -2992,14 +3030,12 @@
                         if (t.underConstruction) {
                             t.hp = Math.min(t.maxHp, t.hp + 1);
                             if (t.hp >= t.maxHp) {
-                                t.underConstruction = false;
+                                markConstructionComplete(t);
                                 let targetLvl = Math.floor(Math.log2(t.stacks || 1)) + 1;
                                 if (targetLvl > (t.level || 1)) {
+                                    if (!t.isUpgrading) t.upgradeHp = 1;
                                     t.isUpgrading = true;
-                                    t.upgradeHp = 1;
-                                    t.upgradeMaxHp = 80 * ((t.level || 1) + 1);
-                                    if (t.type && (t.type === 'barrack' || t.type.startsWith('barrack_') || t instanceof Tower)) t.upgradeMaxHp = 100 * ((t.level || 1) + 1);
-                                    if (t.type && (t.type === 'spawner' || t.type === 'salvager' || t.type === 'builder_spawner')) t.upgradeMaxHp = 50 * ((t.level || 1) + 1);
+                                    t.upgradeMaxHp = getUpgradeMaxHp(t, (t.level || 1) + 1);
                                 }
                                 createExplosion(t.x, t.y, '#8f8', 8);
                                 if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
@@ -3385,6 +3421,11 @@
             let cardDef = CARD_TYPES[itemKey];
             if (!cardDef) return false;
 
+            if (itemKey.startsWith('cloud_')) {
+                let hasSameCloud = towers.some(t => t.owner === playerId && t.type === itemKey && t.hp > 0);
+                if (hasSameCloud) return false;
+            }
+
             // Area upgrader: special handling
             if (itemKey === 'area_upgrader') {
                 let aId = grid[gy][gx].areaId;
@@ -3427,6 +3468,8 @@
                     grid[gy][gx].owner = playerId;
                     let t = new Tower(gx, gy, itemKey, playerId);
                     t.underConstruction = true; t.hp = 1;
+                    t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
+                    t.updateTextCache();
                     towers.push(t);
                 }
                 dirtyGrid = true;
@@ -3437,7 +3480,7 @@
                 let existing = barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
                 if (existing) {
                     let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
-                    if (nextLevel > existing.level) {
+                    if (nextLevel > existing.level && !existing.isUpgrading) {
                         existing.isUpgrading = true;
                         existing.upgradeHp = 1;
                         existing.upgradeMaxHp = 100 * nextLevel;
@@ -3447,6 +3490,8 @@
                 else {
                     let b = new Barrack(gx, gy, playerId, unitType);
                     b.underConstruction = true; b.hp = 1;
+                    b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
+                    updateItemTextCache(b);
                     barracks.push(b);
                     grid[gy][gx].item = b;
                     grid[gy][gx].owner = playerId;
@@ -3456,7 +3501,7 @@
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'spawner' && s.owner === playerId);
                 if (existing) {
                     let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
-                    if (nextLevel > existing.level) {
+                    if (nextLevel > existing.level && !existing.isUpgrading) {
                         existing.isUpgrading = true;
                         existing.upgradeHp = 1;
                         existing.upgradeMaxHp = 50 * nextLevel;
@@ -3466,6 +3511,8 @@
                 else {
                     let s = new CollectorSpawner(gx, gy, playerId);
                     s.underConstruction = true; s.hp = 1;
+                    s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
+                    updateItemTextCache(s);
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
@@ -3475,7 +3522,7 @@
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'salvager' && s.owner === playerId);
                 if (existing) {
                     let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
-                    if (nextLevel > existing.level) {
+                    if (nextLevel > existing.level && !existing.isUpgrading) {
                         existing.isUpgrading = true;
                         existing.upgradeHp = 1;
                         existing.upgradeMaxHp = 50 * nextLevel;
@@ -3485,6 +3532,8 @@
                 else {
                     let s = new SalvagerSpawner(gx, gy, playerId);
                     s.underConstruction = true; s.hp = 1;
+                    s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
+                    updateItemTextCache(s);
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
@@ -3494,7 +3543,7 @@
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'builder_spawner' && s.owner === playerId);
                 if (existing) {
                     let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
-                    if (nextLevel > existing.level) {
+                    if (nextLevel > existing.level && !existing.isUpgrading) {
                         existing.isUpgrading = true;
                         existing.upgradeHp = 1;
                         existing.upgradeMaxHp = 50 * nextLevel;
@@ -3505,6 +3554,8 @@
                     let s = new BuilderSpawner(gx, gy, playerId);
                     // builder spawner starts under construction too
                     s.underConstruction = true; s.hp = 1;
+                    s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
+                    updateItemTextCache(s);
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
@@ -3516,7 +3567,7 @@
                 if (cell.item && cell.item.type === itemKey && cell.owner === playerId) {
                     let nextLevel = Math.floor(Math.log2(cell.item.stacks + 1)) + 1;
                     let curLevel = Math.floor(Math.log2(cell.item.stacks)) + 1;
-                    if (nextLevel > curLevel) {
+                    if (nextLevel > curLevel && !cell.item.isUpgrading) {
                         cell.item.isUpgrading = true;
                         cell.item.upgradeHp = 1;
                         cell.item.upgradeMaxHp = 80 * nextLevel;
@@ -3525,7 +3576,7 @@
                     updateItemTextCache(cell.item);
                 } else {
                     let stats = calculateItemStats(itemKey, 1);
-                    let item = { type: itemKey, stacks: 1, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId };
+                    let item = { type: itemKey, stacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId };
                     cell.item = item;
                     cell.owner = playerId;
                     updateItemTextCache(item);
@@ -4180,6 +4231,22 @@
                 minimapCtx.fillRect(b.gx * scale, b.gy * scale, Math.max(1, scale), Math.max(1, scale));
             }
 
+            for (let s of collectorSpawners) {
+                if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
+                minimapCtx.fillStyle = PLAYER_COLORS[s.owner];
+                minimapCtx.fillRect(s.gx * scale, s.gy * scale, Math.max(1, scale), Math.max(1, scale));
+            }
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    if (!cell.item || cell.owner < 0) continue;
+                    if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
+                    minimapCtx.fillStyle = PLAYER_COLORS_DIM[cell.owner] || PLAYER_COLORS[cell.owner];
+                    minimapCtx.fillRect(x * scale, y * scale, Math.max(1, scale), Math.max(1, scale));
+                }
+            }
+
             // Gold mines
             for (let m of goldMines) {
                 if (m.gold <= 0) continue;
@@ -4299,6 +4366,17 @@
             gameTime++;
             pathfindBudget = 0;
 
+            if (gameTime % TICK_RATE === 0) {
+                for (let y = 0; y < GRID_H; y++) {
+                    for (let x = 0; x < GRID_W; x++) {
+                        let item = grid[y][x].item;
+                        if (!item || item.type !== 'farm' || item.underConstruction || item.hp <= 0) continue;
+                        let lvl = Math.max(1, Math.floor(Math.log2(item.stacks || 1)) + 1);
+                        players[item.owner].money += lvl;
+                    }
+                }
+            }
+
             // Save previous positions for interpolation
             for (let u of units) { u.prevX = u.x; u.prevY = u.y; }
             for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
@@ -4417,6 +4495,12 @@
 
         function initInput() {
             let gameArea = document.getElementById('game-area');
+            function screenToWorldClamped(sx, sy) {
+                let rect = gameArea.getBoundingClientRect();
+                let clampedX = Math.max(rect.left, Math.min(rect.right - 1, sx));
+                let clampedY = Math.max(rect.top, Math.min(rect.bottom - 1, sy));
+                return screenToWorld(clampedX, clampedY);
+            }
 
             gameArea.addEventListener('mousedown', (e) => {
                 if (!gameStarted || gameOver) return;
@@ -4614,12 +4698,19 @@
             });
 
             gameArea.addEventListener('mousemove', (e) => {
-                let world = screenToWorld(e.clientX, e.clientY);
+                let world = screenToWorldClamped(e.clientX, e.clientY);
                 mouseWorldX = world.x; mouseWorldY = world.y;
                 mouseScreenX = e.clientX; mouseScreenY = e.clientY;
                 if (isBoxSelecting && selectionBox) {
                     selectionBox.ex = world.x; selectionBox.ey = world.y;
                 }
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isBoxSelecting || !selectionBox) return;
+                let world = screenToWorldClamped(e.clientX, e.clientY);
+                mouseWorldX = world.x; mouseWorldY = world.y;
+                selectionBox.ex = world.x; selectionBox.ey = world.y;
             });
 
             gameArea.addEventListener('mouseup', (e) => {
@@ -4722,6 +4813,12 @@
                 }
             });
 
+            window.addEventListener('mouseup', (e) => {
+                if (e.button !== 0 || !isBoxSelecting) return;
+                let syntheticUp = new MouseEvent('mouseup', { button: 0, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey });
+                gameArea.dispatchEvent(syntheticUp);
+            });
+
             gameArea.addEventListener('contextmenu', e => e.preventDefault());
 
             gameArea.addEventListener('wheel', (e) => {
@@ -4758,7 +4855,7 @@
                 if (!gameStarted) return;
                 if (e.key === 'Escape') { selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel(); }
                 if ((e.key === 'a' || e.key === 'A') && selectedUnits.length > 0) attackMoveMode = true;
-                if ((e.key === 's' || e.key === 'S') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
+                if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'h' || e.key === 'H') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
                 // Control groups
                 if (e.key >= '1' && e.key <= '9') {
@@ -5288,8 +5385,9 @@
 
         function getLevelHtml(obj) {
             let actualLvl = Math.floor(Math.log2(obj.stacks || 1)) + 1;
-            let effLvl = obj.effectiveLevel || actualLvl;
-            let potLvl = obj.potentialEffectiveLevel || obj.effectiveLevel || actualLvl;
+            if (obj.underConstruction) actualLvl = 0;
+            let effLvl = getDisplayLevel(obj);
+            let potLvl = obj.potentialEffectiveLevel || effLvl || actualLvl;
 
             let html = `<span style="color:#888">L${actualLvl}</span>`;
             if (effLvl !== actualLvl || potLvl !== actualLvl) {
@@ -5359,10 +5457,12 @@
 
         function getEntityGroupKey(e) {
             if (e._isGoldMine) return 'goldmine';
-            if (e.type === 'barrack') return 'barrack_' + e.unitType + '_L' + (e.effectiveLevel || e.level);
-            if (e instanceof Tower) return 'tower_' + e.type + '_L' + (e.effectiveLevel || e.level);
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type + '_L' + (Math.floor(Math.log2(e.stacks || 1)) + 1);
-            if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + '_L' + (Math.floor(Math.log2(e.stacks || 1)) + 1);
+            let state = e.underConstruction ? 'build' : (e.isUpgrading ? 'upg' : 'ready');
+            let lvl = getDisplayLevel(e);
+            if (e.type === 'barrack') return 'barrack_' + e.unitType + '_L' + lvl + '_' + state;
+            if (e instanceof Tower) return 'tower_' + e.type + '_L' + lvl + '_' + state;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type + '_L' + lvl + '_' + state;
+            if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + '_L' + lvl + '_' + state;
             return 'unknown_' + Math.random();
         }
 
@@ -5383,7 +5483,7 @@
             if (e._isGoldMine) return 'goldmine';
             if (e.type === 'barrack') return 'barrack_' + e.unitType;
             if (e instanceof Tower) return e.type;
-            if (e.type === 'spawner' || e.type === 'salvager') return e.type;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type;
             if (e.type && CARD_TYPES[e.type]) return e.type;
             return null;
         }
@@ -5402,7 +5502,9 @@
             let e = grp.items[0];
             if (grp.isUnit) return null;
             if (e._isGoldMine) return null;
-            if (e.effectiveLevel || e.level) return e.effectiveLevel || e.level;
+            if (e.underConstruction) return 0;
+            if (e.effectiveLevel !== undefined) return e.effectiveLevel;
+            if (e.level !== undefined) return e.level;
             if (e.stacks) return Math.floor(Math.log2(e.stacks || 1)) + 1;
             return null;
         }
@@ -5411,10 +5513,12 @@
             let html = '';
             let bKey = 'barrack_' + e.unitType;
             let us = UNIT_STATS[e.unitType] || {};
+            let upg = getNextLevelUpgradeInfo(e);
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
+            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             if (!e.underConstruction) {
                 html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
                 html += infoRow('Unit HP', us.hp || '?');
@@ -5474,6 +5578,7 @@
             let html = '';
             let s = e.currentStats || e.baseStats;
             let bs = e.baseStats;
+            let upg = getNextLevelUpgradeInfo(e);
             let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
@@ -5492,6 +5597,7 @@
             if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
+            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
             if (e.owner === localPlayerId) html += salvageBtn(e.gx, e.gy, e.markedForSalvage);
             html += infoDesc(DESCRIPTIONS[e.type] || 'Defensive tower.');
@@ -5539,10 +5645,12 @@
             let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = e.effectiveLevel || sLevel;
+            let upg = getNextLevelUpgradeInfo(e);
             html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
+            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
             if (e.owner === localPlayerId) {
@@ -5571,6 +5679,7 @@
             let effLevel = e.effectiveLevel || baseLevel;
             let baseStats = calculateItemStats(e.type, baseLevel);
             let effStats = calculateItemStats(e.type, effLevel);
+            let upg = getNextLevelUpgradeInfo(e);
             if (baseStats.maxHp > 0) html += infoRow('HP', `${Math.floor(e.hp || baseStats.maxHp)}/${effStats.maxHp}`);
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
@@ -5585,10 +5694,11 @@
             if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
             if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
             if (e.type === 'farm') {
-                let baseInc = Math.floor(10 * Math.pow(1.5, baseLevel - 1));
-                let effInc = Math.floor(10 * Math.pow(1.5, effLevel - 1));
-                html += infoRow('Income', `${baseInc}g/kill`, baseInc !== effInc ? `${effInc}g/kill` : undefined);
+                let baseInc = Math.max(1, baseLevel);
+                let effInc = Math.max(1, effLevel);
+                html += infoRow('Income', `${baseInc}g/s`, baseInc !== effInc ? `${effInc}g/s` : undefined);
             }
+            html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `${def.price || '?'}g`);
             let fgx = e.gx !== undefined ? e.gx : e._gx, fgy = e.gy !== undefined ? e.gy : e._gy;
             if (fgx !== undefined && fgy !== undefined) html += salvageBtn(fgx, fgy, e.markedForSalvage);
@@ -5756,9 +5866,9 @@
             if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
             if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
             if (e.type === 'farm') {
-                let baseInc = Math.floor(10 * Math.pow(1.5, baseLevel - 1));
-                let effInc = Math.floor(10 * Math.pow(1.5, effLevel - 1));
-                html += infoRow('Income', `${baseInc}g/kill`, baseInc !== effInc ? `${effInc}g/kill` : undefined);
+                let baseInc = Math.max(1, baseLevel);
+                let effInc = Math.max(1, effLevel);
+                html += infoRow('Income', `${baseInc}g/s`, baseInc !== effInc ? `${effInc}g/s` : undefined);
             }
             html += infoRow('Value', `${def.price || '?'}g`);
             if (e._gx !== undefined || e.gx !== undefined) {
@@ -5798,7 +5908,7 @@
             }
 
             let allGroups = [...Object.entries(entityGroups), ...Object.entries(unitGroups)];
-            let showSubGroupToggles = allGroups.length > 1;
+            let showSubGroupToggles = allGroups.length > 0;
 
             // Ensure all groups have an explicit entry (default true)
             for (let [k] of allGroups) {
@@ -6218,6 +6328,7 @@
 
         let _lastTickTime = 0;
         let _tickAccumulator = 0;
+    let _backgroundTickInterval = null;
 
         function runOneTick() {
             // Send confirmation for upcoming ticks (tell remote we have no more actions for tick currentTick+INPUT_DELAY)
@@ -6304,6 +6415,23 @@
             requestAnimationFrame(gameFrame);
         }
 
+        function runHiddenTickPump() {
+            if (!gameStarted || gameOver || !document.hidden) return;
+            if (isMultiplayer && !remoteTickConfirmed[currentTick]) return;
+            runOneTick();
+        }
+
+        function refreshBackgroundTickMode() {
+            if (document.hidden) {
+                if (!_backgroundTickInterval) {
+                    _backgroundTickInterval = setInterval(runHiddenTickPump, TICK_MS);
+                }
+            } else if (_backgroundTickInterval) {
+                clearInterval(_backgroundTickInterval);
+                _backgroundTickInterval = null;
+            }
+        }
+
         // ============================================================
         // INIT
         // ============================================================
@@ -6334,6 +6462,8 @@
             }
             resize();
             window.addEventListener('resize', resize);
+            document.addEventListener('visibilitychange', refreshBackgroundTickMode);
+            refreshBackgroundTickMode();
 
             initInput();
             initBuildTabs();
