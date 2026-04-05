@@ -330,6 +330,40 @@
             font-size: 14px;
             color: #aaa;
         }
+
+        /* Mobile specific CSS */
+        @media (max-width: 800px) {
+
+            #left-panel,
+            #right-panel {
+                width: 140px;
+            }
+
+            #minimapCanvas {
+                width: 100%;
+                height: auto;
+            }
+
+            .build-item {
+                width: 40px;
+                height: 44px;
+            }
+
+            #hud {
+                font-size: 11px;
+                padding: 0 4px;
+                gap: 6px;
+            }
+
+            #hud button {
+                font-size: 10px !important;
+                padding: 2px 4px !important;
+            }
+
+            .build-tab {
+                font-size: 9px;
+            }
+        }
     </style>
 </head>
 
@@ -398,14 +432,21 @@
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
         <span class="hud-time"
-            style="margin-left: auto; display:inline-flex; align-items:center; gap:14px; margin-right:15px;">
+            style="margin-left: auto; display:inline-flex; align-items:center; gap:8px; margin-right:5px;">
+            <button id="btn-fullscreen"
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">⛶
+                FS</button>
             <span style="display:inline-flex; align-items:center;">
-                <input type="checkbox" id="setting-range-outlines" style="margin-right:4px; cursor:pointer;">
-                <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Range
-                    Outlines</label>
+                <input type="checkbox" id="setting-long-press" style="margin-right:2px; cursor:pointer;">
+                <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
+                    Rally</label>
             </span>
             <span style="display:inline-flex; align-items:center;">
-                <input type="checkbox" id="setting-audio" style="margin-right:4px; cursor:pointer;">
+                <input type="checkbox" id="setting-range-outlines" style="margin-right:2px; cursor:pointer;">
+                <label for="setting-range-outlines" style="cursor:pointer; font-size:12px; color:#ddd;">Outlines</label>
+            </span>
+            <span style="display:inline-flex; align-items:center;">
+                <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-audio" style="cursor:pointer; font-size:12px; color:#ddd;">Audio</label>
             </span>
         </span>
@@ -430,7 +471,14 @@
                 <div id="build-items"></div>
             </div>
             <div id="minimap-wrap">
-                <canvas id="minimapCanvas" width="160" height="160"></canvas>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 2px;">
+                    <span style="font-size:10px; color:#888;">Map</span>
+                    <button id="btn-minimap"
+                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:9px; padding:1px 4px; border-radius:2px;">▼</button>
+                </div>
+                <div id="minimap-container">
+                    <canvas id="minimapCanvas" width="160" height="160"></canvas>
+                </div>
             </div>
         </div>
 
@@ -721,6 +769,7 @@
         // Multiplayer
         let peer = null, myPeerId = null, connections = [], connectedPlayers = [];
         let isHost = false, isMultiplayer = false;
+        let longPressRallyEnabled = window.innerWidth <= 800;
 
         // ============================================================
         // AUDIO ENGINE
@@ -1142,6 +1191,8 @@
                             }
                         }
                     }
+                    // Un-visit cells left in queue so they can form their own areas
+                    for (let rem of queue) visited[rem.y][rem.x] = false;
                     areas.push({ id: areaId, type: cellType, cells, active: false, multiplierLevel: 0 });
                     areaId++;
                 }
@@ -1881,7 +1932,19 @@
                 if (closest) {
                     this.targetUnit = closest;
                     this.commandState = CMD_ATTACKING;
+                    return;
                 }
+                // Also check enemy buildings in range
+                let _buildingAggro = (list) => {
+                    for (let b of list) {
+                        if (b.owner === this.owner || b.hp <= 0) continue;
+                        if (Math.hypot(b.x - this.x, b.y - this.y) < aggroRange) {
+                            this.targetBuilding = b; this.commandState = CMD_ATTACKING; return true;
+                        }
+                    }
+                    return false;
+                };
+                if (_buildingAggro(towers) || _buildingAggro(barracks) || _buildingAggro(collectorSpawners)) return;
             }
 
             doMoving(spd) {
@@ -2764,7 +2827,7 @@
                             } else {
                                 let extract = Math.min(10, u.workerTarget.gold);
                                 u.workerTarget.gold -= extract;
-                                u.carryingValue = extract;
+                                u.carryingValue = extract * (u.unitLevel || 1);
                                 if (u.workerTarget.gold <= 0) {
                                     let mine = u.workerTarget;
                                     grid[mine.gy][mine.gx].type = TYPE_FLOOR;
@@ -2809,7 +2872,7 @@
                         if (dist <= 24) {
                             let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
                             let p = CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
-                            u.carryingValue = refund;
+                            u.carryingValue = refund * (u.unitLevel || 1);
                             destroyBuilding(u.workerTarget);
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
@@ -4366,8 +4429,26 @@
                         if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
                         // Short-circuit for immediate cant_place feedback (affordability / validity)
                         let _cd = CARD_TYPES[selectedBuildItem];
-                        let _canPlace = _cd && players[localPlayerId].money >= _cd.price &&
-                            (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
+                        let _canPlace = false;
+                        if (selectedBuildItem === 'area_upgrader') {
+                            let aId = grid[gy][gx].areaId;
+                            let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
+                            if (area) {
+                                let filledCount = 0;
+                                for (let cp of area.cells) {
+                                    let c = grid[cp.y][cp.x];
+                                    if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) filledCount++;
+                                    else if (c.item) filledCount++;
+                                    else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) filledCount++;
+                                    else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
+                                }
+                                let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
+                                _canPlace = filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost;
+                            }
+                        } else {
+                            _canPlace = _cd && players[localPlayerId].money >= _cd.price &&
+                                (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
+                        }
                         if (!_canPlace) { playSound('cant_place'); return; }
                         queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem });
                         updateBuildMenu();
@@ -4695,6 +4776,180 @@
                 audioToggle.addEventListener('change', () => {
                     audioEnabled = audioToggle.checked;
                     if (!audioEnabled) stopLaserSound();
+                });
+            }
+
+            // Fullscreen
+            const btnFs = document.getElementById('btn-fullscreen');
+            if (btnFs) {
+                btnFs.addEventListener('click', () => {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen().catch(err => console.log(err));
+                    } else {
+                        document.exitFullscreen();
+                    }
+                });
+            }
+
+            // Minimap toggle
+            const btnMap = document.getElementById('btn-minimap');
+            const mapCont = document.getElementById('minimap-container');
+            if (btnMap && mapCont) {
+                btnMap.addEventListener('click', () => {
+                    if (mapCont.style.display === 'none') {
+                        mapCont.style.display = 'block';
+                        btnMap.innerText = '▼';
+                    } else {
+                        mapCont.style.display = 'none';
+                        btnMap.innerText = '▲';
+                    }
+                });
+            }
+
+            // Touch events for gameArea
+            let activeTouches = {};
+            let touchDistInitial = 0;
+            let touchCenterInitial = null;
+            let cameraZoomInitial = 1;
+            let cameraXInitial = 0;
+            let cameraYInitial = 0;
+            let singleTouchId = null;
+            let longPressTimer = null;
+            let longPressFired = false;
+            let touchStartX = 0;
+            let touchStartY = 0;
+
+            gameArea.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    activeTouches[e.changedTouches[i].identifier] = e.changedTouches[i];
+                }
+                let keys = Object.keys(activeTouches);
+
+                if (keys.length === 1) {
+                    let t = activeTouches[keys[0]];
+                    singleTouchId = t.identifier;
+                    longPressFired = false;
+                    touchStartX = t.clientX;
+                    touchStartY = t.clientY;
+
+                    let syntheticDown = new MouseEvent('mousedown', { button: 0, clientX: t.clientX, clientY: t.clientY });
+                    gameArea.dispatchEvent(syntheticDown);
+
+                    if (longPressRallyEnabled) {
+                        longPressTimer = setTimeout(() => {
+                            longPressTimer = null;
+                            longPressFired = true;
+                            isBoxSelecting = false;
+                            selectionBox = null;
+                            let syntheticRight = new MouseEvent('mousedown', { button: 2, clientX: t.clientX, clientY: t.clientY });
+                            gameArea.dispatchEvent(syntheticRight);
+                        }, 300);
+                    }
+                } else if (keys.length === 2) {
+                    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+                    isBoxSelecting = false;
+                    selectionBox = null;
+                    let t1 = activeTouches[keys[0]], t2 = activeTouches[keys[1]];
+                    let dx = t1.clientX - t2.clientX;
+                    let dy = t1.clientY - t2.clientY;
+                    touchDistInitial = Math.hypot(dx, dy);
+                    touchCenterInitial = { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+                    cameraZoomInitial = camera.zoom;
+                    cameraXInitial = camera.x;
+                    cameraYInitial = camera.y;
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    activeTouches[e.changedTouches[i].identifier] = e.changedTouches[i];
+                }
+                let keys = Object.keys(activeTouches);
+
+                if (keys.length === 1 && keys[0] == singleTouchId) {
+                    let t = activeTouches[keys[0]];
+
+                    if (longPressTimer) {
+                        let limit = Math.min(gameArea.clientWidth, gameArea.clientHeight) * 0.10;
+                        let dx = t.clientX - touchStartX;
+                        let dy = t.clientY - touchStartY;
+                        if (Math.hypot(dx, dy) > limit) {
+                            clearTimeout(longPressTimer);
+                            longPressTimer = null;
+                        }
+                    }
+
+                    if (!longPressFired) {
+                        let syntheticMove = new MouseEvent('mousemove', { clientX: t.clientX, clientY: t.clientY });
+                        gameArea.dispatchEvent(syntheticMove);
+                    }
+                } else if (keys.length === 2 && touchCenterInitial) {
+                    let t1 = activeTouches[keys[0]], t2 = activeTouches[keys[1]];
+                    let dx = t1.clientX - t2.clientX;
+                    let dy = t1.clientY - t2.clientY;
+                    let dist = Math.hypot(dx, dy);
+                    let cx = (t1.clientX + t2.clientX) / 2;
+                    let cy = (t1.clientY + t2.clientY) / 2;
+
+                    // Zoom
+                    let zoomRatio = dist / touchDistInitial;
+                    let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
+                    camera.zoom = Math.max(minZoom, Math.min(2, cameraZoomInitial * zoomRatio));
+
+                    // Pan (keeping center stable)
+                    let rect = gameArea.getBoundingClientRect();
+                    let worldBeforeX = cameraXInitial + (touchCenterInitial.x - rect.left) / cameraZoomInitial;
+                    let worldBeforeY = cameraYInitial + (touchCenterInitial.y - rect.top) / cameraZoomInitial;
+
+                    camera.x = worldBeforeX - (cx - rect.left) / camera.zoom;
+                    camera.y = worldBeforeY - (cy - rect.top) / camera.zoom;
+
+                    clampCamera();
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    delete activeTouches[e.changedTouches[i].identifier];
+                }
+                let keys = Object.keys(activeTouches);
+
+                if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+
+                if (keys.length === 0) {
+                    if (!longPressFired) {
+                        let t = e.changedTouches[0];
+                        let syntheticUp = new MouseEvent('mouseup', { button: 0, clientX: t.clientX, clientY: t.clientY });
+                        gameArea.dispatchEvent(syntheticUp);
+                    }
+
+                    touchCenterInitial = null;
+                    singleTouchId = null;
+                    longPressFired = false;
+                }
+            }, { passive: false });
+
+            gameArea.addEventListener('touchcancel', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    delete activeTouches[e.changedTouches[i].identifier];
+                }
+                if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+                isBoxSelecting = false;
+                selectionBox = null;
+                touchCenterInitial = null;
+                singleTouchId = null;
+                longPressFired = false;
+            }, { passive: false });
+
+            let longPressToggle = document.getElementById('setting-long-press');
+            if (longPressToggle) {
+                longPressToggle.checked = longPressRallyEnabled;
+                longPressToggle.addEventListener('change', (e) => {
+                    longPressRallyEnabled = e.target.checked;
                 });
             }
         }
