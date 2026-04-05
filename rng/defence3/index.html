@@ -2942,7 +2942,7 @@
                 if (u.workerState === 'IDLE') {
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
-                    if (!u.workerTarget || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
                         // Building finished (maybe by another builder), find next
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -3025,7 +3025,7 @@
                         }
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-                    if (!u.workerTarget || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -3047,7 +3047,7 @@
                     }
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
                     // Building in place without returning for gold (every 20 ticks add 1 HP)
-                    if (!u.workerTarget || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading)) {
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -3180,6 +3180,12 @@
         }
 
         function _builderAssignTarget(u, target, myGx, myGy) {
+            if (!target || target.markedForSalvage) {
+                u.workerTarget = null;
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
             u.workerTarget = target;
             let canWalk = _builderCanWalk(u.owner);
             if (u.builderHasMaterial) {
@@ -3894,6 +3900,124 @@
         // ============================================================
         // Pre-compute area color lookup (rebuilt when dirtyAreas)
         let _areaColorCache = null; // Map: areaId -> color string
+        let _combinedBgCanvas = null; // Full world background (grid + area outlines)
+        let _combinedBgCtx = null;
+
+        function ensureCombinedBgCanvas() {
+            if (!_combinedBgCanvas || _combinedBgCanvas.width !== WORLD_W || _combinedBgCanvas.height !== WORLD_H) {
+                _combinedBgCanvas = document.createElement('canvas');
+                _combinedBgCanvas.width = WORLD_W;
+                _combinedBgCanvas.height = WORLD_H;
+                _combinedBgCtx = _combinedBgCanvas.getContext('2d');
+                dirtyGrid = true;
+                dirtyAreas = true;
+            }
+        }
+
+        function rebuildCombinedBackgroundCache() {
+            ensureCombinedBgCanvas();
+            if (dirtyAreas || !_areaColorCache) rebuildAreaColorCache();
+            let c = _combinedBgCtx;
+            c.clearRect(0, 0, WORLD_W, WORLD_H);
+
+            // Grid base (no visibility filtering in cache)
+            c.fillStyle = C_FLOOR;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
+                }
+            }
+
+            c.fillStyle = '#222';
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+                }
+            }
+
+            c.fillStyle = C_WALL;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+
+            c.strokeStyle = '#444'; c.lineWidth = 1;
+            c.beginPath();
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+            c.stroke();
+
+            // Area outlines (no visibility filtering in cache)
+            let batches = new Map();
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let aid = grid[y][x].areaId;
+                    if (aid === -1) continue;
+                    let color = _areaColorCache.get(aid);
+                    if (!color) continue;
+                    let px = x * TILE, py = y * TILE;
+                    if (!batches.has(color)) batches.set(color, []);
+                    let edges = batches.get(color);
+                    if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) edges.push(px + TILE - 1, py, px + TILE - 1, py + TILE);
+                    if (x === 0 || grid[y][x - 1].areaId !== aid) edges.push(px + 1, py, px + 1, py + TILE);
+                    if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) edges.push(px, py + TILE - 1, px + TILE, py + TILE - 1);
+                    if (y === 0 || grid[y - 1][x].areaId !== aid) edges.push(px, py + 1, px + TILE, py + 1);
+                }
+            }
+            c.lineWidth = 2;
+            for (let [color, edges] of batches) {
+                c.strokeStyle = color;
+                c.beginPath();
+                for (let i = 0; i < edges.length; i += 4) {
+                    c.moveTo(edges[i], edges[i + 1]);
+                    c.lineTo(edges[i + 2], edges[i + 3]);
+                }
+                c.stroke();
+            }
+
+            dirtyGrid = false;
+            dirtyAreas = false;
+        }
+
+        function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
+            ensureCombinedBgCanvas();
+            if (dirtyGrid || dirtyAreas) rebuildCombinedBackgroundCache();
+            let sx = minGx * TILE, sy = minGy * TILE;
+            let sw = (maxGx - minGx + 1) * TILE;
+            let sh = (maxGy - minGy + 1) * TILE;
+            ctx.drawImage(_combinedBgCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+        }
+
+        function drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy) {
+            if (fullVisibility || visibilityGrid.length === 0) return;
+            ctx.fillStyle = '#0a0a0a';
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    if (!visibilityGrid[y] || visibilityGrid[y][x] === 0) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+                }
+            }
+        }
+
+        function updateGoldMineRenderCache(m) {
+            if (m._renderGold === m.gold && m._renderCanvas) return;
+            m._renderGold = m.gold;
+            if (!m._renderCanvas) {
+                m._renderCanvas = document.createElement('canvas');
+                m._renderCanvas.width = TILE;
+                m._renderCanvas.height = TILE;
+                m._renderCtx = m._renderCanvas.getContext('2d');
+            }
+            let c = m._renderCtx;
+            c.clearRect(0, 0, TILE, TILE);
+            c.fillStyle = '#fd0'; c.fillRect(4, 4, TILE - 8, TILE - 8);
+            c.fillStyle = '#a80'; c.fillRect(8, 8, TILE - 16, TILE - 16);
+            c.font = '9px Arial'; c.fillStyle = '#fff'; c.textAlign = 'center';
+            c.fillText(formatBigNumber(m.gold), TILE / 2, TILE / 2 + 4);
+        }
 
         function rebuildAreaColorCache() {
             _areaColorCache = new Map();
@@ -3993,22 +4117,18 @@
             ctx.fillRect(0, 0, viewW, viewH);
             ctx.setTransform(camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
 
-            // Background tiles (direct draw, viewport only)
-            drawGridDirect(ctx, minGx, minGy, maxGx, maxGy);
-
-            // Area outlines (direct draw, viewport only)
-            drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy);
+            // Background (cached grid + area outlines)
+            drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy);
+            drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy);
 
             // Gold mines
             for (let m of goldMines) {
                 if (m.gx < minGx || m.gx > maxGx || m.gy < minGy || m.gy > maxGy) continue;
                 if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+                updateGoldMineRenderCache(m);
                 let alpha = m.gold > 0 ? 1 : 0.3;
                 ctx.globalAlpha = alpha;
-                ctx.fillStyle = '#fd0'; ctx.fillRect(m.gx * TILE + 4, m.gy * TILE + 4, TILE - 8, TILE - 8);
-                ctx.fillStyle = '#a80'; ctx.fillRect(m.gx * TILE + 8, m.gy * TILE + 8, TILE - 16, TILE - 16);
-                ctx.font = "9px Arial"; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-                ctx.fillText(formatBigNumber(m.gold), m.x, m.y + 4);
+                ctx.drawImage(m._renderCanvas, m.gx * TILE, m.gy * TILE);
                 ctx.globalAlpha = 1;
             }
 
@@ -5220,6 +5340,7 @@
                                 barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.underConstruction) ||
                                 collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.underConstruction) ||
                                 (grid[a.targetGy] && grid[a.targetGy][a.targetGx] && grid[a.targetGy][a.targetGx].item && grid[a.targetGy][a.targetGx].item.underConstruction ? grid[a.targetGy][a.targetGx].item : null);
+                            if (target && target.markedForSalvage) target = null;
                             if (target) {
                                 u.workerTarget = null; // clear old target
                                 _builderAssignTarget(u, target, myGx, myGy);
