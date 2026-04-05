@@ -271,6 +271,13 @@
             opacity: 0.4;
         }
 
+        .build-item.unavailable {
+            opacity: 0.35;
+            filter: grayscale(1);
+            border-color: #555;
+            cursor: not-allowed;
+        }
+
         .build-item .bi-icon {
             display: flex;
             align-items: center;
@@ -2768,6 +2775,7 @@
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
                             let u = new Unit('builder_unit', this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
                             u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
+                            u.builderHasMaterial = false;
                             // builder DPS based on spawner's effective level
                             u.builderDps = this.getBuilderDps();
                             let lvlMult = Math.pow(1.3, effLvl - 1);
@@ -2943,11 +2951,26 @@
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
+                            if (!u.builderHasMaterial) {
+                                let spawner = _findClosestBuilderSpawner(u);
+                                if (spawner && players[owner].money >= 1) {
+                                    u.workerState = 'RETURNING_FOR_GOLD';
+                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy);
+                                    u.pathIndex = 0; u.commandState = CMD_MOVING;
+                                    u._builderSpawnerTarget = spawner;
+                                    return;
+                                } else {
+                                    u.workerState = 'BUILDING_IN_PLACE';
+                                    return;
+                                }
+                            }
                             // Add HP to building
                             let dps = u.builderDps || 5;
                             let t = u.workerTarget;
+                            let didWork = false;
                             if (t.underConstruction) {
                                 t.hp = Math.min(t.maxHp, t.hp + dps);
+                                didWork = true;
                                 if (t.hp >= t.maxHp) {
                                     markConstructionComplete(t);
                                     let targetLvl = Math.floor(Math.log2(t.stacks || 1)) + 1;
@@ -2964,6 +2987,7 @@
                                 }
                             } else if (t.isUpgrading) {
                                 t.upgradeHp = Math.min(t.upgradeMaxHp, t.upgradeHp + dps);
+                                didWork = true;
                                 if (t.upgradeHp >= t.upgradeMaxHp) {
                                     if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                     t.effectiveLevel++;
@@ -2982,6 +3006,8 @@
                                     _builderFindTarget(u, myGx, myGy);
                                 }
                             }
+
+                            if (didWork) u.builderHasMaterial = false;
 
                             if (u.workerTarget) {
                                 // Not done yet — loop back to spawner for more gold, then come back
@@ -3010,6 +3036,7 @@
                         if (!spawner || dist <= 24) {
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
+                                u.builderHasMaterial = true;
                             }
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
@@ -3155,6 +3182,12 @@
         function _builderAssignTarget(u, target, myGx, myGy) {
             u.workerTarget = target;
             let canWalk = _builderCanWalk(u.owner);
+            if (u.builderHasMaterial) {
+                u.workerState = 'MOVING_TO_BUILD';
+                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
+                u.pathIndex = 0; u.commandState = CMD_MOVING;
+                return;
+            }
             let spawner = _findClosestBuilderSpawner(u);
             if (spawner && players[u.owner].money >= 1) {
                 u.workerState = 'RETURNING_FOR_GOLD';
@@ -5295,6 +5328,13 @@
         let _buildMenuTab = null;
         let _buildMenuItems = {}; // key -> div element
 
+        function isBuildItemAvailable(key, playerId = localPlayerId) {
+            if (key.startsWith('cloud_')) {
+                return !towers.some(t => t.owner === playerId && t.type === key && t.hp > 0);
+            }
+            return true;
+        }
+
         function updateBuildMenu() {
             let container = document.getElementById('build-items');
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
@@ -5313,6 +5353,7 @@
                     let displayPrice = def.price;
                     if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
                     if (money < displayPrice) div.classList.add('cant-afford');
+                    if (!isBuildItemAvailable(key)) div.classList.add('unavailable');
                     if (selectedBuildItem === key) div.classList.add('selected');
                     let thumbUrl = getItemThumbnail(key, 28);
                     let iconWrap = document.createElement('span');
@@ -5330,6 +5371,7 @@
                     priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
                     div.appendChild(priceSpan);
                     div.addEventListener('click', () => {
+                        if (!isBuildItemAvailable(key)) return;
                         selectedBuildItem = selectedBuildItem === key ? null : key;
                         _patchBuildMenuClasses(players[localPlayerId].money);
                     });
@@ -5349,7 +5391,10 @@
                 let div = _buildMenuItems[key]; if (!div) continue;
                 let displayPrice = def.price;
                 if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
+                let available = isBuildItemAvailable(key);
                 div.classList.toggle('cant-afford', money < displayPrice);
+                div.classList.toggle('unavailable', !available);
+                if (!available && selectedBuildItem === key) selectedBuildItem = null;
                 div.classList.toggle('selected', selectedBuildItem === key);
                 let priceSpan = div.querySelector('.bi-price');
                 if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
@@ -6288,6 +6333,7 @@
                     let sp = findNearestWalkable(bgx, bgy);
                     let u = new Unit('builder_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
                     u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
+                    u.builderHasMaterial = false;
                     u.builderDps = spawner.getBuilderDps();
                     units.push(u); players[pid].popCount++;
                 }
