@@ -1814,11 +1814,48 @@
             }
         }
 
-        function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null) {
+        function getCloudTowerAt(gx, gy, owner = null) {
+            let t = towers.find(t => t.gx === gx && t.gy === gy && t.hp > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud);
+            if (!t) return null;
+            if (owner !== null && t.owner !== owner) return null;
+            return t;
+        }
+
+        function getPairedCloudTower(cloud, owner = null) {
+            if (!cloud || !cloud.baseStats || !cloud.baseStats.isCloud) return null;
+            let pairId = cloud.baseStats.pairId;
+            if (pairId === undefined || pairId === null) return null;
+            let matchOwner = owner !== null ? owner : cloud.owner;
+            return towers.find(t => t !== cloud && t.hp > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud && t.baseStats.pairId === pairId && t.owner === matchOwner) || null;
+        }
+
+        function isCloudPortalLink(gx1, gy1, gx2, gy2, owner) {
+            let c1 = getCloudTowerAt(gx1, gy1, owner);
+            let c2 = getCloudTowerAt(gx2, gy2, owner);
+            if (!c1 || !c2) return false;
+            if (c1.baseStats.pairId === undefined || c2.baseStats.pairId === undefined) return false;
+            return c1.baseStats.pairId === c2.baseStats.pairId;
+        }
+
+        function canUnitOccupyTile(unit, gx, gy) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+            if (grid[gy][gx].type !== TYPE_WALL) return true;
+            return !!getCloudTowerAt(gx, gy, unit ? unit.owner : null);
+        }
+
+        function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null) {
             if (sx === ex && sy === ey) return [{ x: ex, y: ey }];
+            let usePortalEdges = (!ignoreWalls && pathOwner !== null);
+            let estimateCost = (x, y) => {
+                // Cloud teleport edges can invalidate Manhattan as an admissible heuristic.
+                // Use Dijkstra scoring in portal mode so shortest paths via clouds are chosen reliably.
+                if (usePortalEdges) return 0;
+                return Math.abs(ex - x) + Math.abs(ey - y);
+            };
             let isWalkable = (nx, ny) => {
                 if (ignoreWalls) return true;
                 if (grid[ny][nx].type !== TYPE_WALL) return true;
+                if (pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) return true;
                 if (canWalk && canWalk(nx, ny)) return true;
                 return false;
             };
@@ -1844,7 +1881,7 @@
             let startKey = sy * GRID_W + sx;
             let endKey = ey * GRID_W + ex;
             gScore.set(startKey, 0);
-            open.push({ x: sx, y: sy, f: Math.abs(ex - sx) + Math.abs(ey - sy), g: 0 });
+            open.push({ x: sx, y: sy, f: estimateCost(sx, sy), g: 0 });
             let visited = new Set();
 
             while (open.length > 0) {
@@ -1865,19 +1902,32 @@
                     return path;
                 }
 
+                let neighbors = [];
                 for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
                     let nx = cur.x + dx, ny = cur.y + dy;
                     if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
                     if (!isWalkable(nx, ny)) continue;
-                    let nKey = ny * GRID_W + nx;
+                    neighbors.push({ x: nx, y: ny, cost: 1 });
+                }
+
+                if (usePortalEdges) {
+                    let cloud = getCloudTowerAt(cur.x, cur.y, pathOwner);
+                    if (cloud) {
+                        let partner = getPairedCloudTower(cloud, pathOwner);
+                        if (partner) neighbors.push({ x: partner.gx, y: partner.gy, cost: 1 });
+                    }
+                }
+
+                for (let n of neighbors) {
+                    let nKey = n.y * GRID_W + n.x;
                     if (visited.has(nKey)) continue;
-                    let ng = cur.g + 1;
+                    let ng = cur.g + n.cost;
                     let prev = gScore.get(nKey);
                     if (prev === undefined || ng < prev) {
                         gScore.set(nKey, ng);
                         cameFrom.set(nKey, curKey);
-                        let h = Math.abs(ex - nx) + Math.abs(ey - ny);
-                        open.push({ x: nx, y: ny, f: ng + h, g: ng });
+                        let h = estimateCost(n.x, n.y);
+                        open.push({ x: n.x, y: n.y, f: ng + h, g: ng });
                     }
                 }
             }
@@ -2829,7 +2879,7 @@
                 rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
                 this._scoutTarget = { gx: rgx, gy: rgy };
                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                    this.path = findPathAStar(ugx, ugy, rgx, rgy, true);
+                    this.path = findPathAStar(ugx, ugy, rgx, rgy, true, null, this.owner);
                     this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                     pathfindBudget++;
                 } else {
@@ -2937,7 +2987,7 @@
                     this.x += pushX; this.y += pushY;
                     // Clamp to walkable area
                     let ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-                    if (!this.isFlying && (ngx < 0 || ngx >= GRID_W || ngy < 0 || ngy >= GRID_H || grid[ngy][ngx].type === TYPE_WALL)) {
+                    if (!this.isFlying && !canUnitOccupyTile(this, ngx, ngy)) {
                         this.x -= pushX; this.y -= pushY;
                     }
                 }
@@ -3147,7 +3197,7 @@
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let dest = findNearestWalkable(tgx, tgy, ugx, ugy);
-                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
+                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
                             } else {
@@ -3185,7 +3235,7 @@
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let dest = findNearestWalkable(tgx, tgy, ugx, ugy);
-                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying);
+                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
                             } else {
@@ -3221,6 +3271,14 @@
                 let dx = tx - this.x, dy = ty - this.y;
                 let dist = Math.hypot(dx, dy);
                 if (dist < 4) {
+                    let nextNode = this.path[this.pathIndex + 1];
+                    if (nextNode && isCloudPortalLink(node.x, node.y, nextNode.x, nextNode.y, this.owner)) {
+                        this.x = nextNode.x * TILE + 16;
+                        this.y = nextNode.y * TILE + 16;
+                        this.pathIndex += 2;
+                        if (this.pathIndex >= this.path.length) return true;
+                        return false;
+                    }
                     this.pathIndex++;
                     if (this.pathIndex >= this.path.length) return true;
                     return false;
@@ -3534,7 +3592,7 @@
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_ATTACK_MOVING;
                                     pathfindBudget++;
                                 }
@@ -3640,7 +3698,7 @@
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
                                     pathfindBudget++;
                                 }
@@ -3727,7 +3785,7 @@
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
                                     pathfindBudget++;
                                 }
@@ -3823,7 +3881,7 @@
                             if (this.rallyX !== null && this.rallyY !== null) {
                                 let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying);
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
                                     pathfindBudget++;
                                 }
@@ -3993,7 +4051,7 @@
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     let canWalk = _builderCanWalk(u.owner);
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
+                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                     return;
@@ -4053,7 +4111,7 @@
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     let canWalk = _builderCanWalk(u.owner);
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
+                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                 } else {
@@ -4080,7 +4138,7 @@
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
                             let canWalk = _builderCanWalk(u.owner);
-                            u.path = findPathAStar(myGx, myGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk);
+                            u.path = findPathAStar(myGx, myGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner);
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                         }
                     }
@@ -4135,7 +4193,7 @@
                     if (spawner && players[owner].money >= 1 && u.workerTarget) {
                         u.workerState = 'RETURNING_FOR_GOLD';
                         let canWalk = _builderCanWalk(u.owner);
-                        u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
+                        u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._builderSpawnerTarget = spawner;
                     }
@@ -4181,7 +4239,7 @@
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
             u.workerTarget = target; u.workerTargetType = targetType;
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
-            u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
+            u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
             if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
             else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
@@ -4201,7 +4259,7 @@
             if (bestItem) {
                 u.workerTarget = bestItem;
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
-                u.path = findPathAStar(myGx, myGy, bestItem.gx, bestItem.gy, false, canWalk);
+                u.path = findPathAStar(myGx, myGy, bestItem.gx, bestItem.gy, false, canWalk, u.owner);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
                 else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
@@ -4230,20 +4288,20 @@
             let canWalk = _builderCanWalk(u.owner);
             if (u.builderHasMaterial) {
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
+                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 return;
             }
             let spawner = _findClosestBuilderSpawner(u);
             if (spawner && players[u.owner].money >= 1) {
                 u.workerState = 'RETURNING_FOR_GOLD';
-                u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk);
+                u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = spawner;
             } else {
                 // No spawner or no money — go build directly (slow mode)
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk);
+                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
         }
@@ -4292,7 +4350,7 @@
             let closest = _findClosestSpawner(u, type);
             if (closest) {
                 let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
-                u.path = findPathAStar(myGx, myGy, closest.gx, closest.gy) || [];
+                u.path = findPathAStar(myGx, myGy, closest.gx, closest.gy, false, null, u.owner) || [];
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             } else {
                 u.path = []; u.pathIndex = 0; u.commandState = CMD_IDLE;
@@ -5642,7 +5700,7 @@
                 let pt = u._pendingPathTarget;
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy);
-                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, null, u.owner);
                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                 u.commandState = pt.cmd;
                 u._pendingPathTarget = null;
@@ -6487,7 +6545,7 @@
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
-                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, null, u.owner);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
@@ -6508,7 +6566,7 @@
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
-                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, null, u.owner);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
@@ -6528,7 +6586,7 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, null, u.owner);
                                     u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                     u._pendingPathTarget = null;
                                     pathfindBudget++;
@@ -6551,7 +6609,7 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying);
+                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u._pendingPathTarget = null;
                                     pathfindBudget++;
                                 } else {
