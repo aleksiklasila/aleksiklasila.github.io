@@ -24,6 +24,26 @@
             flex-direction: column;
         }
 
+        body.app-fullscreen #hud {
+            display: none;
+        }
+
+        body.app-fullscreen #left-panel,
+        body.app-fullscreen #right-panel {
+            display: none;
+        }
+
+        body.app-fullscreen #main-row {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+        }
+
+        body.app-fullscreen #game-area {
+            border-left: 0;
+            border-right: 0;
+        }
+
         /* LOBBY */
         #lobby {
             position: fixed;
@@ -99,6 +119,78 @@
 
         .hud-time {
             color: #aaa;
+        }
+
+        #help-popup {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.62);
+        }
+
+        #help-popup.hidden {
+            display: none;
+        }
+
+        #help-popup-card {
+            width: min(560px, calc(100vw - 28px));
+            max-height: calc(100vh - 28px);
+            overflow: auto;
+            background: #121212;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            box-shadow: 0 12px 42px rgba(0, 0, 0, 0.55);
+            padding: 14px;
+        }
+
+        .help-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            gap: 8px;
+        }
+
+        .help-mode {
+            font-size: 12px;
+            color: #aee;
+            margin-bottom: 10px;
+        }
+
+        .help-keys {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .help-keys th,
+        .help-keys td {
+            border: 1px solid #333;
+            padding: 6px 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .help-keys th {
+            color: #8dc6ff;
+            background: #1a1a1a;
+        }
+
+        .kbd {
+            display: inline-block;
+            min-width: 18px;
+            padding: 1px 6px;
+            border: 1px solid #555;
+            border-bottom-width: 2px;
+            border-radius: 4px;
+            background: #202020;
+            color: #fff;
+            font-size: 11px;
+            line-height: 1.5;
+            margin-right: 2px;
         }
 
         /* GAME AREA */
@@ -238,6 +330,23 @@
             gap: 3px;
             padding: 4px;
             overflow-y: auto;
+        }
+
+        #build-selected-desc {
+            min-height: 34px;
+            max-height: 70px;
+            overflow-y: auto;
+            padding: 5px 6px;
+            border-top: 1px solid #2a2a2a;
+            color: #9a9a9a;
+            font-size: 10px;
+            line-height: 1.25;
+            background: #111;
+        }
+
+        #build-selected-desc.empty {
+            color: #666;
+            font-style: italic;
         }
 
         .build-item {
@@ -451,7 +560,9 @@
                 FS</button>
             <button id="btn-level-visibility"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
-            <span style="display:inline-flex; align-items:center;">
+            <button id="btn-help"
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Help</button>
+            <span style="display:none; align-items:center;">
                 <input type="checkbox" id="setting-long-press" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
                     Rally</label>
@@ -465,6 +576,67 @@
                 <label for="setting-audio" style="cursor:pointer; font-size:12px; color:#ddd;">Audio</label>
             </span>
         </span>
+    </div>
+
+    <div id="help-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <div id="help-popup-card">
+            <div class="help-title-row">
+                <h3 id="help-title" style="color:#8dc6ff; font-size:18px; margin:0">Controls & Game Info</h3>
+                <button id="btn-help-close"
+                    style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+            </div>
+            <div class="help-mode">Current mode: <strong id="help-game-mode">Destroy Base</strong></div>
+            <table class="help-keys">
+                <thead>
+                    <tr>
+                        <th style="width:38%">Input</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="kbd">Left Click</span> / Drag</td>
+                        <td>Select units and buildings / box select</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">Right Click</span></td>
+                        <td>Move / attack / assign workers / set rally</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
+                        <td>Add a rally point and split selected spawners across all set points</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">A</span></td>
+                        <td>Attack-move mode for selected units</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">X</span></td>
+                        <td>Stop selected units</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">H</span></td>
+                        <td>Hold position for selected units</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">1..9</span></td>
+                        <td>Select control group</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">Ctrl</span> + <span class="kbd">1..9</span></td>
+                        <td>Assign selected units to control group</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">Esc</span></td>
+                        <td>Close this help popup (if open), otherwise clear selection/build mode</td>
+                    </tr>
+                    <tr>
+                        <td><span class="kbd">Long Press</span> (touch)</td>
+                        <td>Simulate right-click for rally/commands when enabled</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- MAIN CONTENT ROW -->
@@ -484,6 +656,7 @@
                     <div class="build-tab" data-tab="special">Special</div>
                 </div>
                 <div id="build-items"></div>
+                <div id="build-selected-desc" class="empty">Select a shop item to see details.</div>
             </div>
             <div id="minimap-wrap">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 2px;">
@@ -523,6 +696,22 @@
             let e = Math.floor(Math.log10(n));
             const s = '\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079';
             return '10' + e.toString().split('').map(c => s[c]).join('');
+        }
+
+        function getGameModeLabel(mode = gameMode) {
+            return mode === 'killking' ? 'Kill King' : 'Destroy Base';
+        }
+
+        function setHelpPopupOpen(open) {
+            let popup = document.getElementById('help-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            if (open) {
+                let modeEl = document.getElementById('help-game-mode');
+                if (modeEl) modeEl.textContent = getGameModeLabel(gameMode);
+            }
+            popup.classList.toggle('hidden', !open);
+            return wasOpen !== open;
         }
 
         function mulberry32(seed) {
@@ -574,6 +763,7 @@
             ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
             elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
             laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
+            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 28, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 15 },
 
             // Floor items
             sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", target: 'floor' },
@@ -613,6 +803,7 @@
             barrack_ice_resistant: { name: "Ice Res Brk", price: 160, icon: "\u26FA", color: "#afe", target: 'floor', unitType: 'ice_resistant' },
             barrack_laser_resistant: { name: "Lsr Res Brk", price: 160, icon: "\u26FA", color: "#d0f", target: 'floor', unitType: 'laser_resistant' },
             barrack_snake: { name: "Snake Brk", price: 400, icon: "\u26FA", color: "#0f0", target: 'floor', unitType: 'snake' },
+            barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", target: 'floor', unitType: 'scout' },
         };
 
         // Descriptions
@@ -627,6 +818,7 @@
             ice: "Freezes enemies. Combo with water for bonus damage.",
             elements: "Applies all status effects. Jack of all trades.",
             laser: "Beam between aligned laser towers. Constant DPS.",
+            watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low HP, large vision.",
             // Floor
             sand: "Slows enemies walking over it.",
             lava: "Burns enemies walking over it.",
@@ -661,6 +853,7 @@
             barrack_ice_resistant: "Trains ice-immune units.",
             barrack_laser_resistant: "Trains laser-immune units.",
             barrack_snake: "Trains snakes. Massive HP, leaves a trail.",
+            barrack_scout: "Trains scouts. Fast flying recon units that roam the map.",
             // Units
             norm: "Basic infantry. Balanced stats, cheap to produce.",
             fast: "Fast scout. Low HP but high speed.",
@@ -674,12 +867,13 @@
             ice_resistant: "Ice-immune. Attacks with frost shards.",
             laser_resistant: "Laser-immune. Shoots laser beams from range.",
             snake: "Massive serpent. Rams targets, takes self-damage.",
+            scout: "Fast flying recon. Very high vision, low HP, low attack. Patrols random points continuously.",
         };
 
         // Build menu categories
         const BUILD_CATEGORIES = {
-            barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake'],
-            towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'elements', 'laser'],
+            barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
+            towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'elements', 'laser', 'watch_tower'],
             floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm'],
             special: ['spawner', 'salvager', 'builder_spawner', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
@@ -691,6 +885,7 @@
             flying: { baseTime: 35, reduction: 0.09 }, poison_resistant: { baseTime: 40, reduction: 0.08 },
             fire_resistant: { baseTime: 40, reduction: 0.08 }, water_resistant: { baseTime: 35, reduction: 0.09 },
             ice_resistant: { baseTime: 40, reduction: 0.08 }, laser_resistant: { baseTime: 40, reduction: 0.08 },
+            scout: { baseTime: 18, reduction: 0.11 },
             collector: { baseTime: 15, reduction: 0.10 },
             salvager_unit: { baseTime: 20, reduction: 0.10 },
             builder_unit: { baseTime: 25, reduction: 0.10 },
@@ -710,6 +905,7 @@
             ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
             laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
             snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+            scout: { hp: 14, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 32, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
             collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
             salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
@@ -722,6 +918,7 @@
             flying: { hpExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 10, visionExp: 1.03, visionCapBonus: 1.8 },
             snake: { hpExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 14, visionExp: 1.02, visionCapBonus: 1.3 },
             tank: { hpExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 12, visionExp: 1.02, visionCapBonus: 1.0 },
+            scout: { hpExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 12, visionExp: 1.04, visionCapBonus: 3.2 },
             collector: { hpExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
             salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
             builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
@@ -1491,6 +1688,93 @@
             return stats;
         }
 
+        function ensureStatusState(target) {
+            if (!target) return;
+            if (target.burning === undefined) target.burning = 0;
+            if (target.burnTickDamage === undefined) target.burnTickDamage = 0;
+            if (target.poisoned === undefined) target.poisoned = 0;
+            if (target.poisonTickDamage === undefined) target.poisonTickDamage = 0;
+            if (target.frozen === undefined) target.frozen = 0;
+            if (target.iceTickDamage === undefined) target.iceTickDamage = 0;
+            if (target.wet === undefined) target.wet = 0;
+            if (target.sandy === undefined) target.sandy = 0;
+            if (target.watched === undefined) target.watched = 0;
+        }
+
+        function isEffectImmune(target, effect) {
+            if (!target) return false;
+            if (effect === 'fire' && target.fireResistant) return true;
+            if (effect === 'poison' && target.poisonResistant) return true;
+            if (effect === 'water' && target.waterResistant) return true;
+            if (effect === 'ice' && target.iceResistant) return true;
+            if (effect === 'sand' && target.sandResistant) return true;
+
+            let tType = target.type || '';
+            if (tType === 'fire' && effect === 'fire') return true;
+            if (tType === 'poison' && effect === 'poison') return true;
+            if (tType === 'water' && effect === 'water') return true;
+            if (tType === 'ice' && effect === 'ice') return true;
+            if (tType === 'sand_gun' && effect === 'sand') return true;
+            if (tType === 'watch_tower' && effect === 'watch') return true;
+            if (tType === 'elements' && ['fire', 'poison', 'water', 'ice', 'sand'].includes(effect)) return true;
+            return false;
+        }
+
+        function applyStatusEffect(target, effect, level, baseDamage = 0) {
+            if (!target) return false;
+            ensureStatusState(target);
+            if (isEffectImmune(target, effect)) return false;
+
+            let lvl = Math.max(1, level || 1);
+            if (effect === 'fire') {
+                target.burning = Math.max(target.burning, 60 + lvl * 10);
+                let d = Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+                target.burnTickDamage = Math.max(target.burnTickDamage, d);
+            } else if (effect === 'poison') {
+                target.poisoned = Math.max(target.poisoned, 100 + lvl * 20);
+                let d = Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+                target.poisonTickDamage = Math.max(target.poisonTickDamage, d);
+            } else if (effect === 'ice') {
+                target.frozen = Math.max(target.frozen, 60 + lvl * 10);
+                let d = Math.max(0.2, baseDamage > 0 ? baseDamage : 0.5);
+                target.iceTickDamage = Math.max(target.iceTickDamage, d);
+            } else if (effect === 'water') {
+                target.wet = Math.max(target.wet, 120 + lvl * 20);
+            } else if (effect === 'sand') {
+                target.sandy = Math.max(target.sandy, 180);
+            } else if (effect === 'watch') {
+                target.watched = Math.max(target.watched, 80 + lvl * 20);
+            }
+            return true;
+        }
+
+        function tickStatusEffects(target) {
+            if (!target) return false;
+            ensureStatusState(target);
+
+            if (target.burning > 0) {
+                target.burning--;
+                if (target.burnTickDamage > 0) target.hp -= target.burnTickDamage;
+            }
+            if (target.poisoned > 0) {
+                target.poisoned--;
+                if (target.poisonTickDamage > 0) target.hp -= target.poisonTickDamage;
+            }
+            if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
+                target.hp -= target.iceTickDamage * 1.5;
+            }
+            if (target.frozen > 0) target.frozen--;
+            if (target.wet > 0) target.wet--;
+            if (target.sandy > 0) target.sandy--;
+            if (target.watched > 0) target.watched--;
+
+            if (target.hp !== undefined && target.hp <= 0) {
+                target.hp = 0;
+                return true;
+            }
+            return false;
+        }
+
         function updateItemTextCache(item) {
             if (!item.textCanvas) {
                 item.textCanvas = document.createElement('canvas');
@@ -1593,11 +1877,14 @@
                 }
                 if (!s.cd) s.cd = this.baseStats.cd;
                 if (!s.visionRange) s.visionRange = this.baseStats.visionRange;
-                if (s.visionRange > 5) s.visionRange = 5;
+                let maxVision = this.baseStats.maxVisionRange || 5;
+                if (s.visionRange > maxVision) s.visionRange = maxVision;
                 return s;
             }
 
             update() {
+                if (this.hp <= 0) return;
+                tickStatusEffects(this);
                 if (this.hp <= 0) return;
                 if (this.underConstruction) return;
                 if (this.type.startsWith('cloud')) return;
@@ -1682,6 +1969,7 @@
                         else if (this.type === 'water') affected = u.wet > 0;
                         else if (this.type === 'ice') affected = u.frozen > 0;
                         else if (this.type === 'sand_gun') affected = u.sandy > 0;
+                        else if (this.type === 'watch_tower') affected = u.watched > 0;
                         if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
                         else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
                     }
@@ -1894,6 +2182,10 @@
                 } else if (this.type === 'sand_gun') {
                     t.sandy = 180;
                     if (!t.sandResistant) { t.hp -= this.dmg; createExplosion(this.x, this.y, "#c96", 4); }
+                } else if (this.type === 'watch_tower') {
+                    applyStatusEffect(t, 'watch', this.level || 1);
+                    if (this.dmg > 0) t.hp -= this.dmg;
+                    createExplosion(this.x, this.y, "#fd0", 3);
                 } else {
                     t.hp -= this.dmg;
                     createExplosion(this.x, this.y, "#fff", 4);
@@ -1906,7 +2198,36 @@
                 if (this.type === 'fire' || this.type === 'ice' || this.type === 'poison' || this.type === 'water' || this.type === 'sand_gun' || this.type === 'elements') {
                     actualDmg += (this.level * 2); // Elements apply burst damage to buildings
                 }
-                b.hp -= actualDmg;
+
+                if (this.type === 'watch_tower') {
+                    applyStatusEffect(b, 'watch', this.level || 1);
+                } else if (this.type === 'fire') {
+                    applyStatusEffect(b, 'fire', this.level || 1, Math.max(0.1, this.dmg * 0.05));
+                    if (!isEffectImmune(b, 'fire')) b.hp -= actualDmg;
+                } else if (this.type === 'poison') {
+                    applyStatusEffect(b, 'poison', this.level || 1, Math.max(0.1, this.dmg * 0.1));
+                    if (!isEffectImmune(b, 'poison')) b.hp -= actualDmg;
+                } else if (this.type === 'water') {
+                    applyStatusEffect(b, 'water', this.level || 1);
+                    if (!isEffectImmune(b, 'water')) b.hp -= actualDmg;
+                } else if (this.type === 'ice') {
+                    applyStatusEffect(b, 'ice', this.level || 1, Math.max(0.2, this.dmg * 0.2));
+                    if (!isEffectImmune(b, 'ice')) b.hp -= actualDmg;
+                } else if (this.type === 'sand_gun') {
+                    applyStatusEffect(b, 'sand', this.level || 1);
+                    if (!isEffectImmune(b, 'sand')) b.hp -= actualDmg;
+                } else if (this.type === 'elements') {
+                    let appliedAny = false;
+                    appliedAny = applyStatusEffect(b, 'fire', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'poison', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'water', this.level || 1) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'ice', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'sand', this.level || 1) || appliedAny;
+                    if (appliedAny) b.hp -= actualDmg;
+                } else {
+                    b.hp -= actualDmg;
+                }
+
                 createExplosion(this.x, this.y, "#f84", 4);
                 if (b.hp <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }
             }
@@ -2002,7 +2323,7 @@
                 this.poisoned = 0; this.poisonTickDamage = 0;
                 this.burning = 0; this.burnTickDamage = 0;
                 this.frozen = 0; this.iceTickDamage = 0;
-                this.wet = 0; this.sandy = 0;
+                this.wet = 0; this.sandy = 0; this.watched = 0;
                 this.vx = 0; this.vy = 0;
 
                 // Snake
@@ -2013,9 +2334,28 @@
             }
 
             getCollisionLayer() {
+                if (this.unitType === 'scout') return 'scout';
                 if (this.isFlying) return 'air';
                 if (this.unitType === 'mole') return 'mole';
                 return 'ground';
+            }
+
+            pickScoutDestination() {
+                let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                let rgx = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_W);
+                let rgy = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_H);
+                rgx = Math.max(0, Math.min(GRID_W - 1, rgx));
+                rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
+                this._scoutTarget = { gx: rgx, gy: rgy };
+                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                    this.path = findPathAStar(ugx, ugy, rgx, rgy, true);
+                    this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
+                    pathfindBudget++;
+                } else {
+                    this.path = null;
+                    this.pathIndex = 0;
+                }
+                this.commandState = CMD_MOVING;
             }
 
             update() {
@@ -2036,6 +2376,7 @@
                 if (this.frozen > 0) this.frozen--;
                 if (this.wet > 0) this.wet--;
                 if (this.sandy > 0) this.sandy--;
+                if (this.watched > 0) this.watched--;
 
                 if (this.hp <= 0) { this.dead = true; return; }
 
@@ -2123,6 +2464,10 @@
             }
 
             doIdle(spd) {
+                if (this.unitType === 'scout') {
+                    this.pickScoutDestination();
+                    return;
+                }
                 // Auto-aggro nearby enemies
                 let aggroRange = this.visionRange * TILE;
                 let near = getUnitsInRange(this.x, this.y, aggroRange);
@@ -2151,6 +2496,28 @@
             }
 
             doMoving(spd) {
+                if (this.unitType === 'scout') {
+                    if (this.path && this.pathIndex < this.path.length) {
+                        if (this.followPath(spd)) {
+                            this.path = null;
+                            this.commandState = CMD_IDLE;
+                        }
+                    } else if (this._scoutTarget) {
+                        let tx = this._scoutTarget.gx * TILE + 16;
+                        let ty = this._scoutTarget.gy * TILE + 16;
+                        let dx = tx - this.x, dy = ty - this.y;
+                        let dist = Math.hypot(dx, dy) || 1;
+                        if (dist <= Math.max(4, spd)) {
+                            this.commandState = CMD_IDLE;
+                        } else {
+                            this.x += (dx / dist) * spd;
+                            this.y += (dy / dist) * spd;
+                        }
+                    } else {
+                        this.commandState = CMD_IDLE;
+                    }
+                    return;
+                }
                 if (this.followPath(spd)) {
                     this.commandState = CMD_IDLE;
                     this.path = null;
@@ -2234,30 +2601,41 @@
             }
 
             _performAttackOnBuilding(tb) {
-                tb.hp -= this.attackDamage;
                 this.attackTimer = this.attackCooldown;
                 this.attackTarget = tb;
                 this.attackFlash = 8;
                 let style = this.attackStyle;
                 if (style === 'fire') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f50', 3);
+                    applyStatusEffect(tb, 'fire', this.unitLevel || 1, this.attackDamage * 0.04);
+                    if (!isEffectImmune(tb, 'fire')) tb.hp -= this.attackDamage;
                 } else if (style === 'water') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#4af', 3);
+                    applyStatusEffect(tb, 'water', this.unitLevel || 1);
+                    if (!isEffectImmune(tb, 'water')) tb.hp -= this.attackDamage;
                 } else if (style === 'ice') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#afe', 3);
+                    applyStatusEffect(tb, 'ice', this.unitLevel || 1, this.attackDamage * 0.2);
+                    if (!isEffectImmune(tb, 'ice')) tb.hp -= this.attackDamage;
                 } else if (style === 'poison') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#2d2', 3);
+                    applyStatusEffect(tb, 'poison', this.unitLevel || 1, this.attackDamage * 0.04);
+                    if (!isEffectImmune(tb, 'poison')) tb.hp -= this.attackDamage;
                 } else if (style === 'laser') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f0f', 2);
+                    tb.hp -= this.attackDamage;
                 } else if (style === 'swoop') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#dd0', 2);
+                    tb.hp -= this.attackDamage;
                 } else if (style === 'ram') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#0f0', 3);
                     createDirectedParticles(tb.x, tb.y, this.x, this.y, '#f00', 2);
+                    tb.hp -= this.attackDamage;
                     this.hp -= this.maxHp * 0.03;
                     if (this.hp <= 0) { this.dead = true; }
                 } else {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f88', 2);
+                    tb.hp -= this.attackDamage;
                 }
                 if (tb.hp <= 0) { destroyBuilding(tb); return true; }
                 return false;
@@ -2662,6 +3040,7 @@
             }
 
             update() {
+                tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl) * TICK_RATE);
@@ -2768,6 +3147,7 @@
             }
             getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(15 * (1 + (lvl - 1) * 0.5)); }
             update() {
+                tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl) * TICK_RATE);
@@ -2854,6 +3234,7 @@
             }
             getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(20 * (1 + (lvl - 1) * 0.5)); }
             update() {
+                tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl) * TICK_RATE);
@@ -2946,6 +3327,7 @@
                 return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
             }
             update() {
+                tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
                 let effLvl = this.effectiveLevel || this.level || 1;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl) * TICK_RATE);
@@ -3497,6 +3879,31 @@
                     if (!rootObj) continue;
                     let touchedAreas = new Set([cell.areaId]);
 
+                    const enqueueMatchingCell = (tx, ty) => {
+                        if (tx < 0 || tx >= GRID_W || ty < 0 || ty >= GRID_H) return;
+                        let key = gid(tx, ty);
+                        if (visited.has(key)) return;
+
+                        let tc = grid[ty][tx], tObj = null, tType = null;
+                        if (isTower) {
+                            if (tc.type !== TYPE_WALL) return;
+                            let tt = towers.find(t => t.gx === tx && t.gy === ty);
+                            if (!tt || tt.owner !== ownerCheck || !isOperationalEntity(tt)) return;
+                            tObj = tt; tType = tt.type;
+                        } else {
+                            if (!tc.item || tc.owner !== ownerCheck || !isOperationalEntity(tc.item)) return;
+                            tObj = tc.item; tType = tc.item.type;
+                        }
+
+                        if (!tObj || tType !== type) return;
+                        if (type === 'barrack' && rootObj && tObj.unitType !== rootObj.unitType) return;
+
+                        visited.add(key);
+                        queue.push({ x: tx, y: ty });
+                        group.push(tObj);
+                        touchedAreas.add(tc.areaId);
+                    };
+
                     while (queue.length > 0) {
                         let cur = queue.shift();
                         for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
@@ -3514,21 +3921,20 @@
                             if (!visited.has(key) && nType === type) {
                                 visited.add(key); queue.push({ x: nx, y: ny }); group.push(nObj); touchedAreas.add(nc.areaId);
                             }
-                            // Cloud bridge
-                            if (isTower && nObj && nObj.baseStats && nObj.baseStats.isCloud) {
-                                let partner = towers.find(pt => pt !== nObj && pt.baseStats.isCloud && pt.baseStats.pairId === nObj.baseStats.pairId && pt.owner === ownerCheck);
-                                let bridges = [nObj]; if (partner) bridges.push(partner);
-                                for (let b of bridges) {
+
+                            // Cloud bridge: if this frontier touches a cloud endpoint, link matching groups across both endpoints.
+                            let cloud = null;
+                            if (nc.type === TYPE_WALL) {
+                                let nt = towers.find(t => t.gx === nx && t.gy === ny);
+                                if (nt && nt.owner === ownerCheck && isOperationalEntity(nt) && nt.baseStats && nt.baseStats.isCloud) cloud = nt;
+                            }
+                            if (cloud) {
+                                let partner = towers.find(pt => pt !== cloud && pt.owner === ownerCheck && isOperationalEntity(pt) && pt.baseStats && pt.baseStats.isCloud && pt.baseStats.pairId === cloud.baseStats.pairId);
+                                let endpoints = [cloud];
+                                if (partner) endpoints.push(partner);
+                                for (let ep of endpoints) {
                                     for (let [dx2, dy2] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                                        let nx2 = b.gx + dx2, ny2 = b.gy + dy2;
-                                        if (nx2 < 0 || nx2 >= GRID_W || ny2 < 0 || ny2 >= GRID_H) continue;
-                                        let k2 = gid(nx2, ny2);
-                                        if (!visited.has(k2) && grid[ny2][nx2].type === TYPE_WALL) {
-                                            let nt2 = towers.find(t => t.gx === nx2 && t.gy === ny2);
-                                            if (nt2 && isOperationalEntity(nt2) && nt2.type === type && nt2.owner === ownerCheck) {
-                                                visited.add(k2); queue.push({ x: nx2, y: ny2 }); group.push(nt2); touchedAreas.add(grid[ny2][nx2].areaId);
-                                            }
-                                        }
+                                        enqueueMatchingCell(ep.gx + dx2, ep.gy + dy2);
                                     }
                                 }
                             }
@@ -4673,18 +5079,18 @@
                 }
             };
 
-            for (let u of units) if (u.owner === playerId && !u.dead) {
+            for (let u of units) if ((u.owner === playerId || (u.watched || 0) > 0) && !u.dead) {
                 setVis(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
             }
-            for (let t of towers) if (t.owner === playerId && t.hp > 0 && !t.underConstruction) {
+            for (let t of towers) if ((t.owner === playerId || (t.watched || 0) > 0) && t.hp > 0 && !t.underConstruction) {
                 setVis(t.gx, t.gy, t.currentStats.visionRange || 3);
             }
-            for (let b of barracks) if (b.owner === playerId && b.hp > 0 && !b.underConstruction) setVis(b.gx, b.gy, 4);
-            for (let s of collectorSpawners) if (s.owner === playerId && s.hp > 0 && !s.underConstruction) setVis(s.gx, s.gy, 4);
+            for (let b of barracks) if ((b.owner === playerId || (b.watched || 0) > 0) && b.hp > 0 && !b.underConstruction) setVis(b.gx, b.gy, 4);
+            for (let s of collectorSpawners) if ((s.owner === playerId || (s.watched || 0) > 0) && s.hp > 0 && !s.underConstruction) setVis(s.gx, s.gy, 4);
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
                     let cell = grid[y][x];
-                    if (cell.item && cell.owner === playerId && cell.item.hp > 0 && !cell.item.underConstruction) setVis(x, y, 3);
+                    if (cell.item && cell.item.hp > 0 && !cell.item.underConstruction && (cell.owner === playerId || (cell.item.watched || 0) > 0)) setVis(x, y, 3);
                 }
             }
 
@@ -4718,6 +5124,24 @@
             if (gameOver) return;
             gameTime++;
             pathfindBudget = 0;
+
+            let floorChanged = false;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    let item = cell.item;
+                    if (!item) continue;
+                    if (tickStatusEffects(item)) {
+                        cell.item = null;
+                        cell.owner = -1;
+                        floorChanged = true;
+                    }
+                }
+            }
+            if (floorChanged) {
+                dirtyGrid = true;
+                recalculateAdjacency();
+            }
 
             if (gameTime % TICK_RATE === 0) {
                 for (let y = 0; y < GRID_H; y++) {
@@ -4848,6 +5272,25 @@
 
         function initInput() {
             let gameArea = document.getElementById('game-area');
+            let multiRallyPoints = [];
+
+            function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally) {
+                if (!selSpawners || selSpawners.length === 0) return;
+                if (appendToMultiRally) {
+                    multiRallyPoints.push({ x: targetX, y: targetY });
+                    if (multiRallyPoints.length > 12) multiRallyPoints.shift();
+                } else {
+                    multiRallyPoints = [{ x: targetX, y: targetY }];
+                }
+                if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY }];
+                for (let i = 0; i < selSpawners.length; i++) {
+                    let b = selSpawners[i];
+                    let rp = multiRallyPoints[i % multiRallyPoints.length];
+                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y });
+                    b.rallyX = rp.x; b.rallyY = rp.y;
+                }
+            }
+
             function screenToWorldClamped(sx, sy) {
                 let rect = gameArea.getBoundingClientRect();
                 let clampedX = Math.max(rect.left, Math.min(rect.right - 1, sx));
@@ -4900,12 +5343,11 @@
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(e => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(e.type) && e.owner === localPlayerId);
                     if (selSpawners.length > 0) {
-                        for (let b of selSpawners) {
-                            queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: world.x, targetY: world.y });
-                            b.rallyX = world.x; b.rallyY = world.y;
-                        }
+                        applyRallyTargets(selSpawners, world.x, world.y, !!e.ctrlKey);
                         // If no units selected, just update and return
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
+                    } else if (!e.ctrlKey) {
+                        multiRallyPoints = [];
                     }
                     // Set preferred target for selected own towers
                     let selTowers = getActiveEntities().filter(e => e instanceof Tower && e.owner === localPlayerId && e.hp > 0);
@@ -5206,7 +5648,10 @@
             document.addEventListener('keydown', (e) => {
                 keysDown[e.key.toLowerCase()] = true;
                 if (!gameStarted) return;
-                if (e.key === 'Escape') { selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel(); }
+                if (e.key === 'Escape') {
+                    if (setHelpPopupOpen(false)) return;
+                    selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
+                }
                 if ((e.key === 'a' || e.key === 'A') && selectedUnits.length > 0) attackMoveMode = true;
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'h' || e.key === 'H') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
@@ -5233,11 +5678,13 @@
             const btnFs = document.getElementById('btn-fullscreen');
             if (btnFs) {
                 btnFs.addEventListener('click', () => {
-                    if (!document.fullscreenElement) {
-                        document.documentElement.requestFullscreen().catch(err => console.log(err));
-                    } else {
-                        document.exitFullscreen();
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen().catch(() => { });
                     }
+                    appFullscreen = !appFullscreen;
+                    document.body.classList.toggle('app-fullscreen', appFullscreen);
+                    btnFs.textContent = appFullscreen ? '🗗 FS' : '⛶ FS';
+                    window.dispatchEvent(new Event('resize'));
                 });
             }
 
@@ -5246,6 +5693,25 @@
                 updateLevelVisibilityButton();
                 btnLevelVisibility.addEventListener('click', () => {
                     cycleLevelVisibilityMode();
+                });
+            }
+
+            const btnHelp = document.getElementById('btn-help');
+            const btnHelpClose = document.getElementById('btn-help-close');
+            const helpPopup = document.getElementById('help-popup');
+            if (btnHelp) {
+                btnHelp.addEventListener('click', () => {
+                    setHelpPopupOpen(true);
+                });
+            }
+            if (btnHelpClose) {
+                btnHelpClose.addEventListener('click', () => {
+                    setHelpPopupOpen(false);
+                });
+            }
+            if (helpPopup) {
+                helpPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === helpPopup) setHelpPopupOpen(false);
                 });
             }
 
@@ -5675,6 +6141,21 @@
 
         let _buildMenuTab = null;
         let _buildMenuItems = {}; // key -> div element
+    let appFullscreen = false;
+
+        function updateSelectedBuildDescription() {
+            let descEl = document.getElementById('build-selected-desc');
+            if (!descEl) return;
+            if (!selectedBuildItem) {
+                descEl.classList.add('empty');
+                descEl.textContent = 'Select a shop item to see details.';
+                return;
+            }
+            let def = CARD_TYPES[selectedBuildItem];
+            let desc = DESCRIPTIONS[selectedBuildItem] || (def ? def.name : selectedBuildItem);
+            descEl.classList.remove('empty');
+            descEl.textContent = desc;
+        }
 
         function isBuildItemAvailable(key, playerId = localPlayerId) {
             if (key.startsWith('cloud_')) {
@@ -5730,6 +6211,7 @@
                 // Stable update: just patch classes and prices
                 _patchBuildMenuClasses(money);
             }
+            updateSelectedBuildDescription();
         }
 
         function _patchBuildMenuClasses(money) {
@@ -5747,6 +6229,7 @@
                 let priceSpan = div.querySelector('.bi-price');
                 if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
             }
+            updateSelectedBuildDescription();
         }
 
 
@@ -6920,6 +7403,46 @@
                 collectorSpawners.push(s);
                 grid[pos.gy][pos.gx].item = s;
                 grid[pos.gy][pos.gx].owner = pid;
+
+                // Starter farm near base (fully built)
+                let farmPos = null;
+                for (let r = 1; r <= 10 && !farmPos; r++) {
+                    for (let dy = -r; dy <= r && !farmPos; dy++) {
+                        for (let dx = -r; dx <= r && !farmPos; dx++) {
+                            let fx = pos.gx + dx, fy = pos.gy + dy;
+                            if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
+                            if (Math.abs(dx) + Math.abs(dy) > r) continue;
+                            let cell = grid[fy][fx];
+                            if (!cell || cell.type === TYPE_WALL || cell.item) continue;
+                            let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
+                            if (blockedByMine) continue;
+                            farmPos = { gx: fx, gy: fy };
+                        }
+                    }
+                }
+                if (farmPos) {
+                    let fs = calculateItemStats('farm', 1);
+                    let farm = {
+                        type: 'farm',
+                        stacks: 1,
+                        level: 1,
+                        effectiveLevel: 1,
+                        potentialEffectiveLevel: 1,
+                        hp: fs.maxHp,
+                        maxHp: fs.maxHp,
+                        damage: 0,
+                        gx: farmPos.gx,
+                        gy: farmPos.gy,
+                        x: farmPos.gx * TILE + 16,
+                        y: farmPos.gy * TILE + 16,
+                        underConstruction: false,
+                        owner: pid,
+                        autoUpgradeEnabled: true
+                    };
+                    grid[farmPos.gy][farmPos.gx].item = farm;
+                    grid[farmPos.gy][farmPos.gx].owner = pid;
+                    updateItemTextCache(farm);
+                }
             }
 
             // Spawn 3 builder units for each team
