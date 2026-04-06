@@ -891,7 +891,7 @@
 
             let sign = n < 0 ? '-' : '';
             let abs = Math.abs(n);
-            if (abs < 1000) return sign + abs.toFixed(d).replace(/\.0+$/, '');
+            if (abs < 1000000) return sign + abs.toFixed(d).replace(/\.0+$/, '');
 
             const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
             let tier = Math.floor(Math.log10(abs) / 3);
@@ -902,7 +902,7 @@
             }
 
             let scaled = abs / Math.pow(1000, tier);
-            let decimals = d > 0 ? d : 2;
+            let decimals = d > 0 ? d : 3;
 
             // Handle boundary rollover (e.g. 999.995K -> 1.00M)
             let rounded = Number(scaled.toFixed(decimals));
@@ -1206,9 +1206,10 @@
         // ============================================================
         // GLOBAL STATE
         // ============================================================
-        let canvas, ctx, minimapCanvas, minimapCtx;
+    let canvas, ctx, bgCanvas, bgCtx, minimapCanvas, minimapCtx;
         let dirtyGrid = true, dirtyAreas = true;
         let visibilityGrid = [];
+    let visibilityVersion = 0;
         let fullVisibility = false;
 
         let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
@@ -5064,6 +5065,25 @@
         let _areaColorCache = null; // Map: areaId -> color string
         let _combinedBgCanvas = null; // Full world background (grid + area outlines)
         let _combinedBgCtx = null;
+        let _staticLayerCache = {
+            valid: false,
+            cameraX: 0,
+            cameraY: 0,
+            zoom: 1,
+            viewW: 0,
+            viewH: 0,
+            dpr: 1,
+            minGx: 0,
+            minGy: 0,
+            maxGx: 0,
+            maxGy: 0,
+            fullVisibility: false,
+            visibilityVersion: -1
+        };
+
+        function invalidateStaticLayerCache() {
+            _staticLayerCache.valid = false;
+        }
 
         function ensureCombinedBgCanvas() {
             if (!_combinedBgCanvas || _combinedBgCanvas.width !== WORLD_W || _combinedBgCanvas.height !== WORLD_H) {
@@ -5071,8 +5091,10 @@
                 _combinedBgCanvas.width = WORLD_W;
                 _combinedBgCanvas.height = WORLD_H;
                 _combinedBgCtx = _combinedBgCanvas.getContext('2d');
+                _combinedBgCtx.imageSmoothingEnabled = false;
                 dirtyGrid = true;
                 dirtyAreas = true;
+                invalidateStaticLayerCache();
             }
         }
 
@@ -5162,6 +5184,53 @@
                     if (!visibilityGrid[y] || visibilityGrid[y][x] === 0) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
                 }
             }
+        }
+
+        function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
+            if (!bgCtx || !bgCanvas) return;
+
+            let dpr = window.devicePixelRatio || 1;
+            let c = _staticLayerCache;
+            let needsRedraw =
+                !c.valid ||
+                c.cameraX !== camera.x ||
+                c.cameraY !== camera.y ||
+                c.zoom !== camera.zoom ||
+                c.viewW !== viewW ||
+                c.viewH !== viewH ||
+                c.dpr !== dpr ||
+                c.minGx !== minGx ||
+                c.minGy !== minGy ||
+                c.maxGx !== maxGx ||
+                c.maxGy !== maxGy ||
+                c.fullVisibility !== fullVisibility ||
+                (!fullVisibility && c.visibilityVersion !== visibilityVersion) ||
+                dirtyGrid ||
+                dirtyAreas;
+
+            if (!needsRedraw) return;
+
+            bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            bgCtx.clearRect(0, 0, viewW, viewH);
+            bgCtx.fillStyle = '#0a0a0a';
+            bgCtx.fillRect(0, 0, viewW, viewH);
+            bgCtx.setTransform(camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
+            drawCombinedBackground(bgCtx, minGx, minGy, maxGx, maxGy);
+            drawVisibilityMask(bgCtx, minGx, minGy, maxGx, maxGy);
+
+            c.valid = true;
+            c.cameraX = camera.x;
+            c.cameraY = camera.y;
+            c.zoom = camera.zoom;
+            c.viewW = viewW;
+            c.viewH = viewH;
+            c.dpr = dpr;
+            c.minGx = minGx;
+            c.minGy = minGy;
+            c.maxGx = maxGx;
+            c.maxGy = maxGy;
+            c.fullVisibility = fullVisibility;
+            c.visibilityVersion = visibilityVersion;
         }
 
         function updateGoldMineRenderCache(m) {
@@ -5271,17 +5340,20 @@
             let maxGx = Math.min(GRID_W - 1, Math.ceil((camera.x + vw) / TILE) + 1);
             let maxGy = Math.min(GRID_H - 1, Math.ceil((camera.y + vh) / TILE) + 1);
 
+            renderStaticLayer(minGx, minGy, maxGx, maxGy);
+
             ctx.save();
             let dpr = window.devicePixelRatio || 1;
-            // Clear entire canvas to black (fixes artifacts outside grid)
+            // Clear dynamic layer only; static world is drawn to bgCanvas
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            ctx.fillStyle = '#0a0a0a';
-            ctx.fillRect(0, 0, viewW, viewH);
+            ctx.clearRect(0, 0, viewW, viewH);
             ctx.setTransform(camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
 
-            // Background (cached grid + area outlines)
-            drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy);
-            drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy);
+            // Fallback (if bg layer context is unavailable)
+            if (!bgCtx) {
+                drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy);
+                drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy);
+            }
 
             // Gold mines
             for (let m of goldMines) {
@@ -5674,6 +5746,8 @@
                     visibilityGrid[y][x] = v;
                 }
             }
+
+            visibilityVersion++;
         }
 
         // ============================================================
@@ -8298,6 +8372,20 @@
         window.addEventListener('load', () => {
             canvas = document.getElementById('gameCanvas');
             ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = false;
+
+            bgCanvas = document.createElement('canvas');
+            bgCanvas.id = 'gameBackgroundCanvas';
+            bgCanvas.style.position = 'absolute';
+            bgCanvas.style.top = '0';
+            bgCanvas.style.left = '0';
+            bgCanvas.style.pointerEvents = 'none';
+            bgCtx = bgCanvas.getContext('2d');
+            bgCtx.imageSmoothingEnabled = false;
+
+            let gameArea = document.getElementById('game-area');
+            gameArea.insertBefore(bgCanvas, canvas);
+
             minimapCanvas = document.getElementById('minimapCanvas');
             minimapCtx = minimapCanvas.getContext('2d');
 
@@ -8310,15 +8398,20 @@
             minimapCtx.scale(mmDpr, mmDpr);
 
             function resize() {
-                let gameArea = document.getElementById('game-area');
                 viewW = gameArea.clientWidth;
                 viewH = gameArea.clientHeight;
                 let dpr = window.devicePixelRatio || 1;
+                bgCanvas.width = viewW * dpr;
+                bgCanvas.height = viewH * dpr;
+                bgCanvas.style.width = viewW + 'px';
+                bgCanvas.style.height = viewH + 'px';
                 canvas.width = viewW * dpr;
                 canvas.height = viewH * dpr;
                 canvas.style.width = viewW + 'px';
                 canvas.style.height = viewH + 'px';
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                invalidateStaticLayerCache();
             }
             resize();
             window.addEventListener('resize', resize);
