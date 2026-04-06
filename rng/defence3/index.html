@@ -1870,7 +1870,8 @@
 
         function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null) {
             if (sx === ex && sy === ey) return [{ x: ex, y: ey }];
-            let usePortalEdges = (!ignoreWalls && pathOwner !== null);
+            // Cloud portals should be usable for all unit pathing modes whenever owner context is known.
+            let usePortalEdges = (pathOwner !== null);
             let estimateCost = (x, y) => {
                 // Cloud teleport edges can invalidate Manhattan as an admissible heuristic.
                 // Use Dijkstra scoring in portal mode so shortest paths via clouds are chosen reliably.
@@ -4076,7 +4077,8 @@
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     let canWalk = _builderCanWalk(u.owner);
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
+                                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                                    u.path = findPathAStar(startGx, startGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                     return;
@@ -4136,7 +4138,8 @@
                                 if (spawner && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     let canWalk = _builderCanWalk(u.owner);
-                                    u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
+                                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                                    u.path = findPathAStar(startGx, startGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                                     u._builderSpawnerTarget = spawner;
                                 } else {
@@ -4163,7 +4166,8 @@
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
                             let canWalk = _builderCanWalk(u.owner);
-                            u.path = findPathAStar(myGx, myGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner);
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner);
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                         }
                     }
@@ -4218,7 +4222,8 @@
                     if (spawner && players[owner].money >= 1 && u.workerTarget) {
                         u.workerState = 'RETURNING_FOR_GOLD';
                         let canWalk = _builderCanWalk(u.owner);
-                        u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
+                        let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                        u.path = findPathAStar(startGx, startGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._builderSpawnerTarget = spawner;
                     }
@@ -4264,7 +4269,8 @@
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
             u.workerTarget = target; u.workerTargetType = targetType;
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
-            u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
+            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+            u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
             if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
             else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
@@ -4284,7 +4290,8 @@
             if (bestItem) {
                 u.workerTarget = bestItem;
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
-                u.path = findPathAStar(myGx, myGy, bestItem.gx, bestItem.gy, false, canWalk, u.owner);
+                let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                u.path = findPathAStar(startGx, startGy, bestItem.gx, bestItem.gy, false, canWalk, u.owner);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
                 else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
@@ -4311,22 +4318,23 @@
             }
             u.workerTarget = target;
             let canWalk = _builderCanWalk(u.owner);
+            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             if (u.builderHasMaterial) {
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
+                u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 return;
             }
             let spawner = _findClosestBuilderSpawner(u);
             if (spawner && players[u.owner].money >= 1) {
                 u.workerState = 'RETURNING_FOR_GOLD';
-                u.path = findPathAStar(myGx, myGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
+                u.path = findPathAStar(startGx, startGy, spawner.gx, spawner.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = spawner;
             } else {
                 // No spawner or no money — go build directly (slow mode)
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(myGx, myGy, target.gx, target.gy, false, canWalk, u.owner);
+                u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
         }
@@ -7013,11 +7021,23 @@
             return `<span class="info-auto-upgrade-group-btn" data-coords="${coordStr}" data-enabled="${nextAutoEnabled}" style="cursor:pointer;background:${allEnabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#8cf' : '#888'}">Auto Upgrade: ${label}</span>`;
         }
 
+        function formatInfoCurrency(n, d = 0) {
+            return `$${formatBigNumber(n, d)}`;
+        }
+
+        function formatInfoFraction(a, b, d = 0) {
+            return `${formatBigNumber(a, d)}/${formatBigNumber(b, d)}`;
+        }
+
+        function formatInfoRowValue(value) {
+            return (typeof value === 'number' && Number.isFinite(value)) ? formatBigNumber(value) : value;
+        }
+
         function infoRow(label, value, effValue) {
             if (effValue !== undefined && effValue !== value) {
-                return `<div class="info-row"><span class="info-label">${label}</span><span class="info-base">${value}</span><span class="info-eff">${effValue}</span></div>`;
+                return `<div class="info-row"><span class="info-label">${label}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
             }
-            return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value">${value}</span></div>`;
+            return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
         }
 
         function getLevelHtml(obj) {
@@ -7151,7 +7171,7 @@
             let bKey = 'barrack_' + e.unitType;
             let us = UNIT_STATS[e.unitType] || {};
             let upg = getNextLevelUpgradeInfo(e);
-            html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), e.maxHp));
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
@@ -7177,7 +7197,7 @@
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${e.spawnQueue.length}/20</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(e.spawnQueue.length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -7192,7 +7212,7 @@
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
             for (let b of group) { totalHp += b.hp; totalMaxHp += b.maxHp; totalQueue += b.spawnQueue.length; }
             html += infoRow('Count', group.length);
-            html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
@@ -7213,7 +7233,7 @@
                 let addBtn = `<span class="info-buy-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${totalQueue}/${group.length * 20}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, group.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -7227,7 +7247,7 @@
             let upg = getNextLevelUpgradeInfo(e);
             let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
-            html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), e.maxHp));
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
@@ -7244,7 +7264,7 @@
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
@@ -7264,7 +7284,7 @@
             let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
             html += infoRow('Count', group.length);
-            html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', e.stacks, e.effectiveStacks !== e.stacks ? e.effectiveStacks : undefined);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
@@ -7278,7 +7298,7 @@
             if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
-            html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(t => t.markedForSalvage);
                 let allAutoEnabled = group.every(t => isAutoUpgradeEnabled(t));
@@ -7299,13 +7319,13 @@
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = e.effectiveLevel || sLevel;
             let upg = getNextLevelUpgradeInfo(e);
-            html += infoRow('HP', `${Math.floor(e.hp)}/${e.maxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), e.maxHp));
             html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 if (e.underConstruction) {
@@ -7320,7 +7340,7 @@
                     let autoEnabled = isAutoUpgradeEnabled(e);
                     let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                     let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${(e.spawnQueue || []).length}/10</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
                 }
             }
@@ -7338,7 +7358,7 @@
             let baseStats = calculateItemStats(e.type, baseLevel);
             let effStats = calculateItemStats(e.type, effLevel);
             let upg = getNextLevelUpgradeInfo(e);
-            if (baseStats.maxHp > 0) html += infoRow('HP', `${Math.floor(e.hp || baseStats.maxHp)}/${effStats.maxHp}`);
+            if (baseStats.maxHp > 0) html += infoRow('HP', formatInfoFraction(Math.floor(e.hp || baseStats.maxHp), effStats.maxHp));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
             if (effStats.damage > 0) {
@@ -7357,7 +7377,7 @@
                 html += infoRow('Income', `${baseInc}g/s`, baseInc !== effInc ? `${effInc}g/s` : undefined);
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            html += infoRow('Value', `${def.price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber(def.price || '?')}g`);
             let fgx = e.gx !== undefined ? e.gx : e._gx, fgy = e.gy !== undefined ? e.gy : e._gy;
             if (fgx !== undefined && fgy !== undefined) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
@@ -7370,7 +7390,7 @@
 
         function renderGoldMineInfo(e) {
             let html = '';
-            html += infoRow('Gold', `${Math.floor(e.gold)}/${e.maxGold}`);
+            html += infoRow('Gold', formatInfoFraction(Math.floor(e.gold), e.maxGold));
             let pct = e.maxGold > 0 ? Math.round(e.gold / e.maxGold * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
             html += infoDesc('Natural gold deposit. Send collectors to gather.');
@@ -7384,7 +7404,7 @@
             let spd = u.speed;
             if (u.frozen > 0) spd *= 0.5;
             if (u.sandy > 0) spd *= 0.5;
-            html += infoRow('HP', `${Math.floor(u.hp)}/${u.maxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(u.hp), u.maxHp));
             html += infoRow('Attack', u.attackDamage);
             html += infoRow('DPS', dps);
             html += infoRow('Speed', `${spd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`);
@@ -7418,7 +7438,7 @@
             for (let u of group) { totalHp += u.hp; totalMaxHp += u.maxHp; }
             let dps = u0.attackCooldown > 0 ? (u0.attackDamage / u0.attackCooldown * TICK_RATE).toFixed(1) : '0';
             html += infoRow('Count', group.length);
-            html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRow('Attack', u0.attackDamage);
             html += infoRow('DPS', dps);
             html += infoRow('Speed', u0.speed.toFixed(1));
@@ -7463,7 +7483,7 @@
             let totalGold = 0, totalMax = 0;
             for (let m of group) { totalGold += m.gold; totalMax += m.maxGold; }
             html += infoRow('Count', group.length);
-            html += infoRow('Gold', `${Math.floor(totalGold)}/${totalMax}`);
+            html += infoRow('Gold', formatInfoFraction(Math.floor(totalGold), totalMax));
             let pct = totalMax > 0 ? Math.round(totalGold / totalMax * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
             html += infoDesc('Natural gold deposit. Send collectors to gather.');
@@ -7482,11 +7502,11 @@
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
             for (let s of group) { totalHp += s.hp; totalMaxHp += s.maxHp; totalQueue += (s.spawnQueue || []).length; }
             html += infoRow('Count', group.length);
-            html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
+            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${(CARD_TYPES[e.type] || {}).price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(s => s.markedForSalvage);
                 let allAutoEnabled = group.every(s => isAutoUpgradeEnabled(s));
@@ -7498,7 +7518,7 @@
                 let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">$${cost}</span><span style="color:#fff;margin:0 6px;">${totalQueue}/${group.length * 10}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, group.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
@@ -7518,7 +7538,7 @@
             let totalHp = 0, totalMaxHp = 0;
             for (let f of group) { totalHp += (f.hp || 0); totalMaxHp += (effStats.maxHp || 0); }
             html += infoRow('Count', group.length);
-            if (baseStats.maxHp > 0) html += infoRow('HP', `${Math.floor(totalHp)}/${totalMaxHp}`);
+            if (baseStats.maxHp > 0) html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRow('Stacks', baseStacks, effStacks !== baseStacks ? effStacks : undefined);
             if (effStats.damage > 0) {
@@ -7536,7 +7556,7 @@
                 let effInc = Math.max(1, effLevel);
                 html += infoRow('Income', `${baseInc}g/s`, baseInc !== effInc ? `${effInc}g/s` : undefined);
             }
-            html += infoRow('Value', `${def.price || '?'}g`);
+            html += infoRow('Value', `${formatBigNumber(def.price || '?')}g`);
             if (e._gx !== undefined || e.gx !== undefined) {
                 let anyMarked = group.some(f => f.markedForSalvage);
                 let allAutoEnabled = group.every(f => isAutoUpgradeEnabled(f));
