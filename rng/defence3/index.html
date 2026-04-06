@@ -160,6 +160,56 @@
             margin-bottom: 10px;
         }
 
+        .help-tabs {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .help-tab-btn {
+            background: #1f1f1f;
+            border: 1px solid #444;
+            color: #bbb;
+            cursor: pointer;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .help-tab-btn.active {
+            border-color: #4af;
+            color: #d9f1ff;
+            background: #1a2a38;
+        }
+
+        .help-tab-panel {
+            display: none;
+        }
+
+        .help-tab-panel.active {
+            display: block;
+        }
+
+        .help-list {
+            margin: 0;
+            padding-left: 16px;
+            font-size: 12px;
+            color: #ddd;
+            line-height: 1.35;
+        }
+
+        .help-list li {
+            margin-bottom: 6px;
+        }
+
+        .help-subtitle {
+            color: #8dc6ff;
+            font-size: 12px;
+            margin: 8px 0 6px;
+            font-weight: bold;
+        }
+
         .help-keys {
             width: 100%;
             border-collapse: collapse;
@@ -595,56 +645,118 @@
                     style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
             </div>
             <div class="help-mode">Current mode: <strong id="help-game-mode">Destroy Base</strong></div>
-            <table class="help-keys">
-                <thead>
-                    <tr>
-                        <th style="width:38%">Input</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><span class="kbd">Left Click</span> / Drag</td>
-                        <td>Select units and buildings / box select</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Right Click</span></td>
-                        <td>Move / attack / assign workers / set rally</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
-                        <td>Add a point and split selected spawners/units across all set points</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Z</span></td>
-                        <td>Attack-move mode for selected units</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">X</span></td>
-                        <td>Stop selected units</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">C</span></td>
-                        <td>Hold position for selected units</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">1..9</span></td>
-                        <td>Select control group</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Ctrl</span> + <span class="kbd">1..9</span></td>
-                        <td>Assign selected units to control group</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Esc</span></td>
-                        <td>Close this help popup (if open), otherwise clear selection/build mode</td>
-                    </tr>
-                    <tr>
-                        <td><span class="kbd">Long Press</span> (touch)</td>
-                        <td>Simulate right-click for rally/commands when enabled</td>
-                    </tr>
-                </tbody>
-            </table>
+            <div class="help-tabs">
+                <button class="help-tab-btn active" data-tab="keybinds">Keybinds</button>
+                <button class="help-tab-btn" data-tab="gameplay">Gameplay</button>
+                <button class="help-tab-btn" data-tab="effects">Effects</button>
+                <button class="help-tab-btn" data-tab="objectives">Objectives</button>
+            </div>
+
+            <div class="help-tab-panel active" data-tab-panel="keybinds">
+                <table class="help-keys">
+                    <thead>
+                        <tr>
+                            <th style="width:38%">Input</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="kbd">Left Click</span> / Drag</td>
+                            <td>Select units and buildings / box select</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Right Click</span></td>
+                            <td>Move / attack / assign workers / set rally</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
+                            <td>Add a point and split selected spawners/units across all set points</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Z</span></td>
+                            <td>Attack-move mode for selected units</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">X</span></td>
+                            <td>Stop selected units</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">C</span></td>
+                            <td>Hold position for selected units</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">1..9</span></td>
+                            <td>Select control group</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Ctrl</span> + <span class="kbd">1..9</span></td>
+                            <td>Assign selected units to control group</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Esc</span></td>
+                            <td>Close this help popup (if open), otherwise clear selection/build mode</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Long Press</span> (touch)</td>
+                            <td>Simulate right-click for rally/commands when enabled</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="help-tab-panel" data-tab-panel="gameplay">
+                <div class="help-subtitle">Leveling & stacks</div>
+                <ul class="help-list">
+                    <li>Most buildings/items scale with <strong>stacks</strong>. Displayed level is based on stacks (roughly $L=\lfloor\log_2(\text{stacks})\rfloor+1$).</li>
+                    <li>You may see base vs effective values in the right panel; effective values include adjacency/group/area bonuses.</li>
+                    <li>Units also show their own level (for example `L1`, `L2`) and subgroup toggles are level-aware.</li>
+                </ul>
+                <div class="help-subtitle">Areas & adjacency</div>
+                <ul class="help-list">
+                    <li>Connected structures/items form groups; bigger connected groups can increase effective power.</li>
+                    <li>Each tile belongs to an area. Area-level multipliers (M0..M5) increase output for objects inside that area.</li>
+                    <li><strong>Area Up</strong> upgrades are available when an area is fully filled and can be leveled up step by step.</li>
+                </ul>
+                <div class="help-subtitle">Economy basics</div>
+                <ul class="help-list">
+                    <li>Collectors gather from gold mines; farms provide passive income over time.</li>
+                    <li>Barracks/spawners queue units at purchase-time costs and use their current rally target on spawn.</li>
+                </ul>
+            </div>
+
+            <div class="help-tab-panel" data-tab-panel="effects">
+                <div class="help-subtitle">Core status effects</div>
+                <ul class="help-list">
+                    <li><strong>Fire</strong>: burst damage + burn over time.</li>
+                    <li><strong>Poison</strong>: poison damage over time.</li>
+                    <li><strong>Ice</strong>: slow/freeze pressure.</li>
+                    <li><strong>Water</strong>: wet/soak state, often enabling stronger ice follow-up.</li>
+                    <li><strong>Sand</strong>: movement slow/control.</li>
+                    <li><strong>Watch</strong>: marks targets for vision sharing (revealed while watched).</li>
+                </ul>
+                <div class="help-subtitle">Combinations & counters</div>
+                <ul class="help-list">
+                    <li>Water + Ice is a key combo path (wet targets are easier to lock down).</li>
+                    <li>Layering DoTs (Fire/Poison) with control (Ice/Sand) is effective against groups.</li>
+                    <li>Some unit lines are resistant/immune to specific elements or tower damage types.</li>
+                    <li>Some tower families resist their own effect type; mix damage types to break through.</li>
+                </ul>
+            </div>
+
+            <div class="help-tab-panel" data-tab-panel="objectives">
+                <div class="help-subtitle">Win conditions</div>
+                <ul class="help-list">
+                    <li><strong>Destroy Base</strong>: eliminate enemy core/base structures.</li>
+                    <li><strong>Kill King</strong>: defeat the enemy king unit to win.</li>
+                </ul>
+                <div class="help-subtitle">Useful strategic notes</div>
+                <ul class="help-list">
+                    <li>Use rally splitting to spread reinforcements or stage flanks.</li>
+                    <li>Use minimap right-click to set distant rallies/commands instantly.</li>
+                    <li>Auto-upgrade + salvage controls in the right panel help macro-management.</li>
+                </ul>
+            </div>
         </div>
     </div>
 
@@ -711,6 +823,20 @@
             return mode === 'killking' ? 'Kill King' : 'Destroy Base';
         }
 
+        let activeHelpTab = 'keybinds';
+
+        function setHelpTab(tabId) {
+            activeHelpTab = tabId || 'keybinds';
+            let popup = document.getElementById('help-popup');
+            if (!popup) return;
+            popup.querySelectorAll('.help-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === activeHelpTab);
+            });
+            popup.querySelectorAll('.help-tab-panel').forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.tabPanel === activeHelpTab);
+            });
+        }
+
         function setHelpPopupOpen(open) {
             let popup = document.getElementById('help-popup');
             if (!popup) return false;
@@ -718,6 +844,7 @@
             if (open) {
                 let modeEl = document.getElementById('help-game-mode');
                 if (modeEl) modeEl.textContent = getGameModeLabel(gameMode);
+                setHelpTab('keybinds');
             }
             popup.classList.toggle('hidden', !open);
             return wasOpen !== open;
@@ -5813,6 +5940,10 @@
                 });
             }
             if (helpPopup) {
+                helpPopup.addEventListener('click', (e) => {
+                    let tabBtn = e.target.closest('.help-tab-btn');
+                    if (tabBtn && tabBtn.dataset.tab) setHelpTab(tabBtn.dataset.tab);
+                });
                 helpPopup.addEventListener('mousedown', (e) => {
                     if (e.target === helpPopup) setHelpPopupOpen(false);
                 });
