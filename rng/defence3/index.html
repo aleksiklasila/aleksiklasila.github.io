@@ -292,6 +292,26 @@
             flex-wrap: nowrap;
         }
 
+        #subgroup-options {
+            display: flex;
+            gap: 4px;
+            padding: 3px 4px;
+            border-bottom: 1px solid #2a2a2a;
+            background: #101010;
+        }
+
+        #btn-ignore-level {
+            width: 100%;
+            border: 1px solid #555;
+            border-radius: 3px;
+            background: #181818;
+            color: #999;
+            font-size: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 2px 6px;
+        }
+
         .control-group-btn {
             flex: 1;
             height: 16px;
@@ -692,6 +712,10 @@
                 FS</button>
             <button id="btn-level-visibility"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
+            <button id="btn-default-build"
+                style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Build: ON</button>
+            <button id="btn-default-auto-upgrade"
+                style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Upgrade: ON</button>
             <button id="btn-help"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Help</button>
             <span style="display:none; align-items:center;">
@@ -743,7 +767,7 @@
                             <td>Move / attack / assign workers / set rally</td>
                         </tr>
                         <tr>
-                            <td><span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
+                            <td><span class="kbd">Shift</span> + <span class="kbd">Right Click</span></td>
                             <td>Add a point and split selected spawners/units across all set points</td>
                         </tr>
                         <tr>
@@ -763,7 +787,7 @@
                             <td>Select control group</td>
                         </tr>
                         <tr>
-                            <td><span class="kbd">Ctrl</span> + <span class="kbd">1..9</span></td>
+                            <td><span class="kbd">Shift</span> + <span class="kbd">1..9</span></td>
                             <td>Assign selected units to control group</td>
                         </tr>
                         <tr>
@@ -867,6 +891,9 @@
         <!-- RIGHT PANEL (info/unit menu) -->
         <div id="right-panel">
             <div id="control-group-bar"></div>
+            <div id="subgroup-options">
+                <button id="btn-ignore-level">Type-Only Groups: OFF</button>
+            </div>
             <div id="info-panel"></div>
         </div>
     </div>
@@ -974,6 +1001,7 @@
         const TYPE_FLOOR = 0, TYPE_WALL = 1;
         const POP_LIMIT = 200;
         const TICK_RATE = 20; // ticks per second
+        const WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
         const TICK_MS = 1000 / TICK_RATE;
         const INPUT_DELAY = 4; // ticks ahead
         let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
@@ -1258,6 +1286,9 @@
         // Build
         let selectedBuildItem = null; // key from CARD_TYPES
         let activeBuildTab = 'barracks';
+    let defaultAutoBuildEnabled = true;
+    let defaultAutoUpgradeEnabled = true;
+    let ignoreLevelSubgroups = false;
 
         // Input
         let keysDown = {};
@@ -1306,10 +1337,26 @@
             return controlGroupAlertState[num];
         }
 
+        function getControlGroupSnapshot(num) {
+            let grp = controlGroups[num];
+            if (!grp) return null;
+            // Backward compatibility: older saves stored an array of units only.
+            if (Array.isArray(grp)) {
+                grp = { units: grp, entities: [], activeSubGroups: {} };
+                controlGroups[num] = grp;
+            }
+            if (!Array.isArray(grp.units)) grp.units = [];
+            if (!Array.isArray(grp.entities)) grp.entities = [];
+            if (!grp.activeSubGroups || typeof grp.activeSubGroups !== 'object') grp.activeSubGroups = {};
+            return grp;
+        }
+
         function normalizeControlGroup(num) {
-            if (!controlGroups[num]) return;
-            controlGroups[num] = controlGroups[num].filter(u => u && !u.dead);
-            if (controlGroups[num].length === 0) delete controlGroups[num];
+            let grp = getControlGroupSnapshot(num);
+            if (!grp) return;
+            grp.units = grp.units.filter(u => u && !u.dead);
+            grp.entities = grp.entities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+            if (grp.units.length === 0 && grp.entities.length === 0) delete controlGroups[num];
         }
 
         function getUnitWorldPos(u) {
@@ -1324,9 +1371,10 @@
             if (!unit) return;
             for (let n = 1; n <= 9; n++) {
                 let key = String(n);
-                let grp = controlGroups[key];
-                if (!grp || grp.length === 0) continue;
-                if (!grp.includes(unit)) continue;
+                let grp = getControlGroupSnapshot(key);
+                if (!grp) continue;
+                if (grp.units.length === 0 && grp.entities.length === 0) continue;
+                if (!grp.units.includes(unit) && !grp.entities.includes(unit)) continue;
                 let st = ensureControlGroupAlertState(key);
                 st.damageUntil = Math.max(st.damageUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
                 if (isKing) st.kingUntil = Math.max(st.kingUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
@@ -1421,11 +1469,21 @@
         }
 
         function isControlGroupSelected(num) {
-            let grp = controlGroups[num];
-            if (!grp || grp.length === 0) return false;
-            let alive = grp.filter(u => u && !u.dead);
-            if (alive.length === 0 || selectedUnits.length !== alive.length) return false;
-            return alive.every(u => selectedUnits.includes(u));
+            let grp = getControlGroupSnapshot(num);
+            if (!grp) return false;
+            let aliveUnits = grp.units.filter(u => u && !u.dead);
+            let aliveEntities = grp.entities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+            if (aliveUnits.length === 0 && aliveEntities.length === 0) return false;
+            if (selectedUnits.length !== aliveUnits.length || selectedEntities.length !== aliveEntities.length) return false;
+            if (!aliveUnits.every(u => selectedUnits.includes(u))) return false;
+            if (!aliveEntities.every(e => selectedEntities.includes(e))) return false;
+
+            // Also require subgroup toggle state to match the saved snapshot for this control group.
+            let saved = grp.activeSubGroups || {};
+            for (let k in saved) {
+                if ((activeSubGroups[k] !== false) !== (saved[k] !== false)) return false;
+            }
+            return true;
         }
 
         function updateControlGroupBar() {
@@ -1449,9 +1507,10 @@
                 normalizeControlGroup(key);
                 let btn = bar.querySelector(`.control-group-btn[data-group="${key}"]`);
                 if (!btn) continue;
-                let grp = controlGroups[key] || [];
+                let grp = getControlGroupSnapshot(key);
                 let st = ensureControlGroupAlertState(key);
-                let hasAssigned = grp.length > 0;
+                let count = grp ? (grp.units.length + grp.entities.length) : 0;
+                let hasAssigned = count > 0;
                 let hasKingDamage = st.kingUntil > gameTime;
                 let hasDamage = st.damageUntil > gameTime;
 
@@ -1460,18 +1519,33 @@
                 btn.classList.toggle('active', isControlGroupSelected(key));
                 btn.classList.toggle('damaged', hasDamage);
                 btn.classList.toggle('king-damaged', hasKingDamage);
-                btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${grp.length} unit(s)` : `Group ${key}: empty`;
+                btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${count} item(s)` : `Group ${key}: empty`;
             }
         }
 
         function handleControlGroupKey(num, assignMode) {
             if (!num || num < '1' || num > '9') return;
             if (assignMode) {
-                controlGroups[num] = selectedUnits.filter(u => u && !u.dead);
+                let unitsSnap = selectedUnits.filter(u => u && !u.dead);
+                let entitiesSnap = selectedEntities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+                let subSnap = {};
+                for (let u of unitsSnap) {
+                    let key = getUnitGroupKey(u);
+                    subSnap[key] = activeSubGroups[key] !== false;
+                }
+                for (let e of entitiesSnap) {
+                    let key = getEntityGroupKey(e);
+                    subSnap[key] = activeSubGroups[key] !== false;
+                }
+                controlGroups[num] = { units: unitsSnap, entities: entitiesSnap, activeSubGroups: subSnap };
                 ensureControlGroupAlertState(num);
             } else if (controlGroups[num]) {
-                selectedUnits = controlGroups[num].filter(u => u && !u.dead);
-                controlGroups[num] = selectedUnits;
+                let grp = getControlGroupSnapshot(num);
+                if (!grp) return;
+                selectedUnits = grp.units.filter(u => u && !u.dead);
+                selectedEntities = grp.entities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+                activeSubGroups = { ...(grp.activeSubGroups || {}) };
+                controlGroups[num] = { units: selectedUnits, entities: selectedEntities, activeSubGroups: { ...activeSubGroups } };
                 updateInfoPanel();
             }
             updateControlGroupBar();
@@ -2220,6 +2294,32 @@
             return item && item.buildEnabled !== false;
         }
 
+        function updateDefaultToggleButtons() {
+            let btnBuild = document.getElementById('btn-default-build');
+            if (btnBuild) {
+                btnBuild.textContent = `Auto Build New Objects: ${defaultAutoBuildEnabled ? 'ON' : 'OFF'}`;
+                btnBuild.style.borderColor = defaultAutoBuildEnabled ? '#6f6' : '#555';
+                btnBuild.style.color = defaultAutoBuildEnabled ? '#9f9' : '#888';
+                btnBuild.style.background = defaultAutoBuildEnabled ? 'rgba(40,90,40,0.25)' : 'transparent';
+            }
+            let btnAuto = document.getElementById('btn-default-auto-upgrade');
+            if (btnAuto) {
+                btnAuto.textContent = `Auto Upgrade New Objects: ${defaultAutoUpgradeEnabled ? 'ON' : 'OFF'}`;
+                btnAuto.style.borderColor = defaultAutoUpgradeEnabled ? '#4af' : '#555';
+                btnAuto.style.color = defaultAutoUpgradeEnabled ? '#8cf' : '#888';
+                btnAuto.style.background = defaultAutoUpgradeEnabled ? 'rgba(40,70,110,0.25)' : 'transparent';
+            }
+        }
+
+        function updateIgnoreLevelButton() {
+            let btn = document.getElementById('btn-ignore-level');
+            if (!btn) return;
+            btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
+            btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
+            btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
+            btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+        }
+
         function getNextLevelUpgradeInfo(item) {
             let stacks = Math.max(1, item.stacks || 1);
             let level = Math.max(0, Math.floor(Math.log2(stacks)) + 1);
@@ -2888,6 +2988,7 @@
                 this.frozen = 0; this.iceTickDamage = 0;
                 this.wet = 0; this.sandy = 0; this.watched = 0;
                 this.vx = 0; this.vy = 0;
+                this.workerTransferCooldown = 0;
 
                 // Snake
                 if (this.isSnake) { this.snakeHistory = []; this.snakeRecordTimer = 0; }
@@ -3417,7 +3518,7 @@
             draw(ctx) {
                 if (this.dead || this.teleportHideTicks > 0) return;
                 // Owner indicator ring
-                let selected = selectedUnits.includes(this);
+                let selected = selectedUnits.includes(this) && activeSubGroups[getUnitGroupKey(this)] !== false;
                 if (selected) {
                     ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2;
                     ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 4, 0, 6.28); ctx.stroke();
@@ -4065,8 +4166,16 @@
         // Worker AI logic - runs inside Unit.update() for collector/salvager/builder types
         function updateWorkerAI(u) {
             if (!u.workerState) return;
+            if (u.commandState === CMD_HOLDING) {
+                u.path = null;
+                u.targetUnit = null;
+                u.targetBuilding = null;
+                u._pendingPathTarget = null;
+                return;
+            }
             let owner = u.owner;
             let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
+            if (u.workerTransferCooldown > 0) u.workerTransferCooldown--;
 
             if (u.workerState === 'MANUAL_MOVE') {
                 if (!u.path || u.pathIndex >= u.path.length) {
@@ -4089,6 +4198,7 @@
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
+                            if (u.workerTransferCooldown > 0) return;
                             if (u.workerTargetType === 'drop') {
                                 u.carryingValue = u.workerTarget.value;
                                 let idx = droppedItems.indexOf(u.workerTarget);
@@ -4108,6 +4218,7 @@
                                     if (idx >= 0) goldMines.splice(idx, 1);
                                 }
                             }
+                            u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
@@ -4118,8 +4229,10 @@
                 } else if (u.workerState === 'RETURNING') {
                     if (!u.path || u.pathIndex >= u.path.length) {
                         if (u.carryingValue > 0) {
+                            if (u.workerTransferCooldown > 0) return;
                             let closest = _findClosestSpawner(u, 'spawner');
                             players[owner].money += u.carryingValue;
+                            u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
@@ -4189,6 +4302,7 @@
                                     return;
                                 }
                             }
+                            if (u.workerTransferCooldown > 0) return;
                             // Add HP to building
                             let dps = u.builderDps || 5;
                             let t = u.workerTarget;
@@ -4232,7 +4346,10 @@
                                 }
                             }
 
-                            if (didWork) u.builderHasMaterial = false;
+                            if (didWork) {
+                                u.builderHasMaterial = false;
+                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            }
 
                             if (u.workerTarget) {
                                 // Not done yet — loop back to spawner for more gold, then come back
@@ -4259,9 +4376,11 @@
                         let spawner = u._builderSpawnerTarget || _findClosestBuilderSpawner(u);
                         let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
                         if (!spawner || dist <= 24) {
+                            if (u.workerTransferCooldown > 0) return;
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
                                 u.builderHasMaterial = true;
+                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             }
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
@@ -4755,9 +4874,16 @@
             return Math.floor(100 * Math.pow(3, currentLevel));
         }
 
-        function placeBuilding(gx, gy, itemKey, playerId) {
+        function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             let cardDef = CARD_TYPES[itemKey];
             if (!cardDef) return false;
+
+            let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
+            let useDefaultBuild = defaultAutoBuildEnabled;
+            if (defaults && typeof defaults === 'object') {
+                if (defaults.autoUpgradeEnabled !== undefined) useDefaultAutoUpgrade = !!defaults.autoUpgradeEnabled;
+                if (defaults.buildEnabled !== undefined) useDefaultBuild = !!defaults.buildEnabled;
+            }
 
             if (itemKey.startsWith('cloud_')) {
                 let hasSameCloud = towers.some(t => t.owner === playerId && t.type === itemKey && t.hp > 0);
@@ -4811,6 +4937,8 @@
                     grid[gy][gx].owner = playerId;
                     let t = new Tower(gx, gy, itemKey, playerId);
                     t.underConstruction = true; t.hp = 1;
+                    t.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    t.buildEnabled = useDefaultBuild;
                     t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
                     t.updateTextCache();
                     towers.push(t);
@@ -4833,7 +4961,8 @@
                 else {
                     let b = new Barrack(gx, gy, playerId, unitType);
                     b.underConstruction = true; b.hp = 1;
-                    b.buildEnabled = true;
+                    b.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    b.buildEnabled = useDefaultBuild;
                     b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
                     updateItemTextCache(b);
                     barracks.push(b);
@@ -4855,7 +4984,8 @@
                 else {
                     let s = new CollectorSpawner(gx, gy, playerId);
                     s.underConstruction = true; s.hp = 1;
-                    s.buildEnabled = true;
+                    s.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    s.buildEnabled = useDefaultBuild;
                     s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
                     updateItemTextCache(s);
                     collectorSpawners.push(s);
@@ -4877,7 +5007,8 @@
                 else {
                     let s = new SalvagerSpawner(gx, gy, playerId);
                     s.underConstruction = true; s.hp = 1;
-                    s.buildEnabled = true;
+                    s.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    s.buildEnabled = useDefaultBuild;
                     s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
                     updateItemTextCache(s);
                     collectorSpawners.push(s);
@@ -4900,7 +5031,8 @@
                     let s = new BuilderSpawner(gx, gy, playerId);
                     // builder spawner starts under construction too
                     s.underConstruction = true; s.hp = 1;
-                    s.buildEnabled = true;
+                    s.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    s.buildEnabled = useDefaultBuild;
                     s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
                     updateItemTextCache(s);
                     collectorSpawners.push(s);
@@ -4923,7 +5055,7 @@
                     updateItemTextCache(cell.item);
                 } else {
                     let stats = calculateItemStats(itemKey, 1);
-                    let item = { type: itemKey, stacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: true, buildEnabled: true };
+                    let item = { type: itemKey, stacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
                     cell.item = item;
                     cell.owner = playerId;
                     updateItemTextCache(item);
@@ -5593,8 +5725,11 @@
                 ctx.fillRect(sx, sy, w, h); ctx.strokeRect(sx, sy, w, h);
             }
 
+            let activeSelectedEntities = getActiveEntities();
+            let activeSelectedUnits = getActiveUnits();
+
             // Selected entities highlight
-            for (let ent of selectedEntities) {
+            for (let ent of activeSelectedEntities) {
                 if (ent.hp !== undefined && ent.hp <= 0) continue;
                 let ex = ent.x || (ent.gx * TILE + 16);
                 let ey = ent.y || (ent.gy * TILE + 16);
@@ -5618,7 +5753,7 @@
             let showRangeEl = document.getElementById('setting-range-outlines');
             if (showRangeEl && showRangeEl.checked) {
                 ctx.lineWidth = 1;
-                for (let ent of selectedEntities) {
+                for (let ent of activeSelectedEntities) {
                     if (ent.hp !== undefined && ent.hp <= 0) continue;
                     let rr = 0;
                     if (ent.currentStats && ent.currentStats.visionRange !== undefined) {
@@ -5641,7 +5776,7 @@
             let moveMarkers = new Map();
             let attackMoveMarkers = new Map();
 
-            for (let u of selectedUnits) {
+            for (let u of activeSelectedUnits) {
                 if (u.dead) continue;
                 let ux = u.prevX + (u.x - u.prevX) * alpha, uy = u.prevY + (u.y - u.prevY) * alpha;
                 if (u.path && u.path.length > 0 && u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
@@ -6104,7 +6239,7 @@
             let multiUnitCommandPoints = [];
 
             function isCtrlMultiCommand(evt) {
-                return !!(evt && (evt.ctrlKey || keysDown['control']));
+                return !!(evt && (evt.shiftKey || keysDown['shift']));
             }
 
             function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally) {
@@ -6183,7 +6318,7 @@
                                 (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
                         }
                         if (!_canPlace) { playSound('cant_place'); return; }
-                        queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem });
+                        queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled });
                         updateBuildMenu();
                         return;
                     }
@@ -6558,9 +6693,18 @@
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'c' || e.key === 'C') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
                 // Control groups
-                if (e.key >= '1' && e.key <= '9') {
-                    let num = e.key;
-                    handleControlGroupKey(num, !!e.ctrlKey);
+                let num = null;
+                if (e.code && e.code.startsWith('Digit')) {
+                    let d = e.code.slice(5);
+                    if (d >= '1' && d <= '9') num = d;
+                } else if (e.code && e.code.startsWith('Numpad')) {
+                    let d = e.code.slice(6);
+                    if (d >= '1' && d <= '9') num = d;
+                } else if (e.key >= '1' && e.key <= '9') {
+                    num = e.key;
+                }
+                if (num) {
+                    handleControlGroupKey(num, !!e.shiftKey);
                 }
             });
             document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
@@ -6623,6 +6767,34 @@
                     cycleLevelVisibilityMode();
                 });
             }
+
+            const btnDefaultBuild = document.getElementById('btn-default-build');
+            if (btnDefaultBuild) {
+                btnDefaultBuild.addEventListener('click', () => {
+                    defaultAutoBuildEnabled = !defaultAutoBuildEnabled;
+                    updateDefaultToggleButtons();
+                });
+            }
+
+            const btnDefaultAutoUpgrade = document.getElementById('btn-default-auto-upgrade');
+            if (btnDefaultAutoUpgrade) {
+                btnDefaultAutoUpgrade.addEventListener('click', () => {
+                    defaultAutoUpgradeEnabled = !defaultAutoUpgradeEnabled;
+                    updateDefaultToggleButtons();
+                });
+            }
+
+            const btnIgnoreLevel = document.getElementById('btn-ignore-level');
+            if (btnIgnoreLevel) {
+                btnIgnoreLevel.addEventListener('click', () => {
+                    ignoreLevelSubgroups = !ignoreLevelSubgroups;
+                    updateIgnoreLevelButton();
+                    activeSubGroups = {};
+                    updateInfoPanel();
+                });
+            }
+            updateDefaultToggleButtons();
+            updateIgnoreLevelButton();
 
             const btnHelp = document.getElementById('btn-help');
             const btnHelpClose = document.getElementById('btn-help-close');
@@ -6825,7 +6997,7 @@
         function processActions(actions, playerId) {
             for (let a of actions) {
                 if (a.action === 'place') {
-                    placeBuilding(a.gx, a.gy, a.itemType, playerId);
+                    placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
                 } else if (a.action === 'move') {
                     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
                     for (let u of units) {
@@ -7301,9 +7473,16 @@
         }
 
         // Returns units filtered by active sub-group toggles
+        function getUnitGroupKey(u) {
+            if (!u) return 'unit_unknown';
+            return ignoreLevelSubgroups
+                ? ('unit_' + u.unitType)
+                : ('unit_' + u.unitType + '_L' + (u.unitLevel || 1));
+        }
+
         function getActiveUnits() {
             if (selectedUnits.length === 0) return [];
-            return selectedUnits.filter(u => !u.dead && activeSubGroups['unit_' + u.unitType + '_L' + (u.unitLevel || 1)] !== false);
+            return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
         }
 
         // Returns selected entities filtered by active sub-group toggles
@@ -7317,12 +7496,20 @@
 
         function getEntityGroupKey(e) {
             if (e._isGoldMine) return 'goldmine';
+            if (ignoreLevelSubgroups) {
+                if (e.type === 'barrack') return 'barrack_' + e.unitType;
+                if (e instanceof Tower) return 'tower_' + e.type;
+                if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type;
+                if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type;
+                return 'unknown_type';
+            }
             let state = e.underConstruction ? 'build' : (e.isUpgrading ? 'upg' : 'ready');
             let lvl = getDisplayLevel(e);
-            if (e.type === 'barrack') return 'barrack_' + e.unitType + '_L' + lvl + '_' + state;
-            if (e instanceof Tower) return 'tower_' + e.type + '_L' + lvl + '_' + state;
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type + '_L' + lvl + '_' + state;
-            if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + '_L' + lvl + '_' + state;
+            let lvlPart = '_L' + lvl;
+            if (e.type === 'barrack') return 'barrack_' + e.unitType + lvlPart + '_' + state;
+            if (e instanceof Tower) return 'tower_' + e.type + lvlPart + '_' + state;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type + lvlPart + '_' + state;
+            if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + lvlPart + '_' + state;
             return 'unknown_' + Math.random();
         }
 
@@ -7359,6 +7546,7 @@
         }
 
         function getGroupLevel(key, grp) {
+            if (ignoreLevelSubgroups) return null;
             let e = grp.items[0];
             if (grp.isUnit) return e.unitLevel || 1;
             if (e._isGoldMine) return null;
@@ -7414,8 +7602,10 @@
             let e = group[0];
             let bKey = 'barrack_' + e.unitType;
             let us = UNIT_STATS[e.unitType] || {};
+            let readyGroup = group.filter(b => !b.underConstruction);
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
-            for (let b of group) { totalHp += b.hp; totalMaxHp += b.maxHp; totalQueue += b.spawnQueue.length; }
+            for (let b of group) { totalHp += b.hp; totalMaxHp += b.maxHp; }
+            for (let b of readyGroup) totalQueue += b.spawnQueue.length;
             html += infoRow('Count', group.length);
             html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
@@ -7434,15 +7624,19 @@
                 let hasUnderConstruction = group.some(b => b.underConstruction);
                 let allBuildEnabled = group.every(b => isBuildEnabled(b));
                 let anyBuildEnabled = group.some(b => isBuildEnabled(b));
+                let queueCoordStr = readyGroup.map(b => `${b.gx},${b.gy}`).join(';');
+                let queueCostSource = readyGroup[0] || e;
+                let cost = queueCostSource.getUnitCost();
+                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= cost;
+                let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                let addBtn = `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                let addBtn = `<span class="info-buy-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, group.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                if (readyGroup.length > 0) {
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                }
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -7716,8 +7910,10 @@
             let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = e.effectiveLevel || sLevel;
+            let readyGroup = group.filter(s => !s.underConstruction);
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
-            for (let s of group) { totalHp += s.hp; totalMaxHp += s.maxHp; totalQueue += (s.spawnQueue || []).length; }
+            for (let s of group) { totalHp += s.hp; totalMaxHp += s.maxHp; }
+            for (let s of readyGroup) totalQueue += (s.spawnQueue || []).length;
             html += infoRow('Count', group.length);
             html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
@@ -7731,15 +7927,19 @@
                 let hasUnderConstruction = group.some(s => s.underConstruction);
                 let allBuildEnabled = group.every(s => isBuildEnabled(s));
                 let anyBuildEnabled = group.some(s => isBuildEnabled(s));
+                let queueCoordStr = readyGroup.map(s => `${s.gx},${s.gy}`).join(';');
+                let queueCostSource = readyGroup[0] || e;
+                let cost = queueCostSource.getUnitCost();
+                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= cost;
+                let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
+                let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
-                let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
-                let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${coordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${coordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, group.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                if (readyGroup.length > 0) {
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                }
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
@@ -7796,6 +7996,7 @@
 
         function updateInfoPanel() {
             let panel = document.getElementById('info-panel');
+            updateIgnoreLevelButton();
 
             updateControlGroupBar();
 
@@ -7818,7 +8019,7 @@
             // Group units by type
             let unitGroups = {};
             for (let u of selectedUnits) {
-                let key = 'unit_' + u.unitType + '_L' + (u.unitLevel || 1);
+                let key = getUnitGroupKey(u);
                 if (!unitGroups[key]) unitGroups[key] = { label: u.unitType.toUpperCase(), items: [], isUnit: true };
                 unitGroups[key].items.push(u);
             }
@@ -7931,7 +8132,7 @@
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
-                        let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0);
+                        let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0 && !b.underConstruction);
                         if (b && b.spawnQueue.length < 20 && b.spawnQueue.length < bestQueue) { best = b; bestQueue = b.spawnQueue.length; }
                     }
                     if (best) queueAction({ action: 'queueUnit', gx: best.gx, gy: best.gy });
@@ -7951,7 +8152,7 @@
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
-                        let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0);
+                        let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0 && !s.underConstruction);
                         if (s && (s.spawnQueue || []).length < 10 && (s.spawnQueue || []).length < bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
                     }
                     if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy });
@@ -7975,10 +8176,10 @@
                     let isWorker = btn.dataset.type === 'worker';
                     for (let c of coords) {
                         if (isWorker) {
-                            let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0);
+                            let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0 && !s.underConstruction);
                             if (s && (s.spawnQueue || []).length > bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
                         } else {
-                            let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0);
+                            let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0 && !b.underConstruction);
                             if (b && b.spawnQueue.length > bestQueue) { best = b; bestQueue = b.spawnQueue.length; }
                         }
                     }
