@@ -281,6 +281,79 @@
             z-index: 10;
         }
 
+        #control-group-bar {
+            display: flex;
+            gap: 2px;
+            padding: 4px 4px 3px;
+            border-bottom: 1px solid #2e2e2e;
+            background: #111;
+            min-height: 24px;
+            align-items: center;
+            flex-wrap: nowrap;
+        }
+
+        .control-group-btn {
+            flex: 1;
+            height: 16px;
+            min-width: 0;
+            border: 1px solid #333;
+            border-radius: 2px;
+            background: #181818;
+            color: #999;
+            font-size: 9px;
+            line-height: 1;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 0;
+        }
+
+        .control-group-btn:hover {
+            filter: brightness(1.2);
+        }
+
+        .control-group-btn.empty {
+            border-color: #262626;
+            background: #101010;
+            color: #555;
+        }
+
+        .control-group-btn.assigned {
+            border-color: #555;
+            color: #ddd;
+            background: #202020;
+        }
+
+        .control-group-btn.active {
+            border-color: #4af;
+            background: #1a2d3a;
+            color: #d7efff;
+        }
+
+        .control-group-btn.damaged {
+            border-color: #f55;
+            background: #3b1717;
+            color: #ffd0d0;
+        }
+
+        .control-group-btn.king-damaged {
+            border-color: #ff3a3a;
+            background: #5a1111;
+            color: #fff;
+            animation: cg-damage-blink 0.55s steps(1) infinite;
+        }
+
+        @keyframes cg-damage-blink {
+            0%,
+            49% {
+                filter: brightness(1.35);
+            }
+
+            50%,
+            100% {
+                filter: brightness(0.8);
+            }
+        }
+
         /* INFO PANEL (inside right panel) */
         #info-panel {
             padding: 8px;
@@ -793,6 +866,7 @@
 
         <!-- RIGHT PANEL (info/unit menu) -->
         <div id="right-panel">
+            <div id="control-group-bar"></div>
             <div id="info-panel"></div>
         </div>
     </div>
@@ -1149,6 +1223,8 @@
         let selectedEntities = []; // towers, barracks, floor items, gold mines, collectors
         let activeSubGroups = {}; // key: groupKey, value: true/false for sub-group filtering
         let controlGroups = {};
+    let controlGroupAlertState = {}; // key: 1..9 => {damageUntil, kingUntil}
+    let mapAlerts = []; // {x,y,start,dur,kind}
         let selectionBox = null; // {sx, sy, ex, ey} in world coords
         let isBoxSelecting = false;
         let mouseWorldX = 0, mouseWorldY = 0;
@@ -1191,6 +1267,199 @@
         let _laserAudioNodes = null; // {osc, gain} for sustained laser buzz
         let _laserAudioActive = false;
         let _kingHurtTimer = 0;
+        let _damageAlertTimer = 0;
+        let _kingDamageAlertTimer = 0;
+        let _bgMusicNodes = null;
+
+        const AUDIO_PITCH_SCALE = 0.78;
+        const CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
+        const MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
+        const MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
+
+        function ensureControlGroupAlertState(num) {
+            if (!controlGroupAlertState[num]) controlGroupAlertState[num] = { damageUntil: 0, kingUntil: 0 };
+            return controlGroupAlertState[num];
+        }
+
+        function normalizeControlGroup(num) {
+            if (!controlGroups[num]) return;
+            controlGroups[num] = controlGroups[num].filter(u => u && !u.dead);
+            if (controlGroups[num].length === 0) delete controlGroups[num];
+        }
+
+        function getUnitWorldPos(u) {
+            if (!u) return { x: 0, y: 0 };
+            if (u.x !== undefined && u.y !== undefined) return { x: u.x, y: u.y };
+            let gx = u.gx !== undefined ? u.gx : (u._gx !== undefined ? u._gx : 0);
+            let gy = u.gy !== undefined ? u.gy : (u._gy !== undefined ? u._gy : 0);
+            return { x: gx * TILE + TILE / 2, y: gy * TILE + TILE / 2 };
+        }
+
+        function markControlGroupsDamaged(unit, isKing) {
+            if (!unit) return;
+            for (let n = 1; n <= 9; n++) {
+                let key = String(n);
+                let grp = controlGroups[key];
+                if (!grp || grp.length === 0) continue;
+                if (!grp.includes(unit)) continue;
+                let st = ensureControlGroupAlertState(key);
+                st.damageUntil = Math.max(st.damageUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
+                if (isKing) st.kingUntil = Math.max(st.kingUntil, gameTime + CONTROL_GROUP_ALERT_TICKS);
+            }
+        }
+
+        function pushDamageAlert(target, dmg) {
+            if (!target || !Number.isFinite(dmg) || dmg <= 0.35) return;
+            let isKing = !!target.isKing;
+            let pos = getUnitWorldPos(target);
+            mapAlerts.push({ x: pos.x, y: pos.y, start: gameTime, dur: isKing ? MAP_KING_ALERT_DURATION : MAP_ALERT_DURATION, kind: isKing ? 'king' : 'damage' });
+            if (mapAlerts.length > 40) mapAlerts.splice(0, mapAlerts.length - 40);
+
+            markControlGroupsDamaged(target, isKing);
+
+            if (isKing) {
+                if (!_kingDamageAlertTimer || gameTime > _kingDamageAlertTimer + Math.floor(TICK_RATE * 0.9)) {
+                    _kingDamageAlertTimer = gameTime;
+                    playSound('alert_king_damage', pos.x, pos.y);
+                }
+            } else {
+                if (!_damageAlertTimer || gameTime > _damageAlertTimer + Math.floor(TICK_RATE * 0.6)) {
+                    _damageAlertTimer = gameTime;
+                    playSound('alert_damage', pos.x, pos.y);
+                }
+            }
+        }
+
+        function scanLocalOwnedDamageAlerts() {
+            let watch = [];
+            for (let u of units) if (!u.dead && u.owner === localPlayerId && u.hp > 0) watch.push(u);
+            for (let t of towers) if (t.owner === localPlayerId && t.hp > 0) watch.push(t);
+            for (let b of barracks) if (b.owner === localPlayerId && b.hp > 0) watch.push(b);
+            for (let s of collectorSpawners) if (s.owner === localPlayerId && s.hp > 0) watch.push(s);
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let item = grid[y][x].item;
+                    if (!item || grid[y][x].owner !== localPlayerId || item.hp <= 0) continue;
+                    if (item._gx === undefined) item._gx = x;
+                    if (item._gy === undefined) item._gy = y;
+                    watch.push(item);
+                }
+            }
+
+            for (let obj of watch) {
+                if (typeof obj.hp !== 'number') continue;
+                let prevHp = obj._alertPrevHp;
+                if (prevHp === undefined) {
+                    obj._alertPrevHp = obj.hp;
+                    continue;
+                }
+                if (obj.hp < prevHp - 0.35) pushDamageAlert(obj, prevHp - obj.hp);
+                obj._alertPrevHp = obj.hp;
+            }
+        }
+
+        function drawMinimapAlerts(ctx, scale) {
+            if (!mapAlerts.length) return;
+            let now = gameTime + tickAlpha;
+            for (let i = mapAlerts.length - 1; i >= 0; i--) {
+                let a = mapAlerts[i];
+                let age = now - a.start;
+                if (age >= a.dur) {
+                    mapAlerts.splice(i, 1);
+                    continue;
+                }
+                let p = Math.max(0, Math.min(1, age / a.dur));
+                let worldRadius = 6 + p * (a.kind === 'king' ? 54 : 40);
+                let radius = (worldRadius / TILE) * scale;
+                let alpha = Math.pow(1 - p, 1.4);
+                let rgb = a.kind === 'king' ? '255,58,58' : '255,140,80';
+                let mx = (a.x / TILE) * scale;
+                let my = (a.y / TILE) * scale;
+
+                ctx.strokeStyle = `rgba(${rgb},${0.9 * alpha})`;
+                ctx.lineWidth = a.kind === 'king' ? 1.4 : 1.1;
+                ctx.beginPath();
+                ctx.arc(mx, my, radius, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.strokeStyle = `rgba(${rgb},${0.45 * alpha})`;
+                ctx.lineWidth = 0.9;
+                ctx.beginPath();
+                ctx.arc(mx, my, Math.max(0.8, radius * 0.52), 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.fillStyle = `rgba(${rgb},${0.35 * alpha})`;
+                ctx.beginPath();
+                ctx.arc(mx, my, a.kind === 'king' ? 1.6 : 1.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function isControlGroupSelected(num) {
+            let grp = controlGroups[num];
+            if (!grp || grp.length === 0) return false;
+            let alive = grp.filter(u => u && !u.dead);
+            if (alive.length === 0 || selectedUnits.length !== alive.length) return false;
+            return alive.every(u => selectedUnits.includes(u));
+        }
+
+        function updateControlGroupBar() {
+            let bar = document.getElementById('control-group-bar');
+            if (!bar) return;
+            if (!bar.dataset.built) {
+                let html = '';
+                for (let n = 1; n <= 9; n++) html += `<button class="control-group-btn" data-group="${n}" title="Select control group ${n}">${n}</button>`;
+                bar.innerHTML = html;
+                bar.dataset.built = '1';
+                bar.querySelectorAll('.control-group-btn').forEach(btn => {
+                    bindInstantPress(btn, () => {
+                        if (!gameStarted || gameOver) return;
+                        handleControlGroupKey(btn.dataset.group, false);
+                    });
+                });
+            }
+
+            for (let n = 1; n <= 9; n++) {
+                let key = String(n);
+                normalizeControlGroup(key);
+                let btn = bar.querySelector(`.control-group-btn[data-group="${key}"]`);
+                if (!btn) continue;
+                let grp = controlGroups[key] || [];
+                let st = ensureControlGroupAlertState(key);
+                let hasAssigned = grp.length > 0;
+                let hasKingDamage = st.kingUntil > gameTime;
+                let hasDamage = st.damageUntil > gameTime;
+
+                btn.classList.toggle('empty', !hasAssigned);
+                btn.classList.toggle('assigned', hasAssigned);
+                btn.classList.toggle('active', isControlGroupSelected(key));
+                btn.classList.toggle('damaged', hasDamage);
+                btn.classList.toggle('king-damaged', hasKingDamage);
+                btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${grp.length} unit(s)` : `Group ${key}: empty`;
+            }
+        }
+
+        function handleControlGroupKey(num, assignMode) {
+            if (!num || num < '1' || num > '9') return;
+            if (assignMode) {
+                controlGroups[num] = selectedUnits.filter(u => u && !u.dead);
+                ensureControlGroupAlertState(num);
+            } else if (controlGroups[num]) {
+                selectedUnits = controlGroups[num].filter(u => u && !u.dead);
+                controlGroups[num] = selectedUnits;
+                updateInfoPanel();
+            }
+            updateControlGroupBar();
+        }
+
+        function _scaleFreqValue(v) {
+            return Math.max(20, v * AUDIO_PITCH_SCALE);
+        }
+
+        function _scaleFreqInput(freq) {
+            if (Array.isArray(freq)) return freq.map(f => _scaleFreqValue(f));
+            return _scaleFreqValue(freq);
+        }
 
         function initAudio() {
             if (audioCtx) return;
@@ -1222,6 +1491,7 @@
         // Play a simple tone: type=waveform, freq (hz or array for sequence), dur (s), vol
         function _playTone(freq, dur, vol, wave, detune) {
             if (!audioCtx) return;
+            freq = _scaleFreqInput(freq);
             let g = _createGainNode(vol);
             let o = audioCtx.createOscillator();
             o.type = wave || 'triangle';
@@ -1350,6 +1620,14 @@
                     _playTone([220, 180, 150], 0.25, 0.7, 'square');
                     _playNoise(0.15, 0.4, 0, 500);
                     break;
+                case 'alert_king_damage':
+                    _playTone([180, 145, 120], 0.33, 0.8, 'square');
+                    _playNoise(0.08, 0.26, 0, 680);
+                    break;
+                case 'alert_damage':
+                    _playTone([150, 120], 0.18, vol * 0.45, 'triangle');
+                    _playNoise(0.04, vol * 0.18, 0, 1100);
+                    break;
 
                 // --- Game over ---
                 case 'victory':
@@ -1385,6 +1663,73 @@
             gain.gain.linearRampToValueAtTime(0, t + 0.15);
             setTimeout(() => { try { osc.stop(); } catch (e) { } }, 200);
             _laserAudioNodes = null;
+        }
+
+        function startBackgroundMusic() {
+            if (!audioCtx || !audioEnabled || _bgMusicNodes) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
+            let chordProgression = [
+                [73.42, 98.0, 123.47],
+                [69.3, 92.5, 110.0],
+                [65.41, 82.41, 110.0],
+                [61.74, 82.41, 98.0]
+            ];
+
+            let mix = audioCtx.createGain();
+            mix.gain.value = 0.0001;
+            mix.connect(masterGain);
+
+            let oscillators = [];
+            let gains = [];
+            let now = audioCtx.currentTime;
+            let baseChord = chordProgression[0];
+            for (let i = 0; i < 3; i++) {
+                let o = audioCtx.createOscillator();
+                let g = audioCtx.createGain();
+                o.type = 'sine';
+                o.frequency.value = _scaleFreqValue(baseChord[i] * 0.75);
+                g.gain.value = i === 0 ? 0.022 : 0.014;
+                o.connect(g);
+                g.connect(mix);
+                o.start(now);
+                oscillators.push(o);
+                gains.push(g);
+            }
+
+            mix.gain.exponentialRampToValueAtTime(0.06, now + 1.4);
+
+            let chordIndex = 0;
+            let timer = setInterval(() => {
+                if (!audioCtx || !_bgMusicNodes || !audioEnabled) return;
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                chordIndex = (chordIndex + 1) % chordProgression.length;
+                let chord = chordProgression[chordIndex];
+                let t = audioCtx.currentTime;
+                for (let i = 0; i < oscillators.length; i++) {
+                    let targetFreq = _scaleFreqValue(chord[i] * 0.75);
+                    oscillators[i].frequency.cancelScheduledValues(t);
+                    oscillators[i].frequency.linearRampToValueAtTime(targetFreq, t + 0.9);
+                }
+            }, 1800);
+
+            _bgMusicNodes = { oscillators, gains, mix, timer };
+        }
+
+        function stopBackgroundMusic() {
+            if (!_bgMusicNodes) return;
+            let nodes = _bgMusicNodes;
+            _bgMusicNodes = null;
+            if (nodes.timer) clearInterval(nodes.timer);
+            let t = audioCtx ? audioCtx.currentTime : 0;
+            try {
+                nodes.mix.gain.cancelScheduledValues(t);
+                nodes.mix.gain.setValueAtTime(nodes.mix.gain.value, t);
+                nodes.mix.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+            } catch (e) { }
+            setTimeout(() => {
+                nodes.oscillators.forEach(o => { try { o.stop(); } catch (e) { } });
+            }, 600);
         }
 
         // Spatial hash (10x10 tile chunks)
@@ -2697,13 +3042,6 @@
                 this.attackTimer = this.attackCooldown;
                 this.attackTarget = target;
                 this.attackFlash = 8;
-                // King taking damage (killking mode)
-                if (target.isKing && gameMode === 'killking' && target.owner === localPlayerId) {
-                    if (!_kingHurtTimer || gameTime > _kingHurtTimer + TICK_RATE * 0.5) {
-                        _kingHurtTimer = gameTime;
-                        playSound('king_hurt');
-                    }
-                }
                 let style = this.attackStyle;
                 if (style === 'fire') {
                     createDirectedParticles(this.x, this.y, target.x, target.y, '#f50', 3);
@@ -5160,6 +5498,9 @@
                 minimapCtx.fillRect(ux, uy, 2, 2);
             }
 
+            // Damage alerts (minimap only)
+            drawMinimapAlerts(minimapCtx, scale);
+
             // Camera viewport rect
             let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
             minimapCtx.strokeStyle = '#fff'; minimapCtx.lineWidth = 1;
@@ -5391,6 +5732,8 @@
             for (let t of towers) { if (t.type === 'laser' && t.laserState === 1 && !t.underConstruction) { anyLaserActive = true; break; } }
             if (anyLaserActive) startLaserSound();
             else stopLaserSound();
+
+            scanLocalOwnedDamageAlerts();
 
             updateVisibility(localPlayerId);
         }
@@ -5868,8 +6211,7 @@
                 // Control groups
                 if (e.key >= '1' && e.key <= '9') {
                     let num = e.key;
-                    if (e.ctrlKey) { controlGroups[num] = [...selectedUnits]; }
-                    else if (controlGroups[num]) { selectedUnits = controlGroups[num].filter(u => !u.dead); updateInfoPanel(); }
+                    handleControlGroupKey(num, !!e.ctrlKey);
                 }
             });
             document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
@@ -5880,9 +6222,16 @@
                 audioEnabled = audioToggle.checked;
                 audioToggle.addEventListener('change', () => {
                     audioEnabled = audioToggle.checked;
-                    if (!audioEnabled) stopLaserSound();
+                    if (!audioEnabled) {
+                        stopLaserSound();
+                        stopBackgroundMusic();
+                    } else {
+                        startBackgroundMusic();
+                    }
                 });
             }
+
+            updateControlGroupBar();
 
             // Fullscreen
             const btnFs = document.getElementById('btn-fullscreen');
@@ -7047,6 +7396,8 @@
         function updateInfoPanel() {
             let panel = document.getElementById('info-panel');
 
+            updateControlGroupBar();
+
             // Remove dead entities
             selectedEntities = selectedEntities.filter(e => !(e.hp !== undefined && e.hp <= 0));
             selectedUnits = selectedUnits.filter(u => !u.dead);
@@ -7630,6 +7981,10 @@
         function startGame() {
             document.getElementById('lobby').style.display = 'none';
 
+            mapAlerts = [];
+            controlGroupAlertState = {};
+            controlGroups = {};
+
             for (let p of players) { p.money = 2000; p.popCount = 0; }
 
             rng = mulberry32(gameSeed);
@@ -7732,6 +8087,8 @@
             dirtyGrid = true; dirtyAreas = true;
             gameStarted = true;
             updateBuildMenu();
+            updateControlGroupBar();
+            startBackgroundMusic();
 
             // Pre-confirm initial ticks (before INPUT_DELAY, no inputs possible)
             // Both sides do this locally, and also send confirmations to the peer
@@ -7823,6 +8180,7 @@
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             draw();
             updateHUD();
+            updateControlGroupBar();
 
             // FPS counter
             _fpsFrameCount++;
