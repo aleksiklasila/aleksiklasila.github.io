@@ -1498,6 +1498,12 @@
                     bindInstantPress(btn, () => {
                         if (!gameStarted || gameOver) return;
                         handleControlGroupKey(btn.dataset.group, false);
+                    }, {
+                        longPressMs: 320,
+                        onLongPress: () => {
+                            if (!gameStarted || gameOver) return;
+                            handleControlGroupKey(btn.dataset.group, true);
+                        }
                     });
                 });
             }
@@ -7255,7 +7261,7 @@
         let _buildMenuItems = {}; // key -> div element
     let appFullscreen = false;
 
-        function bindInstantPress(el, handler) {
+        function bindInstantPress(el, handler, opts = null) {
             if (!el || typeof handler !== 'function') return;
             let invoke = (ev) => {
                 if (ev.type === 'mousedown' && ev.button !== 0) return;
@@ -7263,8 +7269,82 @@
                 ev.stopPropagation();
                 handler(ev);
             };
+
+            let onLongPress = opts && typeof opts.onLongPress === 'function' ? opts.onLongPress : null;
+            if (!onLongPress) {
+                el.addEventListener('mousedown', invoke);
+                el.addEventListener('touchstart', invoke, { passive: false });
+                return;
+            }
+
             el.addEventListener('mousedown', invoke);
-            el.addEventListener('touchstart', invoke, { passive: false });
+
+            let longPressMs = Math.max(120, (opts && Number.isFinite(opts.longPressMs)) ? opts.longPressMs : 320);
+            let moveTolerance = Math.max(6, (opts && Number.isFinite(opts.longPressMoveTolerance)) ? opts.longPressMoveTolerance : 14);
+            let touchId = null;
+            let startX = 0;
+            let startY = 0;
+            let longPressTimer = null;
+            let longPressTriggered = false;
+
+            let clearLongPress = () => {
+                if (longPressTimer) {
+                    clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
+            };
+
+            let getTouchById = (touchList, id) => {
+                if (id === null || !touchList) return null;
+                for (let i = 0; i < touchList.length; i++) {
+                    if (touchList[i].identifier === id) return touchList[i];
+                }
+                return null;
+            };
+
+            el.addEventListener('touchstart', (ev) => {
+                if (!ev.changedTouches || ev.changedTouches.length === 0) return;
+                let t = ev.changedTouches[0];
+                touchId = t.identifier;
+                startX = t.clientX;
+                startY = t.clientY;
+                longPressTriggered = false;
+                clearLongPress();
+                longPressTimer = setTimeout(() => {
+                    longPressTimer = null;
+                    longPressTriggered = true;
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    onLongPress(ev);
+                }, longPressMs);
+            }, { passive: false });
+
+            el.addEventListener('touchmove', (ev) => {
+                if (touchId === null || !longPressTimer) return;
+                let t = getTouchById(ev.touches, touchId) || getTouchById(ev.changedTouches, touchId);
+                if (!t) return;
+                let dx = t.clientX - startX;
+                let dy = t.clientY - startY;
+                if (Math.hypot(dx, dy) > moveTolerance) {
+                    clearLongPress();
+                }
+            }, { passive: false });
+
+            let finishTouch = (ev) => {
+                let wasActive = getTouchById(ev.changedTouches, touchId);
+                if (!wasActive) return;
+                clearLongPress();
+                if (!longPressTriggered) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    handler(ev);
+                }
+                touchId = null;
+                longPressTriggered = false;
+            };
+
+            el.addEventListener('touchend', finishTouch, { passive: false });
+            el.addEventListener('touchcancel', finishTouch, { passive: false });
         }
 
         function updateSelectedBuildDescription() {
