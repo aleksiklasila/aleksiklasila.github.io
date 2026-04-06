@@ -887,10 +887,34 @@
         function formatBigNumber(n, d = 0) {
             if (n == null) return "...";
             if (typeof n === 'string') return n;
-            if (n < 10000) return n.toFixed(d).replace(/\.0+$/, '');
-            let e = Math.floor(Math.log10(n));
-            const s = '\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079';
-            return '10' + e.toString().split('').map(c => s[c]).join('');
+            if (!Number.isFinite(n)) return '' + n;
+
+            let sign = n < 0 ? '-' : '';
+            let abs = Math.abs(n);
+            if (abs < 1000) return sign + abs.toFixed(d).replace(/\.0+$/, '');
+
+            const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
+            let tier = Math.floor(Math.log10(abs) / 3);
+
+            if (tier >= suffixes.length) {
+                let e = Math.floor(Math.log10(abs));
+                return sign + 'e' + e;
+            }
+
+            let scaled = abs / Math.pow(1000, tier);
+            let decimals = d > 0 ? d : 2;
+
+            // Handle boundary rollover (e.g. 999.995K -> 1.00M)
+            let rounded = Number(scaled.toFixed(decimals));
+            if (rounded >= 1000 && tier < suffixes.length - 1) {
+                tier++;
+                scaled = rounded / 1000;
+                rounded = Number(scaled.toFixed(decimals));
+            }
+
+            let text = rounded.toFixed(decimals);
+            if (d <= 0) text = text.replace(/\.0+$/, '');
+            return sign + text + suffixes[tier];
         }
 
         function getGameModeLabel(mode = gameMode) {
