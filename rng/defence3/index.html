@@ -244,6 +244,15 @@
             filter: brightness(1.3);
         }
 
+        .sg-icon-box.sg-unit {
+            border-radius: 50% !important;
+            overflow: hidden;
+        }
+
+        .sg-icon-box.sg-unit img {
+            border-radius: 50%;
+        }
+
         .subgroup-all:hover {
             background: #2a2a2a !important;
         }
@@ -604,10 +613,10 @@
                     </tr>
                     <tr>
                         <td><span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
-                        <td>Add a rally point and split selected spawners across all set points</td>
+                        <td>Add a point and split selected spawners/units across all set points</td>
                     </tr>
                     <tr>
-                        <td><span class="kbd">A</span></td>
+                        <td><span class="kbd">Z</span></td>
                         <td>Attack-move mode for selected units</td>
                     </tr>
                     <tr>
@@ -615,7 +624,7 @@
                         <td>Stop selected units</td>
                     </tr>
                     <tr>
-                        <td><span class="kbd">H</span></td>
+                        <td><span class="kbd">C</span></td>
                         <td>Hold position for selected units</td>
                     </tr>
                     <tr>
@@ -5273,10 +5282,15 @@
         function initInput() {
             let gameArea = document.getElementById('game-area');
             let multiRallyPoints = [];
+            let multiUnitCommandPoints = [];
+
+            function isCtrlMultiCommand(evt) {
+                return !!(evt && (evt.ctrlKey || keysDown['control']));
+            }
 
             function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally) {
                 if (!selSpawners || selSpawners.length === 0) return;
-                if (appendToMultiRally) {
+                if (appendToMultiRally && multiRallyPoints.length > 0) {
                     multiRallyPoints.push({ x: targetX, y: targetY });
                     if (multiRallyPoints.length > 12) multiRallyPoints.shift();
                 } else {
@@ -5288,6 +5302,26 @@
                     let rp = multiRallyPoints[i % multiRallyPoints.length];
                     queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y });
                     b.rallyX = rp.x; b.rallyY = rp.y;
+                }
+            }
+
+            function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
+                if (!unitIds || unitIds.length === 0) return;
+                if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
+                    multiUnitCommandPoints.push({ x: targetX, y: targetY });
+                    if (multiUnitCommandPoints.length > 12) multiUnitCommandPoints.shift();
+                } else {
+                    multiUnitCommandPoints = [{ x: targetX, y: targetY }];
+                }
+                if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
+
+                let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
+                for (let i = 0; i < unitIds.length; i++) buckets[i % multiUnitCommandPoints.length].push(unitIds[i]);
+
+                for (let i = 0; i < buckets.length; i++) {
+                    if (buckets[i].length === 0) continue;
+                    let rp = multiUnitCommandPoints[i];
+                    queueAction({ action: actionName, unitIds: buckets[i], targetX: rp.x, targetY: rp.y });
                 }
             }
 
@@ -5340,13 +5374,14 @@
                 } else if (e.button === 2) { // Right click
                     e.preventDefault();
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
+                    let isCtrlMulti = isCtrlMultiCommand(e);
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(e => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(e.type) && e.owner === localPlayerId);
                     if (selSpawners.length > 0) {
-                        applyRallyTargets(selSpawners, world.x, world.y, !!e.ctrlKey);
+                        applyRallyTargets(selSpawners, world.x, world.y, isCtrlMulti);
                         // If no units selected, just update and return
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
-                    } else if (!e.ctrlKey) {
+                    } else if (!isCtrlMulti) {
                         multiRallyPoints = [];
                     }
                     // Set preferred target for selected own towers
@@ -5473,20 +5508,24 @@
                             let unitIds = combatUnits.map(u => u.id);
                             if (targetUnit) {
                                 queueAction({ action: 'attack', unitIds, targetId: targetUnit.id });
+                                if (!isCtrlMulti) multiUnitCommandPoints = [];
                             } else if (targetBuilding) {
                                 queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuilding.gx, targetGy: targetBuilding.gy });
+                                if (!isCtrlMulti) multiUnitCommandPoints = [];
                             } else if (attackMoveMode) {
-                                queueAction({ action: 'attackMove', unitIds, targetX: world.x, targetY: world.y });
+                                applyUnitCommandTargets(unitIds, world.x, world.y, isCtrlMulti, 'attackMove');
                                 attackMoveMode = false;
                             } else {
                                 // Workers also move to the position if no special target found
                                 let allIds = activeUnits.map(u => u.id);
-                                queueAction({ action: 'move', unitIds: allIds, targetX: world.x, targetY: world.y });
+                                applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
                             }
                         } else if (workerIds.length > 0) {
                             // Only workers selected and no special target — move them
-                            queueAction({ action: 'move', unitIds: workerIds, targetX: world.x, targetY: world.y });
+                            applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move');
                         }
+                    } else if (!isCtrlMulti) {
+                        multiUnitCommandPoints = [];
                     }
                     updateInfoPanel();
                 }
@@ -5633,12 +5672,56 @@
                 clampCamera();
             });
 
-            // Minimap click
+            minimapCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            // Minimap click / command
             minimapCanvas.addEventListener('mousedown', (e) => {
                 let rect = minimapCanvas.getBoundingClientRect();
                 let mx = (e.clientX - rect.left) * (MINIMAP_SIZE / rect.width);
                 let my = (e.clientY - rect.top) * (MINIMAP_SIZE / rect.height);
                 let scale = MINIMAP_SIZE / GRID_W;
+                let gx = Math.max(0, Math.min(GRID_W - 1, Math.floor(mx / scale)));
+                let gy = Math.max(0, Math.min(GRID_H - 1, Math.floor(my / scale)));
+                let worldX = gx * TILE + TILE / 2;
+                let worldY = gy * TILE + TILE / 2;
+
+                if (e.button === 2) {
+                    e.preventDefault();
+                    if (!gameStarted || gameOver) return;
+                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
+
+                    let isCtrlMulti = isCtrlMultiCommand(e);
+                    let selSpawners = getActiveEntities().filter(ent => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(ent.type) && ent.owner === localPlayerId);
+                    if (selSpawners.length > 0) {
+                        applyRallyTargets(selSpawners, worldX, worldY, isCtrlMulti);
+                    } else if (!isCtrlMulti) {
+                        multiRallyPoints = [];
+                    }
+
+                    let activeUnits = getActiveUnits();
+                    if (activeUnits.length > 0) {
+                        let combatUnits = activeUnits.filter(u => !u.workerType).map(u => u.id);
+                        let workerUnits = activeUnits.filter(u => !!u.workerType).map(u => u.id);
+                        if (combatUnits.length > 0) {
+                            if (attackMoveMode) {
+                                applyUnitCommandTargets(combatUnits, worldX, worldY, isCtrlMulti, 'attackMove');
+                                attackMoveMode = false;
+                            } else {
+                                applyUnitCommandTargets(combatUnits, worldX, worldY, isCtrlMulti, 'move');
+                            }
+                        }
+                        if (workerUnits.length > 0) {
+                            applyUnitCommandTargets(workerUnits, worldX, worldY, isCtrlMulti, 'move');
+                        }
+                    } else if (!isCtrlMulti) {
+                        multiUnitCommandPoints = [];
+                    }
+
+                    updateInfoPanel();
+                    return;
+                }
+
+                // Left click centers camera
                 camera.x = (mx / scale) * TILE - viewW / camera.zoom / 2;
                 camera.y = (my / scale) * TILE - viewH / camera.zoom / 2;
                 clampCamera();
@@ -5652,9 +5735,9 @@
                     if (setHelpPopupOpen(false)) return;
                     selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
                 }
-                if ((e.key === 'a' || e.key === 'A') && selectedUnits.length > 0) attackMoveMode = true;
+                if ((e.key === 'z' || e.key === 'Z') && selectedUnits.length > 0) attackMoveMode = true;
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
-                if (e.key === 'h' || e.key === 'H') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
+                if (e.key === 'c' || e.key === 'C') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
                 // Control groups
                 if (e.key >= '1' && e.key <= '9') {
                     let num = e.key;
@@ -5676,16 +5759,36 @@
 
             // Fullscreen
             const btnFs = document.getElementById('btn-fullscreen');
+            function syncFullscreenUi() {
+                let isNativeFullscreen = !!document.fullscreenElement;
+                appFullscreen = false;
+                document.body.classList.remove('app-fullscreen');
+                if (btnFs) btnFs.textContent = isNativeFullscreen ? '🗗 FS' : '⛶ FS';
+                window.dispatchEvent(new Event('resize'));
+            }
+            document.addEventListener('fullscreenchange', syncFullscreenUi);
             if (btnFs) {
                 btnFs.addEventListener('click', () => {
                     if (document.fullscreenElement) {
                         document.exitFullscreen().catch(() => { });
+                        return;
                     }
-                    appFullscreen = !appFullscreen;
-                    document.body.classList.toggle('app-fullscreen', appFullscreen);
-                    btnFs.textContent = appFullscreen ? '🗗 FS' : '⛶ FS';
-                    window.dispatchEvent(new Event('resize'));
+                    let root = document.documentElement;
+                    if (root && root.requestFullscreen) {
+                        root.requestFullscreen().catch(() => {
+                            appFullscreen = false;
+                            document.body.classList.remove('app-fullscreen');
+                            btnFs.textContent = '⛶ FS';
+                            window.dispatchEvent(new Event('resize'));
+                        });
+                    } else {
+                        appFullscreen = false;
+                        document.body.classList.remove('app-fullscreen');
+                        btnFs.textContent = '⛶ FS';
+                        window.dispatchEvent(new Event('resize'));
+                    }
                 });
+                syncFullscreenUi();
             }
 
             const btnLevelVisibility = document.getElementById('btn-level-visibility');
@@ -6143,6 +6246,18 @@
         let _buildMenuItems = {}; // key -> div element
     let appFullscreen = false;
 
+        function bindInstantPress(el, handler) {
+            if (!el || typeof handler !== 'function') return;
+            let invoke = (ev) => {
+                if (ev.type === 'mousedown' && ev.button !== 0) return;
+                ev.preventDefault();
+                ev.stopPropagation();
+                handler(ev);
+            };
+            el.addEventListener('mousedown', invoke);
+            el.addEventListener('touchstart', invoke, { passive: false });
+        }
+
         function updateSelectedBuildDescription() {
             let descEl = document.getElementById('build-selected-desc');
             if (!descEl) return;
@@ -6199,7 +6314,7 @@
                     priceSpan.className = 'bi-price';
                     priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
                     div.appendChild(priceSpan);
-                    div.addEventListener('click', () => {
+                    bindInstantPress(div, () => {
                         if (!isBuildItemAvailable(key)) return;
                         selectedBuildItem = selectedBuildItem === key ? null : key;
                         _patchBuildMenuClasses(players[localPlayerId].money);
@@ -6235,7 +6350,7 @@
 
         function initBuildTabs() {
             document.querySelectorAll('.build-tab').forEach(tab => {
-                tab.addEventListener('click', () => {
+                bindInstantPress(tab, () => {
                     document.querySelectorAll('.build-tab').forEach(t => t.classList.remove('active'));
                     tab.classList.add('active');
                     activeBuildTab = tab.dataset.tab;
@@ -6842,10 +6957,14 @@
                     let opacity = isActive ? '1' : '0.35';
                     let lvl = getGroupLevel(key, grp);
                     let thumbKey = getGroupThumbKey(grp);
+                    let iconRadius = grp.isUnit ? '50%' : '3px';
+                    let iconClass = grp.isUnit ? 'sg-icon-box sg-unit' : 'sg-icon-box sg-entity';
+                    let lvlPos = grp.isUnit ? 'left:50%;transform:translateX(-50%);' : 'left:1px;';
+                    let countPos = grp.isUnit ? 'left:50%;transform:translateX(-50%);' : 'right:1px;';
                     html += `<div class="subgroup-toggle" data-key="${key}" data-thumb="${thumbKey || ''}" style="cursor:pointer;opacity:${opacity};width:36px;text-align:center;position:relative">`;
-                    html += `<div class="sg-icon-box" style="width:34px;height:34px;border:2px solid ${borderColor};border-radius:3px;background:#111;display:flex;align-items:center;justify-content:center;position:relative">`;
-                    if (lvl !== null) html += `<span style="position:absolute;top:-1px;left:1px;font-size:7px;color:#aaa;z-index:1">L${lvl}</span>`;
-                    html += `<span style="position:absolute;bottom:-1px;right:1px;font-size:8px;color:#fd0;font-weight:bold;z-index:1">x${grp.items.length}</span>`;
+                    html += `<div class="${iconClass}" style="width:34px;height:34px;border:2px solid ${borderColor};border-radius:${iconRadius};background:#111;display:flex;align-items:center;justify-content:center;position:relative">`;
+                    if (lvl !== null) html += `<span style="position:absolute;top:-1px;${lvlPos}font-size:7px;color:#aaa;z-index:1">L${lvl}</span>`;
+                    html += `<span style="position:absolute;bottom:-1px;${countPos}font-size:8px;color:#fd0;font-weight:bold;z-index:1">x${grp.items.length}</span>`;
                     html += `</div></div>`;
                 }
                 // Select All / Deselect All
@@ -6911,20 +7030,21 @@
                     let thumbUrl = getItemThumbnail(thumbKey, 26);
                     let img = document.createElement('img');
                     img.src = thumbUrl; img.width = 26; img.height = 26;
+                    if (box.classList.contains('sg-unit')) img.style.borderRadius = '50%';
                     box.insertBefore(img, box.firstChild);
                 }
             });
 
             // Wire up buy buttons for single barracks
             panel.querySelectorAll('.info-buy-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     queueAction({ action: 'queueUnit', gx, gy });
-                };
+                });
             });
             // Wire up group buy buttons - dynamically find barrack with lowest queue
             panel.querySelectorAll('.info-buy-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
@@ -6932,19 +7052,19 @@
                         if (b && b.spawnQueue.length < 20 && b.spawnQueue.length < bestQueue) { best = b; bestQueue = b.spawnQueue.length; }
                     }
                     if (best) queueAction({ action: 'queueUnit', gx: best.gx, gy: best.gy });
-                };
+                });
             });
 
             // Wire up worker buy buttons (single spawner)
             panel.querySelectorAll('.info-buy-worker-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     queueAction({ action: 'queueWorker', gx, gy });
-                };
+                });
             });
             // Wire up worker group buy buttons - distribute to lowest queue
             panel.querySelectorAll('.info-buy-worker-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = Infinity;
                     for (let c of coords) {
@@ -6952,21 +7072,21 @@
                         if (s && (s.spawnQueue || []).length < 10 && (s.spawnQueue || []).length < bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
                     }
                     if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy });
-                };
+                });
             });
 
             // Wire up dequeue buttons
             panel.querySelectorAll('.info-dequeue-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
                     queueAction({ action: type, gx, gy });
-                };
+                });
             });
 
             // Wire up dequeue group buttons (removes from building with highest queue)
             panel.querySelectorAll('.info-dequeue-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     let best = null, bestQueue = -1;
                     let isWorker = btn.dataset.type === 'worker';
@@ -6982,29 +7102,29 @@
                     if (best && bestQueue > 0) {
                         queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy });
                     }
-                };
+                });
             });
 
             // Wire up sub-group toggle buttons (simple toggle, doesn't affect others)
             panel.querySelectorAll('.subgroup-toggle').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let key = btn.dataset.key;
                     activeSubGroups[key] = !activeSubGroups[key];
                     updateInfoPanel();
-                };
+                });
             });
 
             // Wire up select all / deselect all
             panel.querySelectorAll('.subgroup-all').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let val = btn.dataset.action === 'all';
                     for (let [k] of allGroups) activeSubGroups[k] = val;
                     updateInfoPanel();
-                };
+                });
             });
             // Wire up salvage buttons (single building)
             panel.querySelectorAll('.info-salvage-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     if (btn.dataset.unitId) {
                         queueAction({ action: 'killUnit', unitId: parseInt(btn.dataset.unitId) });
                     } else {
@@ -7012,41 +7132,41 @@
                         queueAction({ action: 'markSalvage', gx, gy });
                     }
                     setTimeout(updateInfoPanel, 50);
-                };
+                });
             });
             // Wire up salvage group buttons
             panel.querySelectorAll('.info-salvage-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     for (let c of coords) queueAction({ action: 'markSalvage', gx: c.gx, gy: c.gy });
                     setTimeout(updateInfoPanel, 50);
-                };
+                });
             });
             // Wire up auto-upgrade toggles (single barrack)
             panel.querySelectorAll('.info-auto-upgrade-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     let enabled = btn.dataset.enabled === '1';
                     queueAction({ action: 'setAutoUpgrade', gx, gy, enabled });
                     setTimeout(updateInfoPanel, 50);
-                };
+                });
             });
             // Wire up auto-upgrade toggles (barrack groups)
             panel.querySelectorAll('.info-auto-upgrade-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let enabled = btn.dataset.enabled === '1';
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     for (let c of coords) queueAction({ action: 'setAutoUpgrade', gx: c.gx, gy: c.gy, enabled });
                     setTimeout(updateInfoPanel, 50);
-                };
+                });
             });
             // Wire up kill group buttons (units)
             panel.querySelectorAll('.info-kill-group-btn').forEach(btn => {
-                btn.onclick = () => {
+                bindInstantPress(btn, () => {
                     let ids = btn.dataset.ids.split(',').map(Number);
                     for (let id of ids) queueAction({ action: 'killUnit', unitId: id });
                     setTimeout(updateInfoPanel, 50);
-                };
+                });
             });
         }
 
