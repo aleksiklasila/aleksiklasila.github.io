@@ -768,10 +768,10 @@
                         </tr>
                         <tr>
                             <td><span class="kbd">Right Click</span></td>
-                            <td>Move / attack / assign workers / set rally</td>
+                            <td>Move / attack / assign workers / set rally (resets selected groups to this single point)</td>
                         </tr>
                         <tr>
-                            <td><span class="kbd">Shift</span> + <span class="kbd">Right Click</span></td>
+                            <td><span class="kbd">Shift</span> or <span class="kbd">Ctrl</span> + <span class="kbd">Right Click</span></td>
                             <td>Add a point and split selected spawners/units across all set points</td>
                         </tr>
                         <tr>
@@ -4540,6 +4540,48 @@
             };
         }
 
+        function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
+            if (!target) return false;
+            if (target.owner !== owner) return false;
+            if (target.markedForSalvage) return false;
+            if (!target.underConstruction && !target.isUpgrading) return false;
+            if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
+            return true;
+        }
+
+        function _getBuilderWorkTargetAt(gx, gy, owner, allowDisabledBuild = false) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
+            let target = towers.find(t => t.gx === gx && t.gy === gy && _isBuilderWorkTarget(t, owner, allowDisabledBuild));
+            if (target) return target;
+            target = barracks.find(b => b.gx === gx && b.gy === gy && _isBuilderWorkTarget(b, owner, allowDisabledBuild));
+            if (target) return target;
+            target = collectorSpawners.find(s => s.gx === gx && s.gy === gy && _isBuilderWorkTarget(s, owner, allowDisabledBuild));
+            if (target) return target;
+            let cell = grid[gy][gx];
+            if (cell && cell.item && _isBuilderWorkTarget(cell.item, owner, allowDisabledBuild)) return cell.item;
+            return null;
+        }
+
+        function _getBuilderWorkTargetNear(worldX, worldY, owner, radius = 22, allowDisabledBuild = false) {
+            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+            let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
+            let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
+            let best = null;
+            let bestDist = radius;
+            for (let fy = minGy; fy <= maxGy; fy++) {
+                for (let fx = minGx; fx <= maxGx; fx++) {
+                    let t = _getBuilderWorkTargetAt(fx, fy, owner, allowDisabledBuild);
+                    if (!t) continue;
+                    let d = Math.hypot(t.x - worldX, t.y - worldY);
+                    if (d <= bestDist) {
+                        bestDist = d;
+                        best = t;
+                    }
+                }
+            }
+            return best;
+        }
+
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
             u.workerTarget = target; u.workerTargetType = targetType;
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
@@ -6308,7 +6350,15 @@
             let multiUnitCommandPoints = [];
 
             function isCtrlMultiCommand(evt) {
-                return !!(evt && (evt.shiftKey || keysDown['shift']));
+                if (!evt) return false;
+                // Use only event modifier state here to avoid sticky-key issues when
+                // browser context menus swallow keyup events (e.g. Firefox Shift+RMB).
+                return !!(evt.shiftKey || evt.ctrlKey || evt.metaKey ||
+                    (evt.getModifierState && (
+                        evt.getModifierState('Shift') ||
+                        evt.getModifierState('Control') ||
+                        evt.getModifierState('Meta')
+                    )));
             }
 
             function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally) {
@@ -6463,31 +6513,8 @@
                         let workerIds = [...builderUnits, ...collectorUnits].map(u => u.id);
 
                         if (builderUnits.length > 0) {
-                            // Check if right-clicking a building under construction (own)
-                            let buildTarget = null;
-                            // Check towers
-                            for (let t of towers) {
-                                if (t.owner === localPlayerId && t.underConstruction && Math.hypot(t.x - world.x, t.y - world.y) < 22) {
-                                    buildTarget = t; break;
-                                }
-                            }
-                            // Check barracks
-                            if (!buildTarget) for (let b of barracks) {
-                                if (b.owner === localPlayerId && b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 22) {
-                                    buildTarget = b; break;
-                                }
-                            }
-                            // Check spawners
-                            if (!buildTarget) for (let s of collectorSpawners) {
-                                if (s.owner === localPlayerId && s.underConstruction && Math.hypot(s.x - world.x, s.y - world.y) < 22) {
-                                    buildTarget = s; break;
-                                }
-                            }
-                            // Check floor items
-                            if (!buildTarget && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-                                let cell = grid[gy][gx];
-                                if (cell.item && cell.item.underConstruction && cell.owner === localPlayerId) buildTarget = cell.item;
-                            }
+                            // Generic builder-targeting for any placeable object that can be built/upgraded.
+                            let buildTarget = _getBuilderWorkTargetNear(world.x, world.y, localPlayerId, 22, true);
                             if (buildTarget) {
                                 queueAction({ action: 'workerAssign', unitIds: builderUnits.map(u => u.id), targetType: 'build', targetGx: buildTarget.gx, targetGy: buildTarget.gy });
                                 updateInfoPanel();
@@ -6777,6 +6804,10 @@
                 }
             });
             document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
+            window.addEventListener('blur', () => { keysDown = {}; });
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) keysDown = {};
+            });
 
             // HUD Settings
             const audioToggle = document.getElementById('setting-audio');
@@ -7186,13 +7217,12 @@
                         if (!a.unitIds.includes(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
                         let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
                         if (u.workerType === 'builder' && a.targetType === 'build') {
-                            // Find the target building
-                            let target = towers.find(t => t.gx === a.targetGx && t.gy === a.targetGy && t.underConstruction) ||
-                                barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.underConstruction) ||
-                                collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.underConstruction) ||
-                                (grid[a.targetGy] && grid[a.targetGy][a.targetGx] && grid[a.targetGy][a.targetGx].item && grid[a.targetGy][a.targetGx].item.underConstruction ? grid[a.targetGy][a.targetGx].item : null);
-                            if (target && target.markedForSalvage) target = null;
+                            // Generic lookup: includes both under-construction and upgrading targets.
+                            let target = _getBuilderWorkTargetAt(a.targetGx, a.targetGy, playerId, true);
                             if (target) {
+                                // Manual assignment should always allow builders to work this target,
+                                // even if auto-build for new objects is currently disabled.
+                                target.buildEnabled = true;
                                 u.workerTarget = null; // clear old target
                                 _builderAssignTarget(u, target, myGx, myGy);
                             }
