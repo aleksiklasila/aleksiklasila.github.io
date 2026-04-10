@@ -680,6 +680,10 @@
                 <input id="cfg-full-vis" type="checkbox" checked style="width:auto; height:auto; cursor:pointer;"
                     title="Disable Fog of War">
             </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <label>Max Population:</label>
+                <input id="cfg-max-pop" type="number" min="1" max="100000" value="200" style="width:72px">
+            </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
@@ -702,7 +706,7 @@
     <!-- HUD -->
     <div id="hud">
         <span class="hud-money" id="hud-money">Gold: 300</span>
-        <span class="hud-pop" id="hud-pop">Pop: 0/200</span>
+        <span class="hud-pop" id="hud-pop">Pop: 0/200/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
         <span class="hud-time"
@@ -999,7 +1003,7 @@
         let GOLD_MINE_MAX = 1500;
         let GOLD_MINE_AREA = 70;   // area within which mines spawn (centered)
         const TYPE_FLOOR = 0, TYPE_WALL = 1;
-        const POP_LIMIT = 200;
+    let CONFIG_MAX_POP = 200;
         const TICK_RATE = 20; // ticks per second
         const WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
         const TICK_MS = 1000 / TICK_RATE;
@@ -1040,6 +1044,7 @@
             spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", hp: 60, target: 'floor' },
             salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", hp: 60, target: 'floor' },
             builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", hp: 60, target: 'floor' },
+            house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 120, target: 'floor' },
             area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
 
             // Clouds
@@ -1093,6 +1098,7 @@
             spawner: "Spawns collectors that gather gold from mines.",
             salvager: "Spawns salvagers that recycle marked buildings.",
             builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1hp and need builders to become functional.",
+            house: "Raises max population by 1.6^{level} while operational.",
             cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
             cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
             cloud_1a: "Cloud bridge endpoint. Connects areas for adjacency.",
@@ -1137,7 +1143,7 @@
             barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
             towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'elements', 'laser', 'watch_tower'],
             floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm'],
-            special: ['spawner', 'salvager', 'builder_spawner', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
+            special: ['spawner', 'salvager', 'builder_spawner', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
 
         // Barrack spawn config
@@ -1258,6 +1264,7 @@
 
         const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
         let players = Array.from({ length: 8 }, () => ({ money: 2000, popCount: 0 }));
+    let playerPopCaps = Array.from({ length: 8 }, () => 200);
         let localPlayerId = 0;
         let activeTeamIds = [0, 1];
         let teamColorById = {};
@@ -2242,6 +2249,35 @@
             return Math.floor(Math.log2(item.stacks || 1)) + 1;
         }
 
+        function getConfiguredMaxPop() {
+            return Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
+        }
+
+        function recomputePlayerPopCaps() {
+            let cfgCap = getConfiguredMaxPop();
+            for (let pid = 0; pid < players.length; pid++) {
+                let housePop = 0;
+                for (let y = 0; y < GRID_H; y++) {
+                    for (let x = 0; x < GRID_W; x++) {
+                        let cell = grid[y] && grid[y][x];
+                        let item = cell ? cell.item : null;
+                        if (!item || item.type !== 'house' || cell.owner !== pid) continue;
+                        if (item.hp <= 0 || item.underConstruction) continue;
+                        let level = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
+                        housePop += Math.floor(Math.pow(1.6, level));
+                    }
+                }
+                playerPopCaps[pid] = Math.min(cfgCap, housePop);
+            }
+        }
+
+        function getPlayerPopCap(playerId) {
+            let cfgCap = getConfiguredMaxPop();
+            if (playerId < 0 || playerId >= playerPopCaps.length) return cfgCap;
+            let cap = playerPopCaps[playerId];
+            return Number.isFinite(cap) ? cap : cfgCap;
+        }
+
         function getLevelLabelText(item) {
             let currentLevel = Math.max(0, Math.floor(getDisplayLevel(item) || 0));
             let potentialLevel = item && item.potentialEffectiveLevel !== undefined
@@ -2344,6 +2380,7 @@
             let mult = Math.pow(1.6, level - 1);
             let stats = { maxHp: 0, damage: 0 };
             if (type === 'farm') { stats.maxHp = Math.floor(1000 * mult); }
+            else if (type === 'house') { stats.maxHp = Math.floor(120 * mult); }
             else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
             else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner') { stats.maxHp = Math.floor(60 * mult); }
             else if (type === 'lava') { stats.maxHp = Math.floor(700 * mult); stats.damage = mult; }
@@ -3814,7 +3851,7 @@
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
-                        if (players[this.owner].popCount < POP_LIMIT) {
+                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
                             let queued = this.spawnQueue.shift();
                             let spawnInfo = getQueuedSpawnInfo(queued, this.unitType, effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
@@ -3922,7 +3959,7 @@
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
-                        if (players[this.owner].popCount < POP_LIMIT) {
+                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
                             let queued = this.spawnQueue.shift();
                             let spawnInfo = getQueuedSpawnInfo(queued, 'collector', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
@@ -4010,7 +4047,7 @@
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
-                        if (players[this.owner].popCount < POP_LIMIT) {
+                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
                             let queued = this.spawnQueue.shift();
                             let spawnInfo = getQueuedSpawnInfo(queued, 'salvager_unit', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
@@ -4104,7 +4141,7 @@
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
                         this.spawnTimer = 0;
-                        if (players[this.owner].popCount < POP_LIMIT) {
+                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
                             let queued = this.spawnQueue.shift();
                             let spawnInfo = getQueuedSpawnInfo(queued, 'builder_unit', effLvl);
                             let spawnPos = findNearestWalkable(this.gx, this.gy);
@@ -5184,6 +5221,18 @@
             } else if (item.type === 'farm') {
                 ctx.fillStyle = '#da0'; ctx.beginPath(); ctx.arc(x, y, 12, 0, 6.28); ctx.fill();
                 ctx.font = "14px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#fff"; ctx.fillText("\uD83C\uDF3E", x, y);
+            } else if (item.type === 'house') {
+                ctx.fillStyle = '#c95';
+                ctx.fillRect(x - 10, y - 6, 20, 14);
+                ctx.fillStyle = '#844';
+                ctx.beginPath();
+                ctx.moveTo(x - 12, y - 6);
+                ctx.lineTo(x, y - 14);
+                ctx.lineTo(x + 12, y - 6);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#222';
+                ctx.fillRect(x - 2, y + 1, 4, 7);
             } else if (item.type === 'mine') {
                 ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.28); ctx.fill();
                 ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.28); ctx.fill();
@@ -5284,6 +5333,17 @@
                     ctx.fillStyle = '#da0'; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
                     ctx.font = Math.round(14 * s) + "px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                     ctx.fillStyle = "#fff"; ctx.fillText("\uD83C\uDF3E", cx, cy);
+                } else if (key === 'house') {
+                    ctx.fillStyle = '#c95'; ctx.fillRect(cx - 10 * s, cy - 6 * s, 20 * s, 14 * s);
+                    ctx.fillStyle = '#844';
+                    ctx.beginPath();
+                    ctx.moveTo(cx - 12 * s, cy - 6 * s);
+                    ctx.lineTo(cx, cy - 14 * s);
+                    ctx.lineTo(cx + 12 * s, cy - 6 * s);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.fillStyle = '#222';
+                    ctx.fillRect(cx - 2 * s, cy + 1 * s, 4 * s, 7 * s);
                 } else if (key === 'mine') {
                     ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(cx, cy, 8 * s, 0, 6.28); ctx.fill();
                     ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(cx, cy, 3 * s, 0, 6.28); ctx.fill();
@@ -6109,6 +6169,8 @@
                 dirtyGrid = true;
                 recalculateAdjacency();
             }
+
+            recomputePlayerPopCaps();
 
             if (gameTime % TICK_RATE === 0) {
                 for (let y = 0; y < GRID_H; y++) {
@@ -7239,7 +7301,7 @@
         // ============================================================
         // UI
         // ============================================================
-        let _hudCache = { money: -1, pop: -1, time: -1, fps: -1 };
+    let _hudCache = { money: -1, popText: '', time: -1, fps: -1 };
         let _hudEls = {};
         function updateHUD() {
             if (!_hudEls.money) {
@@ -7251,7 +7313,10 @@
             let p = players[localPlayerId];
             let money = Math.floor(p.money);
             if (_hudCache.money !== money) { _hudCache.money = money; _hudEls.money.textContent = `Gold: ${formatBigNumber(money)}`; }
-            if (_hudCache.pop !== p.popCount) { _hudCache.pop = p.popCount; _hudEls.pop.textContent = `Pop: ${p.popCount}/${POP_LIMIT}`; }
+            let playerCap = getPlayerPopCap(localPlayerId);
+            let cfgCap = getConfiguredMaxPop();
+            let popText = `Pop: ${p.popCount}/${playerCap}/${cfgCap}`;
+            if (_hudCache.popText !== popText) { _hudCache.popText = popText; _hudEls.pop.textContent = popText; }
             let secs = Math.floor(gameTime / TICK_RATE);
             if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
             if (_hudCache.fps !== _fpsDisplay) { _hudCache.fps = _fpsDisplay; _hudEls.fps.textContent = `${_fpsDisplay} FPS (v3)`; }
@@ -8497,6 +8562,7 @@
                         GOLD_MINE_AREA = data.cfg.goldArea;
                         fullVisibility = data.cfg.fullVis || false;
                         gameMode = data.cfg.gameMode || 'destroy';
+                        CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
                     }
                     initAudio();
                     startGame();
@@ -8625,7 +8691,7 @@
             connections.forEach(c => c.send({
                 type: 'START_GAME', seed: gameSeed,
                 lobbyPlayers: lobbyPlayers,
-                cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode }
+                cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP }
             }));
 
             initAudio();
@@ -8664,6 +8730,7 @@
             GOLD_MINE_AREA = Math.floor(size * areaPct / 100);
             fullVisibility = document.getElementById('cfg-full-vis').checked;
             gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
+            CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
         }
 
         function startSoloGame() {
@@ -8703,6 +8770,25 @@
                 let pid = teams[i];
                 let pos = spawns[i] || spawns[0];
                 teamSpawnPos[pid] = pos;
+
+                let findStarterBuildSpot = (origin, maxRadius = 10) => {
+                    for (let r = 1; r <= maxRadius; r++) {
+                        for (let dy = -r; dy <= r; dy++) {
+                            for (let dx = -r; dx <= r; dx++) {
+                                let fx = origin.gx + dx, fy = origin.gy + dy;
+                                if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
+                                if (Math.abs(dx) + Math.abs(dy) > r) continue;
+                                let cell = grid[fy][fx];
+                                if (!cell || cell.type === TYPE_WALL || cell.item) continue;
+                                let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
+                                if (blockedByMine) continue;
+                                return { gx: fx, gy: fy };
+                            }
+                        }
+                    }
+                    return null;
+                };
+
                 let s = new BuilderSpawner(pos.gx, pos.gy, pid);
                 s.underConstruction = false;
                 teamSpawners[pid] = s;
@@ -8711,21 +8797,7 @@
                 grid[pos.gy][pos.gx].owner = pid;
 
                 // Starter farm near base (fully built)
-                let farmPos = null;
-                for (let r = 1; r <= 10 && !farmPos; r++) {
-                    for (let dy = -r; dy <= r && !farmPos; dy++) {
-                        for (let dx = -r; dx <= r && !farmPos; dx++) {
-                            let fx = pos.gx + dx, fy = pos.gy + dy;
-                            if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
-                            if (Math.abs(dx) + Math.abs(dy) > r) continue;
-                            let cell = grid[fy][fx];
-                            if (!cell || cell.type === TYPE_WALL || cell.item) continue;
-                            let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
-                            if (blockedByMine) continue;
-                            farmPos = { gx: fx, gy: fy };
-                        }
-                    }
-                }
+                let farmPos = findStarterBuildSpot(pos, 10);
                 if (farmPos) {
                     let fs = calculateItemStats('farm', 1);
                     let farm = {
@@ -8750,7 +8822,38 @@
                     grid[farmPos.gy][farmPos.gx].owner = pid;
                     updateItemTextCache(farm);
                 }
+
+                // Starter house near base (fully built, L4)
+                let housePos = findStarterBuildSpot(pos, 10);
+                if (housePos) {
+                    let houseLevel = 4;
+                    let houseStacks = Math.pow(2, houseLevel - 1);
+                    let hs = calculateItemStats('house', houseLevel);
+                    let house = {
+                        type: 'house',
+                        stacks: houseStacks,
+                        level: houseLevel,
+                        effectiveLevel: houseLevel,
+                        potentialEffectiveLevel: houseLevel,
+                        hp: hs.maxHp,
+                        maxHp: hs.maxHp,
+                        damage: 0,
+                        gx: housePos.gx,
+                        gy: housePos.gy,
+                        x: housePos.gx * TILE + 16,
+                        y: housePos.gy * TILE + 16,
+                        underConstruction: false,
+                        owner: pid,
+                        autoUpgradeEnabled: true,
+                        buildEnabled: true
+                    };
+                    grid[housePos.gy][housePos.gx].item = house;
+                    grid[housePos.gy][housePos.gx].owner = pid;
+                    updateItemTextCache(house);
+                }
             }
+
+            recomputePlayerPopCaps();
 
             // Spawn 3 builder units for each team
             for (let pid of teams) {
