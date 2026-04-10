@@ -4259,6 +4259,7 @@
                                     grid[mine.gy][mine.gx].type = TYPE_FLOOR;
                                     let idx = goldMines.indexOf(mine);
                                     if (idx >= 0) goldMines.splice(idx, 1);
+                                    dirtyGrid = true;
                                 }
                             }
                             u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
