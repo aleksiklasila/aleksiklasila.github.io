@@ -5816,6 +5816,7 @@
 
         // Thumbnail cache for build menu and sub-group icons
         let _thumbCache = {};
+    let _thumbImageCache = {};
         function getItemThumbnail(key, size) {
             let cacheKey = key + '_' + size;
             if (_thumbCache[cacheKey]) return _thumbCache[cacheKey];
@@ -5958,6 +5959,58 @@
 
             _thumbCache[cacheKey] = c.toDataURL();
             return _thumbCache[cacheKey];
+        }
+
+        function getItemThumbnailImage(key, size) {
+            let cacheKey = key + '_' + size;
+            if (_thumbImageCache[cacheKey]) return _thumbImageCache[cacheKey];
+            let img = new Image();
+            img.src = getItemThumbnail(key, size);
+            _thumbImageCache[cacheKey] = img;
+            return img;
+        }
+
+        function getBuildPreviewLevelFromMultiplier() {
+            let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+            return Math.max(1, Math.floor(Math.log2(stacks)) + 1);
+        }
+
+        function getTowerPreviewVisionRange(type, level) {
+            let base = CARD_TYPES[type];
+            if (!base || base.visionRange === undefined) return 0;
+            let vr = base.visionRange;
+            if (type === 'water' || type === 'smg' || type === 'pistol' || type === 'fire' || type === 'poison' || type === 'sand_gun') {
+                vr = base.visionRange * (1 + (level - 1) * 0.1);
+            }
+            let maxVision = base.maxVisionRange || 5;
+            return Math.min(vr, maxVision);
+        }
+
+        function drawBuildPlacementGhost(ctx, gx, gy, key, canBuild, previewLevel) {
+            let img = getItemThumbnailImage(key, 30);
+            if (img && img.complete && img.naturalWidth > 0) {
+                ctx.save();
+                ctx.globalAlpha = canBuild ? 0.78 : 0.62;
+                ctx.drawImage(img, gx * TILE + 1, gy * TILE + 1, TILE - 2, TILE - 2);
+                ctx.restore();
+            }
+
+            let showRangeEl = document.getElementById('setting-range-outlines');
+            let def = CARD_TYPES[key];
+            if (showRangeEl && showRangeEl.checked && def && def.target === 'wall' && def.towerHp && !def.isCloud) {
+                let rrTiles = getTowerPreviewVisionRange(key, previewLevel);
+                if (rrTiles > 0) {
+                    ctx.save();
+                    ctx.setLineDash([5, 4]);
+                    ctx.lineWidth = 1.4;
+                    ctx.strokeStyle = canBuild ? 'rgba(80,255,80,0.45)' : 'rgba(255,90,90,0.45)';
+                    ctx.beginPath();
+                    ctx.arc(gx * TILE + TILE / 2, gy * TILE + TILE / 2, rrTiles * TILE, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.restore();
+                }
+            }
         }
 
         // ============================================================
@@ -6508,6 +6561,7 @@
                 let gx = Math.floor(mouseWorldX / TILE), gy = Math.floor(mouseWorldY / TILE);
                 if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
                     let canBuild;
+                    let previewLevel = getBuildPreviewLevelFromMultiplier();
                     if (selectedBuildItem === 'area_upgrader') {
                         let aId = grid[gy][gx].areaId;
                         let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
@@ -6555,6 +6609,8 @@
                     } else {
                         canBuild = isTileVisible(gx, gy) && (canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId));
                     }
+
+                    drawBuildPlacementGhost(ctx, gx, gy, selectedBuildItem, !!canBuild, previewLevel);
                     ctx.fillStyle = canBuild ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
                     ctx.fillRect(gx * TILE, gy * TILE, TILE, TILE);
                 }
