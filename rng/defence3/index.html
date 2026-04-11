@@ -735,6 +735,8 @@
                 <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-audio" style="cursor:pointer; font-size:12px; color:#ddd;">Audio</label>
             </span>
+            <button id="btn-resign" title="Resign"
+                style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">☠</button>
         </span>
     </div>
 
@@ -906,9 +908,32 @@
     <div id="game-over">
         <h1 id="go-title">VICTORY</h1>
         <div class="stats" id="go-stats"></div>
+        <div id="go-controls" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+            <button id="go-btn-spectate"
+                style="background:#1f2a36;border:1px solid #4a89c7;color:#d8ecff;cursor:pointer;padding:6px 12px;border-radius:4px;">Spectate</button>
+            <button id="go-btn-graph"
+                style="background:#241f36;border:1px solid #7a67c7;color:#e7ddff;cursor:pointer;padding:6px 12px;border-radius:4px;">Graph</button>
+            <button id="go-btn-play-again"
+                style="display:none;background:#1f3624;border:1px solid #5cad74;color:#d8ffe4;cursor:pointer;padding:6px 12px;border-radius:4px;">Play Again</button>
+        </div>
+        <div id="go-graph-wrap" style="display:none;width:min(900px,92vw);background:#111;border:1px solid #333;border-radius:8px;padding:10px;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;">
+                <button class="go-graph-metric" data-metric="money"
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Money</button>
+                <button class="go-graph-metric" data-metric="pop"
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Population</button>
+                <button class="go-graph-metric" data-metric="units"
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Units</button>
+                <button class="go-graph-metric" data-metric="structures"
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Structures</button>
+            </div>
+            <div id="go-graph-plot"
+                style="width:100%;max-width:860px;height:320px;display:block;margin:0 auto;border:1px solid #2d2d2d;background:#0d0d0d;"></div>
+        </div>
     </div>
 
     <script src="peerjs.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <script>
         "use strict";
 
@@ -950,6 +975,186 @@
 
         function getGameModeLabel(mode = gameMode) {
             return mode === 'killking' ? 'Kill King' : 'Destroy Base';
+        }
+
+        function getTeamDisplayColor(pid) {
+            return teamColorById[pid] || PLAYER_COLORS[pid] || '#ccc';
+        }
+
+        function enterSpectateMode(mode = 'defeated') {
+            spectateMode = mode;
+            localDefeated = true;
+            fullVisibility = true;
+            dirtyGrid = true;
+            selectedBuildItem = null;
+            selectedUnits = [];
+            selectedEntities = [];
+            activeSubGroups = {};
+            attackMoveMode = false;
+            updateBuildMenu();
+            updateInfoPanel();
+        }
+
+        function isTeamAliveByAssets(pid) {
+            if (resignedTeams.has(pid)) return false;
+            for (let t of towers) if (t.owner === pid) return true;
+            for (let b of barracks) if (b.owner === pid) return true;
+            for (let s of collectorSpawners) if (s.owner === pid) return true;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].item && grid[y][x].owner === pid) return true;
+                }
+            }
+            return false;
+        }
+
+        function eliminateTeamAssets(pid) {
+            for (let i = units.length - 1; i >= 0; i--) {
+                let u = units[i];
+                if (u.owner !== pid) continue;
+                removeUnitSpatial(u);
+                selectedUnits = selectedUnits.filter(su => su !== u);
+                units.splice(i, 1);
+            }
+            players[pid].popCount = 0;
+
+            for (let i = towers.length - 1; i >= 0; i--) {
+                let t = towers[i];
+                if (t.owner !== pid) continue;
+                towers.splice(i, 1);
+                if (grid[t.gy] && grid[t.gy][t.gx]) {
+                    grid[t.gy][t.gx].type = TYPE_FLOOR;
+                    grid[t.gy][t.gx].owner = -1;
+                }
+            }
+            for (let i = barracks.length - 1; i >= 0; i--) {
+                let b = barracks[i];
+                if (b.owner !== pid) continue;
+                barracks.splice(i, 1);
+                if (grid[b.gy] && grid[b.gy][b.gx]) {
+                    grid[b.gy][b.gx].item = null;
+                    grid[b.gy][b.gx].owner = -1;
+                }
+            }
+            for (let i = collectorSpawners.length - 1; i >= 0; i--) {
+                let s = collectorSpawners[i];
+                if (s.owner !== pid) continue;
+                collectorSpawners.splice(i, 1);
+                if (grid[s.gy] && grid[s.gy][s.gx]) {
+                    grid[s.gy][s.gx].item = null;
+                    grid[s.gy][s.gx].owner = -1;
+                }
+            }
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    if (cell.item && cell.owner === pid) {
+                        cell.item = null;
+                        cell.owner = -1;
+                    }
+                }
+            }
+            dirtyGrid = true;
+            recalculateAdjacency();
+            recalculateLaserConnections();
+            updateInfoPanel();
+        }
+
+        function getSpawnerRallyTargetWorld(spawner) {
+            if (spawner.rallyTargetUnitId != null) {
+                let tu = units.find(u => u.id === spawner.rallyTargetUnitId && !u.dead && u.owner !== spawner.owner);
+                if (tu) return { x: tu.x, y: tu.y };
+            }
+            if (spawner.rallyX !== null && spawner.rallyY !== null && Number.isFinite(spawner.rallyX) && Number.isFinite(spawner.rallyY)) {
+                return { x: spawner.rallyX, y: spawner.rallyY };
+            }
+            return null;
+        }
+
+        function countTeamUnits(pid) {
+            let n = 0;
+            for (let u of units) if (u.owner === pid && !u.dead) n++;
+            return n;
+        }
+
+        function countTeamStructures(pid) {
+            let n = 0;
+            for (let t of towers) if (t.owner === pid && t.hp > 0) n++;
+            for (let b of barracks) if (b.owner === pid && b.hp > 0) n++;
+            for (let s of collectorSpawners) if (s.owner === pid && s.hp > 0) n++;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let item = grid[y][x].item;
+                    if (item && grid[y][x].owner === pid && item.hp > 0) n++;
+                }
+            }
+            return n;
+        }
+
+        function sampleGameStats() {
+            if (!gameStarted) return;
+            let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+            let sample = { tick: gameTime, money: {}, pop: {}, units: {}, structures: {} };
+            for (let pid of teams) {
+                sample.money[pid] = players[pid] ? players[pid].money : 0;
+                sample.pop[pid] = players[pid] ? players[pid].popCount : 0;
+                sample.units[pid] = countTeamUnits(pid);
+                sample.structures[pid] = countTeamStructures(pid);
+            }
+            gameStatsHistory.push(sample);
+            if (gameStatsHistory.length > 3600) gameStatsHistory.shift();
+        }
+
+        function renderGameGraph(metric = graphMetric) {
+            graphMetric = metric;
+            let plotEl = document.getElementById('go-graph-plot');
+            if (!plotEl || typeof Plotly === 'undefined') return;
+            let samples = gameStatsHistory;
+            if (!samples || samples.length === 0) {
+                Plotly.react(plotEl, [], {
+                    paper_bgcolor: '#0d0d0d',
+                    plot_bgcolor: '#0d0d0d',
+                    xaxis: { visible: false },
+                    yaxis: { visible: false },
+                    annotations: [{ text: 'No graph data recorded.', x: 0.5, y: 0.5, showarrow: false, font: { color: '#999', size: 14 } }],
+                    margin: { l: 24, r: 24, t: 20, b: 20 }
+                }, { displayModeBar: false, responsive: true });
+                return;
+            }
+
+            let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+
+            let traces = teams.map(pid => ({
+                x: samples.map(s => (s.tick || 0) / TICK_RATE),
+                y: samples.map(s => (s[metric] && s[metric][pid]) || 0),
+                mode: 'lines',
+                name: `P${pid + 1}`,
+                line: { color: getTeamDisplayColor(pid), width: 2 }
+            }));
+
+            let maxSeconds = (samples[samples.length - 1].tick || 0) / TICK_RATE;
+            Plotly.react(plotEl, traces, {
+                paper_bgcolor: '#0d0d0d',
+                plot_bgcolor: '#0d0d0d',
+                font: { color: '#cfd8dc', family: 'monospace', size: 11 },
+                margin: { l: 48, r: 12, t: 26, b: 36 },
+                legend: { orientation: 'h', x: 0, y: 1.15 },
+                xaxis: {
+                    title: 'Time (s)',
+                    range: [0, Math.max(10, maxSeconds)],
+                    gridcolor: '#2a2a2a',
+                    zerolinecolor: '#333'
+                },
+                yaxis: {
+                    title: metric.toUpperCase(),
+                    rangemode: 'tozero',
+                    gridcolor: '#2a2a2a',
+                    zerolinecolor: '#333'
+                }
+            }, {
+                displayModeBar: false,
+                responsive: true
+            });
         }
 
         let activeHelpTab = 'keybinds';
@@ -1273,6 +1478,12 @@
         let winner = -1;
         let gameMode = 'destroy'; // 'destroy' or 'killking'
         let gameTime = 0; // in ticks
+    let localDefeated = false;
+    let spectateMode = 'none'; // 'none' | 'defeated' | 'postgame'
+    let resignedTeams = new Set();
+
+    let gameStatsHistory = [];
+    let graphMetric = 'money';
 
         // Camera
         let camera = { x: 0, y: 0, zoom: 1 };
@@ -3022,6 +3233,7 @@
                 this.targetPos = null;
                 this.path = null;
                 this.pathIndex = 0;
+                this.forcedAttackTarget = false;
                 this.dead = false;
                 this.unitLevel = 1;
 
@@ -3208,20 +3420,61 @@
                 }
                 if (closest) {
                     this.targetUnit = closest;
+                    this.forcedAttackTarget = false;
                     this.commandState = CMD_ATTACKING;
                     return;
                 }
-                // Also check enemy buildings in range
-                let _buildingAggro = (list) => {
+                // Priority for structures: towers -> barracks/spawners -> floor items.
+                let closestTower = null, closestTowerD = aggroRange;
+                for (let t of towers) {
+                    if (t.owner === this.owner || t.hp <= 0) continue;
+                    let d = Math.hypot(t.x - this.x, t.y - this.y);
+                    if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
+                }
+                if (closestTower) {
+                    this.targetBuilding = closestTower;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                    return;
+                }
+
+                let closestStruct = null, closestStructD = aggroRange;
+                let scanStructList = (list) => {
                     for (let b of list) {
                         if (b.owner === this.owner || b.hp <= 0) continue;
-                        if (Math.hypot(b.x - this.x, b.y - this.y) < aggroRange) {
-                            this.targetBuilding = b; this.commandState = CMD_ATTACKING; return true;
-                        }
+                        let d = Math.hypot(b.x - this.x, b.y - this.y);
+                        if (d < closestStructD) { closestStructD = d; closestStruct = b; }
                     }
-                    return false;
                 };
-                if (_buildingAggro(towers) || _buildingAggro(barracks) || _buildingAggro(collectorSpawners)) return;
+                scanStructList(barracks);
+                scanStructList(collectorSpawners);
+                if (closestStruct) {
+                    this.targetBuilding = closestStruct;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                    return;
+                }
+
+                let rTiles = Math.ceil(aggroRange / TILE) + 1;
+                let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
+                let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
+                let closestItem = null, closestItemD = aggroRange;
+                for (let gy = minGy; gy <= maxGy; gy++) {
+                    for (let gx = minGx; gx <= maxGx; gx++) {
+                        let cell = grid[gy][gx];
+                        if (!cell || !cell.item || cell.owner === this.owner) continue;
+                        let item = cell.item;
+                        if (item.hp <= 0 || item.underConstruction) continue;
+                        let d = Math.hypot(item.x - this.x, item.y - this.y);
+                        if (d < closestItemD) { closestItemD = d; closestItem = item; }
+                    }
+                }
+                if (closestItem) {
+                    this.targetBuilding = closestItem;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                }
             }
 
             doMoving(spd) {
@@ -3265,20 +3518,61 @@
                 }
                 if (closest) {
                     this.targetUnit = closest;
+                    this.forcedAttackTarget = false;
                     this.commandState = CMD_ATTACKING;
                     return;
                 }
-                // Also check enemy buildings in range
-                let _buildingAggro = (list) => {
+                let closestTower = null, closestTowerD = aggroRange;
+                for (let t of towers) {
+                    if (t.owner === this.owner || t.hp <= 0) continue;
+                    let d = Math.hypot(t.x - this.x, t.y - this.y);
+                    if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
+                }
+                if (closestTower) {
+                    this.targetBuilding = closestTower;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                    return;
+                }
+
+                let closestStruct = null, closestStructD = aggroRange;
+                let scanStructList = (list) => {
                     for (let b of list) {
                         if (b.owner === this.owner || b.hp <= 0) continue;
-                        if (Math.hypot(b.x - this.x, b.y - this.y) < aggroRange) {
-                            this.targetBuilding = b; this.commandState = CMD_ATTACKING; return true;
-                        }
+                        let d = Math.hypot(b.x - this.x, b.y - this.y);
+                        if (d < closestStructD) { closestStructD = d; closestStruct = b; }
                     }
-                    return false;
                 };
-                if (_buildingAggro(towers) || _buildingAggro(barracks) || _buildingAggro(collectorSpawners)) return;
+                scanStructList(barracks);
+                scanStructList(collectorSpawners);
+                if (closestStruct) {
+                    this.targetBuilding = closestStruct;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                    return;
+                }
+
+                let rTiles = Math.ceil(aggroRange / TILE) + 1;
+                let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
+                let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
+                let closestItem = null, closestItemD = aggroRange;
+                for (let gy = minGy; gy <= maxGy; gy++) {
+                    for (let gx = minGx; gx <= maxGx; gx++) {
+                        let cell = grid[gy][gx];
+                        if (!cell || !cell.item || cell.owner === this.owner) continue;
+                        let item = cell.item;
+                        if (item.hp <= 0 || item.underConstruction) continue;
+                        let d = Math.hypot(item.x - this.x, item.y - this.y);
+                        if (d < closestItemD) { closestItemD = d; closestItem = item; }
+                    }
+                }
+                if (closestItem) {
+                    this.targetBuilding = closestItem;
+                    this.forcedAttackTarget = false;
+                    this.commandState = CMD_ATTACKING;
+                    return;
+                }
                 if (this.followPath(spd)) {
                     this.commandState = CMD_IDLE;
                     this.path = null;
@@ -3366,7 +3660,7 @@
             doAttacking(spd) {
                 // Attack unit target
                 if (this.targetUnit) {
-                    if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
+                    if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
                     if (d <= this.attackRange + this.r + this.targetUnit.r) {
                         this.attackTarget = this.targetUnit;
@@ -3374,12 +3668,12 @@
                         // In range - attack
                         if (this.attackTimer <= 0) {
                             if (this._performAttackOnUnit(this.targetUnit)) {
-                                this.targetUnit = null; this.attackTarget = null; this.commandState = CMD_IDLE;
+                                this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
                             }
                         }
-                    } else if (d > 8 * TILE) {
+                    } else if (!this.forcedAttackTarget && d > 8 * TILE) {
                         // Leash
-                        this.targetUnit = null; this.attackTarget = null; this.path = null; this.commandState = CMD_IDLE;
+                        this.targetUnit = null; this.attackTarget = null; this.path = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
                     } else {
                         // Move toward target using path if available, direct if close
                         if (this.path && this.pathIndex < this.path.length) {
@@ -3411,14 +3705,14 @@
                 // Attack building target
                 if (this.targetBuilding) {
                     let tb = this.targetBuilding;
-                    if (tb.hp <= 0) { this.targetBuilding = null; this.attackTarget = null; this.commandState = CMD_IDLE; return; }
+                    if (tb.hp <= 0) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
                     let d = Math.hypot(tb.x - this.x, tb.y - this.y);
                     if (d <= this.attackRange + this.r + 16) {
                         this.attackTarget = tb;
                         this.path = null;
                         if (this.attackTimer <= 0) {
                             if (this._performAttackOnBuilding(tb)) {
-                                this.targetBuilding = null; this.attackTarget = null; this.commandState = CMD_IDLE;
+                                this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
                             }
                         }
                     } else {
@@ -3446,6 +3740,7 @@
                     return;
                 }
                 this.attackTarget = null;
+                this.forcedAttackTarget = false;
                 this.commandState = CMD_IDLE;
             }
 
@@ -3826,6 +4121,7 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level) * TICK_RATE);
                 this.spawnQueue = []; // queue of unit types to spawn
                 this.rallyX = null; this.rallyY = null; // rally point in world coords
+                this.rallyTargetUnitId = null;
                 let stats = calculateItemStats('barrack', this.level);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
@@ -3860,8 +4156,9 @@
                             units.push(u);
                             players[this.owner].popCount++;
                             // Send to rally point if set
-                            if (this.rallyX !== null && this.rallyY !== null) {
-                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                            let rallyTarget = getSpawnerRallyTargetWorld(this);
+                            if (rallyTarget) {
+                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_ATTACK_MOVING;
@@ -3946,6 +4243,7 @@
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
+                this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
@@ -3967,8 +4265,9 @@
                             u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
                             applyUnitLevelScaling(u, spawnInfo.level);
                             units.push(u); players[this.owner].popCount++;
-                            if (this.rallyX !== null && this.rallyY !== null) {
-                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                            let rallyTarget = getSpawnerRallyTargetWorld(this);
+                            if (rallyTarget) {
+                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
@@ -4034,6 +4333,7 @@
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
+                this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
@@ -4055,8 +4355,9 @@
                             u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
                             applyUnitLevelScaling(u, spawnInfo.level);
                             units.push(u); players[this.owner].popCount++;
-                            if (this.rallyX !== null && this.rallyY !== null) {
-                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                            let rallyTarget = getSpawnerRallyTargetWorld(this);
+                            if (rallyTarget) {
+                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
@@ -4123,6 +4424,7 @@
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
+                this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level) * TICK_RATE);
                 updateItemTextCache(this);
             }
@@ -4152,8 +4454,9 @@
                             // Keep builder DPS tied to spawner level baseline
                             u.builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, spawnInfo.level - 1)));
                             units.push(u); players[this.owner].popCount++;
-                            if (this.rallyX !== null && this.rallyY !== null) {
-                                let rgx = Math.floor(this.rallyX / TILE), rgy = Math.floor(this.rallyY / TILE);
+                            let rallyTarget = getSpawnerRallyTargetWorld(this);
+                            if (rallyTarget) {
+                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, null, u.owner);
                                     u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
@@ -5184,34 +5487,23 @@
 
         function checkWinCondition() {
             let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+            let alive = [];
             if (gameMode === 'killking') {
-                let alive = teams.filter(pid => units.some(u => u.owner === pid && u.isKing && !u.dead));
-                if (alive.length <= 1 && teams.length > 1) {
-                    gameOver = true;
-                    winner = alive.length === 1 ? alive[0] : -1;
-                    showGameOver();
-                    return;
-                }
+                alive = teams.filter(pid => !resignedTeams.has(pid) && units.some(u => u.owner === pid && u.isKing && !u.dead));
             } else {
-                let alive = [];
                 for (let pid of teams) {
-                    let has = false;
-                    for (let t of towers) { if (t.owner === pid) { has = true; break; } }
-                    if (!has) for (let b of barracks) { if (b.owner === pid) { has = true; break; } }
-                    if (!has) for (let s of collectorSpawners) { if (s.owner === pid) { has = true; break; } }
-                    if (!has) {
-                        // Check floor items
-                        for (let y = 0; y < GRID_H && !has; y++) for (let x = 0; x < GRID_W && !has; x++) {
-                            if (grid[y][x].item && grid[y][x].owner === pid) has = true;
-                        }
-                    }
-                    if (has) alive.push(pid);
+                    if (isTeamAliveByAssets(pid)) alive.push(pid);
                 }
-                if (alive.length <= 1 && teams.length > 1) {
-                    gameOver = true;
-                    winner = alive.length === 1 ? alive[0] : -1;
-                    showGameOver();
-                }
+            }
+
+            if (!gameOver && !localDefeated && !alive.includes(localPlayerId)) {
+                enterSpectateMode('defeated');
+            }
+
+            if (alive.length <= 1 && teams.length > 1) {
+                gameOver = true;
+                winner = alive.length === 1 ? alive[0] : -1;
+                showGameOver();
             }
         }
 
@@ -6361,21 +6653,29 @@
                     )));
             }
 
-            function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally) {
+            function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally, targetUnitId = null) {
                 if (!selSpawners || selSpawners.length === 0) return;
                 if (appendToMultiRally && multiRallyPoints.length > 0) {
-                    multiRallyPoints.push({ x: targetX, y: targetY });
+                    multiRallyPoints.push({ x: targetX, y: targetY, targetUnitId });
                     if (multiRallyPoints.length > 12) multiRallyPoints.shift();
                 } else {
-                    multiRallyPoints = [{ x: targetX, y: targetY }];
+                    multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
                 }
-                if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY }];
+                if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
                 for (let i = 0; i < selSpawners.length; i++) {
                     let b = selSpawners[i];
                     let rp = multiRallyPoints[i % multiRallyPoints.length];
-                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y });
-                    b.rallyX = rp.x; b.rallyY = rp.y;
+                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
+                    b.rallyX = rp.x; b.rallyY = rp.y; b.rallyTargetUnitId = rp.targetUnitId || null;
                 }
+            }
+
+            function findEnemyUnitNear(worldX, worldY) {
+                for (let u of units) {
+                    if (u.owner === localPlayerId || u.dead) continue;
+                    if (Math.hypot(u.x - worldX, u.y - worldY) < u.r + 8) return u;
+                }
+                return null;
             }
 
             function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
@@ -6411,6 +6711,11 @@
 
                 if (e.button === 0) { // Left click
                     if (selectedBuildItem) {
+                        if (localDefeated) {
+                            selectedBuildItem = null;
+                            updateBuildMenu();
+                            return;
+                        }
                         // Place building (only on visible tiles)
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
                         if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
@@ -6446,12 +6751,16 @@
                     selectionBox = { sx: world.x, sy: world.y, ex: world.x, ey: world.y };
                 } else if (e.button === 2) { // Right click
                     e.preventDefault();
+                    if (localDefeated) return;
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
                     let isCtrlMulti = isCtrlMultiCommand(e);
+                    let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(e => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(e.type) && e.owner === localPlayerId);
                     if (selSpawners.length > 0) {
-                        applyRallyTargets(selSpawners, world.x, world.y, isCtrlMulti);
+                        let rallyX = clickedEnemyUnit ? clickedEnemyUnit.x : world.x;
+                        let rallyY = clickedEnemyUnit ? clickedEnemyUnit.y : world.y;
+                        applyRallyTargets(selSpawners, rallyX, rallyY, isCtrlMulti, clickedEnemyUnit ? clickedEnemyUnit.id : null);
                         // If no units selected, just update and return
                         if (getActiveUnits().length === 0) { updateInfoPanel(); return; }
                     } else if (!isCtrlMulti) {
@@ -6541,11 +6850,7 @@
                         // --- Normal combat unit targeting ---
                         let combatUnits = activeUnits.filter(u => !u.workerType);
                         if (combatUnits.length > 0) {
-                            let targetUnit = null, targetBuilding = null;
-                            for (let u of units) {
-                                if (u.owner === localPlayerId || u.dead) continue;
-                                if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 8) { targetUnit = u; break; }
-                            }
+                            let targetUnit = clickedEnemyUnit, targetBuilding = null;
                             if (!targetUnit) {
                                 for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
                                 if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
@@ -6557,7 +6862,7 @@
                             }
                             let unitIds = combatUnits.map(u => u.id);
                             if (targetUnit) {
-                                queueAction({ action: 'attack', unitIds, targetId: targetUnit.id });
+                                queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
                                 if (!isCtrlMulti) multiUnitCommandPoints = [];
                             } else if (targetBuilding) {
                                 queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuilding.gx, targetGy: targetBuilding.gy });
@@ -6738,6 +7043,7 @@
                 if (e.button === 2) {
                     e.preventDefault();
                     if (!gameStarted || gameOver) return;
+                        if (localDefeated) return;
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
 
                     let isCtrlMulti = isCtrlMultiCommand(e);
@@ -6899,11 +7205,57 @@
             const btnHelp = document.getElementById('btn-help');
             const btnHelpClose = document.getElementById('btn-help-close');
             const helpPopup = document.getElementById('help-popup');
+            const btnResign = document.getElementById('btn-resign');
+            const goBtnSpectate = document.getElementById('go-btn-spectate');
+            const goBtnGraph = document.getElementById('go-btn-graph');
+            const goBtnPlayAgain = document.getElementById('go-btn-play-again');
+            const goGraphWrap = document.getElementById('go-graph-wrap');
             if (btnHelp) {
                 btnHelp.addEventListener('click', () => {
                     setHelpPopupOpen(true);
                 });
             }
+            if (btnResign) {
+                btnResign.addEventListener('click', () => {
+                    let el = document.getElementById('game-over');
+                    if (gameOver) {
+                        if (spectateMode === 'postgame' && el && el.style.display === 'none') {
+                            el.style.display = 'flex';
+                        }
+                        return;
+                    }
+                    if (!gameStarted || localDefeated) return;
+                    if (!confirm('Resign and become a spectator?')) return;
+                    queueAction({ action: 'resign' });
+                });
+            }
+            if (goBtnSpectate) {
+                goBtnSpectate.addEventListener('click', () => {
+                    if (!gameOver) return;
+                    enterSpectateMode('postgame');
+                    let el = document.getElementById('game-over');
+                    if (el) el.style.display = 'none';
+                });
+            }
+            if (goBtnGraph) {
+                goBtnGraph.addEventListener('click', () => {
+                    if (!goGraphWrap) return;
+                    goGraphWrap.style.display = goGraphWrap.style.display === 'none' ? 'block' : 'none';
+                    if (goGraphWrap.style.display !== 'none') renderGameGraph(graphMetric);
+                });
+            }
+            if (goBtnPlayAgain) {
+                goBtnPlayAgain.addEventListener('click', () => {
+                    if (!gameOver || !isHost || !isMultiplayer) return;
+                    hostPlayAgain();
+                });
+            }
+            document.querySelectorAll('.go-graph-metric').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    let metric = btn.dataset.metric || 'money';
+                    renderGameGraph(metric);
+                });
+            });
             if (btnHelpClose) {
                 btnHelpClose.addEventListener('click', () => {
                     setHelpPopupOpen(false);
@@ -7083,6 +7435,8 @@
         }
 
         function queueAction(action) {
+            if (localDefeated && action && action.action !== 'resign') return;
+            if (gameOver) return;
             let tick = currentTick + INPUT_DELAY;
             if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
             let finalAction = { ...action, teamId: localPlayerId };
@@ -7102,7 +7456,7 @@
                     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
                     for (let u of units) {
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                            u.targetUnit = null; u.targetBuilding = null;
+                            u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
                             u.commandState = CMD_MOVING;
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7123,7 +7477,7 @@
                     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
                     for (let u of units) {
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                            u.targetUnit = null; u.targetBuilding = null;
+                            u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
                             u.commandState = CMD_ATTACK_MOVING;
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7145,7 +7499,7 @@
                         let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                                u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null;
+                                u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7159,6 +7513,9 @@
                                 }
                             }
                         }
+                    } else if (Number.isFinite(a.targetX) && Number.isFinite(a.targetY)) {
+                        // Target vanished before processing: continue toward last known position.
+                        processActions([{ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }], playerId);
                     }
                 } else if (a.action === 'attackBuilding') {
                     let tb = towers.find(t => t.gx === a.targetGx && t.gy === a.targetGy && t.hp > 0) ||
@@ -7168,7 +7525,7 @@
                     if (tb) {
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
-                                u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null;
+                                u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7184,11 +7541,11 @@
                     }
                 } else if (a.action === 'stop') {
                     for (let u of units) {
-                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; }
+                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; }
                     }
                 } else if (a.action === 'hold') {
                     for (let u of units) {
-                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; }
+                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; }
                     }
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
@@ -7237,7 +7594,15 @@
                 } else if (a.action === 'setRally') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
                         collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (b) { b.rallyX = a.targetX; b.rallyY = a.targetY; }
+                    if (b) {
+                        b.rallyX = a.targetX;
+                        b.rallyY = a.targetY;
+                        b.rallyTargetUnitId = (a.targetUnitId != null) ? a.targetUnitId : null;
+                    }
+                } else if (a.action === 'resign') {
+                    resignedTeams.add(playerId);
+                    if (playerId === localPlayerId) enterSpectateMode('defeated');
+                    checkWinCondition();
                 } else if (a.action === 'dequeueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
                     if (b && b.spawnQueue.length > 0) {
@@ -8451,10 +8816,17 @@
         function showGameOver() {
             let el = document.getElementById('game-over');
             el.style.display = 'flex';
+            fullVisibility = true;
+            dirtyGrid = true;
             document.getElementById('go-title').textContent = winner === localPlayerId ? 'VICTORY' : 'DEFEAT';
             document.getElementById('go-title').style.color = winner === localPlayerId ? '#4f4' : '#f44';
             let secs = Math.floor(gameTime / TICK_RATE);
             document.getElementById('go-stats').textContent = `Game lasted ${Math.floor(secs / 60)}m ${secs % 60}s`;
+            let graphWrap = document.getElementById('go-graph-wrap');
+            if (graphWrap) graphWrap.style.display = 'none';
+            let btnPlayAgain = document.getElementById('go-btn-play-again');
+            if (btnPlayAgain) btnPlayAgain.style.display = (isHost && isMultiplayer) ? 'inline-block' : 'none';
+            renderGameGraph(graphMetric);
             playSound(winner === localPlayerId ? 'victory' : 'defeat');
         }
 
@@ -8643,6 +9015,11 @@
                         lastDesyncWarning = performance.now();
                         console.warn(`DESYNC at tick ${data.tick}: local=${localHash} remote=${data.hash}`);
                     }
+                } else if (data.type === 'RETURN_TO_LOBBY') {
+                    if (Array.isArray(data.lobbyPlayers)) {
+                        lobbyPlayers = data.lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) }));
+                    }
+                    returnToOnlineLobby(false, data.status || 'Returned to host lobby. Waiting for host to start...');
                 }
             });
             conn.on('open', () => {
@@ -8677,12 +9054,112 @@
             }).catch(() => prompt("Copy this URL:", url));
         }
 
+        function setLobbyMode(mode) {
+            let lobby = document.getElementById('lobby');
+            let settings = document.getElementById('lobby-settings');
+            let buttons = document.getElementById('lobby-buttons');
+            let waiting = document.getElementById('lobby-waiting');
+            let copyBtn = document.getElementById('btn-copy-link');
+            let startBtn = document.getElementById('btn-start-online');
+            let onlineBtn = document.getElementById('btn-online');
+
+            if (!lobby || !settings || !buttons || !waiting) return;
+
+            lobby.style.display = 'flex';
+            if (mode === 'main') {
+                settings.style.display = 'flex';
+                buttons.style.display = 'flex';
+                waiting.style.display = 'none';
+                if (onlineBtn) onlineBtn.disabled = false;
+                return;
+            }
+
+            waiting.style.display = 'block';
+            buttons.style.display = 'none';
+            if (mode === 'host') {
+                // Host uses the exact same settings panel as the main menu.
+                settings.style.display = 'flex';
+                if (copyBtn) copyBtn.style.display = 'inline-block';
+                if (startBtn) startBtn.style.display = 'inline-block';
+            } else {
+                settings.style.display = 'none';
+                if (copyBtn) copyBtn.style.display = 'none';
+                if (startBtn) startBtn.style.display = 'none';
+            }
+        }
+
+        function resetWorldState() {
+            // Clear all world/runtime objects so no match state carries over.
+            towers = [];
+            units = [];
+            projectiles = [];
+            particles = [];
+            barracks = [];
+            collectorSpawners = [];
+            collectors = [];
+            droppedItems = [];
+            goldMines = [];
+            areas = [];
+            grid = [];
+            visibilityGrid = [];
+            visibilityVersion = 0;
+
+            selectedUnits = [];
+            selectedEntities = [];
+            selectionBox = null;
+            isBoxSelecting = false;
+            activeSubGroups = {};
+            controlGroups = {};
+            mapAlerts = [];
+            controlGroupAlertState = {};
+
+            localInputBuffer = {};
+            remoteInputBuffer = {};
+            remoteTickConfirmed = {};
+            currentTick = 0;
+            gameTime = 0;
+            nextUnitId = 1;
+            pathfindBudget = 0;
+
+            initSpatialHash();
+            initGrid();
+            dirtyGrid = true;
+            dirtyAreas = true;
+            invalidateStaticLayerCache();
+        }
+
+        function returnToOnlineLobby(asHost, statusText) {
+            gameStarted = false;
+            gameOver = false;
+            winner = -1;
+            localDefeated = false;
+            spectateMode = 'none';
+            selectedBuildItem = null;
+            selectedUnits = [];
+            selectedEntities = [];
+            activeSubGroups = {};
+            attackMoveMode = false;
+            resetWorldState();
+            let go = document.getElementById('game-over');
+            if (go) go.style.display = 'none';
+            setLobbyMode(asHost ? 'host' : 'guest');
+            let st = document.getElementById('lobby-status');
+            if (st) st.textContent = statusText || (asHost ? 'Lobby ready. Configure settings and start when ready.' : 'Waiting for host to start...');
+            renderOnlineLobby();
+            updateBuildMenu();
+            updateInfoPanel();
+        }
+
+        function hostPlayAgain() {
+            if (!isHost || !isMultiplayer) return;
+            let payloadPlayers = lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color) }));
+            connections.forEach(c => c.send({ type: 'RETURN_TO_LOBBY', lobbyPlayers: payloadPlayers, status: 'Host returned everyone to lobby.' }));
+            returnToOnlineLobby(true, 'Returned to lobby. Configure settings and press Start Game.');
+        }
+
         function hostOnlineGame() {
             isHost = true;
-            let waitDiv = document.getElementById('lobby-waiting');
-            waitDiv.style.display = 'block';
-            document.getElementById('lobby-settings').style.display = 'none';
-            document.getElementById('lobby-buttons').style.display = 'none';
+            setLobbyMode('host');
             document.getElementById('lobby-status').textContent = 'Creating game...';
             document.getElementById('btn-online').disabled = true;
             let startBtn = document.getElementById('btn-start-online');
@@ -8731,10 +9208,7 @@
 
         function joinGame(hostId) {
             if (!hostId) return;
-            let waitDiv = document.getElementById('lobby-waiting');
-            waitDiv.style.display = 'block';
-            document.getElementById('lobby-settings').style.display = 'none';
-            document.getElementById('lobby-buttons').style.display = 'none';
+            setLobbyMode('guest');
             document.getElementById('lobby-status').textContent = 'Connecting to host...';
             document.getElementById('btn-copy-link').style.display = 'none';
             document.getElementById('btn-start-online').style.display = 'none';
@@ -8778,17 +9252,24 @@
         // ============================================================
         function startGame() {
             document.getElementById('lobby').style.display = 'none';
+            let go = document.getElementById('game-over');
+            if (go) go.style.display = 'none';
+
+            resetWorldState();
 
             mapAlerts = [];
             controlGroupAlertState = {};
             controlGroups = {};
+            localDefeated = false;
+            spectateMode = 'none';
+            resignedTeams = new Set();
+            graphMetric = 'money';
+            gameStatsHistory = [];
 
             for (let p of players) { p.money = 2000; p.popCount = 0; }
 
             rng = mulberry32(gameSeed);
             visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
-            initSpatialHash();
-            initGrid();
             generateAreas();
             let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
             let spawns = pickRandomPlayerSpawns(teams.length);
@@ -8975,6 +9456,8 @@
             delete remoteTickConfirmed[currentTick];
 
             gameTick();
+
+            if (currentTick % TICK_RATE === 0) sampleGameStats();
 
             // Periodic checksum exchange (every 60 ticks = 3 seconds)
             if (isMultiplayer && currentTick % 60 === 0) {
