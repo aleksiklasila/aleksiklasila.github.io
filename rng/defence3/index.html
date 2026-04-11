@@ -749,6 +749,21 @@
                 </select>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
+                <label>Map Type:</label>
+                <select id="cfg-map-type"
+                    style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
+                    <option value="random" selected>Random</option>
+                    <option value="arena">Arena</option>
+                    <option value="island">Island</option>
+                    <option value="solar_system">Solar System</option>
+                    <option value="crossroads">Crossroads</option>
+                </select>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <label>Starting Money:</label>
+                <input id="cfg-starting-money" type="number" min="0" max="1000000000" value="2000" style="width:90px">
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
                 <label>Gold Mines:</label>
                 <input id="cfg-gold-count" type="number" min="5" max="50" value="2200" style="width:50px">
             </div>
@@ -1321,6 +1336,8 @@
         let GOLD_MINE_MIN = 500;
         let GOLD_MINE_MAX = 1500;
         let GOLD_MINE_AREA = 70;   // area within which mines spawn (centered)
+        let STARTING_MONEY = 2000;
+        let MAP_TYPE = 'random';
         const TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
         const TICK_RATE = 20; // ticks per second
@@ -2454,74 +2471,151 @@
         function generateGoldMines() {
             let spawnTiles = arguments.length > 0 && arguments[0] ? arguments[0] : [];
             goldMines = [];
-            let totalMines = GOLD_MINE_COUNT;
+            let totalMines = Math.max(0, Math.floor(GOLD_MINE_COUNT || 0));
             let margin = 1;
             let spawnSafeRadius = 3;
             let placed = new Set();
             let goldRange = Math.max(0, GOLD_MINE_MAX - GOLD_MINE_MIN);
-            let remaining = totalMines;
+            let shapeMask = null;
 
             let nearAnySpawn = (gx, gy) => {
                 if (!spawnTiles || spawnTiles.length === 0) return false;
                 return spawnTiles.some(s => Math.hypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
             };
 
-            // Split into veins: ~3-6 tiles each
-            let veinSeeds = [];
-            while (remaining > 0) {
-                let veinSize = Math.min(remaining, 3 + Math.floor(rng() * 4));
-                veinSeeds.push(veinSize);
-                remaining -= veinSize;
-            }
+            let isAllowedByShape = (gx, gy) => {
+                if (!shapeMask) return true;
+                return !!shapeMask(gx, gy);
+            };
 
-            for (let veinSize of veinSeeds) {
-                // Find a valid seed point
-                let seedGx = -1, seedGy = -1;
-                for (let att = 0; att < 80; att++) {
-                    let gx = margin + Math.floor(rng() * (GRID_W - margin * 2));
-                    let gy = margin + Math.floor(rng() * (GRID_H - margin * 2));
-                    if (!placed.has(`${gx},${gy}`) && !nearAnySpawn(gx, gy) &&
-                        grid[gy][gx].type === TYPE_FLOOR) {
-                        seedGx = gx; seedGy = gy;
-                        break;
+            let addMine = (gx, gy) => {
+                if (gx < margin || gx >= GRID_W - margin || gy < margin || gy >= GRID_H - margin) return false;
+                if (placed.has(`${gx},${gy}`)) return false;
+                if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_FLOOR) return false;
+                if (!isAllowedByShape(gx, gy)) return false;
+                if (nearAnySpawn(gx, gy)) return false;
+                placed.add(`${gx},${gy}`);
+                let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
+                goldMines.push({ gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
+                grid[gy][gx].type = TYPE_WALL;
+                return true;
+            };
+
+            let addMinesFromCandidates = (candidates, shuffle = true) => {
+                if (shuffle) {
+                    for (let i = candidates.length - 1; i > 0; i--) {
+                        let j = Math.floor(rng() * (i + 1));
+                        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
                     }
                 }
-                if (seedGx < 0) continue;
+                for (let c of candidates) {
+                    if (goldMines.length >= totalMines) break;
+                    addMine(c.gx, c.gy);
+                }
+            };
 
-                // Grow vein from seed
-                let frontier = [{ x: seedGx, y: seedGy }];
-                let placed_count = 0;
+            let generateRandomMines = () => {
+                let remaining = totalMines - goldMines.length;
+                let veinSeeds = [];
+                while (remaining > 0) {
+                    let veinSize = Math.min(remaining, 3 + Math.floor(rng() * 4));
+                    veinSeeds.push(veinSize);
+                    remaining -= veinSize;
+                }
 
-                while (placed_count < veinSize && frontier.length > 0) {
-                    let idx = Math.floor(rng() * Math.min(frontier.length, 3));
-                    idx = frontier.length - 1 - idx;
-                    let tile = frontier[idx];
-                    let key = `${tile.x},${tile.y}`;
-
-                    if (placed.has(key) || grid[tile.y][tile.x].type !== TYPE_FLOOR) {
-                        frontier.splice(idx, 1);
-                        continue;
+                for (let veinSize of veinSeeds) {
+                    let seedGx = -1, seedGy = -1;
+                    for (let att = 0; att < 100; att++) {
+                        let gx = margin + Math.floor(rng() * Math.max(1, GRID_W - margin * 2));
+                        let gy = margin + Math.floor(rng() * Math.max(1, GRID_H - margin * 2));
+                        if (!placed.has(`${gx},${gy}`) && !nearAnySpawn(gx, gy) && isAllowedByShape(gx, gy) && grid[gy][gx].type === TYPE_FLOOR) {
+                            seedGx = gx; seedGy = gy;
+                            break;
+                        }
                     }
+                    if (seedGx < 0) continue;
 
-                    if (nearAnySpawn(tile.x, tile.y)) {
+                    let frontier = [{ x: seedGx, y: seedGy }];
+                    let placedCount = 0;
+                    while (placedCount < veinSize && frontier.length > 0) {
+                        let idx = Math.floor(rng() * frontier.length);
+                        let tile = frontier[idx];
                         frontier.splice(idx, 1);
-                        continue;
-                    }
-
-                    placed.add(key);
-                    placed_count++;
-
-                    let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
-                    goldMines.push({ gx: tile.x, gy: tile.y, gold, maxGold: gold, x: tile.x * TILE + 16, y: tile.y * TILE + 16 });
-                    grid[tile.y][tile.x].type = TYPE_WALL;
-
-                    for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                        let nx = tile.x + dx, ny = tile.y + dy;
-                        if (nx >= margin && nx < GRID_W - margin && ny >= margin && ny < GRID_H - margin) {
-                            frontier.push({ x: nx, y: ny });
+                        if (addMine(tile.x, tile.y)) {
+                            placedCount++;
+                            for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+                                let nx = tile.x + dx, ny = tile.y + dy;
+                                if (nx >= margin && nx < GRID_W - margin && ny >= margin && ny < GRID_H - margin) {
+                                    frontier.push({ x: nx, y: ny });
+                                }
+                            }
                         }
                     }
                 }
+            };
+
+            let mapMin = Math.min(GRID_W, GRID_H);
+            let centerX = (GRID_W - 1) / 2;
+            let centerY = (GRID_H - 1) / 2;
+
+            if (MAP_TYPE === 'arena') {
+                let ringWidth = Math.max(2, Math.floor(mapMin * 0.16));
+                let candidates = [];
+                for (let gy = margin; gy < GRID_H - margin; gy++) {
+                    for (let gx = margin; gx < GRID_W - margin; gx++) {
+                        let edgeDist = Math.min(gx, gy, GRID_W - 1 - gx, GRID_H - 1 - gy);
+                        if (edgeDist <= ringWidth) candidates.push({ gx, gy });
+                    }
+                }
+                addMinesFromCandidates(candidates);
+            } else if (MAP_TYPE === 'island') {
+                let islandRadius = Math.max(4, Math.floor(mapMin * 0.19));
+                shapeMask = (gx, gy) => Math.hypot(gx - centerX, gy - centerY) <= islandRadius;
+                let candidates = [];
+                for (let gy = margin; gy < GRID_H - margin; gy++) {
+                    for (let gx = margin; gx < GRID_W - margin; gx++) {
+                        let d = Math.hypot(gx - centerX, gy - centerY);
+                        if (d <= islandRadius) candidates.push({ gx, gy, d });
+                    }
+                }
+                candidates.sort((a, b) => a.d - b.d);
+                addMinesFromCandidates(candidates, false);
+            } else if (MAP_TYPE === 'solar_system') {
+                shapeMask = (gx, gy) => {
+                    let d = Math.hypot(gx - centerX, gy - centerY);
+                    let maxDist = Math.hypot(centerX - margin, centerY - margin);
+                    let norm = Math.min(1, d / Math.max(1, maxDist));
+                    return norm <= 0.98;
+                };
+                let candidates = [];
+                let maxDist = Math.hypot(centerX - margin, centerY - margin);
+                for (let gy = margin; gy < GRID_H - margin; gy++) {
+                    for (let gx = margin; gx < GRID_W - margin; gx++) {
+                        let d = Math.hypot(gx - centerX, gy - centerY);
+                        let norm = Math.min(1, d / Math.max(1, maxDist));
+                        let p = Math.pow(Math.max(0, 1 - norm), 6.5);
+                        if (norm <= 0.12 || rng() < p) candidates.push({ gx, gy });
+                    }
+                }
+                addMinesFromCandidates(candidates);
+            } else if (MAP_TYPE === 'crossroads') {
+                let armHalf = Math.max(2, Math.floor(mapMin * 0.08));
+                shapeMask = (gx, gy) => Math.abs(gx - centerX) <= armHalf || Math.abs(gy - centerY) <= armHalf;
+                let candidates = [];
+                for (let gy = margin; gy < GRID_H - margin; gy++) {
+                    for (let gx = margin; gx < GRID_W - margin; gx++) {
+                        let onVertical = Math.abs(gx - centerX) <= armHalf;
+                        let onHorizontal = Math.abs(gy - centerY) <= armHalf;
+                        if (onVertical || onHorizontal) candidates.push({ gx, gy });
+                    }
+                }
+                addMinesFromCandidates(candidates);
+            } else {
+                generateRandomMines();
+            }
+
+            if (goldMines.length < totalMines) {
+                generateRandomMines();
             }
         }
 
@@ -2562,6 +2656,72 @@
                 fallback.push({ gx, gy });
             }
             return fallback;
+        }
+
+        function pickEdgePlayerSpawns(teamCount = 2) {
+            teamCount = Math.max(2, Math.min(8, Math.floor(teamCount || 2)));
+            let margin = 2;
+            let candidates = [];
+            for (let gy = margin; gy < GRID_H - margin; gy++) {
+                for (let gx = margin; gx < GRID_W - margin; gx++) {
+                    if (grid[gy][gx].type !== TYPE_FLOOR) continue;
+                    let edgeDist = Math.min(gx - margin, gy - margin, (GRID_W - 1 - margin) - gx, (GRID_H - 1 - margin) - gy);
+                    if (edgeDist <= 1) candidates.push({ gx, gy });
+                }
+            }
+            if (!candidates.length) return pickRandomPlayerSpawns(teamCount);
+
+            let picks = [];
+            let first = candidates[Math.floor(rng() * candidates.length)];
+            picks.push(first);
+            while (picks.length < teamCount) {
+                let best = null;
+                let bestScore = -1;
+                for (let c of candidates) {
+                    if (picks.some(p => p.gx === c.gx && p.gy === c.gy)) continue;
+                    let nearest = Infinity;
+                    for (let p of picks) {
+                        let d = Math.hypot(c.gx - p.gx, c.gy - p.gy);
+                        if (d < nearest) nearest = d;
+                    }
+                    if (nearest > bestScore) {
+                        bestScore = nearest;
+                        best = c;
+                    }
+                }
+                if (!best) break;
+                picks.push(best);
+            }
+
+            if (picks.length < teamCount) return pickRandomPlayerSpawns(teamCount);
+            return picks;
+        }
+
+        function pickIslandPlayerSpawns(teamCount = 2) {
+            teamCount = Math.max(2, Math.min(8, Math.floor(teamCount || 2)));
+            let centerX = (GRID_W - 1) / 2;
+            let centerY = (GRID_H - 1) / 2;
+            let radius = Math.max(6, Math.floor(Math.min(GRID_W, GRID_H) * 0.34));
+            let picks = [];
+            for (let i = 0; i < teamCount; i++) {
+                let ang = (Math.PI * 2 * i) / teamCount;
+                let gx = Math.round(centerX + Math.cos(ang) * radius);
+                let gy = Math.round(centerY + Math.sin(ang) * radius);
+                gx = Math.max(1, Math.min(GRID_W - 2, gx));
+                gy = Math.max(1, Math.min(GRID_H - 2, gy));
+                if (grid[gy][gx].type !== TYPE_FLOOR) {
+                    let n = findNearestWalkable(gx, gy, centerX, centerY);
+                    gx = n.x; gy = n.y;
+                }
+                picks.push({ gx, gy });
+            }
+            return picks;
+        }
+
+        function pickPlayerSpawns(teamCount = 2) {
+            if (MAP_TYPE === 'arena' || MAP_TYPE === 'solar_system') return pickEdgePlayerSpawns(teamCount);
+            if (MAP_TYPE === 'island') return pickIslandPlayerSpawns(teamCount);
+            return pickRandomPlayerSpawns(teamCount);
         }
 
         // ============================================================
@@ -2737,6 +2897,7 @@
             }
             for (let group of groups.values()) {
                 if (!group || group.length === 0) continue;
+                if (mode === 'd2' && group.length < 2) continue;
                 let u0 = group[0];
                 let unitType = u0.unitType;
                 let unitLevel = ignoreLevelSubgroups ? null : Math.max(1, Math.floor(u0.unitLevel || 1));
@@ -7962,6 +8123,7 @@
                 source = source.filter(u => Math.max(1, Math.floor(u.unitLevel || 1)) === subgroupFilter.unitLevel);
             }
             if (source.length === 0) return;
+            if (mode === 'd2' && source.length < 2) return;
 
             // Keep deterministic order for repeatable redistribution.
             source.sort((a, b) => a.id - b.id);
@@ -9836,6 +9998,8 @@
                         fullVisibility = data.cfg.fullVis || false;
                         gameMode = data.cfg.gameMode || 'destroy';
                         CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
+                        STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
+                        MAP_TYPE = data.cfg.mapType || 'random';
                     }
                     initAudio();
                     startGame();
@@ -10071,7 +10235,7 @@
             connections.forEach(c => c.send({
                 type: 'START_GAME', seed: gameSeed,
                 lobbyPlayers: lobbyPlayers,
-                cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP }
+                cfg: { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP, startingMoney: STARTING_MONEY, mapType: MAP_TYPE }
             }));
 
             initAudio();
@@ -10108,6 +10272,8 @@
             fullVisibility = document.getElementById('cfg-full-vis').checked;
             gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
             CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
+            STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-money').value) || 2000));
+            MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
         }
 
         function startSoloGame() {
@@ -10138,13 +10304,13 @@
             graphMetric = 'money';
             gameStatsHistory = [];
 
-            for (let p of players) { p.money = 2000; p.popCount = 0; }
+            for (let p of players) { p.money = STARTING_MONEY; p.popCount = 0; }
 
             rng = mulberry32(gameSeed);
             visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
             generateAreas();
             let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
-            let spawns = pickRandomPlayerSpawns(teams.length);
+            let spawns = pickPlayerSpawns(teams.length);
             generateGoldMines(spawns);
 
             let teamSpawners = {};
