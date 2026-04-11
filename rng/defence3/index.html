@@ -535,6 +535,54 @@
             background: #111;
         }
 
+        #shop-stats-container {
+            display: none;
+            border: 1px solid #444;
+            background: #111;
+            padding: 4px 5px;
+        }
+
+        #shop-stats-container .shop-stats-title {
+            color: #4af;
+            font-size: 10px;
+            font-weight: bold;
+            margin-bottom: 3px;
+        }
+
+        #shop-stats-container .build-stats-panel {
+            border-top: 1px solid #2a2a2a;
+            border-bottom: 1px solid #2a2a2a;
+            padding: 3px 0;
+            margin: 0;
+        }
+
+        #shop-stats-container .build-stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1px 0;
+            font-size: 9px;
+        }
+
+        #shop-stats-container .build-stat-label {
+            color: #888;
+        }
+
+        #shop-stats-container .build-stat-value {
+            color: #fff;
+            text-align: right;
+        }
+
+        #shop-stats-container .shop-stats-desc {
+            margin-top: 4px;
+            border-top: 1px solid #2a2a2a;
+            padding-top: 3px;
+            color: #777;
+            font-size: 9px;
+            font-style: italic;
+            line-height: 1.25;
+        }
+
         #build-selected-desc.empty {
             color: #666;
             font-style: italic;
@@ -928,13 +976,14 @@
             </div>
             <div id="minimap-wrap">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 2px;">
-                    <span style="font-size:10px; color:#888;">Map</span>
+                    <span id="minimap-title" style="font-size:10px; color:#888;">Map</span>
                     <button id="btn-minimap"
                         style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:9px; padding:1px 4px; border-radius:2px;">▼</button>
                 </div>
                 <div id="minimap-container">
                     <canvas id="minimapCanvas" width="160" height="160"></canvas>
                 </div>
+                <div id="shop-stats-container"></div>
             </div>
         </div>
 
@@ -1354,15 +1403,15 @@
             sand_gun: "Slows enemies drastically. Low damage.",
             ice: "Freezes enemies. Combo with water for bonus damage.",
             elements: "Applies all status effects. Jack of all trades.",
-            laser: "Beam between aligned laser towers. Constant DPS.",
+            laser: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.",
             watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low HP, large vision.",
             // Floor
-            sand: "Slows enemies walking over it.",
-            lava: "Burns enemies walking over it.",
-            poison_puddle: "Poisons enemies walking over it.",
-            ice_patch: "Freezes enemies walking over it.",
-            water_puddle: "Soaks enemies walking over it.",
-            mine: "Explodes once when an enemy walks over it.",
+            sand: "Slows enemies walking over it. Fast to build. Strong agains moles. Low health.",
+            lava: "Burns enemies walking over it. Fast to build. Strong agains moles. Low health.",
+            poison_puddle: "Poisons enemies walking over it. Fast to build. Strong agains moles. Low health.",
+            ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
+            water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
+            mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
             farm: "Generates gold per second equal to its level.",
             // Special
             spawner: "Spawns collectors that gather gold from mines.",
@@ -7559,14 +7608,18 @@
             // Minimap toggle
             const btnMap = document.getElementById('btn-minimap');
             const mapCont = document.getElementById('minimap-container');
+            const statsCont = document.getElementById('shop-stats-container');
             if (btnMap && mapCont) {
                 btnMap.addEventListener('click', () => {
-                    if (mapCont.style.display === 'none') {
-                        mapCont.style.display = 'block';
-                        btnMap.innerText = '▼';
-                    } else {
+                    let isCollapsed = btnMap.innerText === '▲';
+                    btnMap.innerText = isCollapsed ? '▼' : '▲';
+                    let showPanel = btnMap.innerText === '▼';
+                    if (selectedBuildItem) {
                         mapCont.style.display = 'none';
-                        btnMap.innerText = '▲';
+                        if (statsCont) statsCont.style.display = showPanel ? 'block' : 'none';
+                    } else {
+                        mapCont.style.display = showPanel ? 'block' : 'none';
+                        if (statsCont) statsCont.style.display = 'none';
                     }
                 });
             }
@@ -8323,15 +8376,169 @@
         function updateSelectedBuildDescription() {
             let descEl = document.getElementById('build-selected-desc');
             if (!descEl) return;
+            descEl.style.display = 'none';
             if (!selectedBuildItem) {
                 descEl.classList.add('empty');
-                descEl.textContent = 'Select a shop item to see details.';
+                descEl.textContent = '';
+                updateShopStatsInMinimap();
                 return;
             }
-            let def = CARD_TYPES[selectedBuildItem];
-            let desc = DESCRIPTIONS[selectedBuildItem] || (def ? def.name : selectedBuildItem);
             descEl.classList.remove('empty');
-            descEl.textContent = desc;
+            descEl.textContent = '';
+            updateShopStatsInMinimap();
+        }
+
+        function updateShopStatsInMinimap() {
+            let mapCont = document.getElementById('minimap-container');
+            let statsCont = document.getElementById('shop-stats-container');
+            let titleEl = document.getElementById('minimap-title');
+            let btnMap = document.getElementById('btn-minimap');
+            if (!mapCont || !statsCont || !btnMap) return;
+
+            let isCollapsed = btnMap.innerText === '▲';
+            if (!selectedBuildItem) {
+                statsCont.style.display = 'none';
+                statsCont.innerHTML = '';
+                mapCont.style.display = isCollapsed ? 'none' : 'block';
+                if (titleEl) titleEl.textContent = 'Map';
+                return;
+            }
+
+            let def = CARD_TYPES[selectedBuildItem] || {};
+            let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
+            statsCont.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
+            mapCont.style.display = 'none';
+            statsCont.style.display = isCollapsed ? 'none' : 'block';
+            if (titleEl) titleEl.textContent = 'Shop Stats';
+        }
+
+        function renderBuildItemDetailedStats(key) {
+            let def = CARD_TYPES[key];
+            if (!def) return '';
+
+            let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+            let level = Math.max(1, Math.floor(Math.log2(stacks)) + 1);
+            let html = '<div class="build-stats-panel">';
+
+            let addRow = (label, value) => {
+                html += `<div class="build-stat-row"><span class="build-stat-label">${label}</span><span class="build-stat-value">${value}</span></div>`;
+            };
+
+            let fmt = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v)) ? formatBigNumber(v, d) : v;
+            let getUnitPreview = (unitType, lvl) => {
+                let us = UNIT_STATS[unitType] || UNIT_STATS.norm;
+                let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
+                let hp = Math.max(1, Math.floor((us.hp || 1) * Math.pow(cfg.hpExp || 1, lvl - 1)));
+                let atk = us.atk > 0 ? Math.max(1, Math.round(us.atk * Math.pow(cfg.dmgExp || 1, lvl - 1))) : 0;
+                let baseCd = us.atkCd || 30;
+                let cd = baseCd < 900 ? Math.max(cfg.minCd || 8, Math.round(baseCd * Math.pow(cfg.cdExp || 1, lvl - 1))) : baseCd;
+                let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : ((us.speed || 1) * (cfg.speedCapMul || 1.8));
+                let speed = Math.min(speedCap, (us.speed || 1) * Math.pow(cfg.speedExp || 1, lvl - 1));
+                return { hp, atk, cd, speed };
+            };
+
+            addRow('Stacks', `x${stacks}`);
+            addRow('Level', `L${level}`);
+
+            if (key.startsWith('barrack_')) {
+                let unitType = def.unitType || 'norm';
+                let bStats = calculateItemStats('barrack', level);
+                let baseCost = Math.round(((BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm).baseTime || 20) * 0.5);
+                let unitCost = Math.round(baseCost * (1 + (level - 1) * 0.5));
+                let spawnCd = getBarrackSpawnCooldown(unitType, level);
+                let up = getUnitPreview(unitType, level);
+                addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`);
+                addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
+                addRow('Queue Cost', `$${fmt(unitCost)}`);
+                addRow('Unit HP', fmt(up.hp));
+                if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                else if (unitType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
+                else if (unitType === 'salvager_unit') addRow('Salvage Yield', `10% x L${level}`);
+                else {
+                    addRow('Unit Attack', fmt(up.atk));
+                    let dps = up.cd > 0 ? (up.atk / up.cd * TICK_RATE).toFixed(1) : '0';
+                    addRow('Unit DPS', dps);
+                }
+                addRow('Unit Speed', up.speed.toFixed(1));
+            } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner') {
+                let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : 'builder_unit');
+                let stats = calculateItemStats(key, level);
+                let spawnCd = getBarrackSpawnCooldown(workerType, level);
+                let unitCost = key === 'spawner' ? 15 : (key === 'salvager' ? 20 : 18);
+                unitCost = Math.round(unitCost * (1 + (level - 1) * 0.5));
+                let up = getUnitPreview(workerType, level);
+                addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`);
+                addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
+                addRow('Queue Cost', `$${fmt(unitCost)}`);
+                addRow('Worker HP', fmt(up.hp));
+                if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                else if (workerType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
+                else addRow('Salvage Yield', `10% x L${level}`);
+                addRow('Worker Speed', up.speed.toFixed(1));
+            } else if (def.target === 'wall') {
+                let hp = Math.floor((def.towerHp || 0) * Math.pow(1.4, level - 1));
+                let dmg = (def.damage !== undefined) ? (def.damage * Math.pow(1.4, level - 1)) : null;
+                let cd = def.cd;
+                let vision = def.visionRange;
+                if (def.type === 'water' || key === 'water' || key === 'smg' || key === 'pistol') {
+                    if (cd) cd = Math.max(5, def.cd * (1 - (level - 1) * 0.1));
+                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
+                } else if (key === 'fire' || key === 'poison') {
+                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
+                } else if (key === 'sand_gun') {
+                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
+                    if (cd) cd = def.cd * Math.pow(0.9, level);
+                }
+                if (vision && def.maxVisionRange) vision = Math.min(vision, def.maxVisionRange);
+                if (hp > 0) addRow('HP', `${fmt(hp)}/${fmt(hp)}`);
+                if (dmg !== null) addRow('Attack', fmt(dmg, 1));
+                if (cd) {
+                    addRow('Cooldown', `${(cd / TICK_RATE).toFixed(2)}s`);
+                    let dps = dmg !== null && cd > 0 ? (dmg / cd * TICK_RATE).toFixed(1) : '0';
+                    addRow('DPS', dps);
+                }
+                if (vision !== undefined) addRow('Range', fmt(vision, 1));
+                if (dmg !== null) {
+                    if (key === 'fire') {
+                        addRow('Burn DPS', (dmg * 0.05).toFixed(1));
+                        addRow('Burn Duration', `${((60 + level * 10) / TICK_RATE).toFixed(1)}s`);
+                        addRow('Splash Radius', `${(64 / TILE).toFixed(1)} tiles`);
+                    } else if (key === 'poison') {
+                        addRow('Poison DPS', (dmg * 0.10).toFixed(1));
+                        addRow('Poison Duration', `${((150 + level * 50) / TICK_RATE).toFixed(1)}s`);
+                    } else if (key === 'ice') {
+                        addRow('Freeze DPS', (dmg * 0.20).toFixed(1));
+                        addRow('Freeze Duration', `${((60 + level * 10) / TICK_RATE).toFixed(1)}s`);
+                    } else if (key === 'elements') {
+                        let dot = (dmg * 0.20).toFixed(1);
+                        addRow('Burn DPS', dot);
+                        addRow('Poison DPS', dot);
+                        addRow('Freeze DPS', dot);
+                    }
+                }
+                if (key === 'water') {
+                    addRow('Wet Duration', `${((120 + level * 20) / TICK_RATE).toFixed(1)}s`);
+                } else if (key === 'sand_gun') {
+                    addRow('Slow Duration', `${(180 / TICK_RATE).toFixed(1)}s`);
+                } else if (key === 'watch_tower') {
+                    addRow('Watch Duration', `${((80 + level * 20) / TICK_RATE).toFixed(1)}s`);
+                }
+            } else {
+                let stats = calculateItemStats(key, level);
+                if (stats.maxHp > 0) addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`);
+                if (key === 'farm') addRow('Income', `+${fmt(level)}/s`);
+                if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
+                if (key === 'mine' && stats.damage > 0) addRow('Blast Dmg', fmt(stats.damage));
+                if (key === 'lava' && stats.damage > 0) addRow('Burn DPS', stats.damage.toFixed(1));
+                if (key === 'poison_puddle' && stats.damage > 0) addRow('Poison DPS', stats.damage.toFixed(1));
+                if (key === 'ice_patch' && stats.damage > 0) addRow('Freeze DPS', stats.damage.toFixed(1));
+                if (key === 'sand' && stats.damage > 0) addRow('Slow Power', stats.damage.toFixed(2));
+                if (key === 'water_puddle') addRow('Wet Duration', `${(60 / TICK_RATE).toFixed(1)}s`);
+                if (key === 'area_upgrader') addRow('Effect', 'Area multiplier +1');
+            }
+
+            html += '</div>';
+            return html;
         }
 
         function isBuildItemAvailable(key, playerId = localPlayerId) {
