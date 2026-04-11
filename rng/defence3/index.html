@@ -451,6 +451,45 @@
             flex-shrink: 0;
         }
 
+        .mult-toggle-bar {
+            display: flex;
+            gap: 0;
+            padding: 2px 2px;
+            border-bottom: 1px solid #2f2f2f;
+            background: #121212;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+
+        .mult-toggle-btn {
+            border: 1px solid #444;
+            border-radius: 3px;
+            background: #1a1a1a;
+            color: #888;
+            font-size: 9px;
+            font-weight: bold;
+            padding: 1px 0;
+            min-width: 0;
+            cursor: pointer;
+            flex: 1 1 0;
+            margin: 0;
+        }
+
+        .mult-toggle-btn.active {
+            border-color: #4af;
+            background: #1a2d3a;
+            color: #d7efff;
+        }
+
+        .mult-toggle-label {
+            color: #777;
+            font-size: 9px;
+            display: inline-flex;
+            align-items: center;
+            margin-right: 4px;
+            flex: 0 0 auto;
+        }
+
         .build-tab {
             flex: 1;
             display: flex;
@@ -789,6 +828,10 @@
                             <td>Hold position for selected units</td>
                         </tr>
                         <tr>
+                            <td><span class="kbd">*</span> / <span class="kbd">/</span></td>
+                            <td>Apply subgroup unit <code>x2</code> / <code>/2</code> to each active selected unit subgroup</td>
+                        </tr>
+                        <tr>
                             <td><span class="kbd">1..9</span></td>
                             <td>Select control group</td>
                         </tr>
@@ -873,6 +916,7 @@
         <!-- LEFT PANEL (shop + minimap) -->
         <div id="left-panel">
             <div id="build-bar">
+                <div id="build-multiplier-bar" class="mult-toggle-bar"></div>
                 <div id="build-tabs">
                     <div class="build-tab active" data-tab="barracks">Barracks</div>
                     <div class="build-tab" data-tab="towers">Towers</div>
@@ -897,6 +941,7 @@
         <!-- RIGHT PANEL (info/unit menu) -->
         <div id="right-panel">
             <div id="control-group-bar"></div>
+            <div id="queue-multiplier-bar" class="mult-toggle-bar"></div>
             <div id="subgroup-options">
                 <button id="btn-ignore-level">Type-Only Groups: OFF</button>
             </div>
@@ -1422,6 +1467,9 @@
             if (!unit) return;
             let lvl = Math.max(1, Math.floor(level || 1));
             unit.unitLevel = lvl;
+            if (!(Number.isFinite(unit.stackCount) && unit.stackCount >= 1)) {
+                unit.stackCount = Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+            }
 
             let baseHp = unit.baseHp || unit.maxHp || 1;
             let baseAtk = unit.baseAttackDamage || unit.attackDamage || 0;
@@ -1526,6 +1574,9 @@
         // Build
         let selectedBuildItem = null; // key from CARD_TYPES
         let activeBuildTab = 'barracks';
+        const PURCHASE_MULTIPLIERS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+        let buildPurchaseMultiplier = 1;
+        let queuePurchaseMultiplier = 1;
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = false;
@@ -2593,6 +2644,57 @@
             btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
             btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
             btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+        }
+
+        function renderMultiplierBar(containerId, currentValue, onChange, label) {
+            let bar = document.getElementById(containerId);
+            if (!bar) return;
+            let html = '';
+            for (let mult of PURCHASE_MULTIPLIERS) {
+                let activeCls = mult === currentValue ? ' active' : '';
+                html += `<button class="mult-toggle-btn${activeCls}" data-mult="${mult}">x${mult}</button>`;
+            }
+            bar.innerHTML = html;
+            bar.querySelectorAll('.mult-toggle-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let val = parseInt(btn.dataset.mult);
+                    if (!Number.isFinite(val) || val < 1) return;
+                    onChange(val);
+                });
+            });
+        }
+
+        function updatePurchaseMultiplierBars() {
+            renderMultiplierBar('build-multiplier-bar', buildPurchaseMultiplier, (val) => {
+                buildPurchaseMultiplier = val;
+                updatePurchaseMultiplierBars();
+                updateBuildMenu();
+            }, 'Buy');
+            renderMultiplierBar('queue-multiplier-bar', queuePurchaseMultiplier, (val) => {
+                queuePurchaseMultiplier = val;
+                updatePurchaseMultiplierBars();
+                updateInfoPanel();
+            }, 'Queue');
+        }
+
+        function queueResizeForEachActiveUnitSubgroup(mode) {
+            let activeUnits = getActiveUnits();
+            if (!activeUnits || activeUnits.length === 0) return;
+            let groups = new Map();
+            for (let u of activeUnits) {
+                let key = getUnitGroupKey(u);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(u);
+            }
+            for (let group of groups.values()) {
+                if (!group || group.length === 0) continue;
+                let u0 = group[0];
+                let unitType = u0.unitType;
+                let unitLevel = ignoreLevelSubgroups ? null : Math.max(1, Math.floor(u0.unitLevel || 1));
+                let ids = group.map(u => u.id);
+                queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
+            }
+            setTimeout(updateInfoPanel, 50);
         }
 
         function getNextLevelUpgradeInfo(item) {
@@ -6764,6 +6866,8 @@
             let gameArea = document.getElementById('game-area');
             let multiRallyPoints = [];
             let multiUnitCommandPoints = [];
+            let multiBuilderAssignTargets = [];
+            let multiCollectorAssignTargets = [];
 
             function isCtrlMultiCommand(evt) {
                 if (!evt) return false;
@@ -6824,6 +6928,37 @@
                 }
             }
 
+            function applyWorkerAssignTargets(workerUnits, targetType, targetGx, targetGy, appendToMultiTargets) {
+                if (!workerUnits || workerUnits.length === 0) return;
+                let multiTargets = targetType === 'build' ? multiBuilderAssignTargets : multiCollectorAssignTargets;
+                if (appendToMultiTargets && multiTargets.length > 0) {
+                    multiTargets.push({ targetGx, targetGy });
+                    if (multiTargets.length > 12) multiTargets.shift();
+                } else {
+                    multiTargets.length = 0;
+                    multiTargets.push({ targetGx, targetGy });
+                }
+                if (multiTargets.length === 0) multiTargets.push({ targetGx, targetGy });
+
+                let unitIds = workerUnits.map(u => u.id);
+                let buckets = Array.from({ length: multiTargets.length }, () => []);
+                for (let i = 0; i < unitIds.length; i++) {
+                    buckets[i % multiTargets.length].push(unitIds[i]);
+                }
+
+                for (let i = 0; i < buckets.length; i++) {
+                    if (buckets[i].length === 0) continue;
+                    let target = multiTargets[i];
+                    queueAction({
+                        action: 'workerAssign',
+                        unitIds: buckets[i],
+                        targetType,
+                        targetGx: target.targetGx,
+                        targetGy: target.targetGy
+                    });
+                }
+            }
+
             function screenToWorldClamped(sx, sy) {
                 let rect = gameArea.getBoundingClientRect();
                 let clampedX = Math.max(rect.left, Math.min(rect.right - 1, sx));
@@ -6847,6 +6982,7 @@
                         if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
                         // Short-circuit for immediate cant_place feedback (affordability / validity)
                         let _cd = CARD_TYPES[selectedBuildItem];
+                        let purchaseCount = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
                         let _canPlace = false;
                         if (selectedBuildItem === 'area_upgrader') {
                             let aId = grid[gy][gx].areaId;
@@ -6861,14 +6997,14 @@
                                     else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
                                 }
                                 let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
-                                _canPlace = filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost;
+                                _canPlace = filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost * purchaseCount;
                             }
                         } else {
-                            _canPlace = _cd && players[localPlayerId].money >= _cd.price &&
+                            _canPlace = _cd && players[localPlayerId].money >= (_cd.price * purchaseCount) &&
                                 (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
                         }
                         if (!_canPlace) { playSound('cant_place'); return; }
-                        queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled });
+                        queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled, count: purchaseCount });
                         updateBuildMenu();
                         return;
                     }
@@ -6945,7 +7081,7 @@
                     if (selSpawners.length === 0) {
                         for (let b of barracks) {
                             if (b.owner === localPlayerId && b.hp > 0 && !b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 20) {
-                                queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy });
+                                queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy, count: queuePurchaseMultiplier });
                                 return;
                             }
                         }
@@ -6963,12 +7099,14 @@
                             // Generic builder-targeting for any placeable object that can be built/upgraded.
                             let buildTarget = _getBuilderWorkTargetNear(world.x, world.y, localPlayerId, 22, true);
                             if (buildTarget) {
-                                queueAction({ action: 'workerAssign', unitIds: builderUnits.map(u => u.id), targetType: 'build', targetGx: buildTarget.gx, targetGy: buildTarget.gy });
+                                applyWorkerAssignTargets(builderUnits, 'build', buildTarget.gx, buildTarget.gy, isCtrlMulti);
                                 updateInfoPanel();
                                 // If no non-worker units, return
                                 let nonWorkers = activeUnits.filter(u => !u.workerType);
                                 if (nonWorkers.length === 0) return;
                             }
+                        } else if (!isCtrlMulti) {
+                            multiBuilderAssignTargets = [];
                         }
 
                         if (collectorUnits.length > 0) {
@@ -6978,11 +7116,13 @@
                                 if (m.gold > 0 && Math.hypot(m.x - world.x, m.y - world.y) < 22) { mine = m; break; }
                             }
                             if (mine) {
-                                queueAction({ action: 'workerAssign', unitIds: collectorUnits.map(u => u.id), targetType: 'mine', targetGx: mine.gx, targetGy: mine.gy });
+                                applyWorkerAssignTargets(collectorUnits, 'mine', mine.gx, mine.gy, isCtrlMulti);
                                 updateInfoPanel();
                                 let nonWorkers = activeUnits.filter(u => !u.workerType);
                                 if (nonWorkers.length === 0) return;
                             }
+                        } else if (!isCtrlMulti) {
+                            multiCollectorAssignTargets = [];
                         }
 
                         // --- Normal combat unit targeting ---
@@ -7232,6 +7372,12 @@
                 if ((e.key === 'z' || e.key === 'Z') && selectedUnits.length > 0) attackMoveMode = true;
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'c' || e.key === 'C') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
+                if (e.key === '/' || e.code === 'NumpadDivide') {
+                    queueResizeForEachActiveUnitSubgroup('d2');
+                }
+                if (e.key === '*' || e.code === 'NumpadMultiply') {
+                    queueResizeForEachActiveUnitSubgroup('x2');
+                }
                 // Control groups
                 let num = null;
                 if (e.code && e.code.startsWith('Digit')) {
@@ -7339,6 +7485,7 @@
             }
             updateDefaultToggleButtons();
             updateIgnoreLevelButton();
+            updatePurchaseMultiplierBars();
 
             const btnHelp = document.getElementById('btn-help');
             const btnHelpClose = document.getElementById('btn-help-close');
@@ -7586,10 +7733,208 @@
             }
         }
 
+        function getUnitStackCount(u) {
+            if (!u) return 1;
+            if (Number.isFinite(u.stackCount) && u.stackCount >= 1) return Math.floor(u.stackCount);
+            let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
+            return Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+        }
+
+        function stackCountToLevel(stacks) {
+            return Math.max(1, Math.floor(Math.log2(Math.max(1, Math.floor(stacks || 1)))) + 1);
+        }
+
+        function distributeEvenInteger(total, count) {
+            let n = Math.max(0, Math.floor(count || 0));
+            if (n <= 0) return [];
+            let sum = Math.max(0, Math.floor(total || 0));
+            let base = Math.floor(sum / n);
+            let rem = sum % n;
+            let out = new Array(n).fill(base);
+            for (let i = 0; i < rem; i++) out[i]++;
+            return out;
+        }
+
+        function distributeEvenWithCaps(total, caps) {
+            let n = caps.length;
+            if (n === 0) return [];
+            let values = new Array(n).fill(0);
+            let left = Math.max(0, Number(total) || 0);
+            let active = Array.from({ length: n }, (_, i) => i);
+            let eps = 1e-6;
+            while (left > eps && active.length > 0) {
+                let share = left / active.length;
+                let nextActive = [];
+                for (let idx of active) {
+                    let capLeft = Math.max(0, (Number(caps[idx]) || 0) - values[idx]);
+                    if (capLeft <= eps) continue;
+                    let add = Math.min(capLeft, share);
+                    values[idx] += add;
+                    left -= add;
+                    if (((Number(caps[idx]) || 0) - values[idx]) > eps) nextActive.push(idx);
+                }
+                if (nextActive.length === active.length) {
+                    // No one capped this pass, we're done.
+                    break;
+                }
+                active = nextActive;
+            }
+            return values;
+        }
+
+        function removeUnitNow(u, adjustPop = true) {
+            if (!u) return;
+            if (!u.dead) {
+                u.dead = true;
+                u.hp = 0;
+            }
+            removeUnitSpatial(u);
+            selectedUnits = selectedUnits.filter(su => su !== u);
+            let idx = units.indexOf(u);
+            if (idx >= 0) units.splice(idx, 1);
+            if (adjustPop && players[u.owner]) players[u.owner].popCount = Math.max(0, (players[u.owner].popCount || 0) - 1);
+        }
+
+        function configureWorkerUnitFromType(u) {
+            if (!u) return;
+            if (u.unitType === 'collector') {
+                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+            } else if (u.unitType === 'salvager_unit') {
+                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+            } else if (u.unitType === 'builder_unit') {
+                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.builderHasMaterial = false;
+            }
+        }
+
+        function spawnUnitNearUnit(templateUnit) {
+            if (!templateUnit) return null;
+            let attempts = [
+                [1, 0], [-1, 0], [0, 1], [0, -1],
+                [1, 1], [1, -1], [-1, 1], [-1, -1],
+                [2, 0], [-2, 0], [0, 2], [0, -2]
+            ];
+            let baseGx = Math.floor(templateUnit.x / TILE);
+            let baseGy = Math.floor(templateUnit.y / TILE);
+            let spawnTile = { x: baseGx, y: baseGy };
+            for (let [dx, dy] of attempts) {
+                let tx = Math.max(0, Math.min(GRID_W - 1, baseGx + dx));
+                let ty = Math.max(0, Math.min(GRID_H - 1, baseGy + dy));
+                if (templateUnit.isFlying || canUnitOccupyTile(templateUnit, tx, ty)) {
+                    spawnTile = { x: tx, y: ty };
+                    break;
+                }
+            }
+            if (!templateUnit.isFlying) {
+                spawnTile = findNearestWalkable(spawnTile.x, spawnTile.y, baseGx, baseGy);
+            }
+            let nu = new Unit(templateUnit.unitType, templateUnit.owner, spawnTile.x * TILE + 16, spawnTile.y * TILE + 16);
+            configureWorkerUnitFromType(nu);
+            return nu;
+        }
+
+        function shuffleInPlaceDeterministic(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                let r = (typeof rng === 'function') ? rng() : Math.random();
+                let j = Math.floor(r * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
+            if (!Array.isArray(unitIds) || unitIds.length === 0) return;
+            let idSet = new Set(unitIds);
+            let source = units.filter(u => idSet.has(u.id) && u.owner === playerId && !u.dead && !u.isKing);
+            if (subgroupFilter && subgroupFilter.unitType) {
+                source = source.filter(u => u.unitType === subgroupFilter.unitType);
+            }
+            if (subgroupFilter && Number.isFinite(subgroupFilter.unitLevel)) {
+                source = source.filter(u => Math.max(1, Math.floor(u.unitLevel || 1)) === subgroupFilter.unitLevel);
+            }
+            if (source.length === 0) return;
+
+            // Keep deterministic order for repeatable redistribution.
+            source.sort((a, b) => a.id - b.id);
+
+            let initialCount = source.length;
+            let sumStacks = source.reduce((s, u) => s + getUnitStackCount(u), 0);
+            let sumHp = source.reduce((s, u) => s + Math.max(0, Number(u.hp) || 0), 0);
+
+            let targetCount = initialCount;
+            if (mode === 'x2') {
+                targetCount = Math.min(sumStacks, initialCount * 2);
+                let popCap = getPlayerPopCap(playerId);
+                let room = Math.max(0, popCap - players[playerId].popCount);
+                targetCount = Math.min(targetCount, initialCount + room);
+            } else {
+                targetCount = Math.floor(initialCount / 2);
+            }
+            targetCount = Math.max(0, Math.floor(targetCount));
+
+            let survivors = [];
+            if (targetCount >= initialCount) {
+                survivors = [...source];
+                let toSpawn = targetCount - initialCount;
+                for (let i = 0; i < toSpawn; i++) {
+                    let template = source[i % source.length];
+                    let nu = spawnUnitNearUnit(template);
+                    if (!nu) continue;
+                    units.push(nu);
+                    players[playerId].popCount++;
+                    survivors.push(nu);
+                }
+            } else {
+                let shuffled = shuffleInPlaceDeterministic([...source]);
+                let survivorSet = new Set(shuffled.slice(0, targetCount).map(u => u.id));
+                survivors = source.filter(u => survivorSet.has(u.id));
+                for (let u of source) {
+                    if (!survivorSet.has(u.id)) removeUnitNow(u, true);
+                }
+            }
+
+            if (survivors.length === 0) {
+                updateInfoPanel();
+                return;
+            }
+
+            // Distribute virtual stacks evenly (+-1), preserving exact combined stacks.
+            let stackShares = distributeEvenInteger(sumStacks, survivors.length);
+            for (let i = 0; i < survivors.length; i++) {
+                let u = survivors[i];
+                let stackCount = Math.max(1, stackShares[i]);
+                u.stackCount = stackCount;
+                let lvl = stackCountToLevel(stackCount);
+                applyUnitLevelScaling(u, lvl);
+                u.stackCount = stackCount;
+            }
+
+            // Preserve total HP as much as possible without exceeding new total max HP.
+            let maxHpCaps = survivors.map(u => Math.max(1, Number(u.maxHp) || 1));
+            let hpTarget = Math.min(sumHp, maxHpCaps.reduce((s, v) => s + v, 0));
+            let hpShares = distributeEvenWithCaps(hpTarget, maxHpCaps);
+            for (let i = 0; i < survivors.length; i++) {
+                survivors[i].hp = Math.max(0, Math.min(maxHpCaps[i], hpShares[i]));
+                if (survivors[i].hp <= 0) survivors[i].hp = Math.min(1, maxHpCaps[i]);
+            }
+
+            // Keep selection focused on transformed survivors only.
+            let survivorIds = new Set(survivors.map(u => u.id));
+            selectedUnits = selectedUnits.filter(u => !idSet.has(u.id) || survivorIds.has(u.id));
+            for (let u of survivors) {
+                if (!selectedUnits.includes(u)) selectedUnits.push(u);
+            }
+
+            updateInfoPanel();
+        }
+
         function processActions(actions, playerId) {
             for (let a of actions) {
                 if (a.action === 'place') {
-                    placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
+                    let count = Math.max(1, Math.floor(a.count || 1));
+                    for (let i = 0; i < count; i++) {
+                        placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
+                    }
                 } else if (a.action === 'move') {
                     let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
                     for (let u of units) {
@@ -7692,8 +8037,10 @@
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
                     if (b && b.hp > 0 && !b.underConstruction) {
-                        let cost = b.getUnitCost();
-                        if (players[playerId].money >= cost && b.spawnQueue.length < 20) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            let cost = b.getUnitCost();
+                            if (players[playerId].money < cost || b.spawnQueue.length >= 20) break;
                             players[playerId].money -= cost;
                             let queuedLevel = b.effectiveLevel || b.level || 1;
                             b.spawnQueue.push({ unitType: b.unitType, level: queuedLevel });
@@ -7702,8 +8049,10 @@
                 } else if (a.action === 'queueWorker') {
                     let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
                     if (s && s.hp > 0 && !s.underConstruction) {
-                        let cost = s.getUnitCost();
-                        if (players[playerId].money >= cost && s.spawnQueue.length < 10) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            let cost = s.getUnitCost();
+                            if (players[playerId].money < cost || s.spawnQueue.length >= 10) break;
                             players[playerId].money -= cost;
                             let queuedLevel = s.effectiveLevel || s.level || 1;
                             let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : 'salvager_unit';
@@ -7750,17 +8099,25 @@
                     checkWinCondition();
                 } else if (a.action === 'dequeueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
-                    if (b && b.spawnQueue.length > 0) {
-                        let cost = b.getUnitCost();
-                        b.spawnQueue.shift();
-                        players[playerId].money += cost * 0.1;
+                    if (b) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            if (b.spawnQueue.length <= 0) break;
+                            let cost = b.getUnitCost();
+                            b.spawnQueue.shift();
+                            players[playerId].money += cost * 0.1;
+                        }
                     }
                 } else if (a.action === 'dequeueWorker') {
                     let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (s && s.spawnQueue.length > 0) {
-                        let cost = s.getUnitCost();
-                        s.spawnQueue.shift();
-                        players[playerId].money += cost * 0.1;
+                    if (s) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            if (s.spawnQueue.length <= 0) break;
+                            let cost = s.getUnitCost();
+                            s.spawnQueue.shift();
+                            players[playerId].money += cost * 0.1;
+                        }
                     }
                 } else if (a.action === 'markSalvage') {
                     // Toggle salvage mark on a building at gx,gy
@@ -7798,6 +8155,12 @@
                 } else if (a.action === 'killUnit') {
                     let u = units.find(u => u.id === a.unitId && u.owner === playerId);
                     if (u && !u.dead && !u.isKing) { u.hp = 0; u.dead = true; players[playerId].popCount--; }
+                } else if (a.action === 'resizeUnitGroup') {
+                    let subgroupFilter = {
+                        unitType: a.unitType || null,
+                        unitLevel: Number.isFinite(a.unitLevel) ? a.unitLevel : null
+                    };
+                    resizeUnitSubgroup(playerId, a.unitIds || [], a.mode, subgroupFilter);
                 } else if (a.action === 'towerTarget') {
                     // Set preferredTarget on own towers
                     for (let tc of (a.towerCoords || [])) {
@@ -7995,6 +8358,7 @@
                     div.dataset.key = key;
                     let displayPrice = def.price;
                     if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
+                    displayPrice *= Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
                     if (money < displayPrice) div.classList.add('cant-afford');
                     if (!isBuildItemAvailable(key)) div.classList.add('unavailable');
                     if (selectedBuildItem === key) div.classList.add('selected');
@@ -8011,7 +8375,7 @@
                     div.appendChild(nameSpan);
                     let priceSpan = document.createElement('span');
                     priceSpan.className = 'bi-price';
-                    priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
+                    priceSpan.textContent = (key === 'area_upgrader' ? formatBigNumber(displayPrice) + 'g+' : formatBigNumber(displayPrice) + 'g');
                     div.appendChild(priceSpan);
                     bindInstantPress(div, () => {
                         if (!isBuildItemAvailable(key)) return;
@@ -8035,13 +8399,14 @@
                 let div = _buildMenuItems[key]; if (!div) continue;
                 let displayPrice = def.price;
                 if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
+                displayPrice *= Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
                 let available = isBuildItemAvailable(key);
                 div.classList.toggle('cant-afford', money < displayPrice);
                 div.classList.toggle('unavailable', !available);
                 if (!available && selectedBuildItem === key) selectedBuildItem = null;
                 div.classList.toggle('selected', selectedBuildItem === key);
                 let priceSpan = div.querySelector('.bi-price');
-                if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? '100g+' : displayPrice + 'g');
+                if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? formatBigNumber(displayPrice) + 'g+' : formatBigNumber(displayPrice) + 'g');
             }
             updateSelectedBuildDescription();
         }
@@ -8125,7 +8490,7 @@
             return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value" style="text-align:right" class="level-display">${getLevelHtml(obj)}</span></div>`;
         }
 
-        function infoHeader(name, obj) {
+        function infoHeader(name, obj, opts = null) {
             let groupSize = obj.effectiveGroupSize || 1;
             let baseStacks = obj.stacks || 1;
             let effStacks = obj.effectiveStacks || baseStacks;
@@ -8142,7 +8507,8 @@
             }
             let areaLevelColor = AREA_LEVEL_COLORS[areaLevel] || '#888';
             let html = `<div class="info-title">${name} `;
-            html += getLevelHtml(obj) + ` `;
+            if (opts && opts.mixedLevel) html += `<span style="color:#fc8">Mixed</span> `;
+            else html += getLevelHtml(obj) + ` `;
             if (groupSize > 1) html += `<span style="color:#4af;font-size:10px">G${groupSize}</span> `;
             if (areaSize > 0) html += `<span style="color:#fd0;font-size:10px">A${areaSize}</span> `;
             html += `<span style="color:${areaLevelColor};font-size:10px">M${areaLevel}</span>`;
@@ -8151,10 +8517,11 @@
             return html;
         }
 
-        function infoHeaderUnit(name, u) {
+        function infoHeaderUnit(name, u, opts = null) {
             let lvl = u.unitLevel || 1;
             let html = `<div class="info-title">${name} `;
-            html += `<span style="color:#888">L${lvl}</span>`;
+            if (opts && opts.mixedLevel) html += `<span style="color:#fc8">Mixed</span>`;
+            else html += `<span style="color:#888">L${lvl}</span>`;
             html += `</div>`;
             return html;
         }
@@ -8247,6 +8614,16 @@
             return null;
         }
 
+        function getEntityLevelToken(e) {
+            if (!e || e._isGoldMine) return null;
+            if (e.underConstruction) return 'build';
+            if (e.isUpgrading) return 'upg';
+            if (e.effectiveLevel !== undefined) return `L${Math.max(0, Math.floor(e.effectiveLevel || 0))}`;
+            if (e.level !== undefined) return `L${Math.max(0, Math.floor(e.level || 0))}`;
+            if (e.stacks !== undefined) return `L${Math.max(1, Math.floor(Math.log2(Math.max(1, e.stacks || 1))) + 1)}`;
+            return null;
+        }
+
         function renderBarrackInfo(e) {
             let html = '';
             let bKey = 'barrack_' + e.unitType;
@@ -8274,13 +8651,15 @@
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             } else if (e.owner === localPlayerId && !e.underConstruction) {
                 let cost = e.getUnitCost();
-                let canAfford = players[localPlayerId].money >= cost;
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = cost * purchaseCount;
+                let canAfford = players[localPlayerId].money >= totalCost;
                 let subBtn = `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(e.spawnQueue.length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(e.spawnQueue.length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -8317,7 +8696,9 @@
                 let queueCoordStr = readyGroup.map(b => `${b.gx},${b.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
-                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= cost;
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = cost * purchaseCount;
+                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= totalCost;
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
@@ -8325,7 +8706,7 @@
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
                 if (readyGroup.length > 0) {
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 }
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
@@ -8434,13 +8815,15 @@
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
                 } else {
                     let cost = e.getUnitCost();
-                    let canAfford = players[localPlayerId].money >= cost;
+                    let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                    let totalCost = cost * purchaseCount;
+                    let canAfford = players[localPlayerId].money >= totalCost;
                     let subBtn = `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                     let addBtn = `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                     let autoEnabled = isAutoUpgradeEnabled(e);
                     let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                     let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
                 }
             }
@@ -8503,11 +8886,23 @@
             let s = UNIT_STATS[u.unitType] || {};
             let dps = u.attackCooldown > 0 ? (u.attackDamage / u.attackCooldown * TICK_RATE).toFixed(1) : '0';
             let spd = u.speed;
+            let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
             if (u.frozen > 0) spd *= 0.5;
             if (u.sandy > 0) spd *= 0.5;
             html += infoRow('HP', formatInfoFraction(Math.floor(u.hp), u.maxHp));
-            html += infoRow('Attack', u.attackDamage);
-            html += infoRow('DPS', dps);
+            html += infoRow('Stacks', getUnitStackCount(u));
+            if (u.workerType === 'builder') {
+                let buildSpeed = u.builderDps || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+                html += infoRow('Build Speed', `${formatBigNumber(buildSpeed, 1)}/tick`);
+            } else if (u.workerType === 'collector') {
+                let gatherPerTrip = 10 * lvl;
+                html += infoRow('Gather Speed', `${formatBigNumber(gatherPerTrip, 1)}/trip`);
+            } else if (u.workerType === 'salvager') {
+                html += infoRow('Salvage Yield', `10% x L${lvl}`);
+            } else {
+                html += infoRow('Attack', u.attackDamage);
+                html += infoRow('DPS', dps);
+            }
             html += infoRow('Speed', `${spd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`);
             html += infoRow('State', ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][u.commandState]);
             let immunes = [];
@@ -8526,7 +8921,13 @@
             if (u.wet > 0) statuses.push(`Wet(${u.wet})`);
             if (u.sandy > 0) statuses.push(`Sand(${u.sandy})`);
             if (statuses.length > 0) html += infoRow('Status', statuses.join(' '));
-            if (u.owner === localPlayerId) html += salvageBtn(0, 0, false, true, u.id);
+            if (u.owner === localPlayerId) {
+                html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
+                html += `<span class="info-salvage-btn" data-unit-id="${u.id}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill Unit</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u.unitLevel || 1))}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u.unitLevel || 1))}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
+                html += `</div>`;
+            }
             html += infoDesc(DESCRIPTIONS[u.unitType] || 'Combat unit.');
             return html;
         }
@@ -8536,12 +8937,36 @@
             let u0 = group[0];
             let s = UNIT_STATS[u0.unitType] || {};
             let totalHp = 0, totalMaxHp = 0;
+            let totalStacks = 0;
+            let totalBuildSpeed = 0;
+            let totalCollectorPerTrip = 0;
+            let totalSalvagerLevel = 0;
             for (let u of group) { totalHp += u.hp; totalMaxHp += u.maxHp; }
+            for (let u of group) totalStacks += getUnitStackCount(u);
+            for (let u of group) {
+                let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
+                if (u.workerType === 'builder') {
+                    totalBuildSpeed += (u.builderDps || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))));
+                } else if (u.workerType === 'collector') {
+                    totalCollectorPerTrip += (10 * lvl);
+                } else if (u.workerType === 'salvager') {
+                    totalSalvagerLevel += lvl;
+                }
+            }
             let dps = u0.attackCooldown > 0 ? (u0.attackDamage / u0.attackCooldown * TICK_RATE).toFixed(1) : '0';
             html += infoRow('Count', group.length);
             html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
-            html += infoRow('Attack', u0.attackDamage);
-            html += infoRow('DPS', dps);
+            html += infoRow('Stacks', totalStacks);
+            if (u0.workerType === 'builder') {
+                html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/tick`);
+            } else if (u0.workerType === 'collector') {
+                html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`);
+            } else if (u0.workerType === 'salvager') {
+                html += infoRow('Salvage Yield', `10% x ΣL${totalSalvagerLevel}`);
+            } else {
+                html += infoRow('Attack', u0.attackDamage);
+                html += infoRow('DPS', dps);
+            }
             html += infoRow('Speed', u0.speed.toFixed(1));
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -8554,7 +8979,12 @@
             if (immunes.length > 0) html += infoRow('Immune', immunes.join(', '));
             if (u0.owner === localPlayerId) {
                 let ids = group.map(u => u.id).join(',');
-                html += `<div style="margin-top:3px;text-align:center"><span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill All (${group.length})</span></div>`;
+                let subgroupLevel = ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u0.unitLevel || 1));
+                html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
+                html += `<span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill All (${group.length})</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
+                html += `</div>`;
             }
             html += infoDesc(DESCRIPTIONS[u0.unitType] || 'Combat unit.');
             return html;
@@ -8620,7 +9050,9 @@
                 let queueCoordStr = readyGroup.map(s => `${s.gx},${s.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
-                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= cost;
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = cost * purchaseCount;
+                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= totalCost;
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
@@ -8628,7 +9060,7 @@
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
                 if (readyGroup.length > 0) {
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(cost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 }
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
@@ -8770,7 +9202,12 @@
                 if (grp.isUnit) {
                     let u0 = items[0];
                     let prefix = items.length > 1 ? `${items.length}x ` : '';
-                    html += infoHeaderUnit(prefix + label, u0);
+                    let mixedUnitLevels = false;
+                    if (items.length > 1) {
+                        let unitLevels = new Set(items.map(u => Math.max(1, Math.floor(u.unitLevel || 1))));
+                        mixedUnitLevels = unitLevels.size > 1;
+                    }
+                    html += infoHeaderUnit(prefix + label, u0, { mixedLevel: mixedUnitLevels });
                     if (items.length === 1) {
                         html += renderUnitInfo(items[0]);
                     } else {
@@ -8782,7 +9219,12 @@
                     if (e0._isGoldMine) {
                         html += `<div class="info-title">${prefix}${label}</div>`;
                     } else {
-                        html += infoHeader(prefix + label, e0);
+                        let mixedEntityLevels = false;
+                        if (items.length > 1) {
+                            let levelTokens = new Set(items.map(it => getEntityLevelToken(it)));
+                            mixedEntityLevels = levelTokens.size > 1;
+                        }
+                        html += infoHeader(prefix + label, e0, { mixedLevel: mixedEntityLevels });
                     }
                     if (items.length === 1) {
                         html += renderEntityBlock(items[0]);
@@ -8813,7 +9255,7 @@
             panel.querySelectorAll('.info-buy-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-                    queueAction({ action: 'queueUnit', gx, gy });
+                    queueAction({ action: 'queueUnit', gx, gy, count: queuePurchaseMultiplier });
                 });
             });
             // Wire up group buy buttons - dynamically find barrack with lowest queue
@@ -8825,7 +9267,7 @@
                         let b = barracks.find(b => b.gx === c.gx && b.gy === c.gy && b.owner === localPlayerId && b.hp > 0 && !b.underConstruction);
                         if (b && b.spawnQueue.length < 20 && b.spawnQueue.length < bestQueue) { best = b; bestQueue = b.spawnQueue.length; }
                     }
-                    if (best) queueAction({ action: 'queueUnit', gx: best.gx, gy: best.gy });
+                    if (best) queueAction({ action: 'queueUnit', gx: best.gx, gy: best.gy, count: queuePurchaseMultiplier });
                 });
             });
 
@@ -8833,7 +9275,7 @@
             panel.querySelectorAll('.info-buy-worker-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-                    queueAction({ action: 'queueWorker', gx, gy });
+                    queueAction({ action: 'queueWorker', gx, gy, count: queuePurchaseMultiplier });
                 });
             });
             // Wire up worker group buy buttons - distribute to lowest queue
@@ -8845,7 +9287,7 @@
                         let s = collectorSpawners.find(s => s.gx === c.gx && s.gy === c.gy && s.owner === localPlayerId && s.hp > 0 && !s.underConstruction);
                         if (s && (s.spawnQueue || []).length < 10 && (s.spawnQueue || []).length < bestQueue) { best = s; bestQueue = (s.spawnQueue || []).length; }
                     }
-                    if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy });
+                    if (best) queueAction({ action: 'queueWorker', gx: best.gx, gy: best.gy, count: queuePurchaseMultiplier });
                 });
             });
 
@@ -8854,7 +9296,7 @@
                 bindInstantPress(btn, () => {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                     let type = btn.dataset.type === 'unit' ? 'dequeueUnit' : 'dequeueWorker';
-                    queueAction({ action: type, gx, gy });
+                    queueAction({ action: type, gx, gy, count: queuePurchaseMultiplier });
                 });
             });
 
@@ -8874,7 +9316,7 @@
                         }
                     }
                     if (best && bestQueue > 0) {
-                        queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy });
+                        queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy, count: queuePurchaseMultiplier });
                     }
                 });
             });
@@ -8957,6 +9399,22 @@
                 bindInstantPress(btn, () => {
                     let ids = btn.dataset.ids.split(',').map(Number);
                     for (let id of ids) queueAction({ action: 'killUnit', unitId: id });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up x2 /2 subgroup resize buttons (units)
+            panel.querySelectorAll('.info-scale-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let ids = (btn.dataset.ids || '')
+                        .split(',')
+                        .map(v => parseInt(v))
+                        .filter(v => Number.isFinite(v));
+                    if (ids.length === 0) return;
+                    let mode = (btn.dataset.mode === 'x2') ? 'x2' : 'd2';
+                    let unitType = btn.dataset.unitType || null;
+                    let parsedLevel = parseInt(btn.dataset.unitLevel);
+                    let unitLevel = Number.isFinite(parsedLevel) ? parsedLevel : null;
+                    queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
                     setTimeout(updateInfoPanel, 50);
                 });
             });
