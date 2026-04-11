@@ -1063,7 +1063,27 @@
         function getSpawnerRallyTargetWorld(spawner) {
             if (spawner.rallyTargetUnitId != null) {
                 let tu = units.find(u => u.id === spawner.rallyTargetUnitId && !u.dead && u.owner !== spawner.owner);
-                if (tu) return { x: tu.x, y: tu.y };
+                if (tu) {
+                    let tgx = Math.floor(tu.x / TILE), tgy = Math.floor(tu.y / TILE);
+                    if (isTileVisibleToPlayer(spawner.owner, tgx, tgy)) {
+                        spawner.rallyX = tu.x;
+                        spawner.rallyY = tu.y;
+                        spawner._rallyLastSeenX = tu.x;
+                        spawner._rallyLastSeenY = tu.y;
+                        spawner._pendingRallyDetach = false;
+                        return { x: tu.x, y: tu.y };
+                    }
+
+                    let lockX = Number.isFinite(spawner._rallyLastSeenX) ? spawner._rallyLastSeenX : spawner.rallyX;
+                    let lockY = Number.isFinite(spawner._rallyLastSeenY) ? spawner._rallyLastSeenY : spawner.rallyY;
+                    if (Number.isFinite(lockX) && Number.isFinite(lockY)) {
+                        spawner.rallyX = lockX;
+                        spawner.rallyY = lockY;
+                    }
+                    // Stop following when target leaves owner's visibility.
+                    spawner.rallyTargetUnitId = null;
+                    spawner._pendingRallyDetach = false;
+                }
             }
             if (spawner.rallyX !== null && spawner.rallyY !== null && Number.isFinite(spawner.rallyX) && Number.isFinite(spawner.rallyY)) {
                 return { x: spawner.rallyX, y: spawner.rallyY };
@@ -1449,6 +1469,8 @@
         let dirtyGrid = true, dirtyAreas = true;
         let visibilityGrid = [];
     let visibilityVersion = 0;
+        let visibilityGridByPlayerCache = new Map();
+        let visibilityCacheTick = -1;
         let fullVisibility = false;
 
         let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
@@ -2594,11 +2616,11 @@
             else if (type === 'house') { stats.maxHp = Math.floor(120 * mult); }
             else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
             else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner') { stats.maxHp = Math.floor(60 * mult); }
-            else if (type === 'lava') { stats.maxHp = Math.floor(700 * mult); stats.damage = mult; }
+            else if (type === 'lava') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
             else if (type === 'mine') { stats.maxHp = Math.floor(30 * mult); stats.damage = Math.floor(135 * mult); }
-            else if (type === 'poison_puddle') { stats.maxHp = Math.floor(400 * mult); stats.damage = mult; }
-            else if (type === 'ice_patch') { stats.maxHp = Math.floor(700 * mult); stats.damage = mult; }
-            else if (type === 'water_puddle') { stats.maxHp = Math.floor(700 * mult); }
+            else if (type === 'poison_puddle') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
+            else if (type === 'ice_patch') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
+            else if (type === 'water_puddle') { stats.maxHp = Math.floor(30 * mult); }
             else if (type.startsWith('barrack')) { stats.maxHp = Math.floor(100 * mult); }
             return stats;
         }
@@ -3234,6 +3256,8 @@
                 this.path = null;
                 this.pathIndex = 0;
                 this.forcedAttackTarget = false;
+                this._forcedTargetLastSeenX = null;
+                this._forcedTargetLastSeenY = null;
                 this.dead = false;
                 this.unitLevel = 1;
 
@@ -3415,6 +3439,8 @@
                 let closest = null, closestD = aggroRange;
                 for (let u of near) {
                     if (u.owner === this.owner || u.dead) continue;
+                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) continue;
                     let d = Math.hypot(u.x - this.x, u.y - this.y);
                     if (d < closestD) { closestD = d; closest = u; }
                 }
@@ -3513,6 +3539,8 @@
                 let closest = null, closestD = aggroRange;
                 for (let u of near) {
                     if (u.owner === this.owner || u.dead) continue;
+                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) continue;
                     let d = Math.hypot(u.x - this.x, u.y - this.y);
                     if (d < closestD) { closestD = d; closest = u; }
                 }
@@ -3661,6 +3689,49 @@
                 // Attack unit target
                 if (this.targetUnit) {
                     if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
+                    let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
+                    let targetVisible = isTileVisibleToPlayer(this.owner, tgx, tgy);
+                    if (!targetVisible) {
+                        if (this.forcedAttackTarget) {
+                            let lockX = Number.isFinite(this._forcedTargetLastSeenX) ? this._forcedTargetLastSeenX : this.targetUnit.x;
+                            let lockY = Number.isFinite(this._forcedTargetLastSeenY) ? this._forcedTargetLastSeenY : this.targetUnit.y;
+                            this.targetUnit = null;
+                            this.attackTarget = null;
+                            this.forcedAttackTarget = false;
+                            this.path = null;
+                            this.pathIndex = 0;
+                            this._pendingPathTarget = null;
+                            if (Number.isFinite(lockX) && Number.isFinite(lockY)) {
+                                let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
+                                let lgx = Math.floor(lockX / TILE), lgy = Math.floor(lockY / TILE);
+                                let dest = findNearestWalkable(lgx, lgy, ugx, ugy);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
+                                    this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
+                                    pathfindBudget++;
+                                } else {
+                                    this._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_MOVING };
+                                }
+                                this.commandState = CMD_MOVING;
+                            } else {
+                                this.commandState = CMD_IDLE;
+                            }
+                            return;
+                        } else {
+                            this.targetUnit = null;
+                            this.attackTarget = null;
+                            this.path = null;
+                            this.pathIndex = 0;
+                            this._pendingPathTarget = null;
+                            this.forcedAttackTarget = false;
+                            this.commandState = CMD_IDLE;
+                            return;
+                        }
+                    }
+                    if (this.forcedAttackTarget) {
+                            this._forcedTargetLastSeenX = this.targetUnit.x;
+                            this._forcedTargetLastSeenY = this.targetUnit.y;
+                    }
                     let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
                     if (d <= this.attackRange + this.r + this.targetUnit.r) {
                         this.attackTarget = this.targetUnit;
@@ -3748,6 +3819,8 @@
                 let near = getUnitsInRange(this.x, this.y, this.attackRange);
                 for (let u of near) {
                     if (u.owner === this.owner || u.dead) continue;
+                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) continue;
                     if (Math.hypot(u.x - this.x, u.y - this.y) <= this.attackRange) {
                         if (this.attackTimer <= 0) {
                             this._performAttackOnUnit(u);
@@ -6180,6 +6253,15 @@
             for (let u of activeSelectedUnits) {
                 if (u.dead) continue;
                 let ux = u.prevX + (u.x - u.prevX) * alpha, uy = u.prevY + (u.y - u.prevY) * alpha;
+                let neutralEndpoint = null;
+                if (u.path && u.path.length > 0) {
+                    let last = u.path[u.path.length - 1];
+                    neutralEndpoint = { x: last.x * TILE + 16, y: last.y * TILE + 16 };
+                } else if (u._pendingPathTarget) {
+                    neutralEndpoint = { x: u._pendingPathTarget.gx * TILE + 16, y: u._pendingPathTarget.gy * TILE + 16 };
+                } else if (Number.isFinite(u._forcedTargetLastSeenX) && Number.isFinite(u._forcedTargetLastSeenY)) {
+                    neutralEndpoint = { x: u._forcedTargetLastSeenX, y: u._forcedTargetLastSeenY };
+                }
                 if (u.path && u.path.length > 0 && u.commandState >= CMD_MOVING && u.commandState <= CMD_ATTACK_MOVING) {
                     let lastPt = u.path[u.path.length - 1];
                     let destX = lastPt.x * TILE + 16, destY = lastPt.y * TILE + 16;
@@ -6193,17 +6275,32 @@
                 }
                 // Attack target indicator
                 if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
-                    let tx = u.targetUnit.prevX + (u.targetUnit.x - u.targetUnit.prevX) * alpha;
-                    let ty = u.targetUnit.prevY + (u.targetUnit.y - u.targetUnit.prevY) * alpha;
-                    ctx.strokeStyle = 'rgba(255,0,0,0.6)'; ctx.lineWidth = 1;
+                    let tgx = Math.floor(u.targetUnit.x / TILE), tgy = Math.floor(u.targetUnit.y / TILE);
+                    let targetVisible = isTileVisible(tgx, tgy);
+                    ctx.lineWidth = 1;
                     ctx.setLineDash([3, 3]);
-                    ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(tx, ty); ctx.stroke();
+                    if (targetVisible) {
+                        let tx = u.targetUnit.prevX + (u.targetUnit.x - u.targetUnit.prevX) * alpha;
+                        let ty = u.targetUnit.prevY + (u.targetUnit.y - u.targetUnit.prevY) * alpha;
+                        ctx.strokeStyle = 'rgba(255,0,0,0.6)';
+                        ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(tx, ty); ctx.stroke();
+                    } else if (neutralEndpoint) {
+                        ctx.strokeStyle = 'rgba(100,255,100,0.6)';
+                        ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(neutralEndpoint.x, neutralEndpoint.y); ctx.stroke();
+                    }
                     ctx.setLineDash([]);
                 }
                 if (u.targetBuilding && u.targetBuilding.hp > 0 && u.commandState === CMD_ATTACKING) {
-                    ctx.strokeStyle = 'rgba(255,0,0,0.6)'; ctx.lineWidth = 1;
+                    let targetVisible = isTileVisible(u.targetBuilding.gx, u.targetBuilding.gy);
+                    ctx.lineWidth = 1;
                     ctx.setLineDash([3, 3]);
-                    ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(u.targetBuilding.x, u.targetBuilding.y); ctx.stroke();
+                    if (targetVisible) {
+                        ctx.strokeStyle = 'rgba(255,0,0,0.6)';
+                        ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(u.targetBuilding.x, u.targetBuilding.y); ctx.stroke();
+                    } else if (neutralEndpoint) {
+                        ctx.strokeStyle = 'rgba(100,255,100,0.6)';
+                        ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(neutralEndpoint.x, neutralEndpoint.y); ctx.stroke();
+                    }
                     ctx.setLineDash([]);
                 }
             }
@@ -6421,21 +6518,18 @@
             return fullVisibility || (visibilityGrid[gy] && visibilityGrid[gy][gx] > 0);
         }
 
-        function updateVisibility(playerId) {
-            // Check fullVisibility toggle
-            if (fullVisibility) return;
+        function createEmptyVisibilityGrid() {
+            let vis = new Array(GRID_H);
+            for (let y = 0; y < GRID_H; y++) vis[y] = new Float32Array(GRID_W);
+            return vis;
+        }
 
-            // Allocate or reset grid
-            if (visibilityGrid.length !== GRID_H || visibilityGrid[0].length !== GRID_W) {
-                visibilityGrid = new Array(GRID_H);
-                for (let y = 0; y < GRID_H; y++) visibilityGrid[y] = new Float32Array(GRID_W);
-            } else {
-                for (let y = 0; y < GRID_H; y++) visibilityGrid[y].fill(0);
-            }
+        function computeVisibilityGridForPlayer(playerId, vis) {
+            for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
             let setVis = (gx, gy, r) => {
                 if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-                    if (r > visibilityGrid[gy][gx]) visibilityGrid[gy][gx] = r;
+                    if (r > vis[gy][gx]) vis[gy][gx] = r;
                 }
             };
 
@@ -6443,7 +6537,7 @@
                 setVis(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
             }
             for (let t of towers) if ((t.owner === playerId || (t.watched || 0) > 0) && t.hp > 0 && !t.underConstruction) {
-                setVis(t.gx, t.gy, t.currentStats.visionRange || 3);
+                setVis(t.gx, t.gy, (t.currentStats && t.currentStats.visionRange) || 3);
             }
             for (let b of barracks) if ((b.owner === playerId || (b.watched || 0) > 0) && b.hp > 0 && !b.underConstruction) setVis(b.gx, b.gy, 4);
             for (let s of collectorSpawners) if ((s.owner === playerId || (s.watched || 0) > 0) && s.hp > 0 && !s.underConstruction) setVis(s.gx, s.gy, 4);
@@ -6457,24 +6551,54 @@
             // 2-pass DP flood fill (Euclidean approximation)
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
-                    let v = visibilityGrid[y][x];
-                    if (x > 0) v = Math.max(v, visibilityGrid[y][x - 1] - 1);
-                    if (y > 0) v = Math.max(v, visibilityGrid[y - 1][x] - 1);
-                    if (x > 0 && y > 0) v = Math.max(v, visibilityGrid[y - 1][x - 1] - 1.414);
-                    if (x < GRID_W - 1 && y > 0) v = Math.max(v, visibilityGrid[y - 1][x + 1] - 1.414);
-                    visibilityGrid[y][x] = v;
+                    let v = vis[y][x];
+                    if (x > 0) v = Math.max(v, vis[y][x - 1] - 1);
+                    if (y > 0) v = Math.max(v, vis[y - 1][x] - 1);
+                    if (x > 0 && y > 0) v = Math.max(v, vis[y - 1][x - 1] - 1.414);
+                    if (x < GRID_W - 1 && y > 0) v = Math.max(v, vis[y - 1][x + 1] - 1.414);
+                    vis[y][x] = v;
                 }
             }
             for (let y = GRID_H - 1; y >= 0; y--) {
                 for (let x = GRID_W - 1; x >= 0; x--) {
-                    let v = visibilityGrid[y][x];
-                    if (x < GRID_W - 1) v = Math.max(v, visibilityGrid[y][x + 1] - 1);
-                    if (y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x] - 1);
-                    if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x + 1] - 1.414);
-                    if (x > 0 && y < GRID_H - 1) v = Math.max(v, visibilityGrid[y + 1][x - 1] - 1.414);
-                    visibilityGrid[y][x] = v;
+                    let v = vis[y][x];
+                    if (x < GRID_W - 1) v = Math.max(v, vis[y][x + 1] - 1);
+                    if (y < GRID_H - 1) v = Math.max(v, vis[y + 1][x] - 1);
+                    if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x + 1] - 1.414);
+                    if (x > 0 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x - 1] - 1.414);
+                    vis[y][x] = v;
                 }
             }
+        }
+
+        function getVisibilityGridForPlayer(playerId) {
+            if (fullVisibility) return null;
+            if (visibilityCacheTick !== gameTime) {
+                visibilityGridByPlayerCache.clear();
+                visibilityCacheTick = gameTime;
+            }
+            let cached = visibilityGridByPlayerCache.get(playerId);
+            if (cached) return cached;
+            let vis = createEmptyVisibilityGrid();
+            computeVisibilityGridForPlayer(playerId, vis);
+            visibilityGridByPlayerCache.set(playerId, vis);
+            return vis;
+        }
+
+        function isTileVisibleToPlayer(playerId, gx, gy) {
+            if (fullVisibility) return true;
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+
+            if (playerId === localPlayerId) return isTileVisible(gx, gy);
+            let vis = getVisibilityGridForPlayer(playerId);
+            return !!(vis[gy] && vis[gy][gx] > 0);
+        }
+
+        function updateVisibility(playerId) {
+            // Check fullVisibility toggle
+            if (fullVisibility) return;
+
+            visibilityGrid = getVisibilityGridForPlayer(playerId);
 
             visibilityVersion++;
         }
@@ -6673,6 +6797,8 @@
             function findEnemyUnitNear(worldX, worldY) {
                 for (let u of units) {
                     if (u.owner === localPlayerId || u.dead) continue;
+                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                    if (!isTileVisible(ugx, ugy)) continue;
                     if (Math.hypot(u.x - worldX, u.y - worldY) < u.r + 8) return u;
                 }
                 return null;
@@ -6754,6 +6880,7 @@
                     if (localDefeated) return;
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
                     let isCtrlMulti = isCtrlMultiCommand(e);
+                    let clickGx = Math.floor(world.x / TILE), clickGy = Math.floor(world.y / TILE);
                     let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(e => ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(e.type) && e.owner === localPlayerId);
@@ -6773,24 +6900,35 @@
                         let towerTarget = null;
                         for (let u of units) {
                             if (u.owner === localPlayerId || u.dead) continue;
+                            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                            if (!isTileVisible(ugx, ugy)) continue;
                             if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 10) { towerTarget = { type: 'unit', id: u.id }; break; }
                         }
                         if (!towerTarget) {
                             for (let t of towers) {
                                 if (t.owner === localPlayerId || t.hp <= 0) continue;
+                                if (!isTileVisible(t.gx, t.gy)) continue;
                                 if (Math.hypot(t.x - world.x, t.y - world.y) < 20) { towerTarget = { type: 'tower', gx: t.gx, gy: t.gy }; break; }
                             }
                         }
                         if (!towerTarget) {
                             for (let b of barracks) {
                                 if (b.owner === localPlayerId || b.hp <= 0) continue;
+                                if (!isTileVisible(b.gx, b.gy)) continue;
                                 if (Math.hypot(b.x - world.x, b.y - world.y) < 20) { towerTarget = { type: 'barrack', gx: b.gx, gy: b.gy }; break; }
                             }
                         }
                         if (!towerTarget) {
                             for (let s of collectorSpawners) {
                                 if (s.owner === localPlayerId || s.hp <= 0) continue;
+                                if (!isTileVisible(s.gx, s.gy)) continue;
                                 if (Math.hypot(s.x - world.x, s.y - world.y) < 20) { towerTarget = { type: 'spawner', gx: s.gx, gy: s.gy }; break; }
+                            }
+                        }
+                        if (!towerTarget && clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isTileVisible(clickGx, clickGy)) {
+                            let cell = grid[clickGy][clickGx];
+                            if (cell.item && cell.item.hp > 0 && cell.owner !== localPlayerId) {
+                                towerTarget = { type: 'item', gx: clickGx, gy: clickGy };
                             }
                         }
                         if (towerTarget) {
@@ -6852,10 +6990,10 @@
                         if (combatUnits.length > 0) {
                             let targetUnit = clickedEnemyUnit, targetBuilding = null;
                             if (!targetUnit) {
-                                for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
-                                if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
-                                if (!targetBuilding) for (let s of collectorSpawners) { if (s.owner !== localPlayerId && s.hp > 0 && Math.hypot(s.x - world.x, s.y - world.y) < 20) { targetBuilding = s; break; } }
-                                if (!targetBuilding && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                                for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && isTileVisible(t.gx, t.gy) && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
+                                if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && isTileVisible(b.gx, b.gy) && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
+                                if (!targetBuilding) for (let s of collectorSpawners) { if (s.owner !== localPlayerId && s.hp > 0 && isTileVisible(s.gx, s.gy) && Math.hypot(s.x - world.x, s.y - world.y) < 20) { targetBuilding = s; break; } }
+                                if (!targetBuilding && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && isTileVisible(gx, gy)) {
                                     let cell = grid[gy][gx];
                                     if (cell.item && cell.owner !== localPlayerId && cell.item.hp > 0) targetBuilding = cell.item;
                                 }
@@ -7457,6 +7595,7 @@
                     for (let u of units) {
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                             u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
+                            u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                             u.commandState = CMD_MOVING;
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7478,6 +7617,7 @@
                     for (let u of units) {
                         if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                             u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
+                            u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                             u.commandState = CMD_ATTACK_MOVING;
                             if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7500,6 +7640,7 @@
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                                 u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
+                                u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7526,6 +7667,7 @@
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                                 u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
+                                u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
@@ -7541,11 +7683,11 @@
                     }
                 } else if (a.action === 'stop') {
                     for (let u of units) {
-                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; }
+                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_IDLE; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null; }
                     }
                 } else if (a.action === 'hold') {
                     for (let u of units) {
-                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; }
+                        if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null; }
                     }
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
@@ -7598,6 +7740,9 @@
                         b.rallyX = a.targetX;
                         b.rallyY = a.targetY;
                         b.rallyTargetUnitId = (a.targetUnitId != null) ? a.targetUnitId : null;
+                        b._rallyLastSeenX = Number.isFinite(a.targetX) ? a.targetX : null;
+                        b._rallyLastSeenY = Number.isFinite(a.targetY) ? a.targetY : null;
+                        b._pendingRallyDetach = false;
                     }
                 } else if (a.action === 'resign') {
                     resignedTeams.add(playerId);
@@ -7668,6 +7813,10 @@
                             t.preferredTarget = barracks.find(b => b.gx === a.target.gx && b.gy === a.target.gy && b.hp > 0) || null;
                         } else if (a.target.type === 'spawner') {
                             t.preferredTarget = collectorSpawners.find(s => s.gx === a.target.gx && s.gy === a.target.gy && s.hp > 0) || null;
+                        } else if (a.target.type === 'item') {
+                            t.preferredTarget = (grid[a.target.gy] && grid[a.target.gy][a.target.gx] && grid[a.target.gy][a.target.gx].item && grid[a.target.gy][a.target.gx].item.hp > 0)
+                                ? grid[a.target.gy][a.target.gx].item
+                                : null;
                         }
                     }
                 }
@@ -9103,6 +9252,8 @@
             grid = [];
             visibilityGrid = [];
             visibilityVersion = 0;
+            visibilityGridByPlayerCache.clear();
+            visibilityCacheTick = -1;
 
             selectedUnits = [];
             selectedEntities = [];
