@@ -824,6 +824,12 @@
                 <label>Max Population:</label>
                 <input id="cfg-max-pop" type="number" min="1" max="100000" value="200" style="width:72px">
             </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <label>TPS / TPD:</label>
+                <input id="cfg-tick-rate" type="number" min="5" max="120" value="20" style="width:52px" title="Game ticks per second">
+                <span>/</span>
+                <input id="cfg-pipeline-delay" type="number" min="0" max="12" value="2" style="width:52px" title="Minimum lockstep pipeline delay in ticks">
+            </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
@@ -1532,11 +1538,12 @@
         let MAP_TYPE = 'random';
         const TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
-        const TICK_RATE = 20; // ticks per second
-        const WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
-        const TICK_MS = 1000 / TICK_RATE;
+        let TICK_RATE = 20; // ticks per second (menu configurable)
+        let WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
+        let TICK_MS = 1000 / TICK_RATE;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
-    let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, 2); // keep only a few ticks in flight to avoid strict-lockstep starvation
+    let LOCKSTEP_PIPELINE_MIN = 2;
+    let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
     let LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
@@ -2002,9 +2009,28 @@
         let _bgMusicNodes = null;
 
         const AUDIO_PITCH_SCALE = 0.78;
-        const CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
-        const MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
-        const MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
+        let CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
+        let MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
+        let MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
+
+        function applyTimingConfig(nextTickRate, nextPipelineMin) {
+            let tps = Number.isFinite(nextTickRate) ? Math.floor(nextTickRate) : TICK_RATE;
+            let pipelineMin = Number.isFinite(nextPipelineMin) ? Math.floor(nextPipelineMin) : LOCKSTEP_PIPELINE_MIN;
+
+            TICK_RATE = Math.max(5, Math.min(120, tps));
+            LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.min(12, pipelineMin));
+
+            TICK_MS = 1000 / TICK_RATE;
+            WORKER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 0.5));
+            LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN);
+            LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
+            LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
+            LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
+
+            CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
+            MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
+            MAP_KING_ALERT_DURATION = Math.floor(TICK_RATE * 2.6);
+        }
 
         function ensureControlGroupAlertState(num) {
             if (!controlGroupAlertState[num]) controlGroupAlertState[num] = { damageUntil: 0, kingUntil: 0 };
@@ -11422,6 +11448,7 @@
                 CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
                 STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
                 MAP_TYPE = data.cfg.mapType || 'random';
+                applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
             }
             initAudio();
             startGame();
@@ -12250,7 +12277,7 @@
                 let uid = getPeerProfileUid(p.peerId);
                 if (uid) matchRoleByUid[uid] = 'playing';
             }
-            matchStartConfig = { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP, startingMoney: STARTING_MONEY, mapType: MAP_TYPE };
+            matchStartConfig = { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP, startingMoney: STARTING_MONEY, mapType: MAP_TYPE, tickRate: TICK_RATE, pipelineDelay: LOCKSTEP_PIPELINE_MIN };
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
             teamColorById = setup.teamColorById;
@@ -12331,6 +12358,10 @@
             CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
             STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-money').value) || 2000));
             MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
+
+            let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
+            let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
+            applyTimingConfig(menuTickRate, menuPipelineDelay);
         }
 
         function startSoloGame() {
