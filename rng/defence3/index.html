@@ -121,7 +121,8 @@
             color: #aaa;
         }
 
-        #help-popup {
+        #help-popup,
+        #settings-popup {
             position: fixed;
             inset: 0;
             z-index: 1200;
@@ -131,11 +132,13 @@
             background: rgba(0, 0, 0, 0.62);
         }
 
-        #help-popup.hidden {
+        #help-popup.hidden,
+        #settings-popup.hidden {
             display: none;
         }
 
-        #help-popup-card {
+        #help-popup-card,
+        #settings-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
             overflow: auto;
@@ -144,6 +147,38 @@
             border-radius: 8px;
             box-shadow: 0 12px 42px rgba(0, 0, 0, 0.55);
             padding: 14px;
+        }
+
+        .settings-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 6px;
+        }
+
+        .settings-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 10px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            background: #151515;
+        }
+
+        .settings-row label {
+            font-size: 12px;
+            color: #cfd8dc;
+        }
+
+        .settings-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #ddd;
+            cursor: pointer;
         }
 
         .help-title-row {
@@ -820,12 +855,12 @@
             <button id="btn-fullscreen"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">⛶
                 FS</button>
-            <button id="btn-level-visibility"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
             <button id="btn-default-build"
                 style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Build: ON</button>
             <button id="btn-default-auto-upgrade"
                 style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Upgrade: ON</button>
+            <button id="btn-settings"
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Settings</button>
             <button id="btn-help"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Help</button>
             <span style="display:none; align-items:center;">
@@ -833,16 +868,46 @@
                 <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
                     Rally</label>
             </span>
-            <button id="btn-render-range"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render
-                range: Turrets</button>
-            <span style="display:inline-flex; align-items:center;">
-                <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
-                <label for="setting-audio" style="cursor:pointer; font-size:12px; color:#ddd;">Audio</label>
-            </span>
             <button id="btn-resign" title="Resign"
                 style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">☠</button>
         </span>
+    </div>
+
+    <div id="settings-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div id="settings-popup-card">
+            <div class="help-title-row">
+                <h3 id="settings-title" style="color:#8dc6ff; font-size:18px; margin:0">Settings</h3>
+                <button id="btn-settings-close"
+                    style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+            </div>
+            <div class="help-mode">Gameplay and rendering options</div>
+            <div class="settings-list">
+                <div class="settings-row">
+                    <label for="btn-level-visibility">Levels visibility</label>
+                    <button id="btn-level-visibility"
+                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
+                </div>
+                <div class="settings-row">
+                    <label for="btn-render-range">Render range overlay</label>
+                    <button id="btn-render-range"
+                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render range: Turrets</button>
+                </div>
+                <div class="settings-row">
+                    <label for="setting-audio">Audio</label>
+                    <label class="settings-toggle" for="setting-audio">
+                        <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
+                        Enabled
+                    </label>
+                </div>
+                <div class="settings-row">
+                    <label for="setting-gold-mine-text">Gold mine amount text</label>
+                    <label class="settings-toggle" for="setting-gold-mine-text">
+                        <input type="checkbox" id="setting-gold-mine-text" style="margin-right:2px; cursor:pointer;">
+                        Enabled
+                    </label>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="help-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -1432,6 +1497,14 @@
             return wasOpen !== open;
         }
 
+        function setSettingsPopupOpen(open) {
+            let popup = document.getElementById('settings-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            return wasOpen !== open;
+        }
+
         function mulberry32(seed) {
             let s = seed | 0;
             return function () {
@@ -1858,6 +1931,7 @@
     const RENDER_RANGE_TURRETS_AND_UNITS = 1;
     const RENDER_RANGE_NONE = 2;
     let renderRangeMode = RENDER_RANGE_TURRETS;
+    let showGoldMineAmountText = false;
 
         // Tick system
         let currentTick = 0;
@@ -7305,6 +7379,21 @@
                 ctx.globalAlpha = 1;
             }
 
+            // Gold mine amount labels (re-enabled for FPS comparison testing).
+            if (showGoldMineAmountText && visibleGoldMines.length > 0) {
+                ctx.font = "bold 8px Arial";
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                for (let m of visibleGoldMines) {
+                    let label = formatBigNumber(Math.max(0, m.gold || 0), 0);
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+                    ctx.strokeText(label, m.gx * TILE + 16, m.gy * TILE + 16);
+                    ctx.fillStyle = (m.gold > 0) ? '#fffbe8' : '#bbb';
+                    ctx.fillText(label, m.gx * TILE + 16, m.gy * TILE + 16);
+                }
+            }
+
             // Floor items
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
@@ -8467,6 +8556,7 @@
                 keysDown[e.key.toLowerCase()] = true;
                 if (!gameStarted) return;
                 if (e.key === 'Escape') {
+                    if (setSettingsPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
                 }
@@ -8502,6 +8592,7 @@
 
             // HUD Settings
             const audioToggle = document.getElementById('setting-audio');
+            const goldMineTextToggle = document.getElementById('setting-gold-mine-text');
             if (audioToggle) {
                 audioEnabled = audioToggle.checked;
                 audioToggle.addEventListener('change', () => {
@@ -8512,6 +8603,12 @@
                     } else {
                         startBackgroundMusic();
                     }
+                });
+            }
+            if (goldMineTextToggle) {
+                showGoldMineAmountText = goldMineTextToggle.checked;
+                goldMineTextToggle.addEventListener('change', () => {
+                    showGoldMineAmountText = goldMineTextToggle.checked;
                 });
             }
 
@@ -8597,8 +8694,11 @@
             updatePurchaseMultiplierBars();
 
             const btnHelp = document.getElementById('btn-help');
+            const btnSettings = document.getElementById('btn-settings');
             const btnHelpClose = document.getElementById('btn-help-close');
+            const btnSettingsClose = document.getElementById('btn-settings-close');
             const helpPopup = document.getElementById('help-popup');
+            const settingsPopup = document.getElementById('settings-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
             const goBtnGraph = document.getElementById('go-btn-graph');
@@ -8607,6 +8707,11 @@
             if (btnHelp) {
                 btnHelp.addEventListener('click', () => {
                     setHelpPopupOpen(true);
+                });
+            }
+            if (btnSettings) {
+                btnSettings.addEventListener('click', () => {
+                    setSettingsPopupOpen(true);
                 });
             }
             if (btnResign) {
@@ -8655,6 +8760,11 @@
                     setHelpPopupOpen(false);
                 });
             }
+            if (btnSettingsClose) {
+                btnSettingsClose.addEventListener('click', () => {
+                    setSettingsPopupOpen(false);
+                });
+            }
             if (helpPopup) {
                 helpPopup.addEventListener('click', (e) => {
                     let tabBtn = e.target.closest('.help-tab-btn');
@@ -8662,6 +8772,11 @@
                 });
                 helpPopup.addEventListener('mousedown', (e) => {
                     if (e.target === helpPopup) setHelpPopupOpen(false);
+                });
+            }
+            if (settingsPopup) {
+                settingsPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === settingsPopup) setSettingsPopupOpen(false);
                 });
             }
 
