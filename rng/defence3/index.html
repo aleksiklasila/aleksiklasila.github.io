@@ -1462,8 +1462,8 @@
         const TICK_RATE = 20; // ticks per second
         const WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
         const TICK_MS = 1000 / TICK_RATE;
-        let INPUT_DELAY = 4; // ticks ahead for lockstep buffering
-    let LOCKSTEP_PIPELINE_TICKS = INPUT_DELAY;
+        let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
+    let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, 2); // keep only a few ticks in flight to avoid strict-lockstep starvation
     let LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
@@ -7167,21 +7167,6 @@
             c.visibilityVersion = visibilityVersion;
         }
 
-        function updateGoldMineRenderCache(m) {
-            if (m._renderGold === m.gold && m._renderCanvas) return;
-            m._renderGold = m.gold;
-            if (!m._renderCanvas) {
-                m._renderCanvas = document.createElement('canvas');
-                m._renderCanvas.width = TILE;
-                m._renderCanvas.height = TILE;
-                m._renderCtx = m._renderCanvas.getContext('2d');
-            }
-            let c = m._renderCtx;
-            c.clearRect(0, 0, TILE, TILE);
-            c.fillStyle = '#fd0'; c.fillRect(4, 4, TILE - 8, TILE - 8);
-            c.fillStyle = '#a80'; c.fillRect(8, 8, TILE - 16, TILE - 16);
-        }
-
         function rebuildAreaColorCache() {
             _areaColorCache = new Map();
             for (let a of areas) {
@@ -7288,27 +7273,35 @@
             }
 
             // Gold mines
+            let visibleGoldMines = [];
             for (let m of goldMines) {
                 if (m.gx < minGx || m.gx > maxGx || m.gy < minGy || m.gy > maxGy) continue;
                 if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
-                updateGoldMineRenderCache(m);
-                let alpha = m.gold > 0 ? 1 : 0.3;
-                ctx.globalAlpha = alpha;
-                ctx.drawImage(m._renderCanvas, m.gx * TILE, m.gy * TILE);
+                visibleGoldMines.push(m);
+            }
 
-                // Draw value as vector text (crisper than bitmap-cached text under zoom)
-                let tx = m.gx * TILE + TILE / 2;
-                let ty = m.gy * TILE + TILE / 2 + 3;
-                ctx.font = '700 9px Arial';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.lineJoin = 'round';
-                ctx.strokeStyle = '#000';
-                ctx.lineWidth = 1.75;
-                let label = formatBigNumber(m.gold);
-                ctx.strokeText(label, tx, ty);
-                ctx.fillStyle = '#fff';
-                ctx.fillText(label, tx, ty);
+            // Always use low-detail mine rendering (batched vector rects).
+            let useGoldMineLowDetail = true;
+
+            if (useGoldMineLowDetail) {
+                // Active mines (single batched fill)
+                ctx.fillStyle = '#fd0';
+                ctx.beginPath();
+                for (let m of visibleGoldMines) {
+                    if (m.gold <= 0) continue;
+                    ctx.rect(m.gx * TILE + 2, m.gy * TILE + 2, TILE - 4, TILE - 4);
+                }
+                ctx.fill();
+
+                // Depleted mines (single batched fill with lighter alpha)
+                ctx.globalAlpha = 0.28;
+                ctx.fillStyle = '#9a9000';
+                ctx.beginPath();
+                for (let m of visibleGoldMines) {
+                    if (m.gold > 0) continue;
+                    ctx.rect(m.gx * TILE + 2, m.gy * TILE + 2, TILE - 4, TILE - 4);
+                }
+                ctx.fill();
                 ctx.globalAlpha = 1;
             }
 
@@ -8854,11 +8847,25 @@
                     return;
                 }
             }
-            let tick = currentTick + INPUT_DELAY;
+            let tick = currentTick + Math.max(0, Math.floor(INPUT_DELAY || 0));
+            if (isMultiplayer && gameStarted) {
+                // With low input delay, the target tick may already be packetized/committed.
+                // Move to the nearest still-editable tick so actions never get dropped.
+                while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]) tick++;
+            }
             if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
             let actorId = myPeerId || `p${localPlayerId}`;
             let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${nextLocalActionSeq++}` };
             localInputBuffer[tick].push(finalAction);
+
+            // Invalidate prebuilt packet/bundle state for this tick so the new action is included.
+            delete lockstepLocalPacketByTick[tick];
+            if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) {
+                delete lockstepHostPacketsByTick[tick][myPeerId];
+                delete lockstepBundleByTick[tick];
+                delete lockstepBundleAckByTick[tick];
+                delete lockstepCommittedByTick[tick];
+            }
         }
 
         function getUnitStackCount(u) {
