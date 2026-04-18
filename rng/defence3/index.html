@@ -1221,7 +1221,7 @@
             if (target instanceof Unit) return { type: 'unit', id: target.id };
             if (target instanceof Tower) return { type: 'tower', gx: target.gx, gy: target.gy };
             if (target instanceof Barrack) return { type: 'barrack', gx: target.gx, gy: target.gy };
-            if ((target instanceof CollectorSpawner) || (target instanceof SalvagerSpawner) || (target instanceof BuilderSpawner)) {
+            if ((target instanceof CollectorSpawner) || (target instanceof SalvagerSpawner) || (target instanceof BuilderSpawner) || (target instanceof HealerSpawner)) {
                 return { type: 'spawner', gx: target.gx, gy: target.gy };
             }
             if (Number.isFinite(target.gx) && Number.isFinite(target.gy)) {
@@ -1504,6 +1504,7 @@
             spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", hp: 60, target: 'floor' },
             salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", hp: 60, target: 'floor' },
             builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", hp: 60, target: 'floor' },
+            healer_spawner: { name: "Healer", price: 180, icon: "\u2695\uFE0F", color: "#355", hp: 60, target: 'floor' },
             house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 120, target: 'floor' },
             area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
 
@@ -1559,6 +1560,7 @@
             spawner: "Spawns collectors that gather gold from mines.",
             salvager: "Spawns salvagers that recycle marked buildings.",
             builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1hp and need builders to become functional.",
+            healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
             house: "Raises max population by 1.6^{level} while operational.",
             cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
             cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
@@ -1597,6 +1599,7 @@
             laser_resistant: "Laser-immune. Shoots laser beams from range.",
             snake: "Massive serpent. Rams targets, takes self-damage.",
             scout: "Fast flying recon. Very high vision, low HP, low attack. Patrols random points continuously.",
+            healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
         };
 
         // Build menu categories
@@ -1604,7 +1607,7 @@
             barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
             towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower'],
             floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm'],
-            special: ['spawner', 'salvager', 'builder_spawner', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
+            special: ['spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
 
         // Barrack spawn config
@@ -1618,6 +1621,7 @@
             collector: { baseTime: 15, reduction: 0.10 },
             salvager_unit: { baseTime: 20, reduction: 0.10 },
             builder_unit: { baseTime: 25, reduction: 0.10 },
+            healer_unit: { baseTime: 25, reduction: 0.10 },
         };
 
         // Unit combat stats
@@ -1638,6 +1642,7 @@
             collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
             salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#fff', r: 6, vis: 'rect', isWorker: true },
             king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 40, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
@@ -1651,6 +1656,7 @@
             collector: { hpExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
             salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
             builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
+            healer_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
             king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 12, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
@@ -1688,6 +1694,10 @@
             if (unit.workerType === 'builder') {
                 builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
             }
+            let healerHps = unit.healerHps || 0;
+            if (unit.workerType === 'healer') {
+                healerHps = Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+            }
 
             return {
                 level: lvl,
@@ -1696,7 +1706,8 @@
                 attackCooldown,
                 speed,
                 visionRange,
-                builderDps
+                builderDps,
+                healerHps
             };
         }
 
@@ -1728,6 +1739,7 @@
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
+            if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
 
             unit.baseLevel = lvl;
             unit.baseLevelMaxHp = scaled.maxHp;
@@ -1736,6 +1748,7 @@
             unit.baseLevelSpeed = scaled.speed;
             unit.baseLevelVisionRange = scaled.visionRange;
             if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
+            if (unit.workerType === 'healer') unit.baseLevelHealerHps = scaled.healerHps;
 
             unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
             unit.effectiveLevel = lvl;
@@ -1755,6 +1768,7 @@
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
+            if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
 
             unit.effectiveLevel = lvl;
         }
@@ -3206,7 +3220,7 @@
         // ============================================================
         function getUpgradeMaxHp(item, nextLevel) {
             if (item.type === 'barrack' || (item.type && item.type.startsWith('barrack'))) return calculateItemStats('barrack', nextLevel).maxHp;
-            if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner') return calculateItemStats(item.type, nextLevel).maxHp;
+            if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner' || item.type === 'healer_spawner') return calculateItemStats(item.type, nextLevel).maxHp;
             if (item instanceof Tower) return item.baseStats.towerHp ? Math.floor(item.baseStats.towerHp * Math.pow(1.4, nextLevel - 1)) : 100 * nextLevel;
             return calculateItemStats(item.type || 'farm', nextLevel).maxHp;
         }
@@ -3330,7 +3344,7 @@
         function getUnitRenderActionRangePx(u) {
             if (!u) return 0;
             // Worker interaction checks use a fixed touch distance in AI logic.
-            if (u.workerType === 'collector' || u.workerType === 'salvager' || u.workerType === 'builder') {
+            if (u.workerType === 'collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer') {
                 return 24;
             }
             let atkRange = Math.max(0, Number(u.attackRange) || 0);
@@ -3458,7 +3472,7 @@
             if (type === 'farm') { stats.maxHp = Math.floor(1000 * mult); }
             else if (type === 'house') { stats.maxHp = Math.floor(120 * mult); }
             else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
-            else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner') { stats.maxHp = Math.floor(60 * mult); }
+            else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner' || type === 'healer_spawner') { stats.maxHp = Math.floor(60 * mult); }
             else if (type === 'lava') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
             else if (type === 'mine') { stats.maxHp = Math.floor(30 * mult); stats.damage = Math.floor(135 * mult); }
             else if (type === 'poison_puddle') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
@@ -4144,6 +4158,7 @@
                 this.baseLevelSpeed = this.speed;
                 this.baseLevelVisionRange = this.visionRange;
                 this.baseLevelBuilderDps = 0;
+                this.baseLevelHealerHps = 0;
 
                 // Status effects
                 this.poisoned = 0; this.poisonTickDamage = 0;
@@ -5036,6 +5051,12 @@
                     } else if (this.workerState === 'MOVING_TO_BUILD' || this.workerState === 'BUILDING_IN_PLACE') {
                         ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('🔨', this.x, this.y - this.r - 9);
                     }
+                } else if (this.workerType === 'healer' && this.workerState) {
+                    if (this.workerState === 'RETURNING_FOR_GOLD') {
+                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                    } else if (this.workerState === 'MOVING_TO_HEAL' || this.workerState === 'HEALING') {
+                        ctx.fillStyle = '#fff'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('+', this.x, this.y - this.r - 9);
+                    }
                 }
             }
         }
@@ -5376,7 +5397,84 @@
             }
         }
 
-        // Worker AI logic - runs inside Unit.update() for collector/salvager/builder types
+        class HealerSpawner {
+            constructor(gx, gy, owner, stacks = 1) {
+                this.gx = gx; this.gy = gy; this.owner = owner;
+                this.x = gx * TILE + 16; this.y = gy * TILE + 16;
+                this.stacks = stacks; this.type = 'healer_spawner';
+                this.effectiveStacks = stacks;
+                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.effectiveLevel = this.level;
+                let stats = calculateItemStats('healer_spawner', this.level);
+                this.hp = stats.maxHp; this.maxHp = stats.maxHp;
+                this.underConstruction = true;
+                this.markedForSalvage = false;
+                this.autoUpgradeEnabled = true;
+                this.buildEnabled = true;
+                this.spawnQueue = []; this.spawnTimer = 0;
+                this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level) * TICK_RATE);
+                updateItemTextCache(this);
+            }
+            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
+            getHealerHps() {
+                let lvl = this.effectiveLevel || this.level || 1;
+                return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+            }
+            update() {
+                tickStatusEffects(this);
+                if (this.hp <= 0 || this.underConstruction) return;
+                let effLvl = this.effectiveLevel || this.level || 1;
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl) * TICK_RATE);
+                if (this.spawnQueue.length > 0) {
+                    this.spawnTimer++;
+                    if (this.spawnTimer >= this.spawnCooldown) {
+                        this.spawnTimer = 0;
+                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
+                            let queued = this.spawnQueue.shift();
+                            let spawnInfo = getQueuedSpawnInfo(queued, 'healer_unit', effLvl);
+                            let spawnPos = findNearestWalkable(this.gx, this.gy);
+                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+                            u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
+                            u.healerHasMaterial = false;
+                            applyUnitLevelScaling(u, spawnInfo.level);
+                            u.healerHps = Math.max(1, Math.round(5 * Math.pow(1.22, spawnInfo.level - 1)));
+                            units.push(u); players[this.owner].popCount++;
+                            let rallyTarget = getSpawnerRallyTargetWorld(this);
+                            if (rallyTarget) {
+                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
+                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
+                                    pathfindBudget++;
+                                }
+                            }
+                        }
+                    }
+                } else { this.spawnTimer = 0; }
+            }
+            draw(ctx) {
+                ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
+                ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+                ctx.fillStyle = '#355'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
+                ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.strokeRect(this.x - 7, this.y - 5, 14, 10);
+                if (this.underConstruction) {
+                    drawBuildingHpProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
+                } else {
+                    if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+                        let pct = this.spawnTimer / this.spawnCooldown;
+                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
+                    }
+                    drawBuildingHpProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
+                }
+                if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+            }
+        }
+
+        // Worker AI logic - runs inside Unit.update() for collector/salvager/builder/healer types
         function updateWorkerAI(u) {
             if (!u.workerState) return;
             if (u.commandState === CMD_HOLDING) {
@@ -5668,6 +5766,102 @@
                         u._builderSpawnerTarget = route.spawner;
                     }
                 }
+            } else if (u.workerType === 'healer') {
+                if (u.workerState === 'IDLE') {
+                    _healerFindTarget(u, myGx, myGy);
+                } else if (u.workerState === 'MOVING_TO_HEAL') {
+                    if (!_isHealerTargetUnit(u.workerTarget, owner)) {
+                        u.workerTarget = null;
+                        _healerFindTarget(u, myGx, myGy);
+                        return;
+                    }
+                    if (!u.path || u.pathIndex >= u.path.length) {
+                        let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
+                        if (dist > 24) {
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.pathIndex = 0;
+                            u.commandState = CMD_MOVING;
+                            return;
+                        }
+                        if (!u.healerHasMaterial) {
+                            let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
+                            if (route && players[owner].money >= 1) {
+                                u.workerState = 'RETURNING_FOR_GOLD';
+                                u.path = route.path;
+                                u.pathIndex = 0; u.commandState = CMD_MOVING;
+                                u._healerSpawnerTarget = route.spawner;
+                            } else {
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
+                            return;
+                        }
+                        if (u.workerTransferCooldown > 0) return;
+                        u.workerState = 'HEALING';
+                        let hps = u.healerHps || 5;
+                        u.workerTarget.hp = Math.min(u.workerTarget.maxHp, u.workerTarget.hp + hps);
+                        createExplosion(u.workerTarget.x, u.workerTarget.y, '#fff', 4);
+                        u.healerHasMaterial = false;
+                        u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+
+                        if (!_isHealerTargetUnit(u.workerTarget, owner)) {
+                            u.workerTarget = null;
+                            _healerFindTarget(u, myGx, myGy);
+                            return;
+                        }
+
+                        let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
+                        if (route && players[owner].money >= 1) {
+                            u.workerState = 'RETURNING_FOR_GOLD';
+                            u.path = route.path;
+                            u.pathIndex = 0; u.commandState = CMD_MOVING;
+                            u._healerSpawnerTarget = route.spawner;
+                        } else {
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                        }
+                    }
+                } else if (u.workerState === 'RETURNING_FOR_GOLD') {
+                    if (!_isHealerTargetUnit(u.workerTarget, owner)) {
+                        u.workerTarget = null;
+                        _healerFindTarget(u, myGx, myGy);
+                        return;
+                    }
+                    if (!u.path || u.pathIndex >= u.path.length) {
+                        let spawner = u._healerSpawnerTarget || _findClosestHealerSpawner(u);
+                        let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
+                        if (!spawner || dist <= 24) {
+                            if (u.workerTransferCooldown > 0) return;
+                            if (spawner && players[owner].money >= 1) {
+                                players[owner].money -= 1;
+                                u.healerHasMaterial = true;
+                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            }
+                            u._healerSpawnerTarget = null;
+                            u.workerState = 'MOVING_TO_HEAL';
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.pathIndex = 0; u.commandState = CMD_MOVING;
+                        } else {
+                            let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
+                            if (route) {
+                                u._healerSpawnerTarget = route.spawner;
+                                u.path = route.path;
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                            } else {
+                                u._healerSpawnerTarget = null;
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
+                        }
+                    }
+                } else if (u.workerState === 'HEALING') {
+                    u.workerState = 'MOVING_TO_HEAL';
+                }
             }
         }
 
@@ -5863,6 +6057,70 @@
                 }
             }
             return closest;
+        }
+
+        function _findClosestHealerSpawner(u) {
+            let closest = null, bestDist = Infinity;
+            for (let s of collectorSpawners) {
+                if (s.type === 'healer_spawner' && s.owner === u.owner && s.hp > 0 && !s.underConstruction) {
+                    let d = Math.hypot(s.x - u.x, s.y - u.y);
+                    if (d < bestDist) { bestDist = d; closest = s; }
+                }
+            }
+            return closest;
+        }
+
+        function _isHealerTargetUnit(target, owner) {
+            if (!target || target.dead) return false;
+            if (target.owner !== owner) return false;
+            if (!Number.isFinite(target.hp) || !Number.isFinite(target.maxHp)) return false;
+            return target.hp > 0 && target.hp < target.maxHp;
+        }
+
+        function _findNearestDamagedFriendlyUnit(u) {
+            let best = null;
+            let bestDist = Infinity;
+            for (let target of units) {
+                if (!_isHealerTargetUnit(target, u.owner)) continue;
+                let d = Math.hypot(target.x - u.x, target.y - u.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = target;
+                }
+            }
+            return best;
+        }
+
+        function _healerFindTarget(u, myGx, myGy) {
+            let target = _findNearestDamagedFriendlyUnit(u);
+            if (target) {
+                u.workerTarget = target;
+                if (u.healerHasMaterial) {
+                    u.workerState = 'MOVING_TO_HEAL';
+                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                    let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
+                    u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                    u.pathIndex = 0;
+                    u.commandState = CMD_MOVING;
+                    return;
+                }
+
+                let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
+                if (route && players[u.owner].money >= 1) {
+                    u.workerState = 'RETURNING_FOR_GOLD';
+                    u.path = route.path;
+                    u.pathIndex = 0;
+                    u.commandState = CMD_MOVING;
+                    u._healerSpawnerTarget = route.spawner;
+                    return;
+                }
+
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+            } else {
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+            }
         }
 
         function _findNearestUnderConstruction(u) {
@@ -6172,7 +6430,7 @@
                 let unitType = cardDef.unitType || 'norm';
                 return !!barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
             }
-            if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner') {
+            if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner') {
                 return !!collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === itemKey && s.owner === playerId);
             }
             // Floor items
@@ -6345,6 +6603,27 @@
                     grid[gy][gx].owner = playerId;
                 }
                 recalculateAdjacency();
+            } else if (itemKey === 'healer_spawner') {
+                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'healer_spawner' && s.owner === playerId);
+                if (existing) {
+                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
+                        beginUpgradeProgress(existing, nextLevel);
+                    }
+                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                }
+                else {
+                    let s = new HealerSpawner(gx, gy, playerId);
+                    s.underConstruction = true; s.hp = 1;
+                    s.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    s.buildEnabled = useDefaultBuild;
+                    s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
+                    updateItemTextCache(s);
+                    collectorSpawners.push(s);
+                    grid[gy][gx].item = s;
+                    grid[gy][gx].owner = playerId;
+                }
+                recalculateAdjacency();
             } else {
                 // Floor item
                 let cell = grid[gy][gx];
@@ -6384,7 +6663,7 @@
                 grid[building.gy][building.gx].item = null;
                 grid[building.gy][building.gx].owner = -1;
                 recalculateAdjacency();
-            } else if (building instanceof CollectorSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner) {
+            } else if (building instanceof CollectorSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner) {
                 let idx = collectorSpawners.indexOf(building);
                 if (idx !== -1) collectorSpawners.splice(idx, 1);
                 grid[building.gy][building.gx].item = null;
@@ -6579,6 +6858,10 @@
                 ctx.fillStyle = '#354'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
                 ctx.fillStyle = '#8b5'; ctx.fillRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
+            } else if (key === 'healer_spawner') {
+                ctx.fillStyle = '#355'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
+                ctx.fillStyle = '#fff'; ctx.fillRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
+                ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.strokeRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
             } else if (def && def.target === 'floor') {
                 // Floor items
                 let floorColors = { sand: '#875', lava: '#d22', poison_puddle: '#2d2', ice_patch: '#afe', water_puddle: '#4af' };
@@ -7122,7 +7405,7 @@
                 ctx.strokeStyle = '#0f0'; ctx.lineWidth = 2;
                 ctx.strokeRect(ex - 18, ey - 18, 36, 36);
                 // Rally point for barracks and spawners
-                if (['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(ent.type) && ent.rallyX !== null) {
+                if (['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner'].includes(ent.type) && ent.rallyX !== null) {
                     let rx = ent.rallyX, ry = ent.rallyY;
                     ctx.setLineDash([6, 4]);
                     ctx.strokeStyle = '#4f4'; ctx.lineWidth = 1.5;
@@ -7711,7 +7994,7 @@
 
             function isRallyCapableEntity(ent) {
                 if (!ent || ent.owner !== localPlayerId) return false;
-                let byType = ['barrack', 'spawner', 'salvager', 'builder_spawner'].includes(ent.type);
+                let byType = ['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner'].includes(ent.type);
                 let byShape = Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
                 return !!(byType || byShape);
             }
@@ -7916,7 +8199,9 @@
                         // --- Worker targeting logic ---
                         let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
                         let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
-                        let workerIds = [...builderUnits, ...collectorUnits].map(u => u.id);
+                        let salvagerUnits = activeUnits.filter(u => u.workerType === 'salvager');
+                        let healerUnits = activeUnits.filter(u => u.workerType === 'healer');
+                        let workerIds = [...builderUnits, ...collectorUnits, ...salvagerUnits, ...healerUnits].map(u => u.id);
 
                         if (builderUnits.length > 0) {
                             // Generic builder-targeting for any placeable object that can be built/upgraded.
@@ -8647,6 +8932,9 @@
             } else if (u.unitType === 'builder_unit') {
                 u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
                 u.builderHasMaterial = false;
+            } else if (u.unitType === 'healer_unit') {
+                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.healerHasMaterial = false;
             }
         }
 
@@ -8899,7 +9187,7 @@
                             if (players[playerId].money < cost || s.spawnQueue.length >= 10) break;
                             players[playerId].money -= cost;
                             let queuedLevel = s.effectiveLevel || s.level || 1;
-                            let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : 'salvager_unit';
+                            let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : s.type === 'healer_spawner' ? 'healer_unit' : 'salvager_unit';
                             s.spawnQueue.push({ unitType: queuedType, level: queuedLevel });
                         }
                     }
@@ -9067,6 +9355,8 @@
         // UI
         // ============================================================
     let _hudCache = { money: -1, popText: '', time: -1, fps: -1, tps: -1 };
+        let infoPanelShowPing = true;
+        let infoPanelShowHostRemoveButtons = true;
         let _hudEls = {};
         function updateHUD() {
             if (!_hudEls.money) {
@@ -9261,6 +9551,7 @@
                 addRow('Queue Cost', `$${fmt(unitCost)}`);
                 addRow('Unit HP', fmt(up.hp));
                 if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
                 else if (unitType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
                 else if (unitType === 'salvager_unit') addRow('Salvage Yield', `10% x L${level}`);
                 else {
@@ -9270,8 +9561,8 @@
                 }
                 addRow('Unit Range', up.range > 0 ? up.range.toFixed(1) : '-');
                 addRow('Unit Speed', up.speed.toFixed(1));
-            } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner') {
-                let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : 'builder_unit');
+            } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner') {
+                let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : (key === 'builder_spawner' ? 'builder_unit' : 'healer_unit'));
                 let stats = calculateItemStats(key, level);
                 let spawnCd = getBarrackSpawnCooldown(workerType, level);
                 let unitCost = key === 'spawner' ? 15 : (key === 'salvager' ? 20 : 18);
@@ -9282,6 +9573,7 @@
                 addRow('Queue Cost', `$${fmt(unitCost)}`);
                 addRow('Worker HP', fmt(up.hp));
                 if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
                 else if (workerType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
                 else addRow('Salvage Yield', `10% x L${level}`);
                 addRow('Worker Speed', up.speed.toFixed(1));
@@ -9575,7 +9867,7 @@
             if (ignoreLevelSubgroups) {
                 if (e.type === 'barrack') return 'barrack_' + e.unitType;
                 if (e instanceof Tower) return 'tower_' + e.type;
-                if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type;
+                if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type;
                 if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type;
                 return 'unknown_type';
             }
@@ -9584,7 +9876,7 @@
             let lvlPart = '_L' + lvl;
             if (e.type === 'barrack') return 'barrack_' + e.unitType + lvlPart + '_' + state;
             if (e instanceof Tower) return 'tower_' + e.type + lvlPart + '_' + state;
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type + lvlPart + '_' + state;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type + lvlPart + '_' + state;
             if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + lvlPart + '_' + state;
             return 'unknown_' + Math.random();
         }
@@ -9596,6 +9888,7 @@
             if (e.type === 'spawner') return 'Collector';
             if (e.type === 'salvager') return 'Salvager';
             if (e.type === 'builder_spawner') return 'Builder';
+            if (e.type === 'healer_spawner') return 'Healer';
             if (e.type && CARD_TYPES[e.type]) return CARD_TYPES[e.type].name;
             return 'Unknown';
         }
@@ -9606,7 +9899,7 @@
             if (e._isGoldMine) return 'goldmine';
             if (e.type === 'barrack') return 'barrack_' + e.unitType;
             if (e instanceof Tower) return e.type;
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return e.type;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type;
             if (e.type && CARD_TYPES[e.type]) return e.type;
             return null;
         }
@@ -9872,7 +10165,7 @@
 
         function renderSpawnerInfo(e) {
             let html = '';
-            let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : 'Salvager';
+            let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
             let baseStacks = e.stacks || 1;
             let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
             let effStacks = e.effectiveStacks || baseStacks;
@@ -10002,6 +10295,10 @@
                 let baseBuild = Number(u.baseLevelBuilderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
                 let effBuild = Number(u.builderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1)));
                 html += infoRow('Build Speed', `${formatBigNumber(baseBuild, 1)}/tick`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/tick` : undefined);
+            } else if (u.workerType === 'healer') {
+                let baseHeal = Number(u.baseLevelHealerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+                let effHeal = Number(u.healerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1)));
+                html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/tick`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/tick` : undefined);
             } else if (u.workerType === 'collector') {
                 let baseGather = 10 * lvl;
                 let effGather = 10 * effLvl;
@@ -10049,6 +10346,7 @@
             let totalBaseHp = 0, totalBaseMaxHp = 0;
             let totalStacks = 0, totalEffStacks = 0;
             let totalBuildSpeed = 0, totalEffBuildSpeed = 0;
+            let totalHealSpeed = 0, totalEffHealSpeed = 0;
             let totalCollectorPerTrip = 0, totalEffCollectorPerTrip = 0;
             let totalSalvagerLevel = 0, totalEffSalvagerLevel = 0;
             let totalBaseAttack = 0, totalEffAttack = 0;
@@ -10101,6 +10399,9 @@
                 if (u.workerType === 'builder') {
                     totalBuildSpeed += (Number(u.baseLevelBuilderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))));
                     totalEffBuildSpeed += (Number(u.builderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1))));
+                } else if (u.workerType === 'healer') {
+                    totalHealSpeed += (Number(u.baseLevelHealerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))));
+                    totalEffHealSpeed += (Number(u.healerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1))));
                 } else if (u.workerType === 'collector') {
                     totalCollectorPerTrip += (10 * lvl);
                     totalEffCollectorPerTrip += (10 * effLvl);
@@ -10130,6 +10431,8 @@
             html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVision)} avg`, Math.abs(avgBaseVision - avgEffVision) > 0.001 ? `${formatRangeStatTiles(avgEffVision)} avg` : undefined);
             if (u0.workerType === 'builder') {
                 html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/tick`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/tick` : undefined);
+            } else if (u0.workerType === 'healer') {
+                html += infoRow('Heal Speed', `${formatBigNumber(totalHealSpeed, 1)}/tick`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/tick` : undefined);
             } else if (u0.workerType === 'collector') {
                 html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
             } else if (u0.workerType === 'salvager') {
@@ -10168,7 +10471,7 @@
             if (e._isGoldMine) return renderGoldMineInfo(e);
             if (e.type === 'barrack' && e.unitType) return renderBarrackInfo(e);
             if (e instanceof Tower) return renderTowerInfo(e);
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return renderSpawnerInfo(e);
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerInfo(e);
             if (e.type && CARD_TYPES[e.type]) return renderFloorItemInfo(e);
             return '';
         }
@@ -10178,7 +10481,7 @@
             if (e.type === 'barrack' && e.unitType) return renderBarrackGroupInfo(group);
             if (e instanceof Tower) return renderTowerGroupInfo(group);
             if (e._isGoldMine) return renderGoldMineGroupInfo(group);
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner') return renderSpawnerGroupInfo(group);
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerGroupInfo(group);
             if (e.type && CARD_TYPES[e.type]) return renderFloorItemGroupInfo(group);
             return '';
         }
@@ -10198,8 +10501,8 @@
         function renderSpawnerGroupInfo(group) {
             let html = '';
             let e = group[0];
-            let label = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : 'Salvager';
-            let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : 'Salvager';
+            let label = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
+            let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
             let baseStacks = e.stacks || 1;
             let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
             let effStacks = e.effectiveStacks || baseStacks;
@@ -10310,16 +10613,7 @@
                 if (playerStatusHtml) {
                     panel.style.display = 'block';
                     panel.innerHTML = playerStatusHtml;
-                    panel.querySelectorAll('.host-remove-player-btn').forEach(btn => {
-                        btn.onclick = () => {
-                            let peerId = btn.getAttribute('data-peer-id') || '';
-                            if (!peerId) return;
-                            let lp = lobbyPlayers.find(p => p.peerId === peerId);
-                            let name = lp ? (lp.name || defaultLobbyName(peerId)) : defaultLobbyName(peerId);
-                            if (!window.confirm(`Remove ${name} from the active match?`)) return;
-                            hostRemovePlayerFromMatch(peerId);
-                        };
-                    });
+                    bindInfoPanelPlayerStatusControls(panel);
                 } else {
                     panel.style.display = 'none';
                     panel.innerHTML = '';
@@ -10446,6 +10740,7 @@
             }
 
             panel.innerHTML = html;
+            bindInfoPanelPlayerStatusControls(panel);
 
             // Insert thumbnails into sub-group toggle icons
             panel.querySelectorAll('.subgroup-toggle[data-thumb]').forEach(el => {
@@ -11138,10 +11433,48 @@
             return 'playing';
         }
 
+        function bindInfoPanelPlayerStatusControls(panel) {
+            if (!panel) return;
+
+            let pingToggle = panel.querySelector('#info-toggle-show-ping');
+            if (pingToggle) {
+                pingToggle.onchange = () => {
+                    infoPanelShowPing = !!pingToggle.checked;
+                    updateInfoPanel();
+                };
+            }
+
+            let removeToggle = panel.querySelector('#info-toggle-show-remove');
+            if (removeToggle) {
+                removeToggle.onchange = () => {
+                    infoPanelShowHostRemoveButtons = !!removeToggle.checked;
+                    updateInfoPanel();
+                };
+            }
+
+            panel.querySelectorAll('.host-remove-player-btn').forEach(btn => {
+                btn.onclick = () => {
+                    let peerId = btn.getAttribute('data-peer-id') || '';
+                    if (!peerId) return;
+                    let lp = lobbyPlayers.find(p => p.peerId === peerId);
+                    let name = lp ? (lp.name || defaultLobbyName(peerId)) : defaultLobbyName(peerId);
+                    if (!window.confirm(`Remove ${name} from the active match?`)) return;
+                    hostRemovePlayerFromMatch(peerId);
+                };
+            });
+        }
+
         function buildInfoPanelPlayerStatusHtml() {
             if (!isMultiplayer || !Array.isArray(lobbyPlayers) || lobbyPlayers.length === 0) return '';
             let setup = computeTeamSetupFromLobby();
             let rows = '';
+            let showHostRemoveToggle = isHost && gameStarted;
+            let controls = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 5px 0;color:#9aa;font-size:10px;">`;
+            controls += `<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input id="info-toggle-show-ping" type="checkbox" ${infoPanelShowPing ? 'checked' : ''} /> Ping</label>`;
+            if (showHostRemoveToggle) {
+                controls += `<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input id="info-toggle-show-remove" type="checkbox" ${infoPanelShowHostRemoveButtons ? 'checked' : ''} /> Remove Buttons</label>`;
+            }
+            controls += `</div>`;
 
             for (let lp of lobbyPlayers) {
                 let teamId = setup.teamByPeer[lp.peerId];
@@ -11151,19 +11484,19 @@
                 let stateColor = state === 'spectator' ? '#fc8' : (state === 'left' ? '#f88' : (state === 'removed' ? '#f66' : '#9f9'));
                 let latencyLabel = getPeerLatencyLabel(lp.peerId);
                 let removeBtn = '';
-                if (isHost && gameStarted && lp.peerId !== myPeerId && !isPeerExplicitlyRemoved(lp.peerId)) {
+                if (isHost && gameStarted && infoPanelShowHostRemoveButtons && lp.peerId !== myPeerId && !isPeerExplicitlyRemoved(lp.peerId)) {
                     removeBtn = `<button class="host-remove-player-btn" data-peer-id="${_escapeHtml(lp.peerId)}" style="cursor:pointer;background:#2a1111;color:#f88;border:1px solid #744;border-radius:3px;font-size:10px;padding:2px 6px">Remove</button>`;
                 }
                 rows += `<div class="info-row" style="align-items:center;gap:6px">
                     <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${teamColor};border:1px solid #444;flex:0 0 auto"></span>
                     <span class="info-label" style="color:#ddd;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_escapeHtml(lp.name || defaultLobbyName(lp.peerId))}</span>
-                    <span class="info-value" style="flex:0 0 auto;color:#8cf;text-align:right;min-width:56px">${latencyLabel}</span>
+                    ${infoPanelShowPing ? `<span class="info-value" style="flex:0 0 auto;color:#8cf;text-align:right;min-width:56px">${latencyLabel}</span>` : ''}
                     <span class="info-value" style="flex:0 0 auto;color:${stateColor};text-align:right">${stateLabel}</span>
                     ${removeBtn}
                 </div>`;
             }
 
-            return `<div class="info-title">Online Players</div>${rows}`;
+            return `<div class="info-title">Online Players</div>${controls}${rows}`;
         }
 
         function renderOnlineLobby() {
