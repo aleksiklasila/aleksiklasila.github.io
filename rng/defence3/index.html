@@ -1846,7 +1846,7 @@
             unit: {
                 hp: Infinity,
                 atk: Infinity,
-                atkCd: Infinity,
+                atkCd: 0.5,
                 speed: 14,
                 visionRange: Infinity,
                 attackRange: 7,
@@ -1856,8 +1856,8 @@
             building: {
                 maxHp: Infinity,
                 damage: Infinity,
-                cd: Infinity,
-                spawnCd: Infinity,
+                cd: 0.5,
+                spawnCd: 0.5,
                 visionRange: 16,
             }
         };
@@ -1896,9 +1896,15 @@
             return Number.isFinite(cap) ? Math.max(0, cap) : Infinity;
         }
 
-        function applyPrecomputedSoftCap(value, cap) {
+        function applyPrecomputedSoftCap(value, cap, statKey) {
             if (!Number.isFinite(value)) return value;
             if (!Number.isFinite(cap) || cap <= 0) return value;
+            if (RESEARCH_DECREASE_STATS[statKey]) {
+                // Smooth floor for cooldown-like stats: approaches cap as value gets small,
+                // but stays close to raw value when it is much larger than cap.
+                let raw = Math.max(0, value);
+                return Math.sqrt((raw * raw) + (cap * cap));
+            }
             // Smooth soft cap: (cap*value)/sqrt((cap^2*(4/5)^2)+value^2)
             let k = 4 / 5;
             let denom = Math.sqrt((cap * cap * k * k) + (value * value));
@@ -2004,7 +2010,7 @@
                         let cap = getPrecomputedSoftCap('unit', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                             let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r);
-                            arr[r] = applyPrecomputedSoftCap(researched, cap);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey);
                         }
                         levelEntry[statKey] = arr;
                     }
@@ -2022,7 +2028,7 @@
                         let cap = getPrecomputedSoftCap('building', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                             let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r);
-                            arr[r] = applyPrecomputedSoftCap(researched, cap);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey);
                         }
                         levelEntry[statKey] = arr;
                     }
