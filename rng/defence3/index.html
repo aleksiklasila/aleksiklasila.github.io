@@ -94,6 +94,130 @@
             border-radius: 3px;
         }
 
+        #lobby-settings-shell {
+            width: min(980px, calc(100vw - 28px));
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #lobby-settings-nav {
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .lobby-nav-btn {
+            min-width: 88px;
+            padding: 6px 10px !important;
+            font-size: 12px !important;
+            background: #1c2735 !important;
+            border-color: #3f5875 !important;
+        }
+
+        .lobby-nav-btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+
+        #lobby-settings-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .lobby-ind-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3a3a3a;
+            border: 1px solid #666;
+            cursor: pointer;
+        }
+
+        .lobby-ind-dot.active {
+            background: #7dc4ff;
+            border-color: #7dc4ff;
+        }
+
+        #lobby-settings {
+            --lobby-gap: 10px;
+            --lobby-panel-height: 332px;
+            display: flex;
+            gap: var(--lobby-gap);
+            overflow-x: hidden;
+            scroll-snap-type: x mandatory;
+            scroll-behavior: smooth;
+            font-size: 12px;
+            padding-bottom: 2px;
+        }
+
+        .lobby-column {
+            flex: 0 0 calc((100% - (var(--lobby-gap) * 2)) / 3);
+            min-width: 0;
+            height: var(--lobby-panel-height);
+            background: #171717;
+            border: 1px solid #323232;
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            scroll-snap-align: center;
+        }
+
+        .lobby-column-title {
+            color: #9ec6ff;
+            font-weight: bold;
+            letter-spacing: 0.2px;
+            border-bottom: 1px solid #2b2b2b;
+            padding-bottom: 4px;
+        }
+
+        .lobby-setting-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .lobby-setting-row label {
+            color: #d2d2d2;
+            white-space: nowrap;
+        }
+
+        .lobby-setting-row.compact label {
+            font-size: 11px;
+            color: #bbb;
+        }
+
+        .lobby-setting-row .range-sep {
+            color: #878787;
+            font-size: 12px;
+            line-height: 1;
+        }
+
+        .lobby-setting-row.grouped {
+            justify-content: flex-start;
+        }
+
+        .lobby-setting-row.grouped label {
+            min-width: 58px;
+        }
+
+        .lobby-setting-row input[type="checkbox"] {
+            width: auto;
+            height: auto;
+            cursor: pointer;
+        }
+
+        .lobby-col-footer {
+            margin-top: auto;
+            font-size: 11px;
+            color: #8f8f8f;
+        }
+
         /* HUD */
         #hud {
             height: 40px;
@@ -773,6 +897,29 @@
             .build-tab {
                 font-size: 9px;
             }
+
+            #lobby-settings-shell {
+                width: min(560px, calc(100vw - 20px));
+            }
+
+            #lobby-settings-nav {
+                display: flex;
+            }
+
+            #lobby-settings {
+                overflow-x: auto;
+                overscroll-behavior-x: contain;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+
+            #lobby-settings::-webkit-scrollbar {
+                display: none;
+            }
+
+            .lobby-column {
+                flex-basis: 100%;
+            }
         }
     </style>
 </head>
@@ -784,71 +931,120 @@
     <!-- LOBBY -->
     <div id="lobby">
         <h1>RTS Defence</h1>
-        <div id="lobby-settings" style="display:flex;flex-direction:column;gap:6px;font-size:12px">
-            <div style="color:#888;font-weight:bold">Game Settings</div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Game Mode:</label>
-                <select id="cfg-gamemode"
-                    style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
-                    <option value="destroy" selected>Destroy Everything</option>
-                    <option value="killking">Kill King</option>
-                </select>
+        <div id="lobby-settings-shell">
+            <div id="lobby-settings-nav">
+                <button id="btn-lobby-prev" class="lobby-nav-btn" type="button">&#9664; Prev</button>
+                <div id="lobby-settings-indicator">
+                    <button type="button" class="lobby-ind-dot" data-lobby-slide="0" aria-label="Network settings"></button>
+                    <button type="button" class="lobby-ind-dot active" data-lobby-slide="1" aria-label="Game settings"></button>
+                    <button type="button" class="lobby-ind-dot" data-lobby-slide="2" aria-label="Resources and research settings"></button>
+                </div>
+                <button id="btn-lobby-next" class="lobby-nav-btn" type="button">Next &#9654;</button>
             </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Map Size:</label>
-                <select id="cfg-mapsize"
-                    style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
-                    <option value="20">Tiny (20x20)</option>
-                    <option value="40">Small (40x40)</option>
-                    <option value="60">Medium (60x60)</option>
-                    <option value="80" selected>Large (80x80)</option>
-                    <option value="120">Huge (120x120)</option>
-                </select>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Map Type:</label>
-                <select id="cfg-map-type"
-                    style="font-family:inherit;font-size:12px;padding:2px 6px;background:#222;color:#fff;border:1px solid #444;border-radius:3px">
-                    <option value="random" selected>Random</option>
-                    <option value="arena">Arena</option>
-                    <option value="island">Island</option>
-                    <option value="islands">Islands</option>
-                    <option value="solar_system">Solar System</option>
-                    <option value="crossroads">Crossroads</option>
-                </select>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Starting Money:</label>
-                <input id="cfg-starting-money" type="number" min="0" max="1000000000" value="2000" style="width:90px">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Gold Mines:</label>
-                <input id="cfg-gold-count" type="number" min="5" max="50" value="2200" style="width:50px">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Gold per Mine:</label>
-                <input id="cfg-gold-min" type="number" min="100" max="5000" value="500" style="width:60px">
-                <span>-</span>
-                <input id="cfg-gold-max" type="number" min="100" max="10000" value="1500" style="width:60px">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Mine Spread (%):</label>
-                <input id="cfg-gold-area" type="number" min="30" max="100" value="85" style="width:50px">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Full Map Visibility:</label>
-                <input id="cfg-full-vis" type="checkbox" checked style="width:auto; height:auto; cursor:pointer;"
-                    title="Disable Fog of War">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>Max Population:</label>
-                <input id="cfg-max-pop" type="number" min="1" max="100000" value="200" style="width:72px">
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <label>TPS / TPD:</label>
-                <input id="cfg-tick-rate" type="number" min="5" max="120" value="20" style="width:52px" title="Game ticks per second">
-                <span>/</span>
-                <input id="cfg-pipeline-delay" type="number" min="0" max="12" value="2" style="width:52px" title="Minimum lockstep pipeline delay in ticks">
+
+            <div id="lobby-settings">
+                <div class="lobby-column" data-lobby-column="0">
+                    <div class="lobby-column-title">Network</div>
+                    <div class="lobby-setting-row">
+                        <label for="cfg-tick-rate">Game Ticks Per Second</label>
+                        <input id="cfg-tick-rate" type="number" min="5" max="120" value="20" style="width:72px" title="Game ticks per second">
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label for="cfg-pipeline-delay">Lockstep Pipeline Delay (ticks)</label>
+                        <input id="cfg-pipeline-delay" type="number" min="0" max="12" value="2" style="width:72px" title="Minimum lockstep pipeline delay in ticks">
+                    </div>
+                    <div class="lobby-col-footer">Host controls these settings for everyone in online matches.</div>
+                </div>
+
+                <div class="lobby-column" data-lobby-column="1">
+                    <div class="lobby-column-title">Game</div>
+                    <div class="lobby-setting-row">
+                        <label>Game Mode</label>
+                        <select id="cfg-gamemode">
+                            <option value="destroy" selected>Destroy Everything</option>
+                            <option value="killking">Kill King</option>
+                        </select>
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label>Map Size</label>
+                        <select id="cfg-mapsize">
+                            <option value="20">Tiny (20x20)</option>
+                            <option value="40">Small (40x40)</option>
+                            <option value="60" selected>Medium (60x60)</option>
+                            <option value="80">Large (80x80)</option>
+                            <option value="120">Huge (120x120)</option>
+                        </select>
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label>Map Type</label>
+                        <select id="cfg-map-type">
+                            <option value="random">Random</option>
+                            <option value="arena">Arena</option>
+                            <option value="island" selected>Island</option>
+                            <option value="islands">Islands</option>
+                            <option value="solar_system">Solar System</option>
+                            <option value="crossroads">Crossroads</option>
+                        </select>
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label>Max Population</label>
+                        <input id="cfg-max-pop" type="number" min="1" max="100000" value="200" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label>Starting Money</label>
+                        <input id="cfg-starting-money" type="number" min="0" max="1000000000" value="2000" style="width:90px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Max Level</label>
+                        <input id="cfg-max-thing-level" type="number" min="1" max="100" step="1" value="20" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label for="cfg-full-vis">Full Map Visibility</label>
+                        <input id="cfg-full-vis" type="checkbox" checked title="Disable Fog of War">
+                    </div>
+                </div>
+
+                <div class="lobby-column" data-lobby-column="2">
+                    <div class="lobby-column-title">Resources & Research</div>
+                    <div class="lobby-setting-row">
+                        <label>Gold Mines</label>
+                        <input id="cfg-gold-count" type="number" min="5" max="5000" value="2000" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row grouped">
+                        <label>Gold / Mine</label>
+                        <input id="cfg-gold-min" type="number" min="100" max="5000" value="500" style="width:60px">
+                        <span class="range-sep">-</span>
+                        <input id="cfg-gold-max" type="number" min="100" max="10000" value="1500" style="width:60px">
+                    </div>
+                    <div class="lobby-setting-row">
+                        <label>Mine Spread (%)</label>
+                        <input id="cfg-gold-area" type="number" min="30" max="100" value="85" style="width:56px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Research Cost Exp</label>
+                        <input id="cfg-research-cost-exp" type="number" min="1" max="10" step="0.01" value="1.85" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Research Work Exp</label>
+                        <input id="cfg-research-work-exp" type="number" min="1" max="10" step="0.01" value="1.7" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Research Work Base</label>
+                        <input id="cfg-research-work-base" type="number" min="1" max="1000000" step="1" value="110" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Unit Bonus Exp</label>
+                        <input id="cfg-research-bonus-exp-units" type="number" min="1" max="10" step="0.01" value="2" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Other Bonus Exp</label>
+                        <input id="cfg-research-bonus-exp-other" type="number" min="1" max="10" step="0.01" value="1.25" style="width:72px">
+                    </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Max Research Level</label>
+                        <input id="cfg-max-research-level" type="number" min="1" max="100" step="1" value="10" style="width:72px">
+                    </div>
+                </div>
             </div>
         </div>
         <div id="lobby-buttons" style="margin-top:16px;display:flex;gap:8px">
@@ -1804,14 +2000,14 @@
             king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 12, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
-        const RESEARCH_COST_EXP = 1.85;
-        const RESEARCH_WORK_EXP = 1.7;
-        const RESEARCH_WORK_BASE = 110;
-        const RESEARCH_BONUS_EXP_UNITS = 2.0;
-        const RESEARCH_BONUS_EXP_OTHER = 1.25;
+        let RESEARCH_COST_EXP = 1.85;
+        let RESEARCH_WORK_EXP = 1.7;
+        let RESEARCH_WORK_BASE = 110;
+        let RESEARCH_BONUS_EXP_UNITS = 2.0;
+        let RESEARCH_BONUS_EXP_OTHER = 1.25;
 
-        const MAX_THING_LEVEL = 20;
-        const MAX_RESEARCH_LEVEL = 10;
+        let MAX_THING_LEVEL = 20;
+        let MAX_RESEARCH_LEVEL = 10;
 
         const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true };
         const RESEARCH_STAT_LABELS = {
@@ -2570,7 +2766,7 @@
         let researchQueuePanelOpenState = {};
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
-    let ignoreLevelSubgroups = false;
+    let ignoreLevelSubgroups = true;
 
         // Input
         let keysDown = {};
@@ -6403,9 +6599,14 @@
                     }
                 } else if (u.workerState === 'RETURNING') {
                     if (!u.path || u.pathIndex >= u.path.length) {
-                        if (u.carryingValue > 0) {
+                        let closest = _findClosestSpawner(u, 'spawner');
+                        let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
+                        if (u.carryingValue > 0 && !isAtDropoff) {
+                            _workerReturnPath(u);
+                            return;
+                        }
+                        if (u.carryingValue > 0 && isAtDropoff) {
                             if (u.workerTransferCooldown > 0) return;
-                            let closest = _findClosestSpawner(u, 'spawner');
                             players[owner].money += u.carryingValue;
                             u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
@@ -6467,7 +6668,7 @@
                 }
 
                 let builderRecheckInterval = Math.max(120, Math.floor(TICK_RATE * 8));
-                let builderStuckTicks = Math.max(90, Math.floor(TICK_RATE * 5));
+                let builderStuckTicks = Math.max(60, Math.floor(TICK_RATE * 3));
                 if (!Number.isFinite(u._builderNextRecheckTick)) u._builderNextRecheckTick = gameTime + builderRecheckInterval;
                 if (!Number.isFinite(u._builderLastMoveTick)) u._builderLastMoveTick = gameTime;
 
@@ -7076,7 +7277,8 @@
 
         function _workerReturnPath(u) {
             let type = u.workerType === 'collector' ? 'spawner' : 'salvager';
-            let route = _findBestSpawnerRoute(u, type, null);
+            let canWalk = u.workerType === 'collector' ? _collectorCanWalk : null;
+            let route = _findBestSpawnerRoute(u, type, canWalk);
             if (route) {
                 u.path = route.path || [];
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -12855,6 +13057,14 @@
                 STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
                 MAP_TYPE = data.cfg.mapType || 'random';
                 applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
+
+                RESEARCH_COST_EXP = Math.max(1, Number(data.cfg.researchCostExp) || 1.85);
+                RESEARCH_WORK_EXP = Math.max(1, Number(data.cfg.researchWorkExp) || 1.7);
+                RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(data.cfg.researchWorkBase) || 110));
+                RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(data.cfg.researchBonusExpUnits) || 2.0);
+                RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(data.cfg.researchBonusExpOther) || 1.25);
+                MAX_THING_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxThingLevel) || 20));
+                MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxResearchLevel) || 10));
             }
             initAudio();
             startGame();
@@ -13683,7 +13893,27 @@
                 let uid = getPeerProfileUid(p.peerId);
                 if (uid) matchRoleByUid[uid] = 'playing';
             }
-            matchStartConfig = { gridW: GRID_W, goldCount: GOLD_MINE_COUNT, goldMin: GOLD_MINE_MIN, goldMax: GOLD_MINE_MAX, goldArea: GOLD_MINE_AREA, fullVis: fullVisibility, gameMode: gameMode, maxPop: CONFIG_MAX_POP, startingMoney: STARTING_MONEY, mapType: MAP_TYPE, tickRate: TICK_RATE, pipelineDelay: LOCKSTEP_PIPELINE_MIN };
+            matchStartConfig = {
+                gridW: GRID_W,
+                goldCount: GOLD_MINE_COUNT,
+                goldMin: GOLD_MINE_MIN,
+                goldMax: GOLD_MINE_MAX,
+                goldArea: GOLD_MINE_AREA,
+                fullVis: fullVisibility,
+                gameMode: gameMode,
+                maxPop: CONFIG_MAX_POP,
+                startingMoney: STARTING_MONEY,
+                mapType: MAP_TYPE,
+                tickRate: TICK_RATE,
+                pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+                researchCostExp: RESEARCH_COST_EXP,
+                researchWorkExp: RESEARCH_WORK_EXP,
+                researchWorkBase: RESEARCH_WORK_BASE,
+                researchBonusExpUnits: RESEARCH_BONUS_EXP_UNITS,
+                researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
+                maxThingLevel: MAX_THING_LEVEL,
+                maxResearchLevel: MAX_RESEARCH_LEVEL,
+            };
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
             teamColorById = setup.teamColorById;
@@ -13768,6 +13998,84 @@
             let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
             applyTimingConfig(menuTickRate, menuPipelineDelay);
+
+            RESEARCH_COST_EXP = Math.max(1, Number(document.getElementById('cfg-research-cost-exp').value) || 1.85);
+            RESEARCH_WORK_EXP = Math.max(1, Number(document.getElementById('cfg-research-work-exp').value) || 1.7);
+            RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(document.getElementById('cfg-research-work-base').value) || 110));
+            RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(document.getElementById('cfg-research-bonus-exp-units').value) || 2.0);
+            RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(document.getElementById('cfg-research-bonus-exp-other').value) || 1.25);
+            MAX_THING_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-thing-level').value) || 20));
+            MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-research-level').value) || 10));
+        }
+
+        function initLobbySettingsCarousel() {
+            let wrap = document.getElementById('lobby-settings');
+            if (!wrap || wrap.dataset.carouselInit === '1') return;
+            wrap.dataset.carouselInit = '1';
+
+            let slides = Array.from(wrap.querySelectorAll('.lobby-column'));
+            if (!slides.length) return;
+
+            let prevBtn = document.getElementById('btn-lobby-prev');
+            let nextBtn = document.getElementById('btn-lobby-next');
+            let dots = Array.from(document.querySelectorAll('.lobby-ind-dot'));
+            let currentIndex = 1;
+
+            function isMobileLayout() {
+                return window.matchMedia('(max-width: 800px)').matches;
+            }
+
+            function getSlideWidth() {
+                if (slides.length < 2) return slides[0].offsetWidth;
+                return slides[1].offsetLeft - slides[0].offsetLeft;
+            }
+
+            function updateNavState() {
+                dots.forEach((d, i) => d.classList.toggle('active', i === currentIndex));
+                if (prevBtn) prevBtn.disabled = currentIndex <= 0;
+                if (nextBtn) nextBtn.disabled = currentIndex >= slides.length - 1;
+            }
+
+            function scrollToIndex(idx, smooth = true) {
+                currentIndex = Math.max(0, Math.min(slides.length - 1, idx));
+                if (isMobileLayout()) {
+                    let slideWidth = getSlideWidth() || wrap.clientWidth;
+                    wrap.scrollTo({ left: currentIndex * slideWidth, behavior: smooth ? 'smooth' : 'auto' });
+                } else {
+                    wrap.scrollTo({ left: 0, behavior: 'auto' });
+                    currentIndex = 1;
+                }
+                updateNavState();
+            }
+
+            function snapFromScroll() {
+                if (!isMobileLayout()) {
+                    currentIndex = 1;
+                    updateNavState();
+                    return;
+                }
+                let slideWidth = getSlideWidth() || wrap.clientWidth;
+                if (slideWidth <= 0) return;
+                currentIndex = Math.max(0, Math.min(slides.length - 1, Math.round(wrap.scrollLeft / slideWidth)));
+                updateNavState();
+            }
+
+            if (prevBtn) prevBtn.addEventListener('click', () => scrollToIndex(currentIndex - 1));
+            if (nextBtn) nextBtn.addEventListener('click', () => scrollToIndex(currentIndex + 1));
+            dots.forEach((dot, i) => dot.addEventListener('click', () => scrollToIndex(i)));
+            wrap.addEventListener('scroll', snapFromScroll, { passive: true });
+
+            window.addEventListener('resize', () => {
+                if (!isMobileLayout()) {
+                    wrap.scrollLeft = 0;
+                    currentIndex = 1;
+                    updateNavState();
+                    return;
+                }
+                scrollToIndex(currentIndex, false);
+            });
+
+            scrollToIndex(1, false);
         }
 
         function startSoloGame() {
@@ -14700,6 +15008,7 @@
             initBuildTabs();
             updateBuildMenu();
             loadOrCreateLocalIdentity();
+            initLobbySettingsCarousel();
 
             // Auto-join if URL has ?game=xxx
             let params = new URLSearchParams(window.location.search);
