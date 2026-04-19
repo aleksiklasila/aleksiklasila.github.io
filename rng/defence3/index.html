@@ -1807,7 +1807,8 @@
         const RESEARCH_COST_EXP = 1.85;
         const RESEARCH_WORK_EXP = 1.7;
         const RESEARCH_WORK_BASE = 110;
-        const RESEARCH_BONUS_EXP = 1.5;
+        const RESEARCH_BONUS_EXP_UNITS = 2.0;
+        const RESEARCH_BONUS_EXP_OTHER = 1.25;
 
         const MAX_THING_LEVEL = 20;
         const MAX_RESEARCH_LEVEL = 10;
@@ -1876,10 +1877,14 @@
             return RESEARCHABLE_UNIT_STATS[unitType] || RESEARCHABLE_UNIT_STATS._default;
         }
 
-        function applyResearchLevelToBaseValue(baseValue, statKey, researchLevel) {
+        function getResearchBonusExp(kind) {
+            return kind === 'unit' ? RESEARCH_BONUS_EXP_UNITS : RESEARCH_BONUS_EXP_OTHER;
+        }
+
+        function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel) {
             if (!Number.isFinite(baseValue)) return NaN;
             let rLevel = clampResearchLevel(researchLevel);
-            let mult = Math.pow(RESEARCH_BONUS_EXP, rLevel);
+            let mult = Math.pow(getResearchBonusExp(kind), rLevel);
             if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
             return baseValue * mult;
         }
@@ -1998,7 +2003,7 @@
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                         let cap = getPrecomputedSoftCap('unit', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                            let researched = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r);
                             arr[r] = applyPrecomputedSoftCap(researched, cap);
                         }
                         levelEntry[statKey] = arr;
@@ -2016,7 +2021,7 @@
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                         let cap = getPrecomputedSoftCap('building', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                            let researched = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r);
                             arr[r] = applyPrecomputedSoftCap(researched, cap);
                         }
                         levelEntry[statKey] = arr;
@@ -2196,7 +2201,7 @@
             let mults = ensurePlayerResearchMultipliers(playerId);
             let id = makeResearchLevelId(kind, key, statKey);
             if (!Number.isFinite(mults[id])) {
-                mults[id] = Math.pow(RESEARCH_BONUS_EXP, getPlayerResearchLevel(playerId, kind, key, statKey));
+                mults[id] = Math.pow(getResearchBonusExp(kind), getPlayerResearchLevel(playerId, kind, key, statKey));
             }
             return Math.max(1, mults[id]);
         }
@@ -2365,7 +2370,7 @@
             let nextLevel = clampResearchLevel(prevLevel + 1);
             if (nextLevel <= prevLevel) return;
             levels[id] = nextLevel;
-            mults[id] = Math.pow(RESEARCH_BONUS_EXP, nextLevel);
+            mults[id] = Math.pow(getResearchBonusExp(task.kind), nextLevel);
             if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
             if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
             recalculateAdjacency();
