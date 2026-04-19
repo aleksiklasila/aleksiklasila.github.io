@@ -2566,6 +2566,7 @@
         let buildPurchaseMultiplier = 1;
         let queuePurchaseMultiplier = 1;
         let researchPanelOpenState = {};
+        let researchQueuePanelOpenState = {};
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = false;
@@ -7804,6 +7805,18 @@
                 ctx.fillStyle = '#355'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
                 ctx.fillStyle = '#fff'; ctx.fillRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
                 ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.strokeRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
+            } else if (key === 'research') {
+                // Match play-area look: team border, blue tile, and centered R.
+                ctx.strokeStyle = PLAYER_COLORS[0] || '#4488ff';
+                ctx.lineWidth = Math.max(1, s);
+                ctx.strokeRect(cx - 14 * s, cy - 14 * s, 28 * s, 28 * s);
+                ctx.fillStyle = '#446';
+                ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
+                ctx.fillStyle = '#aef';
+                ctx.font = `${Math.max(9, Math.round(11 * s))}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('R', cx, cy + 1 * s);
             } else if (def && def.target === 'floor') {
                 // Floor items
                 let floorColors = { sand: '#875', lava: '#d22', poison_puddle: '#2d2', ice_patch: '#afe', water_puddle: '#4af' };
@@ -11648,6 +11661,154 @@
             return `${owner}:${scope}`;
         }
 
+        function isResearchQueuePanelOpen(owner, scope) {
+            return researchQueuePanelOpenState[getResearchPanelScopeKey(owner, scope)] === true;
+        }
+
+        function getResearchOrderedTasksForSingleBuilding(researchBuilding) {
+            let out = [];
+            if (!researchBuilding) return out;
+            if (researchBuilding.researchTask) out.push({ ...researchBuilding.researchTask, isActiveTask: true });
+            for (let q of (researchBuilding.researchQueue || [])) out.push({ ...q, isActiveTask: false });
+            return out;
+        }
+
+        function renderQueuedResearchTasksForSingleBuilding(e) {
+            let html = '';
+            let orderedTasks = getResearchOrderedTasksForSingleBuilding(e);
+            if (orderedTasks.length <= 0) {
+                html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
+                return html;
+            }
+
+            html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+            for (let i = 0; i < orderedTasks.length; i++) {
+                let t = orderedTasks[i];
+                let thing = getResearchThing(t.kind, t.key);
+                let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
+                let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
+                let statLabel = stat ? stat.label : (t.statKey || 'stat');
+
+                let currentLevel = getPlayerResearchLevel(e.owner, t.kind, t.key, t.statKey);
+                let globalQueuedDepth = getResearchQueuedDepthForPlayer(e.owner, t.kind, t.key, t.statKey);
+                let projectedLevel = currentLevel + globalQueuedDepth;
+                let nextCost = getResearchCost(t.kind, t.key, t.statKey, projectedLevel);
+                let nextWork = getResearchWork(t.kind, t.key, t.statKey, projectedLevel);
+                let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
+                let canAfford = !atMax && players[localPlayerId].money >= nextCost;
+
+                let currentValue = getResearchCurrentStatValue(e.owner, t.kind, t.key, t.statKey);
+                let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
+                let projectedValue = t.kind === 'unit'
+                    ? getUnitStatFromMap(t.key, 1, t.statKey, displayProjectedLevel)
+                    : getBuildingStatFromMap(t.key, 1, t.statKey, displayProjectedLevel);
+                if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
+                if (!atMax && displayProjectedLevel <= currentLevel) {
+                    let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
+                    let nextPreview = t.kind === 'unit'
+                        ? getUnitStatFromMap(t.key, 1, t.statKey, previewLevel)
+                        : getBuildingStatFromMap(t.key, 1, t.statKey, previewLevel);
+                    if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
+                }
+
+                let activePctText = '';
+                if (t.isActiveTask) {
+                    let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
+                    activePctText = `<span style="color:#8cf">${pct}% </span>`;
+                }
+
+                html += `<div style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
+                html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
+                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, currentValue)}->${formatResearchStatValue(t.statKey, projectedValue)}</span>`;
+                html += `</div>`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
+                html += `<span style="color:#fd0">${activePctText}${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                html += `<div style="display:flex;align-items:center;gap:4px">`;
+                html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
+                html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                html += `</div>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+            return html;
+        }
+
+        function renderQueuedResearchTasksForGroup(group) {
+            let html = '';
+            let withQueue = (group || []).filter(r => getResearchQueueTotalLength(r) > 0);
+            if (withQueue.length <= 0) {
+                html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
+                return html;
+            }
+
+            html += `<div style="display:flex;flex-direction:column;gap:6px">`;
+            for (let r of withQueue) {
+                let orderedTasks = getResearchOrderedTasksForSingleBuilding(r);
+                if (orderedTasks.length <= 0) continue;
+
+                html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
+                html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Lab (${r.gx},${r.gy})</div>`;
+                html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+
+                for (let i = 0; i < orderedTasks.length; i++) {
+                    let t = orderedTasks[i];
+                    let thing = getResearchThing(t.kind, t.key);
+                    let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
+                    let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
+                    let statLabel = stat ? stat.label : (t.statKey || 'stat');
+
+                    let currentLevel = getPlayerResearchLevel(r.owner, t.kind, t.key, t.statKey);
+                    let globalQueuedDepth = getResearchQueuedDepthForPlayer(r.owner, t.kind, t.key, t.statKey);
+                    let projectedLevel = currentLevel + globalQueuedDepth;
+                    let nextCost = getResearchCost(t.kind, t.key, t.statKey, projectedLevel);
+                    let nextWork = getResearchWork(t.kind, t.key, t.statKey, projectedLevel);
+                    let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
+                    let canAfford = !atMax && players[localPlayerId].money >= nextCost;
+
+                    let currentValue = getResearchCurrentStatValue(r.owner, t.kind, t.key, t.statKey);
+                    let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
+                    let projectedValue = t.kind === 'unit'
+                        ? getUnitStatFromMap(t.key, 1, t.statKey, displayProjectedLevel)
+                        : getBuildingStatFromMap(t.key, 1, t.statKey, displayProjectedLevel);
+                    if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
+                    if (!atMax && displayProjectedLevel <= currentLevel) {
+                        let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
+                        let nextPreview = t.kind === 'unit'
+                            ? getUnitStatFromMap(t.key, 1, t.statKey, previewLevel)
+                            : getBuildingStatFromMap(t.key, 1, t.statKey, previewLevel);
+                        if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
+                    }
+
+                    let activePctText = '';
+                    if (t.isActiveTask) {
+                        let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
+                        activePctText = `<span style="color:#8cf">${pct}% </span>`;
+                    }
+
+                    html += `<div style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+                    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
+                    html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
+                    html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, currentValue)}->${formatResearchStatValue(t.statKey, projectedValue)}</span>`;
+                    html += `</div>`;
+                    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
+                    html += `<span style="color:#fd0">${activePctText}${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                    html += `<div style="display:flex;align-items:center;gap:4px">`;
+                    html += `<span class="info-research-dequeue-btn" data-gx="${r.gx}" data-gy="${r.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
+                    html += `<span class="info-research-buy-btn" data-gx="${r.gx}" data-gy="${r.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+
+                html += `</div>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+            return html;
+        }
+
         function getResearchQueueDepthForStatInGroup(group, kind, key, statKey) {
             let n = 0;
             for (let r of group) n += getResearchQueueDepthForStat(r, kind, key, statKey);
@@ -11733,23 +11894,25 @@
 
         function renderResearchInfo(e) {
             let html = '';
+            let queueScope = `single:${e.gx},${e.gy}`;
+            let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
+            let queueLen = getResearchQueueTotalLength(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isResearching ? '\uD83E\uDDEA Researching' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready')));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            if (e.researchTask) {
-                let t = e.researchTask;
-                let thing = getResearchThing(t.kind, t.key);
-                let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
-                let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
-                let tLabel = thing ? thing.label : (t.kind + ':' + t.key);
-                let sLabel = stat ? stat.label : (t.statKey || 'stat');
-                html += infoRow('Active', `${tLabel} / ${sLabel} (${pct}%)`);
-            }
-            html += infoRow('Queue', `${getResearchQueueTotalLength(e)}/20`);
+            html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, 20)}</span>`;
+            html += `</div>`;
             if (e.owner === localPlayerId && !e.underConstruction) {
+                if (queueOpen) {
+                    html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                    html += renderQueuedResearchTasksForSingleBuilding(e);
+                    html += `</div>`;
+                }
+
                 html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
                 html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Research Queue (Per Stat)</div>`;
                 html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
@@ -11770,6 +11933,8 @@
         function renderResearchGroupInfo(group) {
             let html = '';
             let e = group[0];
+            let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
+            let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
             for (let r of group) {
                 totalHp += r.hp;
@@ -11782,16 +11947,20 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow('Queue', `${totalQueue}/${group.length * 20}`);
-            if (group.some(r => r.researchTask)) {
-                html += infoRow('Active Labs', group.filter(r => !!r.researchTask).length);
-            }
+            html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, group.length * 20)}</span>`;
+            html += `</div>`;
 
             if (e.owner === localPlayerId) {
+                if (queueOpen) {
+                    html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                    html += renderQueuedResearchTasksForGroup(group);
+                    html += `</div>`;
+                }
+
                 html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
                 html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Distributed Research Queue (Per Stat)</div>`;
-                let scope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
-                html += renderResearchThingRowsForPanel(e.owner, scope, group);
+                html += renderResearchThingRowsForPanel(e.owner, queueScope, group);
                 html += `</div>`;
 
                 let coordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
@@ -12173,6 +12342,17 @@
                     let thingId = btn.dataset.thingId;
                     if (!Number.isFinite(owner) || !scope || !thingId) return;
                     researchPanelOpenState[getResearchPanelScopeKey(owner, scope)] = thingId;
+                    updateInfoPanel();
+                });
+            });
+
+            panel.querySelectorAll('.info-research-queue-toggle').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let owner = Number.parseInt(btn.dataset.owner);
+                    let scope = btn.dataset.scope;
+                    if (!Number.isFinite(owner) || !scope) return;
+                    let key = getResearchPanelScopeKey(owner, scope);
+                    researchQueuePanelOpenState[key] = !researchQueuePanelOpenState[key];
                     updateInfoPanel();
                 });
             });
