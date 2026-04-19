@@ -14524,7 +14524,7 @@
                 let pos = teamSpawnPos[pid];
                 let bgx = pos.gx, bgy = pos.gy;
                 let spawner = teamSpawners[pid];
-                for (let i = 0; i < 160; i++) {
+                for (let i = 0; i < 3; i++) {
                     let sp = findNearestWalkable(bgx, bgy);
                     let u = new Unit('builder_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
                     u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
