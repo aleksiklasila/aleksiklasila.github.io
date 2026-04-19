@@ -10361,7 +10361,12 @@
                     return;
                 }
             }
-            let tick = currentTick + Math.max(0, Math.floor(INPUT_DELAY || 0));
+            let actionLead = Math.max(0, Math.floor(INPUT_DELAY || 0));
+            // Host prebuilds bundles up to current+pipeline. Guests must target beyond that window.
+            if (isMultiplayer && gameStarted && !isHost) {
+                actionLead = Math.max(actionLead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
+            }
+            let tick = currentTick + actionLead;
             if (isMultiplayer && gameStarted) {
                 // With low input delay, the target tick may already be packetized/committed.
                 // Move to the nearest still-editable tick so actions never get dropped.
@@ -13340,10 +13345,13 @@
             let setup = computeTeamSetupFromLobby();
             activeTeamIds = setup.activeTeamIds;
             teamColorById = setup.teamColorById;
-            localPlayerId = setup.teamByPeer[myPeerId] ?? (activeTeamIds[0] ?? 0);
+            localPlayerId = resolveLocalPlayerTeamId(setup);
             isMultiplayer = true;
             if (data.cfg) {
-                GRID_W = data.cfg.gridW; GRID_H = data.cfg.gridW;
+                let cfgGridW = Math.max(8, Math.floor(Number(data.cfg.gridW) || 80));
+                let cfgGridH = Math.max(8, Math.floor(Number((data.cfg.gridH !== undefined ? data.cfg.gridH : data.cfg.gridW)) || cfgGridW));
+                GRID_W = cfgGridW;
+                GRID_H = cfgGridH;
                 WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
                 GOLD_MINE_COUNT = data.cfg.goldCount;
                 GOLD_MINE_MIN = data.cfg.goldMin;
@@ -13448,6 +13456,23 @@
             let active = Array.from(activeSet).sort((a, b) => a - b);
             if (active.length === 0) active = [0, 1];
             return { teamByPeer, activeTeamIds: active, teamColorById: colorByTeam };
+        }
+
+        function resolveLocalPlayerTeamId(setup) {
+            if (setup && setup.teamByPeer && myPeerId && setup.teamByPeer[myPeerId] !== undefined) {
+                return setup.teamByPeer[myPeerId];
+            }
+            let uid = String(localPersistentPeerId || '').trim();
+            if (uid) {
+                let match = (lobbyPlayers || []).find(p => p && String(p.uid || '').trim() === uid);
+                if (match && setup && setup.teamByPeer && setup.teamByPeer[match.peerId] !== undefined) {
+                    if (myPeerId) setup.teamByPeer[myPeerId] = setup.teamByPeer[match.peerId];
+                    return setup.teamByPeer[match.peerId];
+                }
+            }
+            return (setup && Array.isArray(setup.activeTeamIds) && setup.activeTeamIds.length > 0)
+                ? setup.activeTeamIds[0]
+                : 0;
         }
 
         function dedupeLobbyPlayers() {
@@ -14197,6 +14222,7 @@
             }
             matchStartConfig = {
                 gridW: GRID_W,
+                gridH: GRID_H,
                 goldCount: GOLD_MINE_COUNT,
                 goldMin: GOLD_MINE_MIN,
                 goldMax: GOLD_MINE_MAX,
@@ -14219,7 +14245,7 @@
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
             teamColorById = setup.teamColorById;
-            localPlayerId = setup.teamByPeer[myPeerId] ?? 0;
+            localPlayerId = resolveLocalPlayerTeamId(setup);
             isMultiplayer = true;
 
             connections.forEach(c => c.send({
@@ -14599,6 +14625,24 @@
             return JSON.stringify(String(v));
         }
 
+        function normalizeLockstepPayload(v) {
+            if (v === null || v === undefined) return null;
+            let t = typeof v;
+            if (t === 'number') return Number.isFinite(v) ? v : null;
+            if (t === 'string' || t === 'boolean') return v;
+            if (Array.isArray(v)) return v.map(normalizeLockstepPayload);
+            if (t === 'object') {
+                let out = {};
+                for (let k of Object.keys(v)) {
+                    let vv = v[k];
+                    if (vv === undefined || typeof vv === 'function' || typeof vv === 'symbol') continue;
+                    out[k] = normalizeLockstepPayload(vv);
+                }
+                return out;
+            }
+            return null;
+        }
+
         function hashStringLockstep(s) {
             let h = 2166136261 >>> 0;
             for (let i = 0; i < s.length; i++) {
@@ -14737,13 +14781,14 @@
         function buildLocalTickPacket(tick) {
             let t = Math.floor(Number(tick));
             if (!Number.isFinite(t) || t < 0 || !myPeerId) return null;
-            let actions = (localInputBuffer[t] || []).map(a => ({ ...a, teamId: localPlayerId }));
+            let actions = (localInputBuffer[t] || []).map(a => normalizeLockstepPayload({ ...a, teamId: localPlayerId }));
             let packet = {
                 tick: t,
                 peerId: myPeerId,
                 teamId: localPlayerId,
                 actions
             };
+            packet = normalizeLockstepPayload(packet) || packet;
             packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
             lockstepLocalPacketByTick[t] = packet;
             return packet;
@@ -14802,21 +14847,35 @@
             if (!isHost) return;
             let packet = data && data.packet ? data.packet : null;
             if (!packet || typeof packet !== 'object') return;
-            packet.peerId = String(packet.peerId || conn.peer || '');
+            let connPeerId = String((conn && conn.peer) || '');
+            packet.peerId = connPeerId || String(packet.peerId || '');
             packet.tick = Math.floor(Number(packet.tick));
             if (!Number.isFinite(packet.tick) || packet.tick < 0 || !packet.peerId) return;
-            let setup = computeTeamSetupFromLobby();
-            packet.teamId = setup.teamByPeer[packet.peerId] ?? Math.floor(Number(packet.teamId) || 0);
-            packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => ({ ...a, teamId: packet.teamId })) : [];
+            packet.teamId = Math.floor(Number(packet.teamId) || 0);
+            packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
+            packet = normalizeLockstepPayload(packet) || packet;
 
             if (!validateTickPacket(packet)) {
                 logLockstepWarning('Packet checksum mismatch; requesting resend', {
                     tick: packet.tick,
                     packetPeerId: packet.peerId,
-                    fromPeer: conn && conn.peer ? conn.peer : null
+                    fromPeer: connPeerId || null
                 });
                 conn.send({ type: 'TICK_RESEND_REQUEST', tick: packet.tick, packetPeerId: packet.peerId });
                 return;
+            }
+
+            if (lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
+                // This tick is already sealed by the host; late packet updates must be ignored.
+                return;
+            }
+
+            let setup = computeTeamSetupFromLobby();
+            let enforcedTeamId = setup.teamByPeer[packet.peerId] ?? packet.teamId;
+            if (packet.teamId !== enforcedTeamId || packet.actions.some(a => Math.floor(Number(a && a.teamId) || 0) !== enforcedTeamId)) {
+                packet.teamId = enforcedTeamId;
+                packet.actions = packet.actions.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
+                packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
             }
 
             if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
