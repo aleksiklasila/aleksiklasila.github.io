@@ -1809,7 +1809,7 @@
         const RESEARCH_WORK_BASE = 110;
         const RESEARCH_BONUS_EXP = 1.5;
 
-        const MAX_THING_LEVEL = 100;
+        const MAX_THING_LEVEL = 20;
         const MAX_RESEARCH_LEVEL = 10;
 
         const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true };
@@ -1837,6 +1837,30 @@
             king: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd']
         };
 
+        const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'builderDps', 'healerHps'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange'];
+
+        // Soft caps for precomputed stats. Infinity means "no soft cap".
+        const PRECOMPUTED_SOFT_CAP_MAP = {
+            unit: {
+                hp: Infinity,
+                atk: Infinity,
+                atkCd: Infinity,
+                speed: 14,
+                visionRange: Infinity,
+                attackRange: 7,
+                builderDps: Infinity,
+                healerHps: Infinity,
+            },
+            building: {
+                maxHp: Infinity,
+                damage: Infinity,
+                cd: Infinity,
+                spawnCd: Infinity,
+                visionRange: 16,
+            }
+        };
+
         let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
         let PRECOMPUTED_STATS_READY = false;
 
@@ -1858,6 +1882,23 @@
             let mult = Math.pow(RESEARCH_BONUS_EXP, rLevel);
             if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
             return baseValue * mult;
+        }
+
+        function getPrecomputedSoftCap(kind, statKey) {
+            let kindMap = (PRECOMPUTED_SOFT_CAP_MAP && PRECOMPUTED_SOFT_CAP_MAP[kind]) || null;
+            if (!kindMap) return Infinity;
+            let cap = kindMap[statKey];
+            return Number.isFinite(cap) ? Math.max(0, cap) : Infinity;
+        }
+
+        function applyPrecomputedSoftCap(value, cap) {
+            if (!Number.isFinite(value)) return value;
+            if (!Number.isFinite(cap) || cap <= 0) return value;
+            // Smooth soft cap: (cap*value)/sqrt((cap^2*(4/5)^2)+value^2)
+            let k = 4 / 5;
+            let denom = Math.sqrt((cap * cap * k * k) + (value * value));
+            if (denom <= 0) return value;
+            return (cap * value) / denom;
         }
 
         function computeBaseUnitStatsAtLevel(unitType, level) {
@@ -1953,10 +1994,12 @@
                 for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
                     let base = computeBaseUnitStatsAtLevel(unitType, lvl);
                     let levelEntry = {};
-                    for (let statKey of Object.keys(base)) {
+                    for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
+                        let cap = getPrecomputedSoftCap('unit', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                            arr[r] = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            let researched = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap);
                         }
                         levelEntry[statKey] = arr;
                     }
@@ -1969,10 +2012,12 @@
                 for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
                     let base = computeBaseBuildingStatsAtLevel(buildingKey, lvl);
                     let levelEntry = {};
-                    for (let statKey of ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange']) {
+                    for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
+                        let cap = getPrecomputedSoftCap('building', statKey);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
-                            arr[r] = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            let researched = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap);
                         }
                         levelEntry[statKey] = arr;
                     }
@@ -6248,6 +6293,9 @@
 
                 if (this.type === 'research' && !isAutoResearchEnabled(this)) {
                     this.isResearching = false;
+                } else if (!this.isUpgrading && this.researchTask && this.researchTask.workDone < this.researchTask.workRequired) {
+                    // Re-arm active task after auto-research is toggled back on.
+                    this.isResearching = true;
                 }
             }
 
@@ -6391,6 +6439,41 @@
                     }
                 }
             } else if (u.workerType === 'builder') {
+                // Long-period watchdog: builders that stop making movement progress
+                // should periodically re-evaluate work instead of waiting forever.
+                let movedSinceLast = false;
+                if (!Number.isFinite(u._builderLastWatchX) || !Number.isFinite(u._builderLastWatchY)) {
+                    u._builderLastWatchX = u.x;
+                    u._builderLastWatchY = u.y;
+                    u._builderLastMoveTick = gameTime;
+                } else {
+                    movedSinceLast = Math.hypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
+                    u._builderLastWatchX = u.x;
+                    u._builderLastWatchY = u.y;
+                    if (movedSinceLast) u._builderLastMoveTick = gameTime;
+                }
+
+                let builderRecheckInterval = Math.max(120, Math.floor(TICK_RATE * 8));
+                let builderStuckTicks = Math.max(90, Math.floor(TICK_RATE * 5));
+                if (!Number.isFinite(u._builderNextRecheckTick)) u._builderNextRecheckTick = gameTime + builderRecheckInterval;
+                if (!Number.isFinite(u._builderLastMoveTick)) u._builderLastMoveTick = gameTime;
+
+                if (u.workerState !== 'BUILDING_IN_PLACE' && gameTime >= u._builderNextRecheckTick) {
+                    u._builderNextRecheckTick = gameTime + builderRecheckInterval;
+                    let stuckTooLong = (gameTime - u._builderLastMoveTick) >= builderStuckTicks;
+                    let shouldRetarget = u.workerState === 'IDLE' || !u.workerTarget || stuckTooLong;
+                    if (shouldRetarget) {
+                        if (stuckTooLong) {
+                            // Drop stale route/spawner reservation and find a fresh task.
+                            u.path = null;
+                            u.pathIndex = 0;
+                            u._builderSpawnerTarget = null;
+                            u.workerTarget = null;
+                        }
+                        _builderFindTarget(u, myGx, myGy);
+                    }
+                }
+
                 if (u.workerState === 'IDLE') {
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
@@ -10259,6 +10342,13 @@
                     let target = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
                     if (target) {
                         target.autoResearchEnabled = !!a.enabled;
+                        if (target.autoResearchEnabled) {
+                            if (!target.isUpgrading && target.researchTask && target.researchTask.workDone < target.researchTask.workRequired) {
+                                target.isResearching = true;
+                            }
+                        } else {
+                            target.isResearching = false;
+                        }
                     }
                 } else if (a.action === 'killUnit') {
                     let u = units.find(u => u.id === a.unitId && u.owner === playerId);
@@ -14245,6 +14335,11 @@
         function gameFrame(timestamp) {
             // v2 unified rAF loop (no MessageChannel)
             sendNetworkPings(timestamp);
+            if (!ctx || !canvas || !bgCtx || !minimapCtx) {
+                ensureRenderContextsInitialized();
+                requestAnimationFrame(gameFrame);
+                return;
+            }
             // --- Process ticks ---
             if (gameStarted && !gameOver) {
                 let dt = timestamp - _lastTickTime;
@@ -14334,56 +14429,79 @@
             }
         }
 
+        let _renderInitEventsBound = false;
+        function ensureRenderContextsInitialized() {
+            canvas = canvas || document.getElementById('gameCanvas');
+            let gameArea = document.getElementById('game-area');
+            if (!canvas || !gameArea) return false;
+
+            if (!ctx) {
+                ctx = canvas.getContext('2d');
+                if (!ctx) return false;
+                ctx.imageSmoothingEnabled = false;
+            }
+
+            if (!bgCanvas) {
+                bgCanvas = document.createElement('canvas');
+                bgCanvas.id = 'gameBackgroundCanvas';
+                bgCanvas.style.position = 'absolute';
+                bgCanvas.style.top = '0';
+                bgCanvas.style.left = '0';
+                bgCanvas.style.pointerEvents = 'none';
+            }
+            if (!bgCanvas.parentElement) gameArea.insertBefore(bgCanvas, canvas);
+            if (!bgCtx) {
+                bgCtx = bgCanvas.getContext('2d');
+                if (!bgCtx) return false;
+                bgCtx.imageSmoothingEnabled = false;
+            }
+
+            minimapCanvas = minimapCanvas || document.getElementById('minimapCanvas');
+            if (!minimapCanvas) return false;
+            if (!minimapCtx) minimapCtx = minimapCanvas.getContext('2d');
+            if (!minimapCtx) return false;
+
+            let mmDpr = window.devicePixelRatio || 1;
+            if (minimapCanvas.width !== MINIMAP_SIZE * mmDpr || minimapCanvas.height !== MINIMAP_SIZE * mmDpr) {
+                minimapCanvas.width = MINIMAP_SIZE * mmDpr;
+                minimapCanvas.height = MINIMAP_SIZE * mmDpr;
+                minimapCanvas.style.width = MINIMAP_SIZE + 'px';
+                minimapCanvas.style.height = MINIMAP_SIZE + 'px';
+                minimapCtx.setTransform(mmDpr, 0, 0, mmDpr, 0, 0);
+            }
+
+            viewW = gameArea.clientWidth;
+            viewH = gameArea.clientHeight;
+            let dpr = window.devicePixelRatio || 1;
+            bgCanvas.width = viewW * dpr;
+            bgCanvas.height = viewH * dpr;
+            bgCanvas.style.width = viewW + 'px';
+            bgCanvas.style.height = viewH + 'px';
+            canvas.width = viewW * dpr;
+            canvas.height = viewH * dpr;
+            canvas.style.width = viewW + 'px';
+            canvas.style.height = viewH + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            if (!_renderInitEventsBound) {
+                window.addEventListener('resize', () => {
+                    if (!ensureRenderContextsInitialized()) return;
+                    invalidateStaticLayerCache();
+                });
+                document.addEventListener('visibilitychange', refreshBackgroundTickMode);
+                _renderInitEventsBound = true;
+            }
+
+            return true;
+        }
+
         // ============================================================
         // INIT
         // ============================================================
         window.addEventListener('load', () => {
-            canvas = document.getElementById('gameCanvas');
-            ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = false;
-
-            bgCanvas = document.createElement('canvas');
-            bgCanvas.id = 'gameBackgroundCanvas';
-            bgCanvas.style.position = 'absolute';
-            bgCanvas.style.top = '0';
-            bgCanvas.style.left = '0';
-            bgCanvas.style.pointerEvents = 'none';
-            bgCtx = bgCanvas.getContext('2d');
-            bgCtx.imageSmoothingEnabled = false;
-
-            let gameArea = document.getElementById('game-area');
-            gameArea.insertBefore(bgCanvas, canvas);
-
-            minimapCanvas = document.getElementById('minimapCanvas');
-            minimapCtx = minimapCanvas.getContext('2d');
-
-            // HiDPI minimap
-            let mmDpr = window.devicePixelRatio || 1;
-            minimapCanvas.width = MINIMAP_SIZE * mmDpr;
-            minimapCanvas.height = MINIMAP_SIZE * mmDpr;
-            minimapCanvas.style.width = MINIMAP_SIZE + 'px';
-            minimapCanvas.style.height = MINIMAP_SIZE + 'px';
-            minimapCtx.scale(mmDpr, mmDpr);
-
-            function resize() {
-                viewW = gameArea.clientWidth;
-                viewH = gameArea.clientHeight;
-                let dpr = window.devicePixelRatio || 1;
-                bgCanvas.width = viewW * dpr;
-                bgCanvas.height = viewH * dpr;
-                bgCanvas.style.width = viewW + 'px';
-                bgCanvas.style.height = viewH + 'px';
-                canvas.width = viewW * dpr;
-                canvas.height = viewH * dpr;
-                canvas.style.width = viewW + 'px';
-                canvas.style.height = viewH + 'px';
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                invalidateStaticLayerCache();
-            }
-            resize();
-            window.addEventListener('resize', resize);
-            document.addEventListener('visibilitychange', refreshBackgroundTickMode);
+            if (!ensureRenderContextsInitialized()) return;
+            invalidateStaticLayerCache();
             refreshBackgroundTickMode();
 
             initInput();
