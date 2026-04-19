@@ -11070,11 +11070,11 @@
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             if (!e.underConstruction) {
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', bKey, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'hp', 'Unit HP'), Number.isFinite(uHp) ? Math.floor(uHp) : '?');
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'atk', 'Unit Atk'), Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'attackRange', 'Unit Range'), formatRangeStatTiles(Number(uRange) || 0));
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'speed', 'Unit Spd'), Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
+                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+                html += infoRow('Unit HP', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+                html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
+                html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
+                html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
                 if (e.owner === localPlayerId) {
                     html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 }
@@ -11121,11 +11121,11 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', bKey, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'hp', 'Unit HP'), Number.isFinite(uHp) ? Math.floor(uHp) : '?');
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'atk', 'Unit Atk'), Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'attackRange', 'Unit Range'), formatRangeStatTiles(Number(uRange) || 0));
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'speed', 'Unit Spd'), Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
+            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+            html += infoRow('Unit HP', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+            html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
+            html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
+            html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
             }
@@ -11258,7 +11258,7 @@
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             if (!e.underConstruction) {
-                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', e.type, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
@@ -11602,7 +11602,7 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', e.type, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
