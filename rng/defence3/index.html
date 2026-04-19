@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -122,7 +122,8 @@
         }
 
         #help-popup,
-        #settings-popup {
+        #settings-popup,
+        #statsmap-popup {
             position: fixed;
             inset: 0;
             z-index: 1200;
@@ -133,12 +134,14 @@
         }
 
         #help-popup.hidden,
-        #settings-popup.hidden {
+        #settings-popup.hidden,
+        #statsmap-popup.hidden {
             display: none;
         }
 
         #help-popup-card,
-        #settings-popup-card {
+        #settings-popup-card,
+        #statsmap-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
             overflow: auto;
@@ -147,6 +150,23 @@
             border-radius: 8px;
             box-shadow: 0 12px 42px rgba(0, 0, 0, 0.55);
             padding: 14px;
+        }
+
+        #statsmap-popup-card {
+            width: min(900px, calc(100vw - 28px));
+        }
+
+        #statsmap-json {
+            width: 100%;
+            min-height: 420px;
+            box-sizing: border-box;
+            background: #0f1113;
+            color: #cfe7ff;
+            border: 1px solid #36414a;
+            border-radius: 6px;
+            padding: 8px;
+            font: 11px/1.35 Consolas, monospace;
+            resize: vertical;
         }
 
         .settings-list {
@@ -859,7 +879,7 @@
         <span class="hud-time"
             style="margin-left: auto; display:inline-flex; align-items:center; gap:8px; margin-right:5px;">
             <button id="btn-fullscreen"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">⛶
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">&#x26F6;
                 FS</button>
             <button id="btn-default-build"
                 style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Build: ON</button>
@@ -875,7 +895,7 @@
                     Rally</label>
             </span>
             <button id="btn-resign" title="Resign"
-                style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">☠</button>
+                style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">â˜ </button>
         </span>
     </div>
 
@@ -912,7 +932,28 @@
                         Enabled
                     </label>
                 </div>
+                <div class="settings-row">
+                    <label for="btn-show-statsmap">Precomputed Stats Map</label>
+                    <button id="btn-show-statsmap"
+                        style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
+                </div>
             </div>
+        </div>
+    </div>
+
+    <div id="statsmap-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="statsmap-title">
+        <div id="statsmap-popup-card">
+            <div class="help-title-row">
+                <h3 id="statsmap-title" style="color:#8dc6ff; font-size:18px; margin:0">PRECOMPUTED_STATS_MAP</h3>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button id="btn-refresh-statsmap"
+                        style="background:#1b2a35; border:1px solid #4a89c7; color:#d8ecff; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Refresh</button>
+                    <button id="btn-statsmap-close"
+                        style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+                </div>
+            </div>
+            <div class="help-mode">Pretty printed JSON snapshot</div>
+            <textarea id="statsmap-json" readonly spellcheck="false"></textarea>
         </div>
     </div>
 
@@ -1067,7 +1108,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 2px;">
                     <span id="minimap-title" style="font-size:10px; color:#888;">Map</span>
                     <button id="btn-minimap"
-                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:9px; padding:1px 4px; border-radius:2px;">▼</button>
+                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:9px; padding:1px 4px; border-radius:2px;">&#9660;</button>
                 </div>
                 <div id="minimap-container">
                     <canvas id="minimapCanvas" width="160" height="160"></canvas>
@@ -1511,6 +1552,27 @@
             return wasOpen !== open;
         }
 
+        function refreshStatsMapPopupText() {
+            ensurePrecomputedStatsMap();
+            let ta = document.getElementById('statsmap-json');
+            if (!ta) return;
+            try {
+                ta.value = JSON.stringify(PRECOMPUTED_STATS_MAP, null, 2);
+            } catch {
+                ta.value = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
+            }
+            ta.scrollTop = 0;
+        }
+
+        function setStatsMapPopupOpen(open) {
+            let popup = document.getElementById('statsmap-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            if (open) refreshStatsMapPopupText();
+            return wasOpen !== open;
+        }
+
         function mulberry32(seed) {
             let s = seed | 0;
             return function () {
@@ -1557,7 +1619,7 @@
         // ============================================================
         // CARD/BUILDING TYPES
         // ============================================================
-        const CARD_TYPES = {
+        const BASE_CARD_TYPES = {
             // Towers (target: wall)
             pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
             smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
@@ -1585,6 +1647,7 @@
             salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", hp: 60, target: 'floor' },
             builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", hp: 60, target: 'floor' },
             healer_spawner: { name: "Healer", price: 180, icon: "\u2695\uFE0F", color: "#355", hp: 60, target: 'floor' },
+            research: { name: "Research", price: 260, icon: "\uD83E\uDDEA", color: "#446", hp: 70, target: 'floor' },
             house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 120, target: 'floor' },
             area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
 
@@ -1641,6 +1704,7 @@
             salvager: "Spawns salvagers that recycle marked buildings.",
             builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1hp and need builders to become functional.",
             healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
+            research: "Runs queued research projects. Builders contribute build speed to complete research tasks one-by-one.",
             house: "Raises max population by 1.6^{level} while operational.",
             cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
             cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
@@ -1687,7 +1751,7 @@
             barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
             towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower'],
             floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm'],
-            special: ['spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
+            special: ['spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
 
         // Barrack spawn config
@@ -1705,7 +1769,7 @@
         };
 
         // Unit combat stats
-        const UNIT_STATS = {
+        const BASE_UNIT_STATS = {
             norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
             fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 20, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
             tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 45, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
@@ -1740,16 +1804,66 @@
             king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 12, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
-        function computeUnitLevelScaledStats(unit, level) {
-            if (!unit) return null;
-            let lvl = Math.max(1, Math.floor(level || 1));
-            let cfg = UNIT_LEVEL_SCALING[unit.unitType] || UNIT_LEVEL_SCALING._default;
+        const RESEARCH_COST_EXP = 1.85;
+        const RESEARCH_WORK_EXP = 1.7;
+        const RESEARCH_WORK_BASE = 110;
+        const RESEARCH_BONUS_EXP = 1.5;
 
-            let baseHp = unit.baseHp || unit.maxHp || 1;
-            let baseAtk = unit.baseAttackDamage || unit.attackDamage || 0;
-            let baseSpeed = unit.baseSpeed || unit.speed || 1;
-            let baseCd = unit.baseAttackCooldown || unit.attackCooldown || 30;
-            let baseVision = unit.baseVisionRange || unit.visionRange || 4;
+        const MAX_THING_LEVEL = 100;
+        const MAX_RESEARCH_LEVEL = 10;
+
+        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true };
+        const RESEARCH_STAT_LABELS = {
+            maxHp: 'Max HP',
+            damage: 'Damage',
+            cd: 'Cooldown',
+            spawnCd: 'Spawn CD',
+            visionRange: 'Vision',
+            hp: 'HP',
+            speed: 'Speed',
+            atk: 'Attack',
+            attackRange: 'Range',
+            atkCd: 'Atk Cooldown',
+            builderDps: 'Build Speed',
+            healerHps: 'Heal Speed'
+        };
+
+        const RESEARCHABLE_UNIT_STATS = {
+            _default: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd'],
+            collector: ['hp', 'speed', 'visionRange'],
+            salvager_unit: ['hp', 'speed', 'visionRange'],
+            builder_unit: ['hp', 'speed', 'visionRange', 'builderDps'],
+            healer_unit: ['hp', 'speed', 'visionRange', 'healerHps'],
+            king: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd']
+        };
+
+        let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
+        let PRECOMPUTED_STATS_READY = false;
+
+        function clampThingLevel(level) {
+            return Math.max(0, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 0)));
+        }
+
+        function clampResearchLevel(level) {
+            return Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(level) || 0)));
+        }
+
+        function getUnitResearchStatKeys(unitType) {
+            return RESEARCHABLE_UNIT_STATS[unitType] || RESEARCHABLE_UNIT_STATS._default;
+        }
+
+        function applyResearchLevelToBaseValue(baseValue, statKey, researchLevel) {
+            if (!Number.isFinite(baseValue)) return NaN;
+            let rLevel = clampResearchLevel(researchLevel);
+            let mult = Math.pow(RESEARCH_BONUS_EXP, rLevel);
+            if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
+            return baseValue * mult;
+        }
+
+        function computeBaseUnitStatsAtLevel(unitType, level) {
+            let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
+            let lvl = Math.max(1, clampThingLevel(level));
+            let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
 
             let hpMult = Math.pow(cfg.hpExp || 1, lvl - 1);
             let dmgMult = Math.pow(cfg.dmgExp || 1, lvl - 1);
@@ -1757,27 +1871,497 @@
             let cdMult = Math.pow(cfg.cdExp || 1, lvl - 1);
             let visionMult = Math.pow(cfg.visionExp || 1, lvl - 1);
 
-            let maxHp = Math.max(1, Math.floor(baseHp * hpMult));
-            let attackDamage = baseAtk;
-            if (baseAtk > 0) attackDamage = Math.max(1, Math.round(baseAtk * dmgMult));
+            let hp = Math.max(1, Math.floor((Number(s.hp) || 1) * hpMult));
+            let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
 
-            let attackCooldown = baseCd;
-            if (baseCd < 900) attackCooldown = Math.max(cfg.minCd || 8, Math.round(baseCd * cdMult));
+            let baseCd = Number(s.atkCd) || 30;
+            let atkCd = baseCd;
+            if (baseCd < 900) atkCd = Math.max(cfg.minCd || 8, Math.round(baseCd * cdMult));
 
+            let baseSpeed = Number(s.speed) || 1;
             let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
             let speed = Math.min(speedCap, baseSpeed * speedMult);
 
+            let baseVision = Math.max(0.25, Number(s.visionRange) || 4);
             let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
             let visionRange = Math.min(visionCap, baseVision * visionMult);
 
-            let builderDps = unit.builderDps || 0;
-            if (unit.workerType === 'builder') {
-                builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+            let attackRange = Math.max(0, Number(s.attackRange) || 0);
+            let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
+            let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
+
+            return { hp, atk, atkCd, speed, visionRange, attackRange, builderDps, healerHps };
+        }
+
+        function computeBaseBuildingStatsAtLevel(type, level) {
+            let key = type || 'farm';
+            let lvl = Math.max(1, clampThingLevel(level));
+            let mult = Math.pow(1.6, lvl - 1);
+            let out = { maxHp: NaN, damage: NaN, cd: NaN, spawnCd: NaN, visionRange: NaN };
+
+            let spawnUnitType = null;
+            if (key.startsWith('barrack_')) spawnUnitType = (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
+            else if (key === 'spawner') spawnUnitType = 'collector';
+            else if (key === 'salvager') spawnUnitType = 'salvager_unit';
+            else if (key === 'builder_spawner') spawnUnitType = 'builder_unit';
+            else if (key === 'healer_spawner') spawnUnitType = 'healer_unit';
+            if (spawnUnitType) {
+                let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
+                out.spawnCd = Math.max(1, (cfg.baseTime || 20) * Math.pow(1 - (cfg.reduction || 0), lvl - 1));
             }
-            let healerHps = unit.healerHps || 0;
-            if (unit.workerType === 'healer') {
-                healerHps = Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+
+            if (key === 'farm') out.maxHp = Math.floor(1000 * mult);
+            else if (key === 'house') out.maxHp = Math.floor(120 * mult);
+            else if (key === 'sand') { out.maxHp = Math.floor(30 * mult); out.damage = 0.05 * mult; }
+            else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
+                let baseHp = Number.isFinite((BASE_CARD_TYPES[key] || {}).hp) ? BASE_CARD_TYPES[key].hp : (key === 'research' ? 70 : 60);
+                out.maxHp = Math.floor(baseHp * mult);
             }
+            else if (key === 'lava') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
+            else if (key === 'mine') { out.maxHp = Math.floor(30 * mult); out.damage = Math.floor(135 * mult); }
+            else if (key === 'poison_puddle') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
+            else if (key === 'ice_patch') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
+            else if (key === 'water_puddle') { out.maxHp = Math.floor(30 * mult); }
+            else if (key.startsWith('barrack_')) { out.maxHp = Math.floor(100 * mult); }
+
+            let def = BASE_CARD_TYPES[key] || {};
+            if (Number.isFinite(def.towerHp)) out.maxHp = Math.floor(def.towerHp * Math.pow(1.4, lvl - 1));
+            if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(1.4, lvl - 1);
+            if (Number.isFinite(def.cd)) out.cd = def.cd;
+            if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
+
+            if (key === 'water' || key === 'smg' || key === 'pistol') {
+                if (Number.isFinite(def.cd)) out.cd = Math.max(5, def.cd * (1 - (lvl - 1) * 0.1));
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
+            } else if (key === 'fire' || key === 'poison') {
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
+            } else if (key === 'sand_gun') {
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
+                if (Number.isFinite(def.cd)) out.cd = def.cd * Math.pow(0.9, lvl);
+            }
+            if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
+                out.visionRange = Math.min(out.visionRange, def.maxVisionRange);
+            }
+            return out;
+        }
+
+        function rebuildPrecomputedStatsMap() {
+            PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
+
+            for (let unitType in BASE_UNIT_STATS) {
+                PRECOMPUTED_STATS_MAP.unit[unitType] = [];
+                for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+                    let base = computeBaseUnitStatsAtLevel(unitType, lvl);
+                    let levelEntry = {};
+                    for (let statKey of Object.keys(base)) {
+                        let arr = new Array(MAX_RESEARCH_LEVEL + 1);
+                        for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
+                            arr[r] = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                        }
+                        levelEntry[statKey] = arr;
+                    }
+                    PRECOMPUTED_STATS_MAP.unit[unitType][lvl] = levelEntry;
+                }
+            }
+
+            for (let buildingKey in BASE_CARD_TYPES) {
+                PRECOMPUTED_STATS_MAP.building[buildingKey] = [];
+                for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+                    let base = computeBaseBuildingStatsAtLevel(buildingKey, lvl);
+                    let levelEntry = {};
+                    for (let statKey of ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange']) {
+                        let arr = new Array(MAX_RESEARCH_LEVEL + 1);
+                        for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
+                            arr[r] = applyResearchLevelToBaseValue(base[statKey], statKey, r);
+                        }
+                        levelEntry[statKey] = arr;
+                    }
+                    PRECOMPUTED_STATS_MAP.building[buildingKey][lvl] = levelEntry;
+                }
+            }
+
+            PRECOMPUTED_STATS_READY = true;
+        }
+
+        function ensurePrecomputedStatsMap() {
+            if (!PRECOMPUTED_STATS_READY) rebuildPrecomputedStatsMap();
+        }
+
+        function getUnitStatFromMap(unitType, level, statKey, researchLevel = 0) {
+            ensurePrecomputedStatsMap();
+            let key = PRECOMPUTED_STATS_MAP.unit[unitType] ? unitType : 'norm';
+            let lvl = clampThingLevel(level);
+            let rLvl = clampResearchLevel(researchLevel);
+            let arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
+            if (!arr) return NaN;
+            return arr[rLvl];
+        }
+
+        function getBuildingStatFromMap(buildingKey, level, statKey, researchLevel = 0) {
+            ensurePrecomputedStatsMap();
+            let key = PRECOMPUTED_STATS_MAP.building[buildingKey] ? buildingKey : 'farm';
+            let lvl = clampThingLevel(level);
+            let rLvl = clampResearchLevel(researchLevel);
+            let arr = (((PRECOMPUTED_STATS_MAP.building[key] || [])[lvl] || {})[statKey] || null);
+            if (!arr) return NaN;
+            return arr[rLvl];
+        }
+
+        function getUnitStatForOwner(playerId, unitType, level, statKey) {
+            let rLevel = getPlayerResearchLevel(playerId, 'unit', unitType, statKey);
+            return getUnitStatFromMap(unitType, level, statKey, rLevel);
+        }
+
+        function getBuildingStatForOwner(playerId, buildingKey, level, statKey) {
+            let rLevel = getPlayerResearchLevel(playerId, 'building', buildingKey, statKey);
+            return getBuildingStatFromMap(buildingKey, level, statKey, rLevel);
+        }
+
+        function getUnitBaseResearchPrice(unitType) {
+            if (unitType === 'collector') return 15;
+            if (unitType === 'salvager_unit') return 20;
+            if (unitType === 'builder_unit') return 18;
+            if (unitType === 'healer_unit') return 18;
+            let cfg = BARRACK_SPAWN_CONFIG[unitType];
+            if (cfg && Number.isFinite(cfg.baseTime)) return Math.max(1, Math.round(cfg.baseTime * 0.5));
+            return 20;
+        }
+
+        function makeResearchLevelId(kind, key, statKey) {
+            return `${kind}:${key}:${statKey}`;
+        }
+
+        function getBaseBuildingMaxHpForResearch(buildingKey) {
+            if (!buildingKey) return 1;
+            if (buildingKey.startsWith('barrack_')) return 100;
+            if (buildingKey === 'farm') return 1000;
+            if (buildingKey === 'house') return 120;
+            if (buildingKey === 'sand' || buildingKey === 'lava' || buildingKey === 'mine' || buildingKey === 'poison_puddle' || buildingKey === 'ice_patch' || buildingKey === 'water_puddle') return 30;
+            if (buildingKey === 'spawner' || buildingKey === 'salvager' || buildingKey === 'builder_spawner' || buildingKey === 'healer_spawner' || buildingKey === 'research') {
+                let d = BASE_CARD_TYPES[buildingKey] || {};
+                return Number.isFinite(d.hp) ? d.hp : (buildingKey === 'research' ? 70 : 60);
+            }
+            let def = BASE_CARD_TYPES[buildingKey] || {};
+            if (Number.isFinite(def.towerHp)) return def.towerHp;
+            if (Number.isFinite(def.hp)) return def.hp;
+            return 100;
+        }
+
+        function getResearchStatEntriesForThing(kind, key) {
+            let out = [];
+            if (kind === 'unit') {
+                let s = BASE_UNIT_STATS[key];
+                if (!s) return out;
+                let statOrder = getUnitResearchStatKeys(key);
+                for (let statKey of statOrder) {
+                    let baseValue = s[statKey];
+                    if (statKey === 'builderDps' || statKey === 'healerHps') baseValue = 5;
+                    if (!Number.isFinite(baseValue)) continue;
+                    out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
+                }
+                return out;
+            }
+
+            let seen = new Set();
+            let addStat = (statKey, baseValue) => {
+                if (!Number.isFinite(baseValue) || seen.has(statKey)) return;
+                seen.add(statKey);
+                out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
+            };
+
+            addStat('maxHp', getBaseBuildingMaxHpForResearch(key));
+            let d = BASE_CARD_TYPES[key] || {};
+            addStat('damage', d.damage);
+            addStat('cd', d.cd);
+            addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
+            addStat('visionRange', d.visionRange);
+            return out;
+        }
+
+        const RESEARCH_THINGS = (() => {
+            let things = [];
+            for (let key in BASE_CARD_TYPES) {
+                let def = BASE_CARD_TYPES[key];
+                if (!def || !Number.isFinite(def.price) || def.price <= 0) continue;
+                if (key === 'area_upgrader') continue;
+                let stats = getResearchStatEntriesForThing('building', key);
+                if (stats.length <= 0) continue;
+                things.push({
+                    kind: 'building',
+                    key,
+                    label: def.name || key,
+                    basePrice: Math.max(1, Math.floor(def.price)),
+                    stats
+                });
+            }
+            for (let key in BASE_UNIT_STATS) {
+                let stats = getResearchStatEntriesForThing('unit', key);
+                if (stats.length <= 0) continue;
+                things.push({
+                    kind: 'unit',
+                    key,
+                    label: key.replace(/_/g, ' '),
+                    basePrice: getUnitBaseResearchPrice(key),
+                    stats
+                });
+            }
+            return things;
+        })();
+
+        const RESEARCH_THINGS_BY_ID = (() => {
+            let out = {};
+            for (let t of RESEARCH_THINGS) out[`${t.kind}:${t.key}`] = t;
+            return out;
+        })();
+
+        function getResearchThing(kind, key) {
+            return RESEARCH_THINGS_BY_ID[`${kind}:${key}`] || null;
+        }
+
+        function getResearchStatEntry(kind, key, statKey) {
+            let thing = getResearchThing(kind, key);
+            if (!thing) return null;
+            return (thing.stats || []).find(s => s.statKey === statKey) || null;
+        }
+
+        function ensurePlayerResearchLevels(playerId) {
+            if (!players[playerId]) return {};
+            if (!players[playerId].researchLevels || typeof players[playerId].researchLevels !== 'object') {
+                players[playerId].researchLevels = {};
+            }
+            return players[playerId].researchLevels;
+        }
+
+        function ensurePlayerResearchMultipliers(playerId) {
+            if (!players[playerId]) return {};
+            if (!players[playerId].researchMultipliers || typeof players[playerId].researchMultipliers !== 'object') {
+                players[playerId].researchMultipliers = {};
+            }
+            return players[playerId].researchMultipliers;
+        }
+
+        function getPlayerResearchLevel(playerId, kind, key, statKey) {
+            let levels = ensurePlayerResearchLevels(playerId);
+            let id = makeResearchLevelId(kind, key, statKey);
+            return clampResearchLevel(levels[id] || 0);
+        }
+
+        function getResearchMultiplier(playerId, kind, key, statKey) {
+            if (!statKey) return 1;
+            let mults = ensurePlayerResearchMultipliers(playerId);
+            let id = makeResearchLevelId(kind, key, statKey);
+            if (!Number.isFinite(mults[id])) {
+                mults[id] = Math.pow(RESEARCH_BONUS_EXP, getPlayerResearchLevel(playerId, kind, key, statKey));
+            }
+            return Math.max(1, mults[id]);
+        }
+
+        function applyResearchMultiplierToValue(baseValue, mult, statKey) {
+            if (!Number.isFinite(baseValue)) return baseValue;
+            if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
+            return baseValue * mult;
+        }
+
+        function formatResearchStatValue(statKey, value) {
+            if (!Number.isFinite(value)) return '-';
+            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange') return value.toFixed(2);
+            if (statKey === 'spawnCd') return `${value.toFixed(2)}s`;
+            if (statKey === 'builderDps' || statKey === 'healerHps') return value.toFixed(1);
+            if (statKey === 'cd' || statKey === 'atkCd') return Math.max(1, Math.round(value)).toString();
+            return formatBigNumber(Math.round(value), 0);
+        }
+
+        function getResearchCurrentStatValue(playerId, kind, key, statKey) {
+            let rLevel = getPlayerResearchLevel(playerId, kind, key, statKey);
+            if (kind === 'unit') return getUnitStatFromMap(key, 1, statKey, rLevel);
+            if (kind === 'building') return getBuildingStatFromMap(key, 1, statKey, rLevel);
+            return NaN;
+        }
+
+        function getEffectiveCardTypeForPlayer(playerId, key) {
+            let base = BASE_CARD_TYPES[key];
+            if (!base) return null;
+            let out = { ...base };
+            for (let stat of getResearchStatEntriesForThing('building', key)) {
+                let val = getResearchCurrentStatValue(playerId, 'building', key, stat.statKey);
+                if (!Number.isFinite(val)) continue;
+                if (stat.statKey === 'maxHp') {
+                    if (Number.isFinite(base.towerHp)) out.towerHp = val;
+                    else if (Number.isFinite(base.hp)) out.hp = val;
+                } else {
+                    out[stat.statKey] = val;
+                }
+            }
+            return out;
+        }
+
+        function getEffectiveUnitStatsForPlayer(playerId, key) {
+            let base = BASE_UNIT_STATS[key];
+            if (!base) return null;
+            let out = { ...base };
+            for (let stat of getResearchStatEntriesForThing('unit', key)) {
+                let val = getResearchCurrentStatValue(playerId, 'unit', key, stat.statKey);
+                if (Number.isFinite(val)) out[stat.statKey] = val;
+            }
+            return out;
+        }
+
+        function getResearchCost(kind, key, statKey, currentLevel) {
+            let thing = getResearchThing(kind, key);
+            let stat = getResearchStatEntry(kind, key, statKey);
+            if (!thing || !stat) return 0;
+            let lvl = Math.max(0, Math.floor(currentLevel || 0));
+            if (lvl >= MAX_RESEARCH_LEVEL) return 0;
+            return Math.max(1, Math.floor(thing.basePrice * Math.pow(RESEARCH_COST_EXP, lvl)));
+        }
+
+        function getResearchWork(kind, key, statKey, currentLevel) {
+            let thing = getResearchThing(kind, key);
+            let stat = getResearchStatEntry(kind, key, statKey);
+            if (!thing || !stat) return 0;
+            let lvl = Math.max(0, Math.floor(currentLevel || 0));
+            if (lvl >= MAX_RESEARCH_LEVEL) return 0;
+            return Math.max(1, Math.floor(RESEARCH_WORK_BASE * thing.basePrice * Math.pow(RESEARCH_WORK_EXP, lvl)));
+        }
+
+        function getResearchQueueDepthForStat(researchBuilding, kind, key, statKey) {
+            if (!researchBuilding) return 0;
+            let n = 0;
+            if (researchBuilding.researchTask && researchBuilding.researchTask.kind === kind && researchBuilding.researchTask.key === key && researchBuilding.researchTask.statKey === statKey) n++;
+            for (let q of (researchBuilding.researchQueue || [])) {
+                if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
+            }
+            return n;
+        }
+
+        function getResearchQueuedDepthForPlayer(playerId, kind, key, statKey) {
+            let n = 0;
+            for (let s of collectorSpawners) {
+                if (!s || s.type !== 'research' || s.owner !== playerId || s.hp <= 0) continue;
+                n += getResearchQueueDepthForStat(s, kind, key, statKey);
+            }
+            return n;
+        }
+
+        function makeResearchTask(owner, kind, key, statKey, projectedLevel) {
+            let lvl = Math.max(0, Math.floor(projectedLevel || 0));
+            return {
+                owner,
+                kind,
+                key,
+                statKey,
+                fromLevel: lvl,
+                toLevel: lvl + 1,
+                cost: getResearchCost(kind, key, statKey, lvl),
+                workRequired: getResearchWork(kind, key, statKey, lvl),
+                workDone: 0
+            };
+        }
+
+        function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
+            for (let u of units) {
+                if (!u || u.dead || u.owner !== owner || u.unitType !== unitType) continue;
+                let prevHp = u.hp;
+                applyUnitLevelScaling(u, getUnitBaseLevel(u));
+                if (statKey === 'hp') u.hp = Math.max(1, Math.min(prevHp, u.maxHp));
+            }
+        }
+
+        function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
+            for (let t of towers) {
+                if (!t || t.owner !== owner || t.type !== buildingKey) continue;
+                let prevHp = t.hp;
+                t.updateStats();
+                if (statKey === 'maxHp') t.hp = Math.max(1, Math.min(prevHp, t.maxHp));
+            }
+
+            for (let b of barracks) {
+                if (!b || b.owner !== owner || `barrack_${b.unitType}` !== buildingKey) continue;
+                let prevHp = b.hp;
+                let lvl = getThingEffectiveLevel(b);
+                let stats = calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner);
+                b.maxHp = Math.max(1, Math.floor(stats.maxHp || 1));
+                if (statKey === 'maxHp') b.hp = Math.max(1, Math.min(prevHp, b.maxHp));
+            }
+
+            for (let s of collectorSpawners) {
+                if (!s || s.owner !== owner || s.type !== buildingKey) continue;
+                let prevHp = s.hp;
+                let lvl = getThingEffectiveLevel(s);
+                let stats = calculateItemStats(s.type, lvl, s.owner);
+                s.maxHp = Math.max(1, Math.floor(stats.maxHp || 1));
+                if (statKey === 'maxHp') s.hp = Math.max(1, Math.min(prevHp, s.maxHp));
+            }
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    if (!cell || !cell.item || cell.owner !== owner) continue;
+                    let item = cell.item;
+                    if (item.type !== buildingKey) continue;
+                    let prevHp = item.hp;
+                    let lvl = getThingEffectiveLevel(item);
+                    let stats = calculateItemStats(item.type, lvl, owner);
+                    if (Number.isFinite(stats.maxHp) && stats.maxHp > 0) {
+                        item.maxHp = Math.max(1, Math.floor(stats.maxHp));
+                        if (statKey === 'maxHp') item.hp = Math.max(1, Math.min(prevHp, item.maxHp));
+                    }
+                    if (Number.isFinite(stats.damage)) item.damage = stats.damage;
+                }
+            }
+        }
+
+        function applyResearchCompletion(owner, task) {
+            if (!task) return;
+            let levels = ensurePlayerResearchLevels(owner);
+            let mults = ensurePlayerResearchMultipliers(owner);
+            let id = makeResearchLevelId(task.kind, task.key, task.statKey);
+            let prevLevel = clampResearchLevel(levels[id] || 0);
+            let nextLevel = clampResearchLevel(prevLevel + 1);
+            if (nextLevel <= prevLevel) return;
+            levels[id] = nextLevel;
+            mults[id] = Math.pow(RESEARCH_BONUS_EXP, nextLevel);
+            if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
+            if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
+            recalculateAdjacency();
+        }
+
+        function getResearchQueueTotalLength(researchBuilding) {
+            if (!researchBuilding) return 0;
+            return (researchBuilding.researchTask ? 1 : 0) + ((researchBuilding.researchQueue || []).length);
+        }
+
+        function computeUnitLevelScaledStats(unit, level) {
+            if (!unit) return null;
+            let lvl = Math.max(1, clampThingLevel(level || 1));
+
+            let maxHp = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'hp');
+            let attackDamage = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atk');
+            let attackCooldown = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atkCd');
+            let speed = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'speed');
+            let visionRange = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'visionRange');
+            let attackRangeTiles = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'attackRange');
+            let builderDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'builderDps');
+            let healerHps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'healerHps');
+
+            if (!Number.isFinite(maxHp)) maxHp = Math.max(1, Math.floor(unit.baseHp || unit.maxHp || 1));
+            if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
+            if (!Number.isFinite(attackCooldown)) attackCooldown = Math.max(1, Number(unit.baseAttackCooldown || unit.attackCooldown || 30));
+            if (!Number.isFinite(speed)) speed = Math.max(0.1, Number(unit.baseSpeed || unit.speed || 1));
+            if (!Number.isFinite(visionRange)) visionRange = Math.max(0.25, Number(unit.baseVisionRange || unit.visionRange || 4));
+            if (!Number.isFinite(attackRangeTiles)) attackRangeTiles = Math.max(0, Number(unit.baseAttackRange || (unit.attackRange / TILE) || 0));
+
+            maxHp = Math.max(1, Math.floor(maxHp));
+            attackDamage = Math.max(0, Number(attackDamage) || 0);
+            attackCooldown = Math.max(1, Math.round(Number(attackCooldown) || 1));
+            speed = Math.max(0.1, Number(speed) || 0.1);
+            visionRange = Math.max(0.25, Number(visionRange) || 0.25);
+            let attackRange = Math.max(0, Number(attackRangeTiles) || 0) * TILE;
+
+            if (!Number.isFinite(builderDps)) builderDps = 0;
+            if (!Number.isFinite(healerHps)) healerHps = 0;
+            if (unit.workerType === 'builder') builderDps = Math.max(1, Math.round(builderDps));
+            if (unit.workerType === 'healer') healerHps = Math.max(1, Math.round(healerHps));
 
             return {
                 level: lvl,
@@ -1786,6 +2370,7 @@
                 attackCooldown,
                 speed,
                 visionRange,
+                attackRange,
                 builderDps,
                 healerHps
             };
@@ -1799,7 +2384,7 @@
                 || !Number.isFinite(unit.baseLevel)
                 || Math.max(1, Math.floor(unit.baseLevel || 1)) !== lvl;
             if (shouldSyncStackFromLevel) {
-                unit.stackCount = Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+                unit.stackCount = getRequiredStacksForLevel(lvl);
             }
 
             unit.baseHp = unit.baseHp || unit.maxHp || 1;
@@ -1807,6 +2392,7 @@
             unit.baseSpeed = unit.baseSpeed || unit.speed || 1;
             unit.baseAttackCooldown = unit.baseAttackCooldown || unit.attackCooldown || 30;
             unit.baseVisionRange = unit.baseVisionRange || unit.visionRange || 4;
+            if (!Number.isFinite(unit.baseAttackRange)) unit.baseAttackRange = (Number(unit.attackRange) || 0) / TILE;
 
             let scaled = computeUnitLevelScaledStats(unit, lvl);
             if (!scaled) return;
@@ -1818,6 +2404,7 @@
             unit.attackCooldown = scaled.attackCooldown;
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
+            unit.attackRange = scaled.attackRange;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
 
@@ -1827,6 +2414,7 @@
             unit.baseLevelAttackCooldown = scaled.attackCooldown;
             unit.baseLevelSpeed = scaled.speed;
             unit.baseLevelVisionRange = scaled.visionRange;
+            unit.baseLevelAttackRange = scaled.attackRange;
             if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.baseLevelHealerHps = scaled.healerHps;
 
@@ -1847,6 +2435,7 @@
             unit.attackCooldown = scaled.attackCooldown;
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
+            unit.attackRange = scaled.attackRange;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
 
@@ -1915,11 +2504,12 @@
         let mouseScreenX = 0, mouseScreenY = 0;
 
         // Build
-        let selectedBuildItem = null; // key from CARD_TYPES
+        let selectedBuildItem = null; // key from BASE_CARD_TYPES
         let activeBuildTab = 'barracks';
         const PURCHASE_MULTIPLIERS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
         let buildPurchaseMultiplier = 1;
         let queuePurchaseMultiplier = 1;
+        let researchPanelOpenState = {};
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = false;
@@ -3319,10 +3909,13 @@
         // ITEM STATS
         // ============================================================
         function getUpgradeMaxHp(item, nextLevel) {
-            if (item.type === 'barrack' || (item.type && item.type.startsWith('barrack'))) return calculateItemStats('barrack', nextLevel).maxHp;
-            if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner' || item.type === 'healer_spawner') return calculateItemStats(item.type, nextLevel).maxHp;
+            if (item.type === 'barrack' || (item.type && item.type.startsWith('barrack'))) {
+                let bType = item.unitType ? ('barrack_' + item.unitType) : 'barrack_norm';
+                return calculateItemStats(bType, nextLevel, item.owner).maxHp;
+            }
+            if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner' || item.type === 'healer_spawner' || item.type === 'research') return calculateItemStats(item.type, nextLevel, item.owner).maxHp;
             if (item instanceof Tower) return item.baseStats.towerHp ? Math.floor(item.baseStats.towerHp * Math.pow(1.4, nextLevel - 1)) : 100 * nextLevel;
-            return calculateItemStats(item.type || 'farm', nextLevel).maxHp;
+            return calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxHp;
         }
 
         function beginUpgradeProgress(item, nextLevel) {
@@ -3338,9 +3931,50 @@
         function getDisplayLevel(item) {
             if (!item) return 1;
             if (item.underConstruction) return 0;
-            if (item.effectiveLevel !== undefined) return item.effectiveLevel;
-            if (item.level !== undefined) return item.level;
-            return Math.floor(Math.log2(item.stacks || 1)) + 1;
+            if (item.effectiveLevel !== undefined) return clampThingLevel(item.effectiveLevel);
+            if (item.level !== undefined) return clampThingLevel(item.level);
+            return stackCountToLevel(item.stacks || 1);
+        }
+
+        function getRequiredStacksForLevel(level) {
+            let lvl = Math.max(1, clampThingLevel(Math.floor(Number(level) || 1)));
+            return Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+        }
+
+        function getThingBaseLevel(item, fallback = 1) {
+            if (!item) return Math.max(1, clampThingLevel(fallback));
+            if (Number.isFinite(item.level)) return Math.max(1, clampThingLevel(item.level));
+            if (Number.isFinite(item.stacks)) return stackCountToLevel(item.stacks || 1);
+            return Math.max(1, clampThingLevel(fallback));
+        }
+
+        function getThingEffectiveLevel(item, fallback = 1) {
+            if (!item) return Math.max(1, clampThingLevel(fallback));
+            if (Number.isFinite(item.effectiveLevel)) return Math.max(1, clampThingLevel(item.effectiveLevel));
+            return getThingBaseLevel(item, fallback);
+        }
+
+        function getThingPotentialLevel(item, fallback = 1) {
+            let lvl = getThingEffectiveLevel(item, fallback);
+            if (!item) return lvl;
+            if (Number.isFinite(item.potentialEffectiveLevel)) lvl = Math.max(lvl, Math.max(1, clampThingLevel(item.potentialEffectiveLevel)));
+            if (Number.isFinite(item.level)) lvl = Math.max(lvl, Math.max(1, clampThingLevel(item.level)));
+            if (Number.isFinite(item.stacks)) lvl = Math.max(lvl, stackCountToLevel(item.stacks || 1));
+            return lvl;
+        }
+
+        function getUnitBaseLevel(unit, fallback = 1) {
+            if (!unit) return Math.max(1, clampThingLevel(fallback));
+            if (Number.isFinite(unit.unitLevel)) return Math.max(1, clampThingLevel(unit.unitLevel));
+            if (Number.isFinite(unit.baseLevel)) return Math.max(1, clampThingLevel(unit.baseLevel));
+            if (Number.isFinite(unit.stackCount)) return stackCountToLevel(unit.stackCount || 1);
+            return Math.max(1, clampThingLevel(fallback));
+        }
+
+        function getUnitEffectiveLevel(unit, fallback = 1) {
+            if (!unit) return Math.max(1, clampThingLevel(fallback));
+            if (Number.isFinite(unit.effectiveLevel)) return Math.max(1, clampThingLevel(unit.effectiveLevel));
+            return getUnitBaseLevel(unit, fallback);
         }
 
         function getConfiguredMaxPop() {
@@ -3383,7 +4017,7 @@
         }
 
         function getUnitLevelLabelText(unit) {
-            let lvl = Math.max(1, Math.floor((unit && unit.unitLevel) || 1));
+            let lvl = getUnitBaseLevel(unit);
             return `L${lvl}`;
         }
 
@@ -3474,6 +4108,11 @@
             return item && item.buildEnabled !== false;
         }
 
+        function isAutoResearchEnabled(item) {
+            if (!item || item.type !== 'research') return true;
+            return item.autoResearchEnabled !== false;
+        }
+
         function updateDefaultToggleButtons() {
             let btnBuild = document.getElementById('btn-default-build');
             if (btnBuild) {
@@ -3545,7 +4184,7 @@
                 if (mode === 'd2' && group.length < 2) continue;
                 let u0 = group[0];
                 let unitType = u0.unitType;
-                let unitLevel = ignoreLevelSubgroups ? null : Math.max(1, Math.floor(u0.unitLevel || 1));
+                let unitLevel = ignoreLevelSubgroups ? null : getUnitBaseLevel(u0);
                 let ids = group.map(u => u.id);
                 queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
             }
@@ -3554,31 +4193,34 @@
 
         function getNextLevelUpgradeInfo(item) {
             let stacks = Math.max(1, item.stacks || 1);
-            let level = Math.max(0, Math.floor(Math.log2(stacks)) + 1);
+            let level = stackCountToLevel(stacks);
             let nextLevel = Math.max(1, level + 1);
-            let nextStacksNeeded = Math.pow(2, nextLevel - 1);
+            let nextStacksNeeded = getRequiredStacksForLevel(nextLevel);
             let missingStacks = Math.max(0, nextStacksNeeded - stacks);
             let key = item instanceof Tower ? item.type : (item.type === 'barrack' ? 'barrack_' + item.unitType : item.type);
-            let def = CARD_TYPES[key] || { price: 0 };
+            let def = BASE_CARD_TYPES[key] || { price: 0 };
             let goldCost = missingStacks * (def.price || 0);
             let hpNow = item.maxHp || 0;
-            let hpNext = item instanceof Tower ? getUpgradeMaxHp(item, nextLevel) : (calculateItemStats(item.type || 'farm', nextLevel).maxHp || hpNow);
+            let hpNext = item instanceof Tower ? getUpgradeMaxHp(item, nextLevel) : (calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxHp || hpNow);
             return { nextLevel, missingStacks, goldCost, hpNow, hpNext };
         }
 
-        function calculateItemStats(type, level) {
-            let mult = Math.pow(1.6, level - 1);
+        function normalizeBuildingResearchKey(type) {
+            if (!type) return 'farm';
+            if (type === 'barrack') return 'barrack_norm';
+            if (type.startsWith('barrack_')) return type;
+            return type;
+        }
+
+        function calculateItemStats(type, level, owner = null) {
             let stats = { maxHp: 0, damage: 0 };
-            if (type === 'farm') { stats.maxHp = Math.floor(1000 * mult); }
-            else if (type === 'house') { stats.maxHp = Math.floor(120 * mult); }
-            else if (type === 'sand') { stats.maxHp = Math.floor(30 * mult); stats.damage = 0.05 * mult; }
-            else if (type === 'spawner' || type === 'salvager' || type === 'builder_spawner' || type === 'healer_spawner') { stats.maxHp = Math.floor(60 * mult); }
-            else if (type === 'lava') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
-            else if (type === 'mine') { stats.maxHp = Math.floor(30 * mult); stats.damage = Math.floor(135 * mult); }
-            else if (type === 'poison_puddle') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
-            else if (type === 'ice_patch') { stats.maxHp = Math.floor(30 * mult); stats.damage = mult; }
-            else if (type === 'water_puddle') { stats.maxHp = Math.floor(30 * mult); }
-            else if (type.startsWith('barrack')) { stats.maxHp = Math.floor(100 * mult); }
+            let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+            let bKey = normalizeBuildingResearchKey(type);
+            let lvl = Math.max(1, clampThingLevel(level));
+            let maxHp = getBuildingStatForOwner(ownerId, bKey, lvl, 'maxHp');
+            let damage = getBuildingStatForOwner(ownerId, bKey, lvl, 'damage');
+            if (Number.isFinite(maxHp)) stats.maxHp = Math.max(1, Math.floor(maxHp));
+            if (Number.isFinite(damage)) stats.damage = damage;
             return stats;
         }
 
@@ -3720,9 +4362,9 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = startStacks;
                 this.effectiveStacks = startStacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
-                this.baseStats = CARD_TYPES[type];
+                this.baseStats = BASE_CARD_TYPES[type];
                 this.currentStats = { ...this.baseStats };
 
                 // HP
@@ -3744,12 +4386,12 @@
             }
 
             upgrade() {
-                let nextLevel = Math.floor(Math.log2(this.stacks + 1)) + 1;
+                let nextLevel = stackCountToLevel(this.stacks + 1);
                 if (nextLevel > (this.level || 1) && !this.isUpgrading && isAutoUpgradeEnabled(this)) {
                     beginUpgradeProgress(this, nextLevel);
                 }
                 this.stacks++;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.updateTextCache();
             }
 
@@ -3771,11 +4413,12 @@
             }
 
             updateStats() {
-                let effLevel = this.effectiveLevel || 1;
+                let effLevel = getThingEffectiveLevel(this);
                 this.currentStats = this.calcStats(effLevel);
 
-                let baseHp = this.baseStats.towerHp || 100;
-                let newMaxHp = Math.floor(baseHp * Math.pow(1.4, effLevel - 1));
+                let newMaxHp = getBuildingStatForOwner(this.owner, this.type, effLevel, 'maxHp');
+                if (!Number.isFinite(newMaxHp)) newMaxHp = this.maxHp || 1;
+                newMaxHp = Math.max(1, Math.floor(newMaxHp));
                 if (this.isUpgrading && this.upgradeMaxHp > 0) {
                     this.maxHp = Math.max(1, Math.floor(this.upgradeMaxHp));
                     if (!Number.isFinite(this.hp) || this.hp < 1) this.hp = 1;
@@ -3790,22 +4433,13 @@
 
             calcStats(lvl) {
                 let s = { ...this.baseStats };
-                let m = Math.pow(1.4, lvl - 1);
-                s.damage = this.baseStats.damage * m;
-                if (this.type === 'water' || this.type === 'smg' || this.type === 'pistol') {
-                    s.cd = Math.max(5, this.baseStats.cd * (1 - (lvl - 1) * 0.1));
-                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
-                } else if (this.type === 'fire' || this.type === 'poison') {
-                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
-                } else if (this.type === 'sand_gun') {
-                    s.visionRange = this.baseStats.visionRange * (1 + (lvl - 1) * 0.1);
-                    s.cd = this.baseStats.cd * Math.pow(0.9, lvl);
-                }
-                if (!s.cd) s.cd = this.baseStats.cd;
-                if (!s.visionRange) s.visionRange = this.baseStats.visionRange;
-                if (Number.isFinite(this.baseStats.maxVisionRange) && s.visionRange > this.baseStats.maxVisionRange) {
-                    s.visionRange = this.baseStats.maxVisionRange;
-                }
+                let effLvl = Math.max(1, clampThingLevel(lvl));
+                let dmg = getBuildingStatForOwner(this.owner, this.type, effLvl, 'damage');
+                let cd = getBuildingStatForOwner(this.owner, this.type, effLvl, 'cd');
+                let vr = getBuildingStatForOwner(this.owner, this.type, effLvl, 'visionRange');
+                if (Number.isFinite(dmg)) s.damage = dmg;
+                if (Number.isFinite(cd)) s.cd = Math.max(3, cd);
+                if (Number.isFinite(vr)) s.visionRange = vr;
                 return s;
             }
 
@@ -3875,7 +4509,7 @@
                 let preferredTarget = getTowerPreferredTargetInRange(this, rangePx);
                 if (preferredTarget) {
                     let target = preferredTarget;
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.effectiveLevel || this.level, this, rangePx));
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
                     this.cd = this.currentStats.cd || 30;
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
@@ -3942,7 +4576,7 @@
                 }
 
                 if (target) {
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, this.effectiveLevel || this.level, this, rangePx));
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
                     this.cd = this.currentStats.cd || 30;
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
@@ -4151,7 +4785,7 @@
                 if (b.hp <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }
             }
             draw(ctx) {
-                ctx.fillStyle = CARD_TYPES[this.type] ? CARD_TYPES[this.type].color : '#fff';
+                ctx.fillStyle = BASE_CARD_TYPES[this.type] ? BASE_CARD_TYPES[this.type].color : '#fff';
                 ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, 6.28); ctx.fill();
             }
         }
@@ -4205,7 +4839,7 @@
                 this.prevX = x; this.prevY = y;
                 this.teleportHideTicks = 0;
 
-                let s = UNIT_STATS[unitType] || UNIT_STATS.norm;
+                let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
                 this.hp = s.hp; this.maxHp = s.hp;
                 this.speed = s.speed;
                 this.attackDamage = s.atk;
@@ -4250,6 +4884,7 @@
                 this.baseSpeed = this.speed;
                 this.baseAttackCooldown = this.attackCooldown;
                 this.baseVisionRange = this.visionRange;
+                this.baseAttackRange = this.attackRange / TILE;
 
                 this.baseLevel = 1;
                 this.baseLevelMaxHp = this.maxHp;
@@ -4648,19 +5283,19 @@
                 let style = this.attackStyle;
                 if (style === 'fire') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f50', 3);
-                    applyStatusEffect(tb, 'fire', this.unitLevel || 1, this.attackDamage * 0.04);
+                    applyStatusEffect(tb, 'fire', getUnitBaseLevel(this), this.attackDamage * 0.04);
                     if (!isEffectImmune(tb, 'fire')) tb.hp -= this.attackDamage;
                 } else if (style === 'water') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#4af', 3);
-                    applyStatusEffect(tb, 'water', this.unitLevel || 1);
+                    applyStatusEffect(tb, 'water', getUnitBaseLevel(this));
                     if (!isEffectImmune(tb, 'water')) tb.hp -= this.attackDamage;
                 } else if (style === 'ice') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#afe', 3);
-                    applyStatusEffect(tb, 'ice', this.unitLevel || 1, this.attackDamage * 0.2);
+                    applyStatusEffect(tb, 'ice', getUnitBaseLevel(this), this.attackDamage * 0.2);
                     if (!isEffectImmune(tb, 'ice')) tb.hp -= this.attackDamage;
                 } else if (style === 'poison') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#2d2', 3);
-                    applyStatusEffect(tb, 'poison', this.unitLevel || 1, this.attackDamage * 0.04);
+                    applyStatusEffect(tb, 'poison', getUnitBaseLevel(this), this.attackDamage * 0.04);
                     if (!isEffectImmune(tb, 'poison')) tb.hp -= this.attackDamage;
                 } else if (style === 'laser') {
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f0f', 2);
@@ -5149,7 +5784,7 @@
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
                         ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
                     } else if (this.workerState === 'MOVING_TO_BUILD' || this.workerState === 'BUILDING_IN_PLACE') {
-                        ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('🔨', this.x, this.y - this.r - 9);
+                        ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('\uD83D\uDD28', this.x, this.y - this.r - 9);
                     }
                 } else if (this.workerType === 'healer' && this.workerState) {
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
@@ -5164,9 +5799,14 @@
         // ============================================================
         // BARRACK CLASS
         // ============================================================
-        function getBarrackSpawnCooldown(unitType, level) {
+        function getBarrackSpawnCooldown(unitType, level, owner = null, buildingKey = null) {
             let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
-            return Math.max(1, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
+            let baseCd = Math.max(1, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
+            if (buildingKey && Number.isFinite(owner)) {
+                let researched = getBuildingStatForOwner(owner, buildingKey, level, 'spawnCd');
+                if (Number.isFinite(researched)) return Math.max(1, researched);
+            }
+            return baseCd;
         }
 
         function getQueuedSpawnInfo(entry, fallbackType, fallbackLevel) {
@@ -5188,14 +5828,14 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'barrack'; this.unitType = unitType;
                 this.effectiveStacks = stacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
                 this.spawnTimer = 0;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level) * TICK_RATE);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
                 this.spawnQueue = []; // queue of unit types to spawn
                 this.rallyX = null; this.rallyY = null; // rally point in world coords
                 this.rallyTargetUnitId = null;
-                let stats = calculateItemStats('barrack', this.level);
+                let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
@@ -5207,15 +5847,15 @@
                 // Cost scales linearly with effective level
                 let cfg = BARRACK_SPAWN_CONFIG[this.unitType];
                 let baseCost = cfg ? Math.round(cfg.baseTime * 0.5) : 10;
-                let lvl = this.effectiveLevel || this.level || 1;
+                let lvl = getThingEffectiveLevel(this);
                 return Math.round(baseCost * (1 + (lvl - 1) * 0.5));
             }
 
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
-                let effLvl = this.effectiveLevel || this.level || 1;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl) * TICK_RATE);
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
@@ -5255,7 +5895,7 @@
                 ctx.fill();
 
                 // Unit type indicator
-                let us = UNIT_STATS[this.unitType] || UNIT_STATS.norm;
+                let us = BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm;
                 ctx.fillStyle = us.color; ctx.beginPath(); ctx.arc(this.x, this.y + 4, 5, 0, 6.28); ctx.fill();
 
                 if (this.underConstruction) {
@@ -5283,24 +5923,24 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'spawner';
                 this.effectiveStacks = stacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
-                let stats = calculateItemStats('spawner', this.level);
+                let stats = calculateItemStats('spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level) * TICK_RATE);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level, this.owner, 'spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(15 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(15 * (1 + (lvl - 1) * 0.5)); }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
-                let effLvl = this.effectiveLevel || this.level || 1;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl) * TICK_RATE);
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl, this.owner, 'spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
@@ -5353,24 +5993,24 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'salvager';
                 this.effectiveStacks = stacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
-                let stats = calculateItemStats('salvager', this.level);
+                let stats = calculateItemStats('salvager', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level) * TICK_RATE);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level, this.owner, 'salvager') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(20 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(20 * (1 + (lvl - 1) * 0.5)); }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
-                let effLvl = this.effectiveLevel || this.level || 1;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl) * TICK_RATE);
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl, this.owner, 'salvager') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
@@ -5423,9 +6063,9 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'builder_spawner';
                 this.effectiveStacks = stacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
-                let stats = calculateItemStats('builder_spawner', this.level);
+                let stats = calculateItemStats('builder_spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.underConstruction = true;
                 this.markedForSalvage = false;
@@ -5433,20 +6073,20 @@
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level) * TICK_RATE);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level, this.owner, 'builder_spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
             // Builder DPS per unit: scales with effective level
             getBuilderDps() {
-                let lvl = this.effectiveLevel || this.level || 1;
+                let lvl = getThingEffectiveLevel(this);
                 return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
             }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
-                let effLvl = this.effectiveLevel || this.level || 1;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl) * TICK_RATE);
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl, this.owner, 'builder_spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
@@ -5459,8 +6099,6 @@
                             u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
                             u.builderHasMaterial = false;
                             applyUnitLevelScaling(u, spawnInfo.level);
-                            // Keep builder DPS tied to spawner level baseline
-                            u.builderDps = Math.max(1, Math.round(5 * Math.pow(1.22, spawnInfo.level - 1)));
                             units.push(u); players[this.owner].popCount++;
                             let rallyTarget = getSpawnerRallyTargetWorld(this);
                             if (rallyTarget) {
@@ -5503,9 +6141,9 @@
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'healer_spawner';
                 this.effectiveStacks = stacks;
-                this.level = Math.floor(Math.log2(this.stacks)) + 1;
+                this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
-                let stats = calculateItemStats('healer_spawner', this.level);
+                let stats = calculateItemStats('healer_spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.underConstruction = true;
                 this.markedForSalvage = false;
@@ -5513,19 +6151,19 @@
                 this.buildEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level) * TICK_RATE);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level, this.owner, 'healer_spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = this.effectiveLevel || this.level || 1; return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
             getHealerHps() {
-                let lvl = this.effectiveLevel || this.level || 1;
+                let lvl = getThingEffectiveLevel(this);
                 return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
             }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
-                let effLvl = this.effectiveLevel || this.level || 1;
-                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl) * TICK_RATE);
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl, this.owner, 'healer_spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
                     this.spawnTimer++;
                     if (this.spawnTimer >= this.spawnCooldown) {
@@ -5538,7 +6176,6 @@
                             u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
                             u.healerHasMaterial = false;
                             applyUnitLevelScaling(u, spawnInfo.level);
-                            u.healerHps = Math.max(1, Math.round(5 * Math.pow(1.22, spawnInfo.level - 1)));
                             units.push(u); players[this.owner].popCount++;
                             let rallyTarget = getSpawnerRallyTargetWorld(this);
                             if (rallyTarget) {
@@ -5570,6 +6207,71 @@
                     }
                     drawBuildingHpProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
                 }
+                if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+            }
+        }
+
+        class ResearchSpawner {
+            constructor(gx, gy, owner, stacks = 1) {
+                this.gx = gx; this.gy = gy; this.owner = owner;
+                this.x = gx * TILE + 16; this.y = gy * TILE + 16;
+                this.stacks = stacks; this.type = 'research';
+                this.effectiveStacks = stacks;
+                this.level = stackCountToLevel(this.stacks);
+                this.effectiveLevel = this.level;
+                let stats = calculateItemStats('research', this.level, this.owner);
+                this.hp = stats.maxHp; this.maxHp = stats.maxHp;
+                this.underConstruction = true;
+                this.markedForSalvage = false;
+                this.autoUpgradeEnabled = true;
+                this.buildEnabled = true;
+                this.autoResearchEnabled = true;
+                this.researchQueue = [];
+                this.researchTask = null;
+                this.isResearching = false;
+                updateItemTextCache(this);
+            }
+
+            update() {
+                tickStatusEffects(this);
+                if (this.hp <= 0 || this.underConstruction) return;
+
+                if (!this.isUpgrading && (!this.researchTask || this.researchTask.workDone >= this.researchTask.workRequired) && this.researchQueue.length > 0) {
+                    this.researchTask = this.researchQueue.shift();
+                    this.researchTask.workDone = Math.max(0, this.researchTask.workDone || 0);
+                    this.isResearching = true;
+                }
+
+                if (!this.researchTask || this.isUpgrading) {
+                    this.isResearching = false;
+                }
+
+                if (this.type === 'research' && !isAutoResearchEnabled(this)) {
+                    this.isResearching = false;
+                }
+            }
+
+            draw(ctx) {
+                ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
+                ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+                ctx.fillStyle = '#446'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
+                ctx.fillStyle = '#aef';
+                ctx.font = '11px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('R', this.x, this.y + 1);
+
+                if (this.underConstruction) {
+                    drawBuildingHpProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
+                } else {
+                    if (this.researchTask && this.researchTask.workRequired > 0) {
+                        let pct = Math.max(0, Math.min(1, (this.researchTask.workDone || 0) / this.researchTask.workRequired));
+                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#4af'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
+                    }
+                    drawBuildingHpProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
+                }
+
                 if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
             }
         }
@@ -5621,7 +6323,7 @@
                             } else {
                                 let extract = Math.min(10, u.workerTarget.gold);
                                 u.workerTarget.gold -= extract;
-                                u.carryingValue = extract * (u.unitLevel || 1);
+                                u.carryingValue = extract * getUnitBaseLevel(u);
                                 if (u.workerTarget.gold <= 0) {
                                     let mine = u.workerTarget;
                                     grid[mine.gy][mine.gx].type = TYPE_FLOOR;
@@ -5669,8 +6371,8 @@
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
                             let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
-                            let p = CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
-                            u.carryingValue = refund * (u.unitLevel || 1);
+                            let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
+                            u.carryingValue = refund * getUnitBaseLevel(u);
                             destroyBuilding(u.workerTarget);
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
@@ -5692,7 +6394,7 @@
                 if (u.workerState === 'IDLE') {
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         // Building finished (maybe by another builder), find next
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -5719,12 +6421,24 @@
                             let dps = u.builderDps || 5;
                             let t = u.workerTarget;
                             let didWork = false;
-                            if (t.underConstruction) {
+                            if (t.type === 'research' && t.isResearching && t.researchTask) {
+                                let task = t.researchTask;
+                                task.workDone = Math.min(task.workRequired, (task.workDone || 0) + dps);
+                                didWork = true;
+                                if (task.workDone >= task.workRequired) {
+                                    applyResearchCompletion(t.owner, task);
+                                    t.researchTask = null;
+                                    t.isResearching = false;
+                                    if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+                                    u.workerTarget = null;
+                                    _builderFindTarget(u, myGx, myGy);
+                                }
+                            } else if (t.underConstruction) {
                                 t.hp = Math.min(t.maxHp, t.hp + dps);
                                 didWork = true;
                                 if (t.hp >= t.maxHp) {
                                     markConstructionComplete(t);
-                                    let targetLvl = Math.floor(Math.log2(t.stacks || 1)) + 1;
+                                    let targetLvl = stackCountToLevel(t.stacks || 1);
                                     if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
                                         beginUpgradeProgress(t, (t.level || 1) + 1);
                                     }
@@ -5741,7 +6455,7 @@
                                     if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                     t.effectiveLevel++;
 
-                                    if (t.effectiveLevel < (t.potentialEffectiveLevel || 1)) {
+                                    if (getThingEffectiveLevel(t) < getThingPotentialLevel(t)) {
                                         beginUpgradeProgress(t, t.effectiveLevel + 1);
                                     } else {
                                         t.isUpgrading = false;
@@ -5762,7 +6476,7 @@
                             }
 
                             if (u.workerTarget) {
-                                // Not done yet — loop back to spawner for more gold, then come back
+                                // Not done yet â€” loop back to spawner for more gold, then come back
                                 let route = _findBestSpawnerRoute(u, 'builder_spawner', null);
                                 if (route && players[owner].money >= 1) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
@@ -5777,7 +6491,7 @@
                         }
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -5815,18 +6529,29 @@
                     }
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
                     // Building in place without returning for gold (every 20 ticks add 1 HP)
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
                     if (gameTime % 20 === 0) {
                         let t = u.workerTarget;
-                        if (t.underConstruction) {
+                        if (t.type === 'research' && t.isResearching && t.researchTask) {
+                            let task = t.researchTask;
+                            task.workDone = Math.min(task.workRequired, (task.workDone || 0) + 1);
+                            if (task.workDone >= task.workRequired) {
+                                applyResearchCompletion(t.owner, task);
+                                t.researchTask = null;
+                                t.isResearching = false;
+                                if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+                                u.workerTarget = null;
+                                _builderFindTarget(u, myGx, myGy);
+                            }
+                        } else if (t.underConstruction) {
                             t.hp = Math.min(t.maxHp, t.hp + 1);
                             if (t.hp >= t.maxHp) {
                                 markConstructionComplete(t);
-                                let targetLvl = Math.floor(Math.log2(t.stacks || 1)) + 1;
+                                let targetLvl = stackCountToLevel(t.stacks || 1);
                                 if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
                                     beginUpgradeProgress(t, (t.level || 1) + 1);
                                 }
@@ -5842,7 +6567,7 @@
                                 if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                 t.effectiveLevel++;
 
-                                if (t.effectiveLevel < (t.potentialEffectiveLevel || 1)) {
+                                if (getThingEffectiveLevel(t) < getThingPotentialLevel(t)) {
                                     beginUpgradeProgress(t, t.effectiveLevel + 1);
                                 } else {
                                     t.isUpgrading = false;
@@ -5857,7 +6582,7 @@
                             }
                         }
                     }
-                    // Check if money became available — switch back to gold trips
+                    // Check if money became available â€” switch back to gold trips
                     let route = _findBestSpawnerRoute(u, 'builder_spawner', null);
                     if (route && players[owner].money >= 1 && u.workerTarget) {
                         u.workerState = 'RETURNING_FOR_GOLD';
@@ -5991,10 +6716,10 @@
         function _hasUnderConstructionOrUpgradingAt(nx, ny) {
             if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) return false;
             let cell = grid[ny][nx];
-            if (cell && cell.item && (cell.item.underConstruction || cell.item.isUpgrading)) return true;
-            for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading)) return true; }
-            for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading)) return true; }
-            for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading)) return true; }
+            if (cell && cell.item && (cell.item.underConstruction || cell.item.isUpgrading || cell.item.isResearching)) return true;
+            for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading || t.isResearching)) return true; }
+            for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading || b.isResearching)) return true; }
+            for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading || s.isResearching)) return true; }
             return false;
         }
 
@@ -6015,7 +6740,7 @@
             if (!target) return false;
             if (target.owner !== owner) return false;
             if (target.markedForSalvage) return false;
-            if (!target.underConstruction && !target.isUpgrading) return false;
+            if (!target.underConstruction && !target.isUpgrading && !target.isResearching) return false;
             if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
             return true;
         }
@@ -6119,7 +6844,7 @@
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = route.spawner;
             } else {
-                // No spawner or no money — go build directly (slow mode)
+                // No spawner or no money â€” go build directly (slow mode)
                 u.workerState = 'MOVING_TO_BUILD';
                 u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -6227,7 +6952,8 @@
             let owner = u.owner, bestDist = Infinity, best = null;
             let check = (b) => {
                 if (b.markedForSalvage) return;
-                if ((!b.underConstruction && !b.isUpgrading) || b.owner !== owner) return;
+                if ((!b.underConstruction && !b.isUpgrading && !b.isResearching) || b.owner !== owner) return;
+                if (b.type === 'research' && !isAutoResearchEnabled(b)) return;
                 if (b.underConstruction && !isBuildEnabled(b)) return;
                 let d = Math.hypot(b.x - u.x, b.y - u.y);
                 if (d < bestDist) { bestDist = d; best = b; }
@@ -6236,7 +6962,7 @@
             for (let b of barracks) check(b);
             for (let s of collectorSpawners) check(s);
             for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) {
-                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading)) check(c.item);
+                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading || c.item.isResearching)) check(c.item);
             }
             return best;
         }
@@ -6402,7 +7128,7 @@
 
                         obj.effectiveStacks = baseStacks * groupSize * areaMult;
 
-                        let potentialLevel = Math.floor(Math.log2(obj.effectiveStacks)) + 1;
+                        let potentialLevel = stackCountToLevel(obj.effectiveStacks);
                         obj.potentialEffectiveLevel = potentialLevel;
 
                         if (obj.effectiveLevel === undefined) obj.effectiveLevel = 1;
@@ -6428,7 +7154,8 @@
                             obj.updateStats();
                         } else {
                             obj.effectiveGroupSize = groupSize; obj.effectiveAreaMult = areaMult;
-                            let stats = calculateItemStats(obj.type, obj.effectiveLevel);
+                            let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
+                            let stats = calculateItemStats(statsType, obj.effectiveLevel, obj.owner);
                             if (obj.isUpgrading && obj.upgradeMaxHp > 0) {
                                 obj.maxHp = Math.max(1, Math.floor(obj.upgradeMaxHp));
                                 if (!Number.isFinite(obj.hp) || obj.hp < 1) obj.hp = 1;
@@ -6490,7 +7217,7 @@
             }
 
             for (let u of aliveUnits) {
-                applyUnitEffectiveScaling(u, u.effectiveLevel || u.unitLevel || 1);
+                applyUnitEffectiveScaling(u, getUnitEffectiveLevel(u));
             }
         }
 
@@ -6521,7 +7248,7 @@
         function canStackAt(gx, gy, itemKey, playerId) {
             // Check if we can stack on an existing same-type building
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
-            let cardDef = CARD_TYPES[itemKey];
+            let cardDef = BASE_CARD_TYPES[itemKey];
             if (!cardDef) return false;
             if (cardDef.target === 'wall') {
                 return !!towers.find(t => t.gx === gx && t.gy === gy && t.type === itemKey && t.owner === playerId);
@@ -6530,7 +7257,7 @@
                 let unitType = cardDef.unitType || 'norm';
                 return !!barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
             }
-            if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner') {
+            if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
                 return !!collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === itemKey && s.owner === playerId);
             }
             // Floor items
@@ -6546,7 +7273,7 @@
         }
 
         function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
-            let cardDef = CARD_TYPES[itemKey];
+            let cardDef = BASE_CARD_TYPES[itemKey];
             if (!cardDef) return false;
 
             let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
@@ -6572,13 +7299,13 @@
                     let c = grid[cp.y][cp.x];
                     if (c.type === TYPE_WALL) {
                         let t = towers.find(t => t.gx === cp.x && t.gy === cp.y);
-                        if (t && !t.underConstruction && (t.effectiveLevel || t.level || 0) > 0) return true;
+                        if (t && !t.underConstruction && getDisplayLevel(t) > 0) return true;
                     }
-                    if (c.item && !c.item.underConstruction && (c.item.effectiveLevel || c.item.level || 0) > 0) return true;
+                    if (c.item && !c.item.underConstruction && getDisplayLevel(c.item) > 0) return true;
                     let b = barracks.find(b => b.gx === cp.x && b.gy === cp.y);
-                    if (b && !b.underConstruction && (b.effectiveLevel || b.level || 0) > 0) return true;
+                    if (b && !b.underConstruction && getDisplayLevel(b) > 0) return true;
                     let s = collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y);
-                    if (s && !s.underConstruction && (s.effectiveLevel || s.level || 0) > 0) return true;
+                    if (s && !s.underConstruction && getDisplayLevel(s) > 0) return true;
                     return false;
                 });
                 if (!allFilled) return false;
@@ -6621,11 +7348,11 @@
                 let unitType = cardDef.unitType || 'norm';
                 let existing = barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
                 if (existing) {
-                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
                     if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
                         beginUpgradeProgress(existing, nextLevel);
                     }
-                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
                 }
                 else {
                     let b = new Barrack(gx, gy, playerId, unitType);
@@ -6642,11 +7369,11 @@
             } else if (itemKey === 'spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
                     if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
                         beginUpgradeProgress(existing, nextLevel);
                     }
-                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
                 }
                 else {
                     let s = new CollectorSpawner(gx, gy, playerId);
@@ -6663,11 +7390,11 @@
             } else if (itemKey === 'salvager') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'salvager' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
                     if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
                         beginUpgradeProgress(existing, nextLevel);
                     }
-                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
                 }
                 else {
                     let s = new SalvagerSpawner(gx, gy, playerId);
@@ -6684,11 +7411,11 @@
             } else if (itemKey === 'builder_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'builder_spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
                     if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
                         beginUpgradeProgress(existing, nextLevel);
                     }
-                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
                 }
                 else {
                     let s = new BuilderSpawner(gx, gy, playerId);
@@ -6706,14 +7433,35 @@
             } else if (itemKey === 'healer_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'healer_spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = Math.floor(Math.log2(existing.stacks + 1)) + 1;
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
                     if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
                         beginUpgradeProgress(existing, nextLevel);
                     }
-                    existing.stacks++; existing.level = Math.floor(Math.log2(existing.stacks)) + 1; updateItemTextCache(existing);
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
                 }
                 else {
                     let s = new HealerSpawner(gx, gy, playerId);
+                    s.underConstruction = true; s.hp = 1;
+                    s.autoUpgradeEnabled = useDefaultAutoUpgrade;
+                    s.buildEnabled = useDefaultBuild;
+                    s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
+                    updateItemTextCache(s);
+                    collectorSpawners.push(s);
+                    grid[gy][gx].item = s;
+                    grid[gy][gx].owner = playerId;
+                }
+                recalculateAdjacency();
+            } else if (itemKey === 'research') {
+                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'research' && s.owner === playerId);
+                if (existing) {
+                    let nextLevel = stackCountToLevel(existing.stacks + 1);
+                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
+                        beginUpgradeProgress(existing, nextLevel);
+                    }
+                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                }
+                else {
+                    let s = new ResearchSpawner(gx, gy, playerId);
                     s.underConstruction = true; s.hp = 1;
                     s.autoUpgradeEnabled = useDefaultAutoUpgrade;
                     s.buildEnabled = useDefaultBuild;
@@ -6728,15 +7476,15 @@
                 // Floor item
                 let cell = grid[gy][gx];
                 if (cell.item && cell.item.type === itemKey && cell.owner === playerId) {
-                    let nextLevel = Math.floor(Math.log2(cell.item.stacks + 1)) + 1;
-                    let curLevel = Math.floor(Math.log2(cell.item.stacks)) + 1;
+                    let nextLevel = stackCountToLevel(cell.item.stacks + 1);
+                    let curLevel = stackCountToLevel(cell.item.stacks);
                     if (nextLevel > curLevel && !cell.item.isUpgrading && isAutoUpgradeEnabled(cell.item)) {
                         beginUpgradeProgress(cell.item, nextLevel);
                     }
                     cell.item.stacks = (cell.item.stacks || 1) + 1;
                     updateItemTextCache(cell.item);
                 } else {
-                    let stats = calculateItemStats(itemKey, 1);
+                    let stats = calculateItemStats(itemKey, 1, playerId);
                     let item = { type: itemKey, stacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
                     cell.item = item;
                     cell.owner = playerId;
@@ -6763,7 +7511,7 @@
                 grid[building.gy][building.gx].item = null;
                 grid[building.gy][building.gx].owner = -1;
                 recalculateAdjacency();
-            } else if (building instanceof CollectorSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner) {
+            } else if (building instanceof CollectorSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
                 let idx = collectorSpawners.indexOf(building);
                 if (idx !== -1) collectorSpawners.splice(idx, 1);
                 grid[building.gy][building.gx].item = null;
@@ -6903,8 +7651,8 @@
             let cx = size / 2, cy = size / 2;
             let s = size / 32; // scale factor relative to 32px tile
 
-            let def = CARD_TYPES[key];
-            let us = UNIT_STATS[key]; // for unit types
+            let def = BASE_CARD_TYPES[key];
+            let us = BASE_UNIT_STATS[key]; // for unit types
 
             if (key === 'area_upgrader') {
                 ctx.fillStyle = '#fd0'; ctx.beginPath(); ctx.arc(cx, cy, 10 * s, 0, 6.28); ctx.fill();
@@ -6939,7 +7687,7 @@
                 }
             } else if (def && def.unitType) {
                 // Barrack
-                let unitColor = (UNIT_STATS[def.unitType] || {}).color || '#fff';
+                let unitColor = (BASE_UNIT_STATS[def.unitType] || {}).color || '#fff';
                 ctx.fillStyle = '#664'; ctx.beginPath();
                 ctx.moveTo(cx - 12 * s, cy - 6 * s); ctx.lineTo(cx + 12 * s, cy - 6 * s); ctx.lineTo(cx, cy - 14 * s);
                 ctx.fill();
@@ -7050,19 +7798,12 @@
 
         function getBuildPreviewLevelFromMultiplier() {
             let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
-            return Math.max(1, Math.floor(Math.log2(stacks)) + 1);
+            return stackCountToLevel(stacks);
         }
 
         function getTowerPreviewVisionRange(type, level) {
-            let base = CARD_TYPES[type];
-            if (!base || base.visionRange === undefined) return 0;
-            let vr = base.visionRange;
-            if (type === 'water' || type === 'smg' || type === 'pistol' || type === 'fire' || type === 'poison' || type === 'sand_gun') {
-                vr = base.visionRange * (1 + (level - 1) * 0.1);
-            }
-            if (Number.isFinite(base.maxVisionRange)) {
-                vr = Math.min(vr, base.maxVisionRange);
-            }
+            let vr = getBuildingStatForOwner(localPlayerId, type, level, 'visionRange');
+            if (!Number.isFinite(vr)) return 0;
             return vr;
         }
 
@@ -7075,7 +7816,7 @@
                 ctx.restore();
             }
 
-            let def = CARD_TYPES[key];
+            let def = BASE_CARD_TYPES[key];
             if (renderRangeMode !== RENDER_RANGE_NONE && def && def.target === 'wall' && def.towerHp && !def.isCloud) {
                 let rrTiles = getTowerPreviewVisionRange(key, previewLevel);
                 if (rrTiles > 0) {
@@ -7938,7 +8679,7 @@
                     for (let x = 0; x < GRID_W; x++) {
                         let item = grid[y][x].item;
                         if (!item || item.type !== 'farm' || item.underConstruction || item.hp <= 0) continue;
-                        let lvl = Math.max(1, Math.floor(Math.log2(item.stacks || 1)) + 1);
+                        let lvl = stackCountToLevel(item.stacks || 1);
                         players[item.owner].money += lvl;
                     }
                 }
@@ -7982,7 +8723,7 @@
                 if (u.dead) {
                     if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y);
                     // Drop money on death (bounty)
-                    let cost = UNIT_STATS[u.unitType] ? UNIT_STATS[u.unitType].hp * 0.5 : 5;
+                    let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].hp * 0.5 : 5;
                     let bounty = Math.floor(cost * 0.1);
                     if (bounty > 0) {
                         let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
@@ -7998,7 +8739,7 @@
                         let cell = grid[fgy][fgx];
                         if (cell.item && cell.item.type === 'farm' && cell.owner !== u.owner && !cell.item.underConstruction) {
                             let stacks = cell.item.stacks || 1;
-                            let level = Math.floor(Math.log2(stacks)) + 1;
+                            let level = stackCountToLevel(stacks);
                             players[cell.owner].money += Math.floor(10 * Math.pow(1.5, level - 1));
                         }
                     }
@@ -8190,7 +8931,7 @@
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
                         if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
                         // Short-circuit for immediate cant_place feedback (affordability / validity)
-                        let _cd = CARD_TYPES[selectedBuildItem];
+                        let _cd = BASE_CARD_TYPES[selectedBuildItem];
                         let purchaseCount = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
                         let _canPlace = false;
                         if (selectedBuildItem === 'area_upgrader') {
@@ -8370,7 +9111,7 @@
                                 applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
                             }
                         } else if (workerIds.length > 0) {
-                            // Only workers selected and no special target — move them
+                            // Only workers selected and no special target â€” move them
                             applyUnitCommandTargets(workerIds, world.x, world.y, isCtrlMulti, 'move');
                         }
                     } else if (!isCtrlMulti) {
@@ -8445,7 +9186,7 @@
                                 } else if (!e.shiftKey) { selectedUnits = []; selectedEntities = []; }
                             }
                         } else {
-                            // Box select — pick up units AND buildings
+                            // Box select â€” pick up units AND buildings
                             let newUnits = [];
                             let newEntities = [];
                             for (let u of units) {
@@ -8646,7 +9387,7 @@
                 let isNativeFullscreen = !!document.fullscreenElement;
                 appFullscreen = false;
                 document.body.classList.remove('app-fullscreen');
-                if (btnFs) btnFs.textContent = isNativeFullscreen ? '🗗 FS' : '⛶ FS';
+                if (btnFs) btnFs.textContent = isNativeFullscreen ? '\uD83D\uDDD6 FS' : '\u26F6 FS';
                 window.dispatchEvent(new Event('resize'));
             }
             document.addEventListener('fullscreenchange', syncFullscreenUi);
@@ -8661,13 +9402,13 @@
                         root.requestFullscreen().catch(() => {
                             appFullscreen = false;
                             document.body.classList.remove('app-fullscreen');
-                            btnFs.textContent = '⛶ FS';
+                            btnFs.textContent = '\u26F6 FS';
                             window.dispatchEvent(new Event('resize'));
                         });
                     } else {
                         appFullscreen = false;
                         document.body.classList.remove('app-fullscreen');
-                        btnFs.textContent = '⛶ FS';
+                        btnFs.textContent = '\u26F6 FS';
                         window.dispatchEvent(new Event('resize'));
                     }
                 });
@@ -8723,8 +9464,12 @@
             const btnSettings = document.getElementById('btn-settings');
             const btnHelpClose = document.getElementById('btn-help-close');
             const btnSettingsClose = document.getElementById('btn-settings-close');
+            const btnShowStatsMap = document.getElementById('btn-show-statsmap');
+            const btnRefreshStatsMap = document.getElementById('btn-refresh-statsmap');
+            const btnStatsMapClose = document.getElementById('btn-statsmap-close');
             const helpPopup = document.getElementById('help-popup');
             const settingsPopup = document.getElementById('settings-popup');
+            const statsMapPopup = document.getElementById('statsmap-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
             const goBtnGraph = document.getElementById('go-btn-graph');
@@ -8738,6 +9483,16 @@
             if (btnSettings) {
                 btnSettings.addEventListener('click', () => {
                     setSettingsPopupOpen(true);
+                });
+            }
+            if (btnShowStatsMap) {
+                btnShowStatsMap.addEventListener('click', () => {
+                    setStatsMapPopupOpen(true);
+                });
+            }
+            if (btnRefreshStatsMap) {
+                btnRefreshStatsMap.addEventListener('click', () => {
+                    refreshStatsMapPopupText();
                 });
             }
             if (btnResign) {
@@ -8791,6 +9546,11 @@
                     setSettingsPopupOpen(false);
                 });
             }
+            if (btnStatsMapClose) {
+                btnStatsMapClose.addEventListener('click', () => {
+                    setStatsMapPopupOpen(false);
+                });
+            }
             if (helpPopup) {
                 helpPopup.addEventListener('click', (e) => {
                     let tabBtn = e.target.closest('.help-tab-btn');
@@ -8805,6 +9565,11 @@
                     if (e.target === settingsPopup) setSettingsPopupOpen(false);
                 });
             }
+            if (statsMapPopup) {
+                statsMapPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === statsMapPopup) setStatsMapPopupOpen(false);
+                });
+            }
 
             // Minimap toggle
             const btnMap = document.getElementById('btn-minimap');
@@ -8812,9 +9577,9 @@
             const statsCont = document.getElementById('shop-stats-container');
             if (btnMap && mapCont) {
                 btnMap.addEventListener('click', () => {
-                    let isCollapsed = btnMap.innerText === '▲';
-                    btnMap.innerText = isCollapsed ? '▼' : '▲';
-                    let showPanel = btnMap.innerText === '▼';
+                    let isCollapsed = btnMap.innerText === '\u25B2';
+                    btnMap.innerText = isCollapsed ? '\u25BC' : '\u25B2';
+                    let showPanel = btnMap.innerText === '\u25BC';
                     if (selectedBuildItem) {
                         mapCont.style.display = 'none';
                         if (statsCont) statsCont.style.display = showPanel ? 'block' : 'none';
@@ -9012,12 +9777,11 @@
         function getUnitStackCount(u) {
             if (!u) return 1;
             if (Number.isFinite(u.stackCount) && u.stackCount >= 1) return Math.floor(u.stackCount);
-            let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
-            return Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+            return getRequiredStacksForLevel(getUnitBaseLevel(u));
         }
 
         function stackCountToLevel(stacks) {
-            return Math.max(1, Math.floor(Math.log2(Math.max(1, Math.floor(stacks || 1)))) + 1);
+            return Math.max(1, clampThingLevel(Math.floor(Math.log2(Math.max(1, Math.floor(stacks || 1)))) + 1));
         }
 
         function distributeEvenInteger(total, count) {
@@ -9129,7 +9893,7 @@
                 source = source.filter(u => u.unitType === subgroupFilter.unitType);
             }
             if (subgroupFilter && Number.isFinite(subgroupFilter.unitLevel)) {
-                source = source.filter(u => Math.max(1, Math.floor(u.unitLevel || 1)) === subgroupFilter.unitLevel);
+                source = source.filter(u => getUnitBaseLevel(u) === subgroupFilter.unitLevel);
             }
             if (source.length === 0) return;
             if (mode === 'd2' && source.length < 2) return;
@@ -9322,7 +10086,7 @@
                             let cost = b.getUnitCost();
                             if (players[playerId].money < cost || b.spawnQueue.length >= 20) break;
                             players[playerId].money -= cost;
-                            let queuedLevel = b.effectiveLevel || b.level || 1;
+                            let queuedLevel = getThingEffectiveLevel(b);
                             b.spawnQueue.push({ unitType: b.unitType, level: queuedLevel });
                         }
                     }
@@ -9334,9 +10098,30 @@
                             let cost = s.getUnitCost();
                             if (players[playerId].money < cost || s.spawnQueue.length >= 10) break;
                             players[playerId].money -= cost;
-                            let queuedLevel = s.effectiveLevel || s.level || 1;
+                            let queuedLevel = getThingEffectiveLevel(s);
                             let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : s.type === 'healer_spawner' ? 'healer_unit' : 'salvager_unit';
                             s.spawnQueue.push({ unitType: queuedType, level: queuedLevel });
+                        }
+                    }
+                } else if (a.action === 'queueResearch') {
+                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
+                    if (r && r.hp > 0 && !r.underConstruction && stat) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            if (getResearchQueueTotalLength(r) >= 20) break;
+                            let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
+                            let queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
+                            let projected = baseLevel + queuedDepth;
+                            if (projected >= MAX_RESEARCH_LEVEL) break;
+                            let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
+                            if (players[playerId].money < task.cost) break;
+                            players[playerId].money -= task.cost;
+                            r.researchQueue.push(task);
+                            if (!r.isUpgrading && !r.researchTask) {
+                                r.researchTask = r.researchQueue.shift();
+                                r.isResearching = true;
+                            }
                         }
                     }
                 } else if (a.action === 'workerAssign') {
@@ -9406,6 +10191,39 @@
                             players[playerId].money += cost * 0.1;
                         }
                     }
+                } else if (a.action === 'dequeueResearch') {
+                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    if (r) {
+                        let count = Math.max(1, Math.floor(a.count || 1));
+                        for (let i = 0; i < count; i++) {
+                            let idx = -1;
+                            if (a.kind && a.key && a.statKey) {
+                                for (let qi = r.researchQueue.length - 1; qi >= 0; qi--) {
+                                    let q = r.researchQueue[qi];
+                                    if (q && q.kind === a.kind && q.key === a.key && q.statKey === a.statKey) {
+                                        idx = qi;
+                                        break;
+                                    }
+                                }
+                            } else if (r.researchQueue.length > 0) {
+                                idx = r.researchQueue.length - 1;
+                            }
+
+                            if (idx >= 0) {
+                                let [task] = r.researchQueue.splice(idx, 1);
+                                if (task && Number.isFinite(task.cost)) players[playerId].money += task.cost * 0.1;
+                                continue;
+                            }
+
+                            if (r.researchTask) {
+                                if (!a.kind || !a.key || !a.statKey || (r.researchTask.kind === a.kind && r.researchTask.key === a.key && r.researchTask.statKey === a.statKey)) {
+                                    players[playerId].money += (Number(r.researchTask.cost) || 0) * 0.1;
+                                    r.researchTask = null;
+                                    r.isResearching = false;
+                                }
+                            }
+                        }
+                    }
                 } else if (a.action === 'markSalvage') {
                     // Toggle salvage mark on a building at gx,gy
                     let t = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId);
@@ -9425,8 +10243,8 @@
                         target.autoUpgradeEnabled = !!a.enabled;
                         if (!target.autoUpgradeEnabled) {
                             target.isUpgrading = false;
-                        } else if (!target.underConstruction && !target.isUpgrading && (target.potentialEffectiveLevel || 0) > (target.effectiveLevel || 0)) {
-                            beginUpgradeProgress(target, (target.effectiveLevel || 1) + 1);
+                        } else if (!target.underConstruction && !target.isUpgrading && getThingPotentialLevel(target) > getThingEffectiveLevel(target)) {
+                            beginUpgradeProgress(target, getThingEffectiveLevel(target) + 1);
                         }
                     }
                 } else if (a.action === 'setBuildEnabled') {
@@ -9436,6 +10254,11 @@
                         (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
                     if (target) {
                         target.buildEnabled = !!a.enabled;
+                    }
+                } else if (a.action === 'setAutoResearch') {
+                    let target = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    if (target) {
+                        target.autoResearchEnabled = !!a.enabled;
                     }
                 } else if (a.action === 'killUnit') {
                     let u = units.find(u => u.id === a.unitId && u.owner === playerId);
@@ -9641,7 +10464,7 @@
             let btnMap = document.getElementById('btn-minimap');
             if (!mapCont || !statsCont || !btnMap) return;
 
-            let isCollapsed = btnMap.innerText === '▲';
+            let isCollapsed = btnMap.innerText === '\u25B2';
             if (!selectedBuildItem) {
                 statsCont.style.display = 'none';
                 statsCont.innerHTML = '';
@@ -9650,7 +10473,7 @@
                 return;
             }
 
-            let def = CARD_TYPES[selectedBuildItem] || {};
+            let def = BASE_CARD_TYPES[selectedBuildItem] || {};
             let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
             statsCont.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
             mapCont.style.display = 'none';
@@ -9659,11 +10482,11 @@
         }
 
         function renderBuildItemDetailedStats(key) {
-            let def = CARD_TYPES[key];
+            let def = BASE_CARD_TYPES[key];
             if (!def) return '';
 
             let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
-            let level = Math.max(1, Math.floor(Math.log2(stacks)) + 1);
+            let level = stackCountToLevel(stacks);
             let html = '<div class="build-stats-panel">';
 
             let addRow = (label, value) => {
@@ -9672,16 +10495,23 @@
 
             let fmt = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v)) ? formatBigNumber(v, d) : v;
             let getUnitPreview = (unitType, lvl) => {
-                let us = UNIT_STATS[unitType] || UNIT_STATS.norm;
-                let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
-                let hp = Math.max(1, Math.floor((us.hp || 1) * Math.pow(cfg.hpExp || 1, lvl - 1)));
-                let atk = us.atk > 0 ? Math.max(1, Math.round(us.atk * Math.pow(cfg.dmgExp || 1, lvl - 1))) : 0;
-                let baseCd = us.atkCd || 30;
-                let cd = baseCd < 900 ? Math.max(cfg.minCd || 8, Math.round(baseCd * Math.pow(cfg.cdExp || 1, lvl - 1))) : baseCd;
-                let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : ((us.speed || 1) * (cfg.speedCapMul || 1.8));
-                let speed = Math.min(speedCap, (us.speed || 1) * Math.pow(cfg.speedExp || 1, lvl - 1));
-                let range = Math.max(0, Number(us.attackRange) || 0);
-                return { hp, atk, cd, speed, range };
+                let safeLvl = Math.max(1, clampThingLevel(lvl));
+                let hp = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'hp');
+                let atk = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atk');
+                let cd = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atkCd');
+                let speed = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'speed');
+                let range = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'attackRange');
+                let builderDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'builderDps');
+                let healerHps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'healerHps');
+                return {
+                    hp: Math.max(1, Math.floor(Number(hp) || 1)),
+                    atk: Math.max(0, Math.floor(Number(atk) || 0)),
+                    cd: Math.max(1, Math.round(Number(cd) || 1)),
+                    speed: Math.max(0.1, Number(speed) || 0.1),
+                    range: Math.max(0, Number(range) || 0),
+                    builderDps: Math.max(0, Number(builderDps) || 0),
+                    healerHps: Math.max(0, Number(healerHps) || 0)
+                };
             };
 
             addRow('Stacks', `x${stacks}`);
@@ -9689,7 +10519,7 @@
 
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
-                let bStats = calculateItemStats('barrack', level);
+                let bStats = calculateItemStats(key, level, localPlayerId);
                 let baseCost = Math.round(((BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm).baseTime || 20) * 0.5);
                 let unitCost = Math.round(baseCost * (1 + (level - 1) * 0.5));
                 let spawnCd = getBarrackSpawnCooldown(unitType, level);
@@ -9698,8 +10528,8 @@
                 addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
                 addRow('Queue Cost', `$${fmt(unitCost)}`);
                 addRow('Unit HP', fmt(up.hp));
-                if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
-                else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/tick`);
+                else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/tick`);
                 else if (unitType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
                 else if (unitType === 'salvager_unit') addRow('Salvage Yield', `10% x L${level}`);
                 else {
@@ -9711,7 +10541,7 @@
                 addRow('Unit Speed', up.speed.toFixed(1));
             } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner') {
                 let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : (key === 'builder_spawner' ? 'builder_unit' : 'healer_unit'));
-                let stats = calculateItemStats(key, level);
+                let stats = calculateItemStats(key, level, localPlayerId);
                 let spawnCd = getBarrackSpawnCooldown(workerType, level);
                 let unitCost = key === 'spawner' ? 15 : (key === 'salvager' ? 20 : 18);
                 unitCost = Math.round(unitCost * (1 + (level - 1) * 0.5));
@@ -9720,26 +10550,20 @@
                 addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
                 addRow('Queue Cost', `$${fmt(unitCost)}`);
                 addRow('Worker HP', fmt(up.hp));
-                if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
-                else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(Math.max(1, Math.round(5 * Math.pow(1.22, level - 1))), 1)}/tick`);
+                if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/tick`);
+                else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/tick`);
                 else if (workerType === 'collector') addRow('Gather Speed', `${fmt(10 * level, 1)}/trip`);
                 else addRow('Salvage Yield', `10% x L${level}`);
                 addRow('Worker Speed', up.speed.toFixed(1));
             } else if (def.target === 'wall') {
-                let hp = Math.floor((def.towerHp || 0) * Math.pow(1.4, level - 1));
-                let dmg = (def.damage !== undefined) ? (def.damage * Math.pow(1.4, level - 1)) : null;
-                let cd = def.cd;
-                let vision = def.visionRange;
-                if (def.type === 'water' || key === 'water' || key === 'smg' || key === 'pistol') {
-                    if (cd) cd = Math.max(5, def.cd * (1 - (level - 1) * 0.1));
-                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
-                } else if (key === 'fire' || key === 'poison') {
-                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
-                } else if (key === 'sand_gun') {
-                    if (vision) vision = def.visionRange * (1 + (level - 1) * 0.1);
-                    if (cd) cd = def.cd * Math.pow(0.9, level);
-                }
-                if (vision && def.maxVisionRange) vision = Math.min(vision, def.maxVisionRange);
+                let hp = getBuildingStatForOwner(localPlayerId, key, level, 'maxHp');
+                let dmg = getBuildingStatForOwner(localPlayerId, key, level, 'damage');
+                let cd = getBuildingStatForOwner(localPlayerId, key, level, 'cd');
+                let vision = getBuildingStatForOwner(localPlayerId, key, level, 'visionRange');
+                if (!Number.isFinite(hp)) hp = Math.floor((def.towerHp || 0) * Math.pow(1.4, level - 1));
+                if (!Number.isFinite(dmg)) dmg = null;
+                if (!Number.isFinite(cd)) cd = def.cd;
+                if (!Number.isFinite(vision)) vision = def.visionRange;
                 if (hp > 0) addRow('HP', `${fmt(hp)}/${fmt(hp)}`);
                 if (dmg !== null) addRow('Attack', fmt(dmg, 1));
                 if (cd) {
@@ -9774,7 +10598,7 @@
                     addRow('Watch Duration', `${((80 + level * 20) / TICK_RATE).toFixed(1)}s`);
                 }
             } else {
-                let stats = calculateItemStats(key, level);
+                let stats = calculateItemStats(key, level, localPlayerId);
                 if (stats.maxHp > 0) addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`);
                 if (key === 'farm') addRow('Income', `+${fmt(level)}/s`);
                 if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
@@ -9809,7 +10633,7 @@
                 _buildMenuItems = {};
                 container.innerHTML = '';
                 for (let key of items) {
-                    let def = CARD_TYPES[key]; if (!def) continue;
+                    let def = BASE_CARD_TYPES[key]; if (!def) continue;
                     let div = document.createElement('div');
                     div.className = 'build-item';
                     div.dataset.key = key;
@@ -9852,7 +10676,7 @@
         function _patchBuildMenuClasses(money) {
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
             for (let key of items) {
-                let def = CARD_TYPES[key]; if (!def) continue;
+                let def = BASE_CARD_TYPES[key]; if (!def) continue;
                 let div = _buildMenuItems[key]; if (!div) continue;
                 let displayPrice = def.price;
                 if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
@@ -9892,10 +10716,20 @@
             return `<span class="info-auto-upgrade-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#8cf' : '#888'}">Auto Upgrade: ${enabled ? 'ON' : 'OFF'}</span>`;
         }
 
+        function autoResearchBtn(gx, gy, enabled) {
+            return `<span class="info-auto-research-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9fdaab' : '#888'}">Auto Research: ${enabled ? 'ON' : 'OFF'}</span>`;
+        }
+
         function autoUpgradeGroupBtn(coordStr, allEnabled, anyEnabled) {
             let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
             let nextAutoEnabled = allEnabled ? '0' : '1';
             return `<span class="info-auto-upgrade-group-btn" data-coords="${coordStr}" data-enabled="${nextAutoEnabled}" style="cursor:pointer;background:${allEnabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#8cf' : '#888'}">Auto Upgrade: ${label}</span>`;
+        }
+
+        function autoResearchGroupBtn(coordStr, allEnabled, anyEnabled) {
+            let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
+            let nextEnabled = allEnabled ? '0' : '1';
+            return `<span class="info-auto-research-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9fdaab' : '#888'}">Auto Research: ${label}</span>`;
         }
 
         function buildToggleBtn(gx, gy, enabled) {
@@ -9920,6 +10754,20 @@
             return (typeof value === 'number' && Number.isFinite(value)) ? formatBigNumber(value) : value;
         }
 
+        function formatStatLabelWithResearchLevel(playerId, kind, key, statKey, label, showPlaceholder = true) {
+            let lvlText = '';
+            let lvlColor = '#666';
+            if (kind && key && statKey && getResearchStatEntry(kind, key, statKey)) {
+                let statLvl = getPlayerResearchLevel(playerId, kind, key, statKey);
+                lvlText = `L${statLvl}`;
+                lvlColor = '#9cf';
+            }
+            let badge = showPlaceholder
+                ? `<span style="display:inline-block;min-width:26px;color:${lvlColor};font-size:10px">${lvlText}</span>`
+                : (lvlText ? `<span style="color:${lvlColor};font-size:10px">${lvlText}</span> ` : '');
+            return `${badge}${label}`;
+        }
+
         function infoRow(label, value, effValue) {
             if (effValue !== undefined && effValue !== value) {
                 return `<div class="info-row"><span class="info-label">${label}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
@@ -9928,10 +10776,12 @@
         }
 
         function getLevelHtml(obj) {
-            let actualLvl = Math.floor(Math.log2(obj.stacks || 1)) + 1;
+            let actualLvl = stackCountToLevel(obj.stacks || 1);
             if (obj.underConstruction) actualLvl = 0;
             let effLvl = getDisplayLevel(obj);
-            let potLvl = obj.potentialEffectiveLevel || effLvl || actualLvl;
+            let potLvl = obj.underConstruction
+                ? Math.max(0, Math.floor(Number(obj.potentialEffectiveLevel || effLvl || actualLvl) || 0))
+                : getThingPotentialLevel(obj, Math.max(1, effLvl || actualLvl));
 
             let html = `<span style="color:#888">L${actualLvl}</span>`;
             if (effLvl !== actualLvl || potLvl !== actualLvl) {
@@ -9984,6 +10834,7 @@
             html += `</div>`;
             return html;
         }
+
         function infoDesc(text) {
             return `<div style="font-size:9px;color:#777;margin-top:4px;border-top:1px solid #333;padding-top:3px;font-style:italic">${text}</div>`;
         }
@@ -10015,8 +10866,8 @@
             if (ignoreLevelSubgroups) {
                 if (e.type === 'barrack') return 'barrack_' + e.unitType;
                 if (e instanceof Tower) return 'tower_' + e.type;
-                if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type;
-                if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type;
+                if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') return e.type;
+                if (e.type && BASE_CARD_TYPES[e.type]) return 'floor_' + e.type;
                 return 'unknown_type';
             }
             let state = e.underConstruction ? 'build' : (e.isUpgrading ? 'upg' : 'ready');
@@ -10024,20 +10875,21 @@
             let lvlPart = '_L' + lvl;
             if (e.type === 'barrack') return 'barrack_' + e.unitType + lvlPart + '_' + state;
             if (e instanceof Tower) return 'tower_' + e.type + lvlPart + '_' + state;
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type + lvlPart + '_' + state;
-            if (e.type && CARD_TYPES[e.type]) return 'floor_' + e.type + lvlPart + '_' + state;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') return e.type + lvlPart + '_' + state;
+            if (e.type && BASE_CARD_TYPES[e.type]) return 'floor_' + e.type + lvlPart + '_' + state;
             return 'unknown_' + Math.random();
         }
 
         function getEntityGroupLabel(e) {
             if (e._isGoldMine) return 'Gold Mine';
-            if (e.type === 'barrack') return ((CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
-            if (e instanceof Tower) return (CARD_TYPES[e.type] || {}).name || e.type;
+            if (e.type === 'barrack') return ((BASE_CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
+            if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).name || e.type;
             if (e.type === 'spawner') return 'Collector';
             if (e.type === 'salvager') return 'Salvager';
             if (e.type === 'builder_spawner') return 'Builder';
             if (e.type === 'healer_spawner') return 'Healer';
-            if (e.type && CARD_TYPES[e.type]) return CARD_TYPES[e.type].name;
+            if (e.type === 'research') return 'Research';
+            if (e.type && BASE_CARD_TYPES[e.type]) return BASE_CARD_TYPES[e.type].name;
             return 'Unknown';
         }
 
@@ -10047,30 +10899,29 @@
             if (e._isGoldMine) return 'goldmine';
             if (e.type === 'barrack') return 'barrack_' + e.unitType;
             if (e instanceof Tower) return e.type;
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return e.type;
-            if (e.type && CARD_TYPES[e.type]) return e.type;
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') return e.type;
+            if (e.type && BASE_CARD_TYPES[e.type]) return e.type;
             return null;
         }
 
         function getGroupBorderColor(grp) {
             let e = grp.items[0];
-            if (grp.isUnit) return (UNIT_STATS[e.unitType] || {}).color || '#fff';
+            if (grp.isUnit) return (BASE_UNIT_STATS[e.unitType] || {}).color || '#fff';
             if (e._isGoldMine) return '#fd0';
-            if (e.type === 'barrack') return (UNIT_STATS[e.unitType] || {}).color || '#686';
-            if (e instanceof Tower) return (CARD_TYPES[e.type] || {}).color || '#fff';
-            let ct = CARD_TYPES[e.type] || {};
+            if (e.type === 'barrack') return (BASE_UNIT_STATS[e.unitType] || {}).color || '#686';
+            if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).color || '#fff';
+            let ct = BASE_CARD_TYPES[e.type] || {};
             return ct.color || '#fff';
         }
 
         function getGroupLevel(key, grp) {
             if (ignoreLevelSubgroups) return null;
             let e = grp.items[0];
-            if (grp.isUnit) return e.unitLevel || 1;
+            if (grp.isUnit) return getUnitBaseLevel(e);
             if (e._isGoldMine) return null;
             if (e.underConstruction) return 0;
-            if (e.effectiveLevel !== undefined) return e.effectiveLevel;
-            if (e.level !== undefined) return e.level;
-            if (e.stacks) return Math.floor(Math.log2(e.stacks || 1)) + 1;
+            if (e.effectiveLevel !== undefined) return getThingEffectiveLevel(e);
+            if (e.level !== undefined || e.stacks) return getThingBaseLevel(e);
             return null;
         }
 
@@ -10078,33 +10929,16 @@
             if (!e || e._isGoldMine) return null;
             if (e.underConstruction) return 'build';
             if (e.isUpgrading) return 'upg';
-            if (e.effectiveLevel !== undefined) return `L${Math.max(0, Math.floor(e.effectiveLevel || 0))}`;
-            if (e.level !== undefined) return `L${Math.max(0, Math.floor(e.level || 0))}`;
-            if (e.stacks !== undefined) return `L${Math.max(1, Math.floor(Math.log2(Math.max(1, e.stacks || 1))) + 1)}`;
+            if (e.effectiveLevel !== undefined) return `L${getThingEffectiveLevel(e)}`;
+            if (e.level !== undefined || e.stacks !== undefined) return `L${getThingBaseLevel(e)}`;
             return null;
         }
 
         function getEntityHpDisplayMax(e) {
             if (!e) return 1;
             let currentMax = Math.max(1, Math.floor(e.maxHp || 1));
-            let effectiveLevel = Math.max(1, Math.floor(
-                Number.isFinite(e.effectiveLevel)
-                    ? e.effectiveLevel
-                    : (Number.isFinite(e.level)
-                        ? e.level
-                        : (Math.floor(Math.log2(Math.max(1, e.stacks || 1))) + 1))
-            ));
-
-            let potentialLevel = effectiveLevel;
-            if (Number.isFinite(e.potentialEffectiveLevel)) {
-                potentialLevel = Math.max(potentialLevel, Math.floor(e.potentialEffectiveLevel));
-            }
-            if (Number.isFinite(e.level)) {
-                potentialLevel = Math.max(potentialLevel, Math.floor(e.level));
-            }
-            if (Number.isFinite(e.stacks)) {
-                potentialLevel = Math.max(potentialLevel, Math.floor(Math.log2(Math.max(1, e.stacks || 1))) + 1);
-            }
+            let effectiveLevel = getThingEffectiveLevel(e);
+            let potentialLevel = getThingPotentialLevel(e, effectiveLevel);
 
             let canUpgrade = potentialLevel > effectiveLevel;
             if (!canUpgrade) return currentMax;
@@ -10115,9 +10949,9 @@
         function getStackProgressText(stacks, levelHint) {
             let safeStacks = Math.max(1, Math.floor(Number(stacks) || 1));
             let safeLevel = Number.isFinite(levelHint)
-                ? Math.max(1, Math.floor(levelHint))
-                : (Math.floor(Math.log2(safeStacks)) + 1);
-            let nextReq = Math.max(safeStacks, Math.pow(2, safeLevel));
+                ? Math.max(1, clampThingLevel(levelHint))
+                : stackCountToLevel(safeStacks);
+            let nextReq = Math.max(safeStacks, getRequiredStacksForLevel(safeLevel + 1));
             return `${formatBigNumber(safeStacks)}/${formatBigNumber(nextReq)}`;
         }
 
@@ -10132,21 +10966,25 @@
         function renderBarrackInfo(e) {
             let html = '';
             let bKey = 'barrack_' + e.unitType;
-            let us = UNIT_STATS[e.unitType] || {};
+            let uLvl = getThingEffectiveLevel(e);
+            let uHp = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'hp');
+            let uAtk = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'atk');
+            let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
+            let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
+            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             if (!e.underConstruction) {
-                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-                html += infoRow('Unit HP', us.hp || '?');
-                html += infoRow('Unit Atk', us.atk || '?');
-                html += infoRow('Unit Range', formatRangeStatTiles(Number(us.attackRange) || 0));
-                html += infoRow('Unit Spd', us.speed || '?');
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', bKey, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'hp', 'Unit HP'), Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'atk', 'Unit Atk'), Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'attackRange', 'Unit Range'), formatRangeStatTiles(Number(uRange) || 0));
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'speed', 'Unit Spd'), Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
                 if (e.owner === localPlayerId) {
                     html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 }
@@ -10178,7 +11016,11 @@
             let html = '';
             let e = group[0];
             let bKey = 'barrack_' + e.unitType;
-            let us = UNIT_STATS[e.unitType] || {};
+            let uLvl = getThingEffectiveLevel(e);
+            let uHp = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'hp');
+            let uAtk = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'atk');
+            let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
+            let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
             let visTiles = getEntityVisibilityRangeTiles(e);
             let readyGroup = group.filter(b => !b.underConstruction);
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
@@ -10189,11 +11031,11 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-            html += infoRow('Unit HP', us.hp || '?');
-            html += infoRow('Unit Atk', us.atk || '?');
-            html += infoRow('Unit Range', formatRangeStatTiles(Number(us.attackRange) || 0));
-            html += infoRow('Unit Spd', us.speed || '?');
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', bKey, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'hp', 'Unit HP'), Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'atk', 'Unit Atk'), Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'attackRange', 'Unit Range'), formatRangeStatTiles(Number(uRange) || 0));
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'unit', e.unitType, 'speed', 'Unit Spd'), Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
             }
@@ -10235,7 +11077,7 @@
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
+            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
@@ -10253,7 +11095,7 @@
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
             if (e.owner === localPlayerId) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
@@ -10293,7 +11135,7 @@
             if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
             if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
             if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
-            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(t => t.markedForSalvage);
@@ -10315,19 +11157,22 @@
             let html = '';
             let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
             let baseStacks = e.stacks || 1;
-            let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
+            let sLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
-            let effLevel = e.effectiveLevel || sLevel;
+            let effLevel = getThingEffectiveLevel(e, sLevel);
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '🔨 Under Construction' : (e.isUpgrading ? '⬆️ Upgrading' : '✓ Ready'));
+            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            if (!e.underConstruction) {
+                html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', e.type, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
+            }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 if (e.underConstruction) {
@@ -10356,13 +11201,13 @@
 
         function renderFloorItemInfo(e) {
             let html = '';
-            let def = CARD_TYPES[e.type];
+            let def = BASE_CARD_TYPES[e.type];
             let baseStacks = e.stacks || 1;
-            let baseLevel = Math.floor(Math.log2(baseStacks)) + 1;
+            let baseLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
-            let effLevel = e.effectiveLevel || baseLevel;
-            let baseStats = calculateItemStats(e.type, baseLevel);
-            let effStats = calculateItemStats(e.type, effLevel);
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
+            let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
+            let effStats = calculateItemStats(e.type, effLevel, e.owner);
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             if (baseStats.maxHp > 0) html += infoRow('HP', formatInfoFraction(Math.floor(e.hp || baseStats.maxHp), getEntityHpDisplayMax(e)));
@@ -10408,9 +11253,9 @@
 
         function renderUnitInfo(u) {
             let html = '';
-            let s = UNIT_STATS[u.unitType] || {};
-            let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
-            let effLvl = Math.max(1, Math.floor(u.effectiveLevel || lvl));
+            let s = BASE_UNIT_STATS[u.unitType] || {};
+            let lvl = getUnitBaseLevel(u);
+            let effLvl = getUnitEffectiveLevel(u, lvl);
             let stacks = getUnitStackCount(u);
             let effStacks = Math.max(1, Math.floor(u.effectiveStacks || stacks));
             let baseMaxHp = Math.max(1, Math.floor(u.baseLevelMaxHp || u.maxHp || 1));
@@ -10429,7 +11274,7 @@
             if (u.sandy > 0) slowMul *= 0.5;
             let baseSpd = (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
             let effSpd = (Number(u.speed) || 0) * slowMul;
-            let baseAttackRange = Math.max(0, Number((UNIT_STATS[u.unitType] || {}).attackRange) || ((Number(u.attackRange) || 0) / TILE));
+            let baseAttackRange = Math.max(0, Number(u.baseLevelAttackRange) || ((Number(u.attackRange) || 0) / TILE));
             let effAttackRange = Math.max(0, (Number(u.attackRange) || 0) / TILE);
             let baseVisionRange = Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
             let effVisionRange = Math.max(0, Number(u.visionRange) || 0);
@@ -10440,12 +11285,12 @@
             html += infoRow('Range', formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
             html += infoRow('Visibility', formatRangeStatTiles(baseVisionRange), Math.abs(baseVisionRange - effVisionRange) > 0.001 ? formatRangeStatTiles(effVisionRange) : undefined);
             if (u.workerType === 'builder') {
-                let baseBuild = Number(u.baseLevelBuilderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
-                let effBuild = Number(u.builderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1)));
+                let baseBuild = Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
+                let effBuild = Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
                 html += infoRow('Build Speed', `${formatBigNumber(baseBuild, 1)}/tick`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/tick` : undefined);
             } else if (u.workerType === 'healer') {
-                let baseHeal = Number(u.baseLevelHealerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
-                let effHeal = Number(u.healerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1)));
+                let baseHeal = Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0;
+                let effHeal = Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0;
                 html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/tick`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/tick` : undefined);
             } else if (u.workerType === 'collector') {
                 let baseGather = 10 * lvl;
@@ -10478,8 +11323,8 @@
             if (u.owner === localPlayerId) {
                 html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
                 html += `<span class="info-salvage-btn" data-unit-id="${u.id}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill Unit</span>`;
-                html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u.unitLevel || 1))}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
-                html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u.unitLevel || 1))}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
+                html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
                 html += `</div>`;
             }
             html += infoDesc(DESCRIPTIONS[u.unitType] || 'Combat unit.');
@@ -10489,7 +11334,7 @@
         function renderUnitGroupInfo(group) {
             let html = '';
             let u0 = group[0];
-            let s = UNIT_STATS[u0.unitType] || {};
+            let s = BASE_UNIT_STATS[u0.unitType] || {};
             let totalHp = 0, totalMaxHp = 0;
             let totalBaseHp = 0, totalBaseMaxHp = 0;
             let totalStacks = 0, totalEffStacks = 0;
@@ -10506,8 +11351,8 @@
             let baseLevels = new Set(), effLevels = new Set();
 
             for (let u of group) {
-                let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
-                let effLvl = Math.max(1, Math.floor(u.effectiveLevel || lvl));
+                let lvl = getUnitBaseLevel(u);
+                let effLvl = getUnitEffectiveLevel(u, lvl);
                 let stacks = getUnitStackCount(u);
                 let effStacks = Math.max(1, Math.floor(u.effectiveStacks || stacks));
                 let ratio = u.maxHp > 0 ? (u.hp / u.maxHp) : 1;
@@ -10535,21 +11380,21 @@
                 totalEffDps += effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0;
                 totalBaseSpeed += (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
                 totalEffSpeed += (Number(u.speed) || 0) * slowMul;
-                totalBaseRange += Math.max(0, Number((UNIT_STATS[u.unitType] || {}).attackRange) || ((Number(u.attackRange) || 0) / TILE));
+                totalBaseRange += Math.max(0, Number(u.baseLevelAttackRange) || ((Number(u.attackRange) || 0) / TILE));
                 totalEffRange += Math.max(0, (Number(u.attackRange) || 0) / TILE);
                 totalBaseVision += Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
                 totalEffVision += Math.max(0, Number(u.visionRange) || 0);
-                totalBaseNextStacks += Math.pow(2, lvl);
-                totalEffNextStacks += Math.pow(2, effLvl);
+                totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
+                totalEffNextStacks += getRequiredStacksForLevel(effLvl + 1);
                 baseLevels.add(lvl);
                 effLevels.add(effLvl);
 
                 if (u.workerType === 'builder') {
-                    totalBuildSpeed += (Number(u.baseLevelBuilderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))));
-                    totalEffBuildSpeed += (Number(u.builderDps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1))));
+                    totalBuildSpeed += (Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0);
+                    totalEffBuildSpeed += (Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0);
                 } else if (u.workerType === 'healer') {
-                    totalHealSpeed += (Number(u.baseLevelHealerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))));
-                    totalEffHealSpeed += (Number(u.healerHps) || Math.max(1, Math.round(5 * Math.pow(1.22, effLvl - 1))));
+                    totalHealSpeed += (Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0);
+                    totalEffHealSpeed += (Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0);
                 } else if (u.workerType === 'collector') {
                     totalCollectorPerTrip += (10 * lvl);
                     totalEffCollectorPerTrip += (10 * effLvl);
@@ -10564,8 +11409,8 @@
             let isEffectiveMixed = effLevels.size > 1;
             let levelSummary = baseLevels.size > 1
                 ? `L${Math.min(...Array.from(baseLevels))}-L${Math.max(...Array.from(baseLevels))}`
-                : `L${Math.max(1, Math.floor(u0.unitLevel || 1))}`;
-            let effLevelSummary = isEffectiveMixed ? 'Mixed' : `L${Math.max(1, Math.floor(u0.effectiveLevel || u0.unitLevel || 1))}`;
+                : `L${getUnitBaseLevel(u0)}`;
+            let effLevelSummary = isEffectiveMixed ? 'Mixed' : `L${getUnitEffectiveLevel(u0)}`;
 
             html += infoRow('Count', group.length);
             html += infoRow('HP', formatInfoFraction(Math.floor(totalBaseHp), totalBaseMaxHp), formatInfoFraction(Math.floor(totalHp), totalMaxHp));
@@ -10584,7 +11429,7 @@
             } else if (u0.workerType === 'collector') {
                 html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
             } else if (u0.workerType === 'salvager') {
-                html += infoRow('Salvage Yield', `10% x ΣL${totalSalvagerLevel}`, totalSalvagerLevel !== totalEffSalvagerLevel ? `10% x ΣL${totalEffSalvagerLevel}` : undefined);
+                html += infoRow('Salvage Yield', `10% x SumL${totalSalvagerLevel}`, totalSalvagerLevel !== totalEffSalvagerLevel ? `10% x SumL${totalEffSalvagerLevel}` : undefined);
             } else {
                 html += infoRow('Attack', formatBigNumber(totalBaseAttack, 1), totalBaseAttack !== totalEffAttack ? formatBigNumber(totalEffAttack, 1) : undefined);
                 html += infoRow('DPS', totalBaseDps.toFixed(1), Math.abs(totalBaseDps - totalEffDps) > 0.01 ? totalEffDps.toFixed(1) : undefined);
@@ -10604,7 +11449,7 @@
             if (immunes.length > 0) html += infoRow('Immune', immunes.join(', '));
             if (u0.owner === localPlayerId) {
                 let ids = group.map(u => u.id).join(',');
-                let subgroupLevel = ignoreLevelSubgroups ? '' : Math.max(1, Math.floor(u0.unitLevel || 1));
+                let subgroupLevel = ignoreLevelSubgroups ? '' : getUnitBaseLevel(u0);
                 html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
                 html += `<span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill All (${group.length})</span>`;
                 html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
@@ -10619,8 +11464,9 @@
             if (e._isGoldMine) return renderGoldMineInfo(e);
             if (e.type === 'barrack' && e.unitType) return renderBarrackInfo(e);
             if (e instanceof Tower) return renderTowerInfo(e);
+            if (e.type === 'research') return renderResearchInfo(e);
             if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerInfo(e);
-            if (e.type && CARD_TYPES[e.type]) return renderFloorItemInfo(e);
+            if (e.type && BASE_CARD_TYPES[e.type]) return renderFloorItemInfo(e);
             return '';
         }
 
@@ -10629,8 +11475,9 @@
             if (e.type === 'barrack' && e.unitType) return renderBarrackGroupInfo(group);
             if (e instanceof Tower) return renderTowerGroupInfo(group);
             if (e._isGoldMine) return renderGoldMineGroupInfo(group);
+            if (e.type === 'research') return renderResearchGroupInfo(group);
             if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerGroupInfo(group);
-            if (e.type && CARD_TYPES[e.type]) return renderFloorItemGroupInfo(group);
+            if (e.type && BASE_CARD_TYPES[e.type]) return renderFloorItemGroupInfo(group);
             return '';
         }
 
@@ -10652,9 +11499,9 @@
             let label = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
             let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
             let baseStacks = e.stacks || 1;
-            let sLevel = Math.floor(Math.log2(baseStacks)) + 1;
+            let sLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
-            let effLevel = e.effectiveLevel || sLevel;
+            let effLevel = getThingEffectiveLevel(e, sLevel);
             let visTiles = getEntityVisibilityRangeTiles(e);
             let readyGroup = group.filter(s => !s.underConstruction);
             let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
@@ -10665,8 +11512,9 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow(formatStatLabelWithResearchLevel(e.owner, 'building', e.type, 'spawnCd', 'Spawn CD'), `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${formatBigNumber((CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(s => s.markedForSalvage);
                 let allAutoEnabled = group.every(s => isAutoUpgradeEnabled(s));
@@ -10695,17 +11543,186 @@
             return html;
         }
 
+        function getResearchPanelScopeKey(owner, scope) {
+            return `${owner}:${scope}`;
+        }
+
+        function getResearchQueueDepthForStatInGroup(group, kind, key, statKey) {
+            let n = 0;
+            for (let r of group) n += getResearchQueueDepthForStat(r, kind, key, statKey);
+            return n;
+        }
+
+        function renderResearchThingRowsForPanel(owner, scope, targetArg) {
+            let html = '';
+            let scopeKey = getResearchPanelScopeKey(owner, scope);
+            let selectedThingId = researchPanelOpenState[scopeKey];
+            if (!selectedThingId || !RESEARCH_THINGS_BY_ID[selectedThingId]) {
+                let first = RESEARCH_THINGS[0];
+                selectedThingId = first ? `${first.kind}:${first.key}` : '';
+                researchPanelOpenState[scopeKey] = selectedThingId;
+            }
+
+            html += `<div class="info-row" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">`;
+            for (let thing of RESEARCH_THINGS) {
+                let thingId = `${thing.kind}:${thing.key}`;
+                let isSelected = thingId === selectedThingId;
+                let borderRadius = thing.kind === 'unit' ? '50%' : '4px';
+                html += `<button class="info-research-thing-btn" data-owner="${owner}" data-scope="${scope}" data-thing-id="${thingId}" title="${thing.label}" style="width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center">`;
+                html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}">`;
+                html += `</button>`;
+            }
+            html += `</div>`;
+
+            let selectedThing = RESEARCH_THINGS_BY_ID[selectedThingId];
+            if (!selectedThing) return html;
+
+            let groupCoordStr = Array.isArray(targetArg) ? targetArg.map(r => `${r.gx},${r.gy}`).join(';') : '';
+            html += `<div style="margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212">`;
+            html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
+            for (let stat of (selectedThing.stats || [])) {
+                let queuedDepth = scope.startsWith('single:')
+                    ? getResearchQueueDepthForStat(targetArg, selectedThing.kind, selectedThing.key, stat.statKey)
+                    : getResearchQueueDepthForStatInGroup(targetArg, selectedThing.kind, selectedThing.key, stat.statKey);
+                let currentLevel = getPlayerResearchLevel(owner, selectedThing.kind, selectedThing.key, stat.statKey);
+                let globalQueuedDepth = getResearchQueuedDepthForPlayer(owner, selectedThing.kind, selectedThing.key, stat.statKey);
+                let projectedLevel = currentLevel + globalQueuedDepth;
+                let nextCost = getResearchCost(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
+                let nextWork = getResearchWork(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
+                let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
+                let canAfford = !atMax && players[localPlayerId].money >= nextCost;
+                let currentValue = getResearchCurrentStatValue(owner, selectedThing.kind, selectedThing.key, stat.statKey);
+                let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
+                let projectedValue = selectedThing.kind === 'unit'
+                    ? getUnitStatFromMap(selectedThing.key, 1, stat.statKey, displayProjectedLevel)
+                    : getBuildingStatFromMap(selectedThing.key, 1, stat.statKey, displayProjectedLevel);
+                if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
+                if (!atMax && displayProjectedLevel <= currentLevel) {
+                    let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
+                    let nextPreview = selectedThing.kind === 'unit'
+                        ? getUnitStatFromMap(selectedThing.key, 1, stat.statKey, previewLevel)
+                        : getBuildingStatFromMap(selectedThing.key, 1, stat.statKey, previewLevel);
+                    if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
+                }
+
+                html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
+                html += `<span style="color:#bbb">${stat.label}</span><span style="color:#8fc">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
+                html += `<span style="color:#9cf">Q:${queuedDepth}</span>`;
+                html += `</div>`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
+                html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                if (scope.startsWith('single:')) {
+                    html += `<div style="display:flex;align-items:center;gap:4px">`;
+                    html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
+                    html += `<span class="info-research-buy-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                    html += `</div>`;
+                } else {
+                    html += `<div style="display:flex;align-items:center;gap:4px">`;
+                    html += `<span class="info-research-dequeue-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
+                    html += `<span class="info-research-buy-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                    html += `</div>`;
+                }
+                html += `</div>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+            return html;
+        }
+
+        function renderResearchInfo(e) {
+            let html = '';
+            let visTiles = getEntityVisibilityRangeTiles(e);
+            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
+            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isResearching ? '\uD83E\uDDEA Researching' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready')));
+            html += infoRowLevel('Level', e);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            if (e.researchTask) {
+                let t = e.researchTask;
+                let thing = getResearchThing(t.kind, t.key);
+                let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
+                let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
+                let tLabel = thing ? thing.label : (t.kind + ':' + t.key);
+                let sLabel = stat ? stat.label : (t.statKey || 'stat');
+                html += infoRow('Active', `${tLabel} / ${sLabel} (${pct}%)`);
+            }
+            html += infoRow('Queue', `${getResearchQueueTotalLength(e)}/20`);
+            if (e.owner === localPlayerId && !e.underConstruction) {
+                html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Research Queue (Per Stat)</div>`;
+                html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
+                html += `</div>`;
+            }
+            if (e.owner === localPlayerId) {
+                let autoEnabled = isAutoUpgradeEnabled(e);
+                let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
+                let autoResearchEnabled = isAutoResearchEnabled(e);
+                let autoResearchToggle = autoResearchBtn(e.gx, e.gy, autoResearchEnabled);
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : '';
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearchToggle}${autoBtn}</div></div>`;
+            }
+            html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
+            return html;
+        }
+
+        function renderResearchGroupInfo(group) {
+            let html = '';
+            let e = group[0];
+            let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
+            for (let r of group) {
+                totalHp += r.hp;
+                totalMaxHp += getEntityHpDisplayMax(r);
+                totalQueue += getResearchQueueTotalLength(r);
+            }
+            let visTiles = getEntityVisibilityRangeTiles(e);
+            html += infoRow('Count', group.length);
+            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRowLevel('Level', e);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow('Queue', `${totalQueue}/${group.length * 20}`);
+            if (group.some(r => r.researchTask)) {
+                html += infoRow('Active Labs', group.filter(r => !!r.researchTask).length);
+            }
+
+            if (e.owner === localPlayerId) {
+                html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Distributed Research Queue (Per Stat)</div>`;
+                let scope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
+                html += renderResearchThingRowsForPanel(e.owner, scope, group);
+                html += `</div>`;
+
+                let coordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
+                let anyMarked = group.some(r => r.markedForSalvage);
+                let allAutoEnabled = group.every(r => isAutoUpgradeEnabled(r));
+                let anyAutoEnabled = group.some(r => isAutoUpgradeEnabled(r));
+                let allAutoResearchEnabled = group.every(r => isAutoResearchEnabled(r));
+                let anyAutoResearchEnabled = group.some(r => isAutoResearchEnabled(r));
+                let hasUnderConstruction = group.some(r => r.underConstruction);
+                let allBuildEnabled = group.every(r => isBuildEnabled(r));
+                let anyBuildEnabled = group.some(r => isBuildEnabled(r));
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
+                let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
+                let autoResearch = autoResearchGroupBtn(coordStr, allAutoResearchEnabled, anyAutoResearchEnabled);
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearch}${autoBtn}</div></div>`;
+            }
+            html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
+            return html;
+        }
+
         function renderFloorItemGroupInfo(group) {
             let html = '';
             let e = group[0];
-            let def = CARD_TYPES[e.type];
+            let def = BASE_CARD_TYPES[e.type];
             let baseStacks = e.stacks || 1;
-            let baseLevel = Math.floor(Math.log2(baseStacks)) + 1;
+            let baseLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
-            let effLevel = e.effectiveLevel || baseLevel;
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
             let visTiles = getEntityVisibilityRangeTiles(e);
-            let baseStats = calculateItemStats(e.type, baseLevel);
-            let effStats = calculateItemStats(e.type, effLevel);
+            let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
+            let effStats = calculateItemStats(e.type, effLevel, e.owner);
             let totalHp = 0, totalMaxHp = 0;
             for (let f of group) { totalHp += (f.hp || 0); totalMaxHp += getEntityHpDisplayMax(f); }
             html += infoRow('Count', group.length);
@@ -10847,8 +11864,8 @@
                     let mixedUnitLevels = false;
                     let mixedEffectiveLevels = false;
                     if (items.length > 1) {
-                        let unitLevels = new Set(items.map(u => Math.max(1, Math.floor(u.unitLevel || 1))));
-                        let effectiveLevels = new Set(items.map(u => Math.max(1, Math.floor(u.effectiveLevel || u.unitLevel || 1))));
+                        let unitLevels = new Set(items.map(u => getUnitBaseLevel(u)));
+                        let effectiveLevels = new Set(items.map(u => getUnitEffectiveLevel(u)));
                         mixedUnitLevels = unitLevels.size > 1;
                         mixedEffectiveLevels = effectiveLevels.size > 1;
                     }
@@ -10970,6 +11987,95 @@
                 });
             });
 
+            // Wire up research buy buttons (single research building)
+            panel.querySelectorAll('.info-research-buy-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let kind = btn.dataset.kind, key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    queueAction({ action: 'queueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                });
+            });
+
+            // Wire up research buy buttons (group, distributed by shortest queue)
+            panel.querySelectorAll('.info-research-buy-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let kind = btn.dataset.kind, key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let coords = (btn.dataset.coords || '').split(';').map(c => {
+                        let [x, y] = c.split(',');
+                        return { gx: parseInt(x), gy: parseInt(y) };
+                    }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
+
+                    let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                    let options = coords.map(c => {
+                        let r = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research');
+                        return r ? { gx: r.gx, gy: r.gy, len: getResearchQueueTotalLength(r) } : null;
+                    }).filter(Boolean);
+
+                    for (let i = 0; i < purchaseCount; i++) {
+                        let best = null;
+                        for (let o of options) {
+                            if (o.len >= 20) continue;
+                            if (!best || o.len < best.len) best = o;
+                        }
+                        if (!best) return;
+                        queueAction({ action: 'queueResearch', gx: best.gx, gy: best.gy, kind, key, statKey, count: 1 });
+                        best.len++;
+                    }
+                });
+            });
+
+            // Wire up research dequeue buttons (single)
+            panel.querySelectorAll('.info-research-dequeue-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let kind = btn.dataset.kind, key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    queueAction({ action: 'dequeueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                });
+            });
+
+            // Wire up research dequeue buttons (group, distributed by longest queue)
+            panel.querySelectorAll('.info-research-dequeue-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let kind = btn.dataset.kind, key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let coords = (btn.dataset.coords || '').split(';').map(c => {
+                        let [x, y] = c.split(',');
+                        return { gx: parseInt(x), gy: parseInt(y) };
+                    }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
+
+                    let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                    let options = coords.map(c => {
+                        let r = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research');
+                        return r ? { gx: r.gx, gy: r.gy, len: getResearchQueueTotalLength(r) } : null;
+                    }).filter(Boolean);
+
+                    for (let i = 0; i < purchaseCount; i++) {
+                        let best = null;
+                        for (let o of options) {
+                            if (o.len <= 0) continue;
+                            if (!best || o.len > best.len) best = o;
+                        }
+                        if (!best) return;
+                        queueAction({ action: 'dequeueResearch', gx: best.gx, gy: best.gy, kind, key, statKey, count: 1 });
+                        best.len--;
+                    }
+                });
+            });
+
+            panel.querySelectorAll('.info-research-thing-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let owner = Number.parseInt(btn.dataset.owner);
+                    let scope = btn.dataset.scope;
+                    let thingId = btn.dataset.thingId;
+                    if (!Number.isFinite(owner) || !scope || !thingId) return;
+                    researchPanelOpenState[getResearchPanelScopeKey(owner, scope)] = thingId;
+                    updateInfoPanel();
+                });
+            });
+
             // Wire up dequeue buttons
             panel.querySelectorAll('.info-dequeue-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
@@ -11061,6 +12167,24 @@
                     let enabled = btn.dataset.enabled === '1';
                     let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
                     for (let c of coords) queueAction({ action: 'setAutoUpgrade', gx: c.gx, gy: c.gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up auto-research toggles (single)
+            panel.querySelectorAll('.info-auto-research-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let enabled = btn.dataset.enabled === '1';
+                    queueAction({ action: 'setAutoResearch', gx, gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up auto-research toggles (groups)
+            panel.querySelectorAll('.info-auto-research-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let enabled = btn.dataset.enabled === '1';
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+                    for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
                     setTimeout(updateInfoPanel, 50);
                 });
             });
@@ -12381,6 +13505,8 @@
             let go = document.getElementById('game-over');
             if (go) go.style.display = 'none';
 
+            rebuildPrecomputedStatsMap();
+
             resetWorldState();
 
             mapAlerts = [];
@@ -12391,8 +13517,14 @@
             resignedTeams = new Set();
             graphMetric = 'money';
             gameStatsHistory = [];
+            researchPanelOpenState = {};
 
-            for (let p of players) { p.money = STARTING_MONEY; p.popCount = 0; }
+            for (let p of players) {
+                p.money = STARTING_MONEY;
+                p.popCount = 0;
+                p.researchLevels = {};
+                p.researchMultipliers = {};
+            }
 
             rng = mulberry32(gameSeed);
             visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
@@ -12437,7 +13569,7 @@
                 // Starter farm near base (fully built)
                 let farmPos = findStarterBuildSpot(pos, 10);
                 if (farmPos) {
-                    let fs = calculateItemStats('farm', 1);
+                    let fs = calculateItemStats('farm', 1, pid);
                     let farm = {
                         type: 'farm',
                         stacks: 1,
@@ -12465,8 +13597,8 @@
                 let housePos = findStarterBuildSpot(pos, 10);
                 if (housePos) {
                     let houseLevel = 4;
-                    let houseStacks = Math.pow(2, houseLevel - 1);
-                    let hs = calculateItemStats('house', houseLevel);
+                    let houseStacks = getRequiredStacksForLevel(houseLevel);
+                    let hs = calculateItemStats('house', houseLevel, pid);
                     let house = {
                         type: 'house',
                         stacks: houseStacks,
@@ -12503,7 +13635,7 @@
                     let u = new Unit('builder_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
                     u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
                     u.builderHasMaterial = false;
-                    applyUnitLevelScaling(u, spawner.effectiveLevel || spawner.level || 1);
+                    applyUnitLevelScaling(u, getThingEffectiveLevel(spawner));
                     u.builderDps = spawner.getBuilderDps();
                     units.push(u); players[pid].popCount++;
                 }
