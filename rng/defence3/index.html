@@ -2105,6 +2105,7 @@
 
         function getResearchStatEntriesForThing(kind, key) {
             let out = [];
+            const MIN_VISIBLE_RESEARCH_STAT = 1e-4;
             if (kind === 'unit') {
                 let s = BASE_UNIT_STATS[key];
                 if (!s) return out;
@@ -2112,7 +2113,7 @@
                 for (let statKey of statOrder) {
                     let baseValue = s[statKey];
                     if (statKey === 'builderDps' || statKey === 'healerHps') baseValue = 5;
-                    if (!Number.isFinite(baseValue)) continue;
+                    if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
                     out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
                 }
                 return out;
@@ -2120,7 +2121,7 @@
 
             let seen = new Set();
             let addStat = (statKey, baseValue) => {
-                if (!Number.isFinite(baseValue) || seen.has(statKey)) return;
+                if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT || seen.has(statKey)) return;
                 seen.add(statKey);
                 out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
             };
