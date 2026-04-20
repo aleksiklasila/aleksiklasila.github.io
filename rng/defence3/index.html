@@ -246,7 +246,7 @@
         }
 
         #help-popup,
-        #settings-popup,
+        #research-popup,
         #statsmap-popup {
             position: fixed;
             inset: 0;
@@ -258,13 +258,13 @@
         }
 
         #help-popup.hidden,
-        #settings-popup.hidden,
+        #research-popup.hidden,
         #statsmap-popup.hidden {
             display: none;
         }
 
         #help-popup-card,
-        #settings-popup-card,
+        #research-popup-card,
         #statsmap-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
@@ -278,6 +278,10 @@
 
         #statsmap-popup-card {
             width: min(900px, calc(100vw - 28px));
+        }
+
+        #research-popup-card {
+            width: min(680px, calc(100vw - 28px));
         }
 
         #statsmap-json {
@@ -463,12 +467,21 @@
         #control-group-bar {
             display: flex;
             gap: 2px;
-            padding: 4px 4px 3px;
+            padding: 4px;
             border-bottom: 1px solid #2e2e2e;
             background: #111;
-            min-height: 24px;
+            min-height: 40px;
+            align-items: flex-start;
+            align-content: flex-start;
+            flex-wrap: wrap;
+            row-gap: 2px;
+        }
+
+        .control-group-row {
+            display: flex;
+            width: 100%;
+            gap: 2px;
             align-items: center;
-            flex-wrap: nowrap;
         }
 
         #subgroup-options {
@@ -541,6 +554,29 @@
             animation: cg-damage-blink 0.55s steps(1) infinite;
         }
 
+        .control-group-popup-btn,
+        .control-group--popup-btn {
+            border-color: #2f3b4a;
+            background: #121924;
+            color: #8fb6d9;
+            height: 15px;
+            font-size: 8px;
+        }
+
+        .control-group-popup-btn.assigned,
+        .control-group--popup-btn.assigned {
+            border-color: #4f6f95;
+            color: #cde4ff;
+            background: #1a2740;
+        }
+
+        .control-group-popup-btn.active,
+        .control-group--popup-btn.active {
+            border-color: #8ec8ff;
+            background: #1f3552;
+            color: #e6f3ff;
+        }
+
         @keyframes cg-damage-blink {
             0%,
             49% {
@@ -554,7 +590,8 @@
         }
 
         /* INFO PANEL (inside right panel) */
-        #info-panel {
+        #info-panel,
+        #research-popup-info-panel {
             padding: 8px;
             font-size: 11px;
             overflow-y: auto;
@@ -579,37 +616,43 @@
             background: #2a2a2a !important;
         }
 
-        #info-panel .info-title {
+        #info-panel .info-title,
+        #research-popup-info-panel .info-title {
             color: #4af;
             font-size: 13px;
             font-weight: bold;
             margin-bottom: 4px;
         }
 
-        #info-panel .info-row {
+        #info-panel .info-row,
+        #research-popup-info-panel .info-row {
             display: flex;
             padding: 1px 0;
         }
 
-        #info-panel .info-label {
+        #info-panel .info-label,
+        #research-popup-info-panel .info-label {
             color: #888;
             flex: 1;
             text-align: left;
         }
 
-        #info-panel .info-base {
+        #info-panel .info-base,
+        #research-popup-info-panel .info-base {
             color: #fd0;
             flex: 0 0 50px;
             text-align: center;
         }
 
-        #info-panel .info-eff {
+        #info-panel .info-eff,
+        #research-popup-info-panel .info-eff {
             color: #4f4;
             flex: 0 0 50px;
             text-align: center;
         }
 
-        #info-panel .info-value {
+        #info-panel .info-value,
+        #research-popup-info-panel .info-value {
             color: #fff;
             flex: 0 0 100px;
             text-align: center;
@@ -1081,10 +1124,8 @@
                 style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Build: ON</button>
             <button id="btn-default-auto-upgrade"
                 style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Upgrade: ON</button>
-            <button id="btn-settings"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Settings</button>
             <button id="btn-help"
-                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Help</button>
+                style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">&#9881;</button>
             <span style="display:none; align-items:center;">
                 <input type="checkbox" id="setting-long-press" style="margin-right:2px; cursor:pointer;">
                 <label for="setting-long-press" style="cursor:pointer; font-size:12px; color:#ddd;">Long Press
@@ -1095,75 +1136,15 @@
         </span>
     </div>
 
-    <div id="settings-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <div id="settings-popup-card">
+    <div id="research-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="research-popup-title">
+        <div id="research-popup-card">
             <div class="help-title-row">
-                <h3 id="settings-title" style="color:#8dc6ff; font-size:18px; margin:0">Settings</h3>
-                <button id="btn-settings-close"
+                <h3 id="research-popup-title" style="color:#8dc6ff; font-size:18px; margin:0">Research</h3>
+                <button id="btn-research-close"
                     style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
             </div>
-            <div class="help-mode">Gameplay and rendering options</div>
-            <div class="settings-list">
-                <div class="settings-row">
-                    <label for="btn-level-visibility">Levels visibility</label>
-                    <button id="btn-level-visibility"
-                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
-                </div>
-                <div class="settings-row">
-                    <label for="btn-render-range">Render range overlay</label>
-                    <button id="btn-render-range"
-                        style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render range: Turrets</button>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-audio">Audio</label>
-                    <label class="settings-toggle" for="setting-audio">
-                        <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
-                        Enabled
-                    </label>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-gold-mine-text">Gold mine amount text</label>
-                    <label class="settings-toggle" for="setting-gold-mine-text">
-                        <input type="checkbox" id="setting-gold-mine-text" style="margin-right:2px; cursor:pointer;">
-                        Enabled
-                    </label>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-rally-line-type">Rally line type</label>
-                    <select id="setting-rally-line-type" style="width:120px">
-                        <option value="dotted" selected>Dotted</option>
-                        <option value="solid">Solid</option>
-                    </select>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-show-rally-lines">Show rally lines</label>
-                    <select id="setting-show-rally-lines" style="width:150px">
-                        <option value="buildings" selected>Buildings</option>
-                        <option value="buildings_units">Buildings + Units</option>
-                        <option value="none">None</option>
-                    </select>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-show-selection-outlines">Selection outlines</label>
-                    <select id="setting-show-selection-outlines" style="width:150px">
-                        <option value="buildings_units" selected>Buildings + Units</option>
-                        <option value="buildings">Buildings</option>
-                        <option value="none">None</option>
-                    </select>
-                </div>
-                <div class="settings-row">
-                    <label for="setting-selection-outline-type">Selection outline type</label>
-                    <select id="setting-selection-outline-type" style="width:120px">
-                        <option value="dotted" selected>Dotted</option>
-                        <option value="solid">Solid</option>
-                    </select>
-                </div>
-                <div class="settings-row">
-                    <label for="btn-show-statsmap">Precomputed Stats Map</label>
-                    <button id="btn-show-statsmap"
-                        style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
-                </div>
-            </div>
+            <div class="help-mode">Shared research queue for all of your labs</div>
+            <div id="research-popup-content"></div>
         </div>
     </div>
 
@@ -1193,6 +1174,7 @@
             <div class="help-mode">Current mode: <strong id="help-game-mode">Destroy Base</strong></div>
             <div class="help-tabs">
                 <button class="help-tab-btn active" data-tab="keybinds">Keybinds</button>
+                <button class="help-tab-btn" data-tab="settings">Settings</button>
                 <button class="help-tab-btn" data-tab="gameplay">Gameplay</button>
                 <button class="help-tab-btn" data-tab="effects">Effects</button>
                 <button class="help-tab-btn" data-tab="objectives">Objectives</button>
@@ -1248,11 +1230,84 @@
                             <td>Close this help popup (if open), otherwise clear selection/build mode</td>
                         </tr>
                         <tr>
+                            <td><span class="kbd">R/T/Y/U/I/O/P</span></td>
+                            <td>Open popup control group (if assigned)</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Shift</span> + <span class="kbd">R/T/Y/U/I/O/P</span></td>
+                            <td>Assign current selected subgroups to popup control group</td>
+                        </tr>
+                        <tr>
                             <td><span class="kbd">Long Press</span> (touch)</td>
                             <td>Simulate right-click for rally/commands when enabled</td>
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <div class="help-tab-panel" data-tab-panel="settings">
+                <div class="help-mode">Gameplay and rendering options</div>
+                <div class="settings-list">
+                    <div class="settings-row">
+                        <label for="btn-level-visibility">Levels visibility</label>
+                        <button id="btn-level-visibility"
+                            style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
+                    </div>
+                    <div class="settings-row">
+                        <label for="btn-render-range">Render range overlay</label>
+                        <button id="btn-render-range"
+                            style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render range: Turrets</button>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-audio">Audio</label>
+                        <label class="settings-toggle" for="setting-audio">
+                            <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
+                            Enabled
+                        </label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-gold-mine-text">Gold mine amount text</label>
+                        <label class="settings-toggle" for="setting-gold-mine-text">
+                            <input type="checkbox" id="setting-gold-mine-text" style="margin-right:2px; cursor:pointer;">
+                            Enabled
+                        </label>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-rally-line-type">Rally line type</label>
+                        <select id="setting-rally-line-type" style="width:120px">
+                            <option value="dotted" selected>Dotted</option>
+                            <option value="solid">Solid</option>
+                        </select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-show-rally-lines">Show rally lines</label>
+                        <select id="setting-show-rally-lines" style="width:150px">
+                            <option value="buildings" selected>Buildings</option>
+                            <option value="buildings_units">Buildings + Units</option>
+                            <option value="none">None</option>
+                        </select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-show-selection-outlines">Selection outlines</label>
+                        <select id="setting-show-selection-outlines" style="width:150px">
+                            <option value="buildings_units" selected>Buildings + Units</option>
+                            <option value="buildings">Buildings</option>
+                            <option value="none">None</option>
+                        </select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-selection-outline-type">Selection outline type</label>
+                        <select id="setting-selection-outline-type" style="width:120px">
+                            <option value="dotted" selected>Dotted</option>
+                            <option value="solid">Solid</option>
+                        </select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="btn-show-statsmap">Precomputed Stats Map</label>
+                        <button id="btn-show-statsmap"
+                            style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
+                    </div>
+                </div>
             </div>
 
             <div class="help-tab-panel" data-tab-panel="gameplay">
@@ -1770,11 +1825,76 @@
             return wasOpen !== open;
         }
 
-        function setSettingsPopupOpen(open) {
-            let popup = document.getElementById('settings-popup');
+        function getOwnedActiveResearchLabs(owner) {
+            return collectorSpawners.filter(s => s && s.type === 'research' && s.owner === owner && s.hp > 0 && !s.underConstruction);
+        }
+
+        function renderResearchPopupContent() {
+            let holder = document.getElementById('research-popup-content');
+            if (!holder) return;
+            let popupSnapshot = null;
+            if (activePopupControlGroupKey) {
+                normalizePopupControlGroup(activePopupControlGroupKey);
+                popupSnapshot = getPopupControlGroupSnapshot(activePopupControlGroupKey);
+                if (!popupSnapshot) activePopupControlGroupKey = '';
+            }
+
+            let unitsSnapshot = popupSnapshot
+                ? (popupSnapshot.units || []).filter(u => u && !u.dead)
+                : selectedUnits.filter(u => u && !u.dead);
+            let entitiesSnapshot = popupSnapshot
+                ? (popupSnapshot.entities || []).filter(e => e && !(e.hp !== undefined && e.hp <= 0))
+                : selectedEntities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+            let subgroupSnapshot = popupSnapshot
+                ? { ...(popupSnapshot.activeSubGroups || {}) }
+                : { ...activeSubGroups };
+
+            holder.innerHTML = `
+                <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
+                    <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
+                </div>
+                <div id="research-popup-info-panel"></div>
+            `;
+
+            let popupIgnoreBtn = document.getElementById('btn-ignore-level-popup');
+            if (popupIgnoreBtn) {
+                bindInstantPress(popupIgnoreBtn, () => {
+                    ignoreLevelSubgroups = !ignoreLevelSubgroups;
+                    updateIgnoreLevelButton();
+                    subgroupSnapshot = {};
+                    if (popupSnapshot) popupSnapshot.activeSubGroups = {};
+                    renderResearchPopupContent();
+                    updateInfoPanel();
+                });
+            }
+
+            let prevUnits = selectedUnits;
+            let prevEntities = selectedEntities;
+
+            selectedUnits = unitsSnapshot;
+            selectedEntities = entitiesSnapshot;
+            updateInfoPanel(document.getElementById('research-popup-info-panel'), {
+                skipGlobalSync: true,
+                subgroupState: subgroupSnapshot,
+                onRefresh: () => renderResearchPopupContent(),
+                onSubgroupStateChange: (nextState) => {
+                    subgroupSnapshot = { ...(nextState || {}) };
+                    if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
+                }
+            });
+
+            selectedUnits = prevUnits;
+            selectedEntities = prevEntities;
+            updateIgnoreLevelButton();
+        }
+
+        function setResearchPopupOpen(open) {
+            let popup = document.getElementById('research-popup');
             if (!popup) return false;
             let wasOpen = !popup.classList.contains('hidden');
+            if (open) renderResearchPopupContent();
             popup.classList.toggle('hidden', !open);
+            if (!open) activePopupControlGroupKey = '';
             return wasOpen !== open;
         }
 
@@ -2507,21 +2627,66 @@
             return Math.max(1, Math.floor(RESEARCH_WORK_BASE * thing.basePrice * Math.pow(RESEARCH_WORK_EXP, lvl)));
         }
 
+        function ensurePlayerResearchQueueState(playerId) {
+            if (!players[playerId]) return { researchQueue: [], researchTask: null };
+            if (!Array.isArray(players[playerId].researchQueue)) players[playerId].researchQueue = [];
+            if (!Object.prototype.hasOwnProperty.call(players[playerId], 'researchTask')) players[playerId].researchTask = null;
+            return players[playerId];
+        }
+
+        function getPlayerResearchQueue(playerId) {
+            return ensurePlayerResearchQueueState(playerId).researchQueue;
+        }
+
+        function getPlayerResearchTask(playerId) {
+            return ensurePlayerResearchQueueState(playerId).researchTask;
+        }
+
+        function getResearchQueueCapacityForPlayer(playerId) {
+            let labs = 0;
+            for (let s of collectorSpawners) {
+                if (!s || s.type !== 'research' || s.owner !== playerId || s.hp <= 0) continue;
+                labs++;
+            }
+            return Math.max(0, labs * 20);
+        }
+
+        function getPlayerResearchQueueTotalLength(playerId) {
+            let queue = getPlayerResearchQueue(playerId);
+            let task = getPlayerResearchTask(playerId);
+            return (task ? 1 : 0) + queue.length;
+        }
+
+        function tryAdvancePlayerResearchTask(playerId) {
+            let p = ensurePlayerResearchQueueState(playerId);
+            if (!p.researchTask && p.researchQueue.length > 0) {
+                p.researchTask = p.researchQueue.shift();
+                if (p.researchTask) p.researchTask.workDone = Math.max(0, p.researchTask.workDone || 0);
+            }
+            return p.researchTask;
+        }
+
         function getResearchQueueDepthForStat(researchBuilding, kind, key, statKey) {
             if (!researchBuilding) return 0;
+            let owner = researchBuilding.owner;
+            if (!Number.isFinite(owner)) return 0;
+            let task = getPlayerResearchTask(owner);
+            let queue = getPlayerResearchQueue(owner);
             let n = 0;
-            if (researchBuilding.researchTask && researchBuilding.researchTask.kind === kind && researchBuilding.researchTask.key === key && researchBuilding.researchTask.statKey === statKey) n++;
-            for (let q of (researchBuilding.researchQueue || [])) {
+            if (task && task.kind === kind && task.key === key && task.statKey === statKey) n++;
+            for (let q of queue) {
                 if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
             }
             return n;
         }
 
         function getResearchQueuedDepthForPlayer(playerId, kind, key, statKey) {
+            let task = getPlayerResearchTask(playerId);
+            let queue = getPlayerResearchQueue(playerId);
             let n = 0;
-            for (let s of collectorSpawners) {
-                if (!s || s.type !== 'research' || s.owner !== playerId || s.hp <= 0) continue;
-                n += getResearchQueueDepthForStat(s, kind, key, statKey);
+            if (task && task.kind === kind && task.key === key && task.statKey === statKey) n++;
+            for (let q of queue) {
+                if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
             }
             return n;
         }
@@ -2609,9 +2774,18 @@
             recalculateAdjacency();
         }
 
+        function completeActiveResearchTaskForPlayer(owner, completedTask) {
+            if (!Number.isFinite(owner) || !completedTask) return;
+            let p = ensurePlayerResearchQueueState(owner);
+            if (p.researchTask !== completedTask) return;
+            applyResearchCompletion(owner, completedTask);
+            p.researchTask = null;
+            tryAdvancePlayerResearchTask(owner);
+        }
+
         function getResearchQueueTotalLength(researchBuilding) {
-            if (!researchBuilding) return 0;
-            return (researchBuilding.researchTask ? 1 : 0) + ((researchBuilding.researchQueue || []).length);
+            if (!researchBuilding || !Number.isFinite(researchBuilding.owner)) return 0;
+            return getPlayerResearchQueueTotalLength(researchBuilding.owner);
         }
 
         function computeUnitLevelScaledStats(unit, level) {
@@ -2779,6 +2953,9 @@
         let selectedEntities = []; // towers, barracks, floor items, gold mines, collectors
         let activeSubGroups = {}; // key: groupKey, value: true/false for sub-group filtering
         let controlGroups = {};
+    let popupControlGroups = {};
+    let activePopupControlGroupKey = '';
+    const POPUP_CONTROL_GROUP_KEYS = ['r', 't', 'y', 'u', 'i', 'o', 'p'];
     let controlGroupAlertState = {}; // key: 1..9 => {damageUntil, kingUntil}
     let mapAlerts = []; // {x,y,start,dur,kind}
         let selectionBox = null; // {sx, sy, ex, ey} in world coords
@@ -2967,6 +3144,42 @@
             if (grp.units.length === 0 && grp.entities.length === 0) delete controlGroups[num];
         }
 
+        function getPopupControlGroupSnapshot(key) {
+            let grp = popupControlGroups[key];
+            if (!grp) return null;
+            if (!Array.isArray(grp.units)) grp.units = [];
+            if (!Array.isArray(grp.entities)) grp.entities = [];
+            if (!grp.activeSubGroups || typeof grp.activeSubGroups !== 'object') grp.activeSubGroups = {};
+            return grp;
+        }
+
+        function normalizePopupControlGroup(key) {
+            let grp = getPopupControlGroupSnapshot(key);
+            if (!grp) return;
+            grp.units = grp.units.filter(u => u && !u.dead);
+            grp.entities = grp.entities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+            if (grp.units.length === 0 && grp.entities.length === 0) {
+                delete popupControlGroups[key];
+                if (activePopupControlGroupKey === key) activePopupControlGroupKey = '';
+            }
+        }
+
+        function doesCurrentSelectionMatchSnapshot(grp) {
+            if (!grp) return false;
+            let aliveUnits = (grp.units || []).filter(u => u && !u.dead);
+            let aliveEntities = (grp.entities || []).filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+            if (aliveUnits.length === 0 && aliveEntities.length === 0) return false;
+            if (selectedUnits.length !== aliveUnits.length || selectedEntities.length !== aliveEntities.length) return false;
+            if (!aliveUnits.every(u => selectedUnits.includes(u))) return false;
+            if (!aliveEntities.every(e => selectedEntities.includes(e))) return false;
+
+            let saved = grp.activeSubGroups || {};
+            for (let k in saved) {
+                if ((activeSubGroups[k] !== false) !== (saved[k] !== false)) return false;
+            }
+            return true;
+        }
+
         function getUnitWorldPos(u) {
             if (!u) return { x: 0, y: 0 };
             if (u.x !== undefined && u.y !== undefined) return { x: u.x, y: u.y };
@@ -3078,31 +3291,31 @@
 
         function isControlGroupSelected(num) {
             let grp = getControlGroupSnapshot(num);
-            if (!grp) return false;
-            let aliveUnits = grp.units.filter(u => u && !u.dead);
-            let aliveEntities = grp.entities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
-            if (aliveUnits.length === 0 && aliveEntities.length === 0) return false;
-            if (selectedUnits.length !== aliveUnits.length || selectedEntities.length !== aliveEntities.length) return false;
-            if (!aliveUnits.every(u => selectedUnits.includes(u))) return false;
-            if (!aliveEntities.every(e => selectedEntities.includes(e))) return false;
+            return doesCurrentSelectionMatchSnapshot(grp);
+        }
 
-            // Also require subgroup toggle state to match the saved snapshot for this control group.
-            let saved = grp.activeSubGroups || {};
-            for (let k in saved) {
-                if ((activeSubGroups[k] !== false) !== (saved[k] !== false)) return false;
-            }
-            return true;
+        function isPopupControlGroupSelected(key) {
+            let grp = getPopupControlGroupSnapshot(key);
+            return doesCurrentSelectionMatchSnapshot(grp);
         }
 
         function updateControlGroupBar() {
             let bar = document.getElementById('control-group-bar');
             if (!bar) return;
             if (!bar.dataset.built) {
-                let html = '';
+                let html = '<div class="control-group-row number-row">';
                 for (let n = 1; n <= 9; n++) html += `<button class="control-group-btn" data-group="${n}" title="Select control group ${n}">${n}</button>`;
+                html += '</div>';
+                html += '<div class="control-group-row popup-row">';
+                for (let key of POPUP_CONTROL_GROUP_KEYS) {
+                    let label = key.toUpperCase();
+                    html += `<button class="control-group-btn control-group-popup-btn control-group--popup-btn" data-popup-group="${key}" title="Open popup control group ${label}">${label}</button>`;
+                }
+                html += '</div>';
                 bar.innerHTML = html;
                 bar.dataset.built = '1';
                 bar.querySelectorAll('.control-group-btn').forEach(btn => {
+                    if (btn.dataset.popupGroup) return;
                     bindInstantPress(btn, () => {
                         if (!gameStarted || gameOver) return;
                         handleControlGroupKey(btn.dataset.group, false);
@@ -3111,6 +3324,18 @@
                         onLongPress: () => {
                             if (!gameStarted || gameOver) return;
                             handleControlGroupKey(btn.dataset.group, true);
+                        }
+                    });
+                });
+                bar.querySelectorAll('.control-group-popup-btn').forEach(btn => {
+                    bindInstantPress(btn, () => {
+                        if (!gameStarted || gameOver) return;
+                        handlePopupControlGroupKey(btn.dataset.popupGroup, false);
+                    }, {
+                        longPressMs: 320,
+                        onLongPress: () => {
+                            if (!gameStarted || gameOver) return;
+                            handlePopupControlGroupKey(btn.dataset.popupGroup, true);
                         }
                     });
                 });
@@ -3134,6 +3359,21 @@
                 btn.classList.toggle('damaged', hasDamage);
                 btn.classList.toggle('king-damaged', hasKingDamage);
                 btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${count} item(s)` : `Group ${key}: empty`;
+            }
+
+            for (let key of POPUP_CONTROL_GROUP_KEYS) {
+                normalizePopupControlGroup(key);
+                let btn = bar.querySelector(`.control-group-popup-btn[data-popup-group="${key}"]`);
+                if (!btn) continue;
+                let grp = getPopupControlGroupSnapshot(key);
+                let count = grp ? (grp.units.length + grp.entities.length) : 0;
+                let hasAssigned = count > 0;
+                btn.classList.toggle('empty', !hasAssigned);
+                btn.classList.toggle('assigned', hasAssigned);
+                btn.classList.toggle('active', isPopupControlGroupSelected(key));
+                btn.title = hasAssigned
+                    ? `Popup group ${key.toUpperCase()}: ${count} item(s)`
+                    : `Popup group ${key.toUpperCase()}: empty`;
             }
         }
 
@@ -3162,6 +3402,57 @@
                 controlGroups[num] = { units: selectedUnits, entities: selectedEntities, activeSubGroups: { ...activeSubGroups } };
                 updateInfoPanel();
             }
+            updateControlGroupBar();
+        }
+
+        function getResearchLabsFromPopupGroup(grp) {
+            if (!grp) return [];
+            let out = [];
+            let seen = new Set();
+            let subSnap = grp.activeSubGroups || {};
+            for (let e of (grp.entities || [])) {
+                if (!e || e.type !== 'research' || e.owner !== localPlayerId || e.hp <= 0 || e.underConstruction) continue;
+                let gk = getEntityGroupKey(e);
+                if (subSnap[gk] === false) continue;
+                let id = `${e.gx},${e.gy}`;
+                if (seen.has(id)) continue;
+                seen.add(id);
+                out.push(e);
+            }
+            return out;
+        }
+
+        function handlePopupControlGroupKey(key, assignMode) {
+            key = String(key || '').toLowerCase();
+            if (!POPUP_CONTROL_GROUP_KEYS.includes(key)) return;
+            if (assignMode) {
+                let unitsSnap = selectedUnits.filter(u => u && !u.dead);
+                let entitiesSnap = selectedEntities.filter(e => e && !(e.hp !== undefined && e.hp <= 0));
+                let subSnap = {};
+                for (let u of unitsSnap) {
+                    let gk = getUnitGroupKey(u);
+                    subSnap[gk] = activeSubGroups[gk] !== false;
+                }
+                for (let e of entitiesSnap) {
+                    let gk = getEntityGroupKey(e);
+                    subSnap[gk] = activeSubGroups[gk] !== false;
+                }
+                popupControlGroups[key] = { units: unitsSnap, entities: entitiesSnap, activeSubGroups: subSnap };
+                updateControlGroupBar();
+                return;
+            }
+
+            let grp = getPopupControlGroupSnapshot(key);
+            if (!grp) return;
+            normalizePopupControlGroup(key);
+            grp = getPopupControlGroupSnapshot(key);
+            if (!grp) {
+                updateControlGroupBar();
+                return;
+            }
+
+            activePopupControlGroupKey = key;
+            setResearchPopupOpen(true);
             updateControlGroupBar();
         }
 
@@ -4564,12 +4855,17 @@
         }
 
         function updateIgnoreLevelButton() {
-            let btn = document.getElementById('btn-ignore-level');
-            if (!btn) return;
-            btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
-            btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
-            btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
-            btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+            let buttons = [
+                document.getElementById('btn-ignore-level'),
+                document.getElementById('btn-ignore-level-popup')
+            ].filter(Boolean);
+            if (buttons.length <= 0) return;
+            for (let btn of buttons) {
+                btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
+                btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
+                btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
+                btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+            }
         }
 
         function renderMultiplierBar(containerId, currentValue, onChange, label) {
@@ -6675,7 +6971,6 @@
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
                 this.autoResearchEnabled = true;
-                this.researchQueue = [];
                 this.researchTask = null;
                 this.isResearching = false;
                 updateItemTextCache(this);
@@ -6685,22 +6980,14 @@
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
 
-                if (!this.isUpgrading && (!this.researchTask || this.researchTask.workDone >= this.researchTask.workRequired) && this.researchQueue.length > 0) {
-                    this.researchTask = this.researchQueue.shift();
-                    this.researchTask.workDone = Math.max(0, this.researchTask.workDone || 0);
-                    this.isResearching = true;
-                }
-
-                if (!this.researchTask || this.isUpgrading) {
-                    this.isResearching = false;
-                }
-
-                if (this.type === 'research' && !isAutoResearchEnabled(this)) {
-                    this.isResearching = false;
-                } else if (!this.isUpgrading && this.researchTask && this.researchTask.workDone < this.researchTask.workRequired) {
-                    // Re-arm active task after auto-research is toggled back on.
-                    this.isResearching = true;
-                }
+                let task = tryAdvancePlayerResearchTask(this.owner);
+                this.researchTask = task || null;
+                this.isResearching = !!(
+                    task
+                    && !this.isUpgrading
+                    && isAutoResearchEnabled(this)
+                    && (task.workDone || 0) < task.workRequired
+                );
             }
 
             draw(ctx) {
@@ -6928,8 +7215,8 @@
                                 task.workDone = Math.min(task.workRequired, (task.workDone || 0) + dps);
                                 didWork = true;
                                 if (task.workDone >= task.workRequired) {
-                                    applyResearchCompletion(t.owner, task);
-                                    t.researchTask = null;
+                                    completeActiveResearchTaskForPlayer(t.owner, task);
+                                    t.researchTask = getPlayerResearchTask(t.owner);
                                     t.isResearching = false;
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     u.workerTarget = null;
@@ -7042,8 +7329,8 @@
                             let task = t.researchTask;
                             task.workDone = Math.min(task.workRequired, (task.workDone || 0) + 1);
                             if (task.workDone >= task.workRequired) {
-                                applyResearchCompletion(t.owner, task);
-                                t.researchTask = null;
+                                completeActiveResearchTaskForPlayer(t.owner, task);
+                                t.researchTask = getPlayerResearchTask(t.owner);
                                 t.isResearching = false;
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 u.workerTarget = null;
@@ -9893,10 +10180,17 @@
                 keysDown[e.key.toLowerCase()] = true;
                 if (!gameStarted) return;
                 if (e.key === 'Escape') {
-                    if (setSettingsPopupOpen(false)) return;
+                    if (setResearchPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
                 }
+
+                let popupGroupKey = String(e.key || '').toLowerCase();
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && POPUP_CONTROL_GROUP_KEYS.includes(popupGroupKey)) {
+                    handlePopupControlGroupKey(popupGroupKey, !!e.shiftKey);
+                    return;
+                }
+
                 if ((e.key === 'z' || e.key === 'Z') && selectedUnits.length > 0) attackMoveMode = true;
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'c' || e.key === 'C') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
@@ -10069,14 +10363,13 @@
             updatePurchaseMultiplierBars();
 
             const btnHelp = document.getElementById('btn-help');
-            const btnSettings = document.getElementById('btn-settings');
             const btnHelpClose = document.getElementById('btn-help-close');
-            const btnSettingsClose = document.getElementById('btn-settings-close');
+            const btnResearchClose = document.getElementById('btn-research-close');
             const btnShowStatsMap = document.getElementById('btn-show-statsmap');
             const btnRefreshStatsMap = document.getElementById('btn-refresh-statsmap');
             const btnStatsMapClose = document.getElementById('btn-statsmap-close');
             const helpPopup = document.getElementById('help-popup');
-            const settingsPopup = document.getElementById('settings-popup');
+            const researchPopup = document.getElementById('research-popup');
             const statsMapPopup = document.getElementById('statsmap-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
@@ -10086,11 +10379,6 @@
             if (btnHelp) {
                 btnHelp.addEventListener('click', () => {
                     setHelpPopupOpen(true);
-                });
-            }
-            if (btnSettings) {
-                btnSettings.addEventListener('click', () => {
-                    setSettingsPopupOpen(true);
                 });
             }
             if (btnShowStatsMap) {
@@ -10149,9 +10437,9 @@
                     setHelpPopupOpen(false);
                 });
             }
-            if (btnSettingsClose) {
-                btnSettingsClose.addEventListener('click', () => {
-                    setSettingsPopupOpen(false);
+            if (btnResearchClose) {
+                btnResearchClose.addEventListener('click', () => {
+                    setResearchPopupOpen(false);
                 });
             }
             if (btnStatsMapClose) {
@@ -10168,9 +10456,9 @@
                     if (e.target === helpPopup) setHelpPopupOpen(false);
                 });
             }
-            if (settingsPopup) {
-                settingsPopup.addEventListener('mousedown', (e) => {
-                    if (e.target === settingsPopup) setSettingsPopupOpen(false);
+            if (researchPopup) {
+                researchPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === researchPopup) setResearchPopupOpen(false);
                 });
             }
             if (statsMapPopup) {
@@ -10720,9 +11008,10 @@
                     let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
                     let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
                     if (r && r.hp > 0 && !r.underConstruction && stat) {
+                        let p = ensurePlayerResearchQueueState(playerId);
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
-                            if (getResearchQueueTotalLength(r) >= 20) break;
+                            if (getPlayerResearchQueueTotalLength(playerId) >= getResearchQueueCapacityForPlayer(playerId)) break;
                             let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
                             let queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
                             let projected = baseLevel + queuedDepth;
@@ -10730,11 +11019,8 @@
                             let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
                             if (players[playerId].money < task.cost) break;
                             players[playerId].money -= task.cost;
-                            r.researchQueue.push(task);
-                            if (!r.isUpgrading && !r.researchTask) {
-                                r.researchTask = r.researchQueue.shift();
-                                r.isResearching = true;
-                            }
+                            p.researchQueue.push(task);
+                            tryAdvancePlayerResearchTask(playerId);
                         }
                     }
                 } else if (a.action === 'workerAssign') {
@@ -10807,32 +11093,51 @@
                 } else if (a.action === 'dequeueResearch') {
                     let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
                     if (r) {
+                        let p = ensurePlayerResearchQueueState(playerId);
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             let idx = -1;
                             if (a.kind && a.key && a.statKey) {
-                                for (let qi = r.researchQueue.length - 1; qi >= 0; qi--) {
-                                    let q = r.researchQueue[qi];
+                                for (let qi = p.researchQueue.length - 1; qi >= 0; qi--) {
+                                    let q = p.researchQueue[qi];
                                     if (q && q.kind === a.kind && q.key === a.key && q.statKey === a.statKey) {
                                         idx = qi;
                                         break;
                                     }
                                 }
-                            } else if (r.researchQueue.length > 0) {
-                                idx = r.researchQueue.length - 1;
+                            } else if (p.researchQueue.length > 0) {
+                                idx = p.researchQueue.length - 1;
                             }
 
                             if (idx >= 0) {
-                                let [task] = r.researchQueue.splice(idx, 1);
+                                let [task] = p.researchQueue.splice(idx, 1);
                                 if (task && Number.isFinite(task.cost)) players[playerId].money += task.cost * 0.1;
                                 continue;
                             }
 
-                            if (r.researchTask) {
-                                if (!a.kind || !a.key || !a.statKey || (r.researchTask.kind === a.kind && r.researchTask.key === a.key && r.researchTask.statKey === a.statKey)) {
-                                    players[playerId].money += (Number(r.researchTask.cost) || 0) * 0.1;
-                                    r.researchTask = null;
-                                    r.isResearching = false;
+                            if (p.researchTask) {
+                                if (!a.kind || !a.key || !a.statKey || (p.researchTask.kind === a.kind && p.researchTask.key === a.key && p.researchTask.statKey === a.statKey)) {
+                                    players[playerId].money += (Number(p.researchTask.cost) || 0) * 0.1;
+                                    p.researchTask = null;
+                                    tryAdvancePlayerResearchTask(playerId);
+                                }
+                            }
+                        }
+                    }
+                } else if (a.action === 'reorderResearch') {
+                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    if (r) {
+                        let p = ensurePlayerResearchQueueState(playerId);
+                        let len = p.researchQueue.length;
+                        if (len > 1) {
+                            let from = Math.floor(Number(a.fromIndex));
+                            let to = Math.floor(Number(a.toIndex));
+                            if (Number.isFinite(from) && Number.isFinite(to)) {
+                                from = Math.max(0, Math.min(len - 1, from));
+                                to = Math.max(0, Math.min(len - 1, to));
+                                if (from !== to) {
+                                    let [task] = p.researchQueue.splice(from, 1);
+                                    if (task) p.researchQueue.splice(to, 0, task);
                                 }
                             }
                         }
@@ -10873,7 +11178,9 @@
                     if (target) {
                         target.autoResearchEnabled = !!a.enabled;
                         if (target.autoResearchEnabled) {
-                            if (!target.isUpgrading && target.researchTask && target.researchTask.workDone < target.researchTask.workRequired) {
+                            let task = getPlayerResearchTask(playerId);
+                            target.researchTask = task || null;
+                            if (!target.isUpgrading && task && task.workDone < task.workRequired) {
                                 target.isResearching = true;
                             }
                         } else {
@@ -11311,7 +11618,6 @@
             }
             updateSelectedBuildDescription();
         }
-
 
         function initBuildTabs() {
             document.querySelectorAll('.build-tab').forEach(tab => {
@@ -12174,9 +12480,47 @@
         function getResearchOrderedTasksForSingleBuilding(researchBuilding) {
             let out = [];
             if (!researchBuilding) return out;
-            if (researchBuilding.researchTask) out.push({ ...researchBuilding.researchTask, isActiveTask: true });
-            for (let q of (researchBuilding.researchQueue || [])) out.push({ ...q, isActiveTask: false });
+            let owner = researchBuilding.owner;
+            let task = getPlayerResearchTask(owner);
+            let queue = getPlayerResearchQueue(owner);
+            if (task) out.push({ ...task, isActiveTask: true });
+            for (let q of queue) out.push({ ...q, isActiveTask: false });
             return out;
+        }
+
+        function getResearchStatValueAtLevel(kind, key, statKey, level) {
+            let lvl = Math.max(0, Math.floor(level || 0));
+            if (kind === 'unit') return getUnitStatFromMap(key, 1, statKey, lvl);
+            if (kind === 'building') return getBuildingStatFromMap(key, 1, statKey, lvl);
+            return NaN;
+        }
+
+        function getQueuedResearchTaskPreview(owner, orderedTasks, taskIndex) {
+            if (!Array.isArray(orderedTasks) || taskIndex < 0 || taskIndex >= orderedTasks.length) return null;
+            let t = orderedTasks[taskIndex];
+            if (!t) return null;
+
+            let baseLevel = getPlayerResearchLevel(owner, t.kind, t.key, t.statKey);
+            let priorSameStat = 0;
+            for (let i = 0; i < taskIndex; i++) {
+                let p = orderedTasks[i];
+                if (!p) continue;
+                if (p.kind === t.kind && p.key === t.key && p.statKey === t.statKey) priorSameStat++;
+            }
+
+            let fromLevel = Math.min(MAX_RESEARCH_LEVEL, baseLevel + priorSameStat);
+            let atMax = fromLevel >= MAX_RESEARCH_LEVEL;
+            let toLevel = atMax ? fromLevel : Math.min(MAX_RESEARCH_LEVEL, fromLevel + 1);
+
+            let cost = atMax ? 0 : getResearchCost(t.kind, t.key, t.statKey, fromLevel);
+            let work = atMax ? 0 : getResearchWork(t.kind, t.key, t.statKey, fromLevel);
+
+            let fromValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, fromLevel);
+            let toValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, toLevel);
+            if (!Number.isFinite(fromValue)) fromValue = getResearchCurrentStatValue(owner, t.kind, t.key, t.statKey);
+            if (!Number.isFinite(toValue)) toValue = fromValue;
+
+            return { fromLevel, toLevel, atMax, cost, work, fromValue, toValue };
         }
 
         function renderQueuedResearchTasksForSingleBuilding(e) {
@@ -12190,32 +12534,13 @@
             html += `<div style="display:flex;flex-direction:column;gap:4px">`;
             for (let i = 0; i < orderedTasks.length; i++) {
                 let t = orderedTasks[i];
+                let preview = getQueuedResearchTaskPreview(e.owner, orderedTasks, i);
+                if (!preview) continue;
                 let thing = getResearchThing(t.kind, t.key);
                 let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
                 let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
-
-                let currentLevel = getPlayerResearchLevel(e.owner, t.kind, t.key, t.statKey);
-                let globalQueuedDepth = getResearchQueuedDepthForPlayer(e.owner, t.kind, t.key, t.statKey);
-                let projectedLevel = currentLevel + globalQueuedDepth;
-                let nextCost = getResearchCost(t.kind, t.key, t.statKey, projectedLevel);
-                let nextWork = getResearchWork(t.kind, t.key, t.statKey, projectedLevel);
-                let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
-                let canAfford = !atMax && players[localPlayerId].money >= nextCost;
-
-                let currentValue = getResearchCurrentStatValue(e.owner, t.kind, t.key, t.statKey);
-                let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
-                let projectedValue = t.kind === 'unit'
-                    ? getUnitStatFromMap(t.key, 1, t.statKey, displayProjectedLevel)
-                    : getBuildingStatFromMap(t.key, 1, t.statKey, displayProjectedLevel);
-                if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
-                if (!atMax && displayProjectedLevel <= currentLevel) {
-                    let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
-                    let nextPreview = t.kind === 'unit'
-                        ? getUnitStatFromMap(t.key, 1, t.statKey, previewLevel)
-                        : getBuildingStatFromMap(t.key, 1, t.statKey, previewLevel);
-                    if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
-                }
+                let canAfford = !preview.atMax && players[localPlayerId].money >= preview.cost;
 
                 let activePctText = '';
                 if (t.isActiveTask) {
@@ -12223,16 +12548,19 @@
                     activePctText = `<span style="color:#8cf">${pct}% </span>`;
                 }
 
-                html += `<div style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+                let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
+                let rowCursor = t.isActiveTask ? 'default' : 'grab';
+
+                html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="${t.isActiveTask ? 'false' : 'true'}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, currentValue)}->${formatResearchStatValue(t.statKey, projectedValue)}</span>`;
+                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${activePctText}${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">L${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-                html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
                 html += `</div>`;
                 html += `</div>`;
                 html += `</div>`;
@@ -12243,82 +12571,67 @@
 
         function renderQueuedResearchTasksForGroup(group) {
             let html = '';
-            let withQueue = (group || []).filter(r => getResearchQueueTotalLength(r) > 0);
-            if (withQueue.length <= 0) {
+            if (!Array.isArray(group) || group.length <= 0) {
+                html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
+                return html;
+            }
+            let owner = group[0].owner;
+            let orderedTasks = getResearchOrderedTasksForSingleBuilding(group[0]);
+            if (orderedTasks.length <= 0) {
                 html += `<div style="font-size:10px;color:#777;padding:4px 0">Queue is empty.</div>`;
                 return html;
             }
 
+            let anchor = group[0];
+            let labCount = group.filter(r => r && r.type === 'research' && r.owner === owner && r.hp > 0 && !r.underConstruction).length;
             html += `<div style="display:flex;flex-direction:column;gap:6px">`;
-            for (let r of withQueue) {
-                let orderedTasks = getResearchOrderedTasksForSingleBuilding(r);
-                if (orderedTasks.length <= 0) continue;
+            html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
+            html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Shared Queue (${labCount} labs)</div>`;
+            html += `<div style="display:flex;flex-direction:column;gap:4px">`;
 
-                html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
-                html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Lab (${r.gx},${r.gy})</div>`;
-                html += `<div style="display:flex;flex-direction:column;gap:4px">`;
+            for (let i = 0; i < orderedTasks.length; i++) {
+                let t = orderedTasks[i];
+                let preview = getQueuedResearchTaskPreview(owner, orderedTasks, i);
+                if (!preview) continue;
+                let thing = getResearchThing(t.kind, t.key);
+                let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
+                let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
+                let statLabel = stat ? stat.label : (t.statKey || 'stat');
+                let canAfford = !preview.atMax && players[localPlayerId].money >= preview.cost;
 
-                for (let i = 0; i < orderedTasks.length; i++) {
-                    let t = orderedTasks[i];
-                    let thing = getResearchThing(t.kind, t.key);
-                    let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
-                    let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
-                    let statLabel = stat ? stat.label : (t.statKey || 'stat');
-
-                    let currentLevel = getPlayerResearchLevel(r.owner, t.kind, t.key, t.statKey);
-                    let globalQueuedDepth = getResearchQueuedDepthForPlayer(r.owner, t.kind, t.key, t.statKey);
-                    let projectedLevel = currentLevel + globalQueuedDepth;
-                    let nextCost = getResearchCost(t.kind, t.key, t.statKey, projectedLevel);
-                    let nextWork = getResearchWork(t.kind, t.key, t.statKey, projectedLevel);
-                    let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
-                    let canAfford = !atMax && players[localPlayerId].money >= nextCost;
-
-                    let currentValue = getResearchCurrentStatValue(r.owner, t.kind, t.key, t.statKey);
-                    let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
-                    let projectedValue = t.kind === 'unit'
-                        ? getUnitStatFromMap(t.key, 1, t.statKey, displayProjectedLevel)
-                        : getBuildingStatFromMap(t.key, 1, t.statKey, displayProjectedLevel);
-                    if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
-                    if (!atMax && displayProjectedLevel <= currentLevel) {
-                        let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
-                        let nextPreview = t.kind === 'unit'
-                            ? getUnitStatFromMap(t.key, 1, t.statKey, previewLevel)
-                            : getBuildingStatFromMap(t.key, 1, t.statKey, previewLevel);
-                        if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
-                    }
-
-                    let activePctText = '';
-                    if (t.isActiveTask) {
-                        let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
-                        activePctText = `<span style="color:#8cf">${pct}% </span>`;
-                    }
-
-                    html += `<div style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
-                    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-                    html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                    html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, currentValue)}->${formatResearchStatValue(t.statKey, projectedValue)}</span>`;
-                    html += `</div>`;
-                    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                    html += `<span style="color:#fd0">${activePctText}${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
-                    html += `<div style="display:flex;align-items:center;gap:4px">`;
-                    html += `<span class="info-research-dequeue-btn" data-gx="${r.gx}" data-gy="${r.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
-                    html += `<span class="info-research-buy-btn" data-gx="${r.gx}" data-gy="${r.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
-                    html += `</div>`;
-                    html += `</div>`;
-                    html += `</div>`;
+                let activePctText = '';
+                if (t.isActiveTask) {
+                    let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
+                    activePctText = `<span style="color:#8cf">${pct}% </span>`;
                 }
 
+                let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
+                let rowCursor = t.isActiveTask ? 'default' : 'grab';
+
+                html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="${t.isActiveTask ? 'false' : 'true'}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
+                html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
+                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
+                html += `</div>`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
+                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">L${preview.toLevel}</span></span>`;
+                html += `<div style="display:flex;align-items:center;gap:4px">`;
+                html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
+                html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
+                html += `</div>`;
                 html += `</div>`;
                 html += `</div>`;
             }
+
+            html += `</div>`;
+            html += `</div>`;
             html += `</div>`;
             return html;
         }
 
         function getResearchQueueDepthForStatInGroup(group, kind, key, statKey) {
-            let n = 0;
-            for (let r of group) n += getResearchQueueDepthForStat(r, kind, key, statKey);
-            return n;
+            if (!Array.isArray(group) || group.length <= 0) return 0;
+            return getResearchQueuedDepthForPlayer(group[0].owner, kind, key, statKey);
         }
 
         function renderResearchThingRowsForPanel(owner, scope, targetArg) {
@@ -12403,6 +12716,7 @@
             let queueScope = `single:${e.gx},${e.gy}`;
             let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
             let queueLen = getResearchQueueTotalLength(e);
+            let queueCap = getResearchQueueCapacityForPlayer(e.owner);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isResearching ? '\uD83E\uDDEA Researching' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready')));
@@ -12410,7 +12724,7 @@
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, 20)}</span>`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
             html += `</div>`;
             if (e.owner === localPlayerId && !e.underConstruction) {
                 if (queueOpen) {
@@ -12420,7 +12734,7 @@
                 }
 
                 html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Research Queue (Per Stat)</div>`;
+                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Shared Research Queue (Per Stat)</div>`;
                 html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
                 html += `</div>`;
             }
@@ -12441,12 +12755,13 @@
             let e = group[0];
             let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
             let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
-            let totalHp = 0, totalMaxHp = 0, totalQueue = 0;
+            let totalHp = 0, totalMaxHp = 0;
             for (let r of group) {
                 totalHp += r.hp;
                 totalMaxHp += getEntityHpDisplayMax(r);
-                totalQueue += getResearchQueueTotalLength(r);
             }
+            let totalQueue = getResearchQueueTotalLength(e);
+            let queueCap = getResearchQueueCapacityForPlayer(e.owner);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Count', group.length);
             html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
@@ -12454,7 +12769,7 @@
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, group.length * 20)}</span>`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
             html += `</div>`;
 
             if (e.owner === localPlayerId) {
@@ -12465,7 +12780,7 @@
                 }
 
                 html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Distributed Research Queue (Per Stat)</div>`;
+                html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Shared Research Queue (Per Stat)</div>`;
                 html += renderResearchThingRowsForPanel(e.owner, queueScope, group);
                 html += `</div>`;
 
@@ -12486,6 +12801,95 @@
             }
             html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
             return html;
+        }
+
+        function bindResearchPopupControls(container) {
+            if (!container || container.dataset.boundResearchPopup === '1') return;
+            container.dataset.boundResearchPopup = '1';
+
+            let parseCoords = (coordStr) => (coordStr || '').split(';').map(c => {
+                let [x, y] = c.split(',');
+                return { gx: parseInt(x), gy: parseInt(y) };
+            }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
+
+            let queueAndRefresh = (action) => {
+                queueAction(action);
+                updateInfoPanel();
+                renderResearchPopupContent();
+            };
+
+            container.addEventListener('click', (e) => {
+                let btn = e.target.closest('[class*="info-"]');
+                if (!btn) return;
+
+                if (btn.classList.contains('info-research-buy-btn')) {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
+                    queueAndRefresh({ action: 'queueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-buy-group-btn')) {
+                    let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
+                    let coords = parseCoords(btn.dataset.coords);
+                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research'));
+                    if (!anchor) return;
+                    queueAndRefresh({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-dequeue-btn')) {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
+                    queueAndRefresh({ action: 'dequeueResearch', gx, gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-dequeue-group-btn')) {
+                    let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
+                    let coords = parseCoords(btn.dataset.coords);
+                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research'));
+                    if (!anchor) return;
+                    queueAndRefresh({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-thing-btn')) {
+                    let owner = Number.parseInt(btn.dataset.owner);
+                    let scope = btn.dataset.scope;
+                    let thingId = btn.dataset.thingId;
+                    if (!Number.isFinite(owner) || !scope || !thingId) return;
+                    researchPanelOpenState[getResearchPanelScopeKey(owner, scope)] = thingId;
+                    renderResearchPopupContent();
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-queue-toggle')) {
+                    let owner = Number.parseInt(btn.dataset.owner);
+                    let scope = btn.dataset.scope;
+                    if (!Number.isFinite(owner) || !scope) return;
+                    let key = getResearchPanelScopeKey(owner, scope);
+                    researchQueuePanelOpenState[key] = !researchQueuePanelOpenState[key];
+                    renderResearchPopupContent();
+                    return;
+                }
+
+                if (btn.classList.contains('info-auto-research-btn')) {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let enabled = btn.dataset.enabled === '1';
+                    queueAndRefresh({ action: 'setAutoResearch', gx, gy, enabled });
+                    return;
+                }
+
+                if (btn.classList.contains('info-auto-research-group-btn')) {
+                    let enabled = btn.dataset.enabled === '1';
+                    let coords = parseCoords(btn.dataset.coords);
+                    for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
+                    updateInfoPanel();
+                    renderResearchPopupContent();
+                    return;
+                }
+            });
         }
 
         function renderFloorItemGroupInfo(group) {
@@ -12538,11 +12942,26 @@
             return html;
         }
 
-        function updateInfoPanel() {
-            let panel = document.getElementById('info-panel');
-            updateIgnoreLevelButton();
-
-            updateControlGroupBar();
+        function updateInfoPanel(panelOverride = null, opts = {}) {
+            let panel = panelOverride || document.getElementById('info-panel');
+            if (!panel) return;
+            let skipGlobalSync = !!opts.skipGlobalSync;
+            let subgroupState = (opts && opts.subgroupState && typeof opts.subgroupState === 'object') ? opts.subgroupState : activeSubGroups;
+            let refreshThisPanel = () => {
+                if (typeof opts.onRefresh === 'function') {
+                    opts.onRefresh();
+                    return;
+                }
+                if (panelOverride) updateInfoPanel(panel, opts);
+                else updateInfoPanel();
+            };
+            let commitSubgroupState = () => {
+                if (typeof opts.onSubgroupStateChange === 'function') opts.onSubgroupStateChange(subgroupState);
+            };
+            if (!skipGlobalSync) {
+                updateIgnoreLevelButton();
+                updateControlGroupBar();
+            }
 
             // Remove dead entities
             selectedEntities = selectedEntities.filter(e => !(e.hp !== undefined && e.hp <= 0));
@@ -12584,14 +13003,14 @@
 
             // Ensure all groups have an explicit entry (default true)
             for (let [k] of allGroups) {
-                if (activeSubGroups[k] === undefined) activeSubGroups[k] = true;
+                if (subgroupState[k] === undefined) subgroupState[k] = true;
             }
 
             // --- SUB-GROUP ICON TOGGLE BAR ---
             if (showSubGroupToggles) {
                 html += `<div id="subgroup-bar" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px;align-items:flex-end">`;
                 for (let [key, grp] of allGroups) {
-                    let isActive = activeSubGroups[key] !== false;
+                    let isActive = subgroupState[key] !== false;
                     let borderColor = isActive ? getGroupBorderColor(grp) : '#333';
                     let opacity = isActive ? '1' : '0.35';
                     let lvl = getGroupLevel(key, grp);
@@ -12628,7 +13047,7 @@
             // --- INDIVIDUAL GROUP SECTIONS (only show active groups) ---
             let activeGroupCount = 0;
             for (let [key, grp] of allGroups) {
-                if (activeSubGroups[key] === false) continue;
+                if (subgroupState[key] === false) continue;
                 activeGroupCount++;
 
                 let items = grp.items;
@@ -12773,7 +13192,7 @@
                 });
             });
 
-            // Wire up research buy buttons (group, distributed by shortest queue)
+            // Wire up research buy buttons (group scope, shared queue)
             panel.querySelectorAll('.info-research-buy-group-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let kind = btn.dataset.kind, key = btn.dataset.key;
@@ -12782,23 +13201,10 @@
                         let [x, y] = c.split(',');
                         return { gx: parseInt(x), gy: parseInt(y) };
                     }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-
+                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research'));
+                    if (!anchor) return;
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-                    let options = coords.map(c => {
-                        let r = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research');
-                        return r ? { gx: r.gx, gy: r.gy, len: getResearchQueueTotalLength(r) } : null;
-                    }).filter(Boolean);
-
-                    for (let i = 0; i < purchaseCount; i++) {
-                        let best = null;
-                        for (let o of options) {
-                            if (o.len >= 20) continue;
-                            if (!best || o.len < best.len) best = o;
-                        }
-                        if (!best) return;
-                        queueAction({ action: 'queueResearch', gx: best.gx, gy: best.gy, kind, key, statKey, count: 1 });
-                        best.len++;
-                    }
+                    queueAction({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
                 });
             });
 
@@ -12812,7 +13218,7 @@
                 });
             });
 
-            // Wire up research dequeue buttons (group, distributed by longest queue)
+            // Wire up research dequeue buttons (group scope, shared queue)
             panel.querySelectorAll('.info-research-dequeue-group-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let kind = btn.dataset.kind, key = btn.dataset.key;
@@ -12821,23 +13227,90 @@
                         let [x, y] = c.split(',');
                         return { gx: parseInt(x), gy: parseInt(y) };
                     }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-
+                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research'));
+                    if (!anchor) return;
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-                    let options = coords.map(c => {
-                        let r = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.hp > 0 && !v.underConstruction && v.type === 'research');
-                        return r ? { gx: r.gx, gy: r.gy, len: getResearchQueueTotalLength(r) } : null;
-                    }).filter(Boolean);
+                    queueAction({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
+                });
+            });
 
-                    for (let i = 0; i < purchaseCount; i++) {
-                        let best = null;
-                        for (let o of options) {
-                            if (o.len <= 0) continue;
-                            if (!best || o.len > best.len) best = o;
-                        }
-                        if (!best) return;
-                        queueAction({ action: 'dequeueResearch', gx: best.gx, gy: best.gy, kind, key, statKey, count: 1 });
-                        best.len--;
+            // Drag/drop reorder for research queue (queued items only; active task is fixed)
+            panel.querySelectorAll('.info-research-queue-item').forEach(item => {
+                let isActiveItem = item.dataset.active === '1';
+
+                item.addEventListener('dragstart', (ev) => {
+                    if (isActiveItem) {
+                        ev.preventDefault();
+                        return;
                     }
+                    let fromIndex = Number.parseInt(item.dataset.pendingIndex, 10);
+                    if (!Number.isFinite(fromIndex) || fromIndex < 0) {
+                        ev.preventDefault();
+                        return;
+                    }
+                    let payload = {
+                        owner: item.dataset.owner || '',
+                        gx: item.dataset.gx || '',
+                        gy: item.dataset.gy || '',
+                        fromIndex
+                    };
+                    item.style.opacity = '0.55';
+                    if (ev.dataTransfer) {
+                        ev.dataTransfer.effectAllowed = 'move';
+                        ev.dataTransfer.setData('text/plain', JSON.stringify(payload));
+                    }
+                });
+
+                item.addEventListener('dragend', () => {
+                    item.style.opacity = '';
+                    panel.querySelectorAll('.info-research-queue-item').forEach(el => {
+                        el.style.boxShadow = '';
+                    });
+                });
+
+                item.addEventListener('dragover', (ev) => {
+                    let raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+                    if (!raw) return;
+                    let payload = null;
+                    try { payload = JSON.parse(raw); } catch { payload = null; }
+                    if (!payload) return;
+                    if (String(payload.owner || '') !== String(item.dataset.owner || '')) return;
+                    if (String(payload.gx || '') !== String(item.dataset.gx || '')) return;
+                    if (String(payload.gy || '') !== String(item.dataset.gy || '')) return;
+                    ev.preventDefault();
+                    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+                    item.style.boxShadow = 'inset 0 0 0 1px #4af';
+                });
+
+                item.addEventListener('dragleave', () => {
+                    item.style.boxShadow = '';
+                });
+
+                item.addEventListener('drop', (ev) => {
+                    ev.preventDefault();
+                    item.style.boxShadow = '';
+                    let raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+                    if (!raw) return;
+                    let payload = null;
+                    try { payload = JSON.parse(raw); } catch { payload = null; }
+                    if (!payload) return;
+
+                    if (String(payload.owner || '') !== String(item.dataset.owner || '')) return;
+                    if (String(payload.gx || '') !== String(item.dataset.gx || '')) return;
+                    if (String(payload.gy || '') !== String(item.dataset.gy || '')) return;
+
+                    let fromIndex = Math.floor(Number(payload.fromIndex));
+                    if (!Number.isFinite(fromIndex) || fromIndex < 0) return;
+                    let toIndex = Number.parseInt(item.dataset.pendingIndex, 10);
+                    if (!Number.isFinite(toIndex) || toIndex < 0) toIndex = 0;
+                    if (fromIndex === toIndex) return;
+
+                    let gx = Number.parseInt(item.dataset.gx, 10);
+                    let gy = Number.parseInt(item.dataset.gy, 10);
+                    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+
+                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex });
+                    refreshThisPanel();
                 });
             });
 
@@ -12848,7 +13321,7 @@
                     let thingId = btn.dataset.thingId;
                     if (!Number.isFinite(owner) || !scope || !thingId) return;
                     researchPanelOpenState[getResearchPanelScopeKey(owner, scope)] = thingId;
-                    updateInfoPanel();
+                    refreshThisPanel();
                 });
             });
 
@@ -12859,7 +13332,7 @@
                     if (!Number.isFinite(owner) || !scope) return;
                     let key = getResearchPanelScopeKey(owner, scope);
                     researchQueuePanelOpenState[key] = !researchQueuePanelOpenState[key];
-                    updateInfoPanel();
+                    refreshThisPanel();
                 });
             });
 
@@ -12906,8 +13379,9 @@
             panel.querySelectorAll('.subgroup-toggle').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let key = btn.dataset.key;
-                    activeSubGroups[key] = !activeSubGroups[key];
-                    updateInfoPanel();
+                    subgroupState[key] = !subgroupState[key];
+                    commitSubgroupState();
+                    refreshThisPanel();
                 });
             });
 
@@ -12915,8 +13389,9 @@
             panel.querySelectorAll('.subgroup-all').forEach(btn => {
                 bindInstantPress(btn, () => {
                     let val = btn.dataset.action === 'all';
-                    for (let [k] of allGroups) activeSubGroups[k] = val;
-                    updateInfoPanel();
+                    for (let [k] of allGroups) subgroupState[k] = val;
+                    commitSubgroupState();
+                    refreshThisPanel();
                 });
             });
             // Wire up salvage buttons (single building)
@@ -13017,6 +13492,13 @@
                     setTimeout(updateInfoPanel, 50);
                 });
             });
+
+            if (!panelOverride) {
+                let researchPopup = document.getElementById('research-popup');
+                if (researchPopup && !researchPopup.classList.contains('hidden')) {
+                    renderResearchPopupContent();
+                }
+            }
         }
 
         function showGameOver() {
@@ -14083,6 +14565,8 @@
             isBoxSelecting = false;
             activeSubGroups = {};
             controlGroups = {};
+            popupControlGroups = {};
+            activePopupControlGroupKey = '';
             mapAlerts = [];
             controlGroupAlertState = {};
 
@@ -14432,18 +14916,23 @@
             mapAlerts = [];
             controlGroupAlertState = {};
             controlGroups = {};
+            popupControlGroups = {};
+            activePopupControlGroupKey = '';
             localDefeated = false;
             spectateMode = 'none';
             resignedTeams = new Set();
             graphMetric = 'money';
             gameStatsHistory = [];
             researchPanelOpenState = {};
+            researchQueuePanelOpenState = {};
 
             for (let p of players) {
                 p.money = STARTING_MONEY;
                 p.popCount = 0;
                 p.researchLevels = {};
                 p.researchMultipliers = {};
+                p.researchQueue = [];
+                p.researchTask = null;
             }
 
             rng = mulberry32(gameSeed);
@@ -15180,6 +15669,11 @@
             gameTick();
 
             if (currentTick % TICK_RATE === 0) sampleGameStats();
+
+            let researchPopup = document.getElementById('research-popup');
+            if (researchPopup && !researchPopup.classList.contains('hidden')) {
+                renderResearchPopupContent();
+            }
 
             _tpsTickCount++;
             let tpsNow = performance.now();
