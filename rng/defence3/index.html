@@ -3030,6 +3030,9 @@
         let queuePurchaseMultiplier = 1;
         let researchPanelOpenState = {};
         let researchQueuePanelOpenState = {};
+    let researchPreviewThingLevel = 1;
+    let researchThingLevelDropdown = null;
+    let researchThingLevelDropdownOutsideHandler = null;
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = true;
@@ -10339,6 +10342,12 @@
                 keysDown[e.key.toLowerCase()] = true;
                 if (!gameStarted) return;
                 if (e.key === 'Escape') {
+                    if (researchThingLevelDropdown) {
+                        closeResearchThingLevelDropdown();
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
                     if (setResearchPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     stopBuildPlacementDrag();
@@ -12703,11 +12712,107 @@
             return out;
         }
 
-        function getResearchStatValueAtLevel(kind, key, statKey, level) {
-            let lvl = Math.max(0, Math.floor(level || 0));
-            if (kind === 'unit') return getUnitStatFromMap(key, 1, statKey, lvl);
-            if (kind === 'building') return getBuildingStatFromMap(key, 1, statKey, lvl);
+        function getResearchPreviewThingLevel() {
+            return Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(researchPreviewThingLevel) || 1)));
+        }
+
+        function setResearchPreviewThingLevel(level) {
+            researchPreviewThingLevel = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+        }
+
+        function getResearchStatValueAtLevel(kind, key, statKey, researchLevel, thingLevel = getResearchPreviewThingLevel()) {
+            let rLvl = Math.max(0, Math.floor(researchLevel || 0));
+            let tLvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(thingLevel) || 1)));
+            if (kind === 'unit') return getUnitStatFromMap(key, tLvl, statKey, rLvl);
+            if (kind === 'building') return getBuildingStatFromMap(key, tLvl, statKey, rLvl);
             return NaN;
+        }
+
+        function closeResearchThingLevelDropdown() {
+            if (researchThingLevelDropdown && researchThingLevelDropdown.parentNode) {
+                researchThingLevelDropdown.parentNode.removeChild(researchThingLevelDropdown);
+            }
+            researchThingLevelDropdown = null;
+            if (researchThingLevelDropdownOutsideHandler) {
+                document.removeEventListener('mousedown', researchThingLevelDropdownOutsideHandler, true);
+                researchThingLevelDropdownOutsideHandler = null;
+            }
+        }
+
+        function openResearchThingLevelDropdown(anchorEl, opts) {
+            if (!anchorEl || !opts) return;
+            closeResearchThingLevelDropdown();
+
+            let kind = String(opts.kind || '');
+            let key = String(opts.key || '');
+            let statKey = String(opts.statKey || '');
+            let fromLevel = Math.max(0, Math.floor(Number(opts.fromLevel) || 0));
+            let toLevel = Math.max(0, Math.floor(Number(opts.toLevel) || 0));
+            if (!kind || !key || !statKey) return;
+
+            let menu = document.createElement('div');
+            menu.style.position = 'fixed';
+            menu.style.zIndex = '12000';
+            menu.style.background = '#121a21';
+            menu.style.border = '1px solid #35516a';
+            menu.style.borderRadius = '4px';
+            menu.style.padding = '4px';
+            menu.style.maxHeight = '240px';
+            menu.style.overflowY = 'auto';
+            menu.style.minWidth = '220px';
+            menu.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+
+            let selectedThingLevel = getResearchPreviewThingLevel();
+            for (let thingLevel = 1; thingLevel <= MAX_THING_LEVEL; thingLevel++) {
+                let fromValue = getResearchStatValueAtLevel(kind, key, statKey, fromLevel, thingLevel);
+                let toValue = getResearchStatValueAtLevel(kind, key, statKey, toLevel, thingLevel);
+                if (!Number.isFinite(fromValue) && !Number.isFinite(toValue)) continue;
+                if (!Number.isFinite(fromValue)) fromValue = toValue;
+                if (!Number.isFinite(toValue)) toValue = fromValue;
+
+                let row = document.createElement('div');
+                row.style.cursor = 'pointer';
+                row.style.padding = '3px 6px';
+                row.style.borderRadius = '3px';
+                row.style.color = '#cfe6ff';
+                row.style.fontSize = '11px';
+                row.style.whiteSpace = 'nowrap';
+                row.style.background = (thingLevel === selectedThingLevel) ? '#1f3750' : 'transparent';
+                row.textContent = `L${thingLevel}: ${formatResearchStatValue(statKey, fromValue)}->${formatResearchStatValue(statKey, toValue)}`;
+                row.addEventListener('mouseenter', () => {
+                    if (thingLevel !== getResearchPreviewThingLevel()) row.style.background = '#183048';
+                });
+                row.addEventListener('mouseleave', () => {
+                    row.style.background = (thingLevel === getResearchPreviewThingLevel()) ? '#1f3750' : 'transparent';
+                });
+                row.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    setResearchPreviewThingLevel(thingLevel);
+                    closeResearchThingLevelDropdown();
+                    updateInfoPanel();
+                    renderResearchPopupContent();
+                });
+                menu.appendChild(row);
+            }
+
+            let rect = anchorEl.getBoundingClientRect();
+            document.body.appendChild(menu);
+            let left = rect.left;
+            let top = rect.bottom + 4;
+            let maxLeft = window.innerWidth - menu.offsetWidth - 6;
+            let maxTop = window.innerHeight - menu.offsetHeight - 6;
+            menu.style.left = `${Math.max(6, Math.min(maxLeft, left))}px`;
+            menu.style.top = `${Math.max(6, Math.min(maxTop, top))}px`;
+
+            researchThingLevelDropdown = menu;
+            researchThingLevelDropdownOutsideHandler = (ev) => {
+                if (!researchThingLevelDropdown) return;
+                if (researchThingLevelDropdown.contains(ev.target)) return;
+                if (anchorEl.contains && anchorEl.contains(ev.target)) return;
+                closeResearchThingLevelDropdown();
+            };
+            document.addEventListener('mousedown', researchThingLevelDropdownOutsideHandler, true);
         }
 
         function getQueuedResearchTaskPreview(owner, orderedTasks, taskIndex) {
@@ -12769,10 +12874,10 @@
                 html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
+                html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">L${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -12826,10 +12931,10 @@
                 html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
+                html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">L${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -12887,27 +12992,25 @@
                 let nextWork = getResearchWork(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
                 let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
                 let canAfford = !atMax && players[localPlayerId].money >= nextCost;
-                let currentValue = getResearchCurrentStatValue(owner, selectedThing.kind, selectedThing.key, stat.statKey);
-                let displayProjectedLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
-                let projectedValue = selectedThing.kind === 'unit'
-                    ? getUnitStatFromMap(selectedThing.key, 1, stat.statKey, displayProjectedLevel)
-                    : getBuildingStatFromMap(selectedThing.key, 1, stat.statKey, displayProjectedLevel);
+                let selectedThingLevel = getResearchPreviewThingLevel();
+                let displayFromLevel = currentLevel;
+                let displayToLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
+                let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayFromLevel, selectedThingLevel);
+                let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
                 if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
-                if (!atMax && displayProjectedLevel <= currentLevel) {
-                    let previewLevel = Math.min(MAX_RESEARCH_LEVEL, currentLevel + 1);
-                    let nextPreview = selectedThing.kind === 'unit'
-                        ? getUnitStatFromMap(selectedThing.key, 1, stat.statKey, previewLevel)
-                        : getBuildingStatFromMap(selectedThing.key, 1, stat.statKey, previewLevel);
+                if (!atMax && displayToLevel <= displayFromLevel) {
+                    displayToLevel = Math.min(MAX_RESEARCH_LEVEL, displayFromLevel + 1);
+                    let nextPreview = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
                     if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
                 }
 
                 html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-                html += `<span style="color:#bbb">${stat.label}</span><span style="color:#8fc">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
+                html += `<span style="color:#bbb">${stat.label}</span><span class="info-research-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
                 html += `<span style="color:#9cf">Q:${queuedDepth}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">${displayProjectedLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">R${displayToLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
                 if (scope.startsWith('single:')) {
                     html += `<div style="display:flex;align-items:center;gap:4px">`;
                     html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
@@ -13034,8 +13137,20 @@
             };
 
             container.addEventListener('click', (e) => {
-                let btn = e.target.closest('[class*="info-"]');
+                let target = e.target;
+                if (!(target instanceof Element)) return;
+                let btn = target.closest('[class*="info-"]');
                 if (!btn) return;
+
+                if (btn.classList.contains('info-research-level-preview-btn')) {
+                    let kind = btn.dataset.kind;
+                    let key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+                    let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+                    openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
+                    return;
+                }
 
                 if (btn.classList.contains('info-research-buy-btn')) {
                     let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
@@ -13446,6 +13561,18 @@
                     if (!anchor) return;
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     queueAction({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
+                });
+            });
+
+            // Wire up clickable research value previews (x->y) for thing-level dropdown.
+            panel.querySelectorAll('.info-research-level-preview-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let kind = btn.dataset.kind;
+                    let key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+                    let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+                    openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
                 });
             });
 
