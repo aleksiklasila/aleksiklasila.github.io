@@ -1829,6 +1829,25 @@
             return collectorSpawners.filter(s => s && s.type === 'research' && s.owner === owner && s.hp > 0 && !s.underConstruction);
         }
 
+        function setResearchQueueDragGuard(active, rerenderPopup = false) {
+            let wasActive = researchQueueDragInProgress;
+            researchQueueDragInProgress = !!active;
+            if (wasActive && !researchQueueDragInProgress && rerenderPopup) {
+                let researchPopup = document.getElementById('research-popup');
+                if (researchPopup && !researchPopup.classList.contains('hidden')) {
+                    renderResearchPopupContent();
+                }
+            }
+        }
+
+        function ensureResearchQueueDragReleaseHooks() {
+            if (researchQueueDragReleaseHooksBound) return;
+            researchQueueDragReleaseHooksBound = true;
+            window.addEventListener('mouseup', () => setResearchQueueDragGuard(false, true), true);
+            window.addEventListener('dragend', () => setResearchQueueDragGuard(false, true), true);
+            window.addEventListener('blur', () => setResearchQueueDragGuard(false, false), true);
+        }
+
         function renderResearchPopupContent() {
             let holder = document.getElementById('research-popup-content');
             if (!holder) return;
@@ -1876,7 +1895,9 @@
             updateInfoPanel(document.getElementById('research-popup-info-panel'), {
                 skipGlobalSync: true,
                 subgroupState: subgroupSnapshot,
-                onRefresh: () => renderResearchPopupContent(),
+                onRefresh: () => {
+                    if (!researchQueueDragInProgress) renderResearchPopupContent();
+                },
                 onSubgroupStateChange: (nextState) => {
                     subgroupSnapshot = { ...(nextState || {}) };
                     if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
@@ -1894,7 +1915,10 @@
             let wasOpen = !popup.classList.contains('hidden');
             if (open) renderResearchPopupContent();
             popup.classList.toggle('hidden', !open);
-            if (!open) activePopupControlGroupKey = '';
+            if (!open) {
+                activePopupControlGroupKey = '';
+                setResearchQueueDragGuard(false, false);
+            }
             return wasOpen !== open;
         }
 
@@ -2955,6 +2979,8 @@
         let controlGroups = {};
     let popupControlGroups = {};
     let activePopupControlGroupKey = '';
+    let researchQueueDragInProgress = false;
+    let researchQueueDragReleaseHooksBound = false;
     const POPUP_CONTROL_GROUP_KEYS = ['r', 't', 'y', 'u', 'i', 'o', 'p'];
     let controlGroupAlertState = {}; // key: 1..9 => {damageUntil, kingUntil}
     let mapAlerts = []; // {x,y,start,dur,kind}
@@ -12815,7 +12841,7 @@
             let queueAndRefresh = (action) => {
                 queueAction(action);
                 updateInfoPanel();
-                renderResearchPopupContent();
+                if (!researchQueueDragInProgress) renderResearchPopupContent();
             };
 
             container.addEventListener('click', (e) => {
@@ -13237,6 +13263,13 @@
             // Drag/drop reorder for research queue (queued items only; active task is fixed)
             panel.querySelectorAll('.info-research-queue-item').forEach(item => {
                 let isActiveItem = item.dataset.active === '1';
+                ensureResearchQueueDragReleaseHooks();
+
+                item.addEventListener('mousedown', (ev) => {
+                    if (isActiveItem) return;
+                    if (ev.button !== 0) return;
+                    setResearchQueueDragGuard(true, false);
+                });
 
                 item.addEventListener('dragstart', (ev) => {
                     if (isActiveItem) {
@@ -13254,6 +13287,7 @@
                         gy: item.dataset.gy || '',
                         fromIndex
                     };
+                    setResearchQueueDragGuard(true, false);
                     item.style.opacity = '0.55';
                     if (ev.dataTransfer) {
                         ev.dataTransfer.effectAllowed = 'move';
@@ -13262,6 +13296,7 @@
                 });
 
                 item.addEventListener('dragend', () => {
+                    setResearchQueueDragGuard(false, true);
                     item.style.opacity = '';
                     panel.querySelectorAll('.info-research-queue-item').forEach(el => {
                         el.style.boxShadow = '';
@@ -13289,6 +13324,7 @@
                 item.addEventListener('drop', (ev) => {
                     ev.preventDefault();
                     item.style.boxShadow = '';
+                    setResearchQueueDragGuard(false, false);
                     let raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
                     if (!raw) return;
                     let payload = null;
@@ -15671,7 +15707,7 @@
             if (currentTick % TICK_RATE === 0) sampleGameStats();
 
             let researchPopup = document.getElementById('research-popup');
-            if (researchPopup && !researchPopup.classList.contains('hidden')) {
+            if (researchPopup && !researchPopup.classList.contains('hidden') && !researchQueueDragInProgress) {
                 renderResearchPopupContent();
             }
 
@@ -15737,7 +15773,11 @@
                 _fpsFrameCount = 0; _fpsLastTime = timestamp;
             }
             // Refresh build menu and info panel every ~30 frames
-            if (++_buildMenuRefreshCounter >= 30) { _buildMenuRefreshCounter = 0; updateBuildMenu(); updateInfoPanel(); }
+            if (++_buildMenuRefreshCounter >= 30) {
+                _buildMenuRefreshCounter = 0;
+                updateBuildMenu();
+                if (!researchQueueDragInProgress) updateInfoPanel();
+            }
             requestAnimationFrame(gameFrame);
         }
 
