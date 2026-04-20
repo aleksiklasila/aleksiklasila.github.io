@@ -11155,6 +11155,50 @@
                     if (r) {
                         let p = ensurePlayerResearchQueueState(playerId);
                         let len = p.researchQueue.length;
+                        let fromIsActive = !!a.fromActive;
+                        let toIsActive = !!a.toActive;
+
+                        let normalizeQueuedTask = (task) => {
+                            if (!task) return null;
+                            return { ...task, workDone: 0 };
+                        };
+
+                        let makeActiveTaskFromQueued = (task) => {
+                            let next = normalizeQueuedTask(task);
+                            if (!next) return null;
+                            next.workDone = 0;
+                            return next;
+                        };
+
+                        if (toIsActive) {
+                            if (fromIsActive || len <= 0) continue;
+                            let from = Math.floor(Number(a.fromIndex));
+                            if (!Number.isFinite(from)) continue;
+                            from = Math.max(0, Math.min(len - 1, from));
+                            let [newActive] = p.researchQueue.splice(from, 1);
+                            if (!newActive) continue;
+                            let oldActive = p.researchTask ? normalizeQueuedTask(p.researchTask) : null;
+                            if (oldActive) {
+                                let insertAt = Math.max(0, Math.min(from, p.researchQueue.length));
+                                p.researchQueue.splice(insertAt, 0, oldActive);
+                            }
+                            p.researchTask = makeActiveTaskFromQueued(newActive);
+                            continue;
+                        }
+
+                        if (fromIsActive) {
+                            if (!p.researchTask || len <= 0) continue;
+                            let to = Math.floor(Number(a.toIndex));
+                            if (!Number.isFinite(to)) continue;
+                            to = Math.max(0, Math.min(len - 1, to));
+                            let [newActive] = p.researchQueue.splice(to, 1);
+                            if (!newActive) continue;
+                            let oldActive = normalizeQueuedTask(p.researchTask);
+                            p.researchQueue.splice(to, 0, oldActive);
+                            p.researchTask = makeActiveTaskFromQueued(newActive);
+                            continue;
+                        }
+
                         if (len > 1) {
                             let from = Math.floor(Number(a.fromIndex));
                             let to = Math.floor(Number(a.toIndex));
@@ -12575,9 +12619,9 @@
                 }
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
-                let rowCursor = t.isActiveTask ? 'default' : 'grab';
+                let rowCursor = 'grab';
 
-                html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="${t.isActiveTask ? 'false' : 'true'}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
+                html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
                 html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
@@ -12632,9 +12676,9 @@
                 }
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
-                let rowCursor = t.isActiveTask ? 'default' : 'grab';
+                let rowCursor = 'grab';
 
-                html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="${t.isActiveTask ? 'false' : 'true'}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
+                html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
                 html += `<span style="color:#8fc">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
@@ -13260,24 +13304,20 @@
                 });
             });
 
-            // Drag/drop reorder for research queue (queued items only; active task is fixed)
+            // Drag/drop reorder for research queue (includes active-task swapping at top)
             panel.querySelectorAll('.info-research-queue-item').forEach(item => {
                 let isActiveItem = item.dataset.active === '1';
                 ensureResearchQueueDragReleaseHooks();
 
                 item.addEventListener('mousedown', (ev) => {
-                    if (isActiveItem) return;
                     if (ev.button !== 0) return;
                     setResearchQueueDragGuard(true, false);
                 });
 
                 item.addEventListener('dragstart', (ev) => {
-                    if (isActiveItem) {
-                        ev.preventDefault();
-                        return;
-                    }
                     let fromIndex = Number.parseInt(item.dataset.pendingIndex, 10);
-                    if (!Number.isFinite(fromIndex) || fromIndex < 0) {
+                    let fromActive = isActiveItem;
+                    if (!Number.isFinite(fromIndex) || (!fromActive && fromIndex < 0)) {
                         ev.preventDefault();
                         return;
                     }
@@ -13285,7 +13325,8 @@
                         owner: item.dataset.owner || '',
                         gx: item.dataset.gx || '',
                         gy: item.dataset.gy || '',
-                        fromIndex
+                        fromIndex,
+                        fromActive
                     };
                     setResearchQueueDragGuard(true, false);
                     item.style.opacity = '0.55';
@@ -13336,16 +13377,19 @@
                     if (String(payload.gy || '') !== String(item.dataset.gy || '')) return;
 
                     let fromIndex = Math.floor(Number(payload.fromIndex));
-                    if (!Number.isFinite(fromIndex) || fromIndex < 0) return;
+                    let fromActive = !!payload.fromActive;
+                    if (!Number.isFinite(fromIndex) || (!fromActive && fromIndex < 0)) return;
                     let toIndex = Number.parseInt(item.dataset.pendingIndex, 10);
-                    if (!Number.isFinite(toIndex) || toIndex < 0) toIndex = 0;
-                    if (fromIndex === toIndex) return;
+                    let toActive = item.dataset.active === '1';
+                    if (!Number.isFinite(toIndex)) return;
+                    if (toIndex < 0) toIndex = 0;
+                    if (fromActive === toActive && fromIndex === toIndex) return;
 
                     let gx = Number.parseInt(item.dataset.gx, 10);
                     let gy = Number.parseInt(item.dataset.gy, 10);
                     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
 
-                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex });
+                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex, fromActive, toActive });
                     refreshThisPanel();
                 });
             });
