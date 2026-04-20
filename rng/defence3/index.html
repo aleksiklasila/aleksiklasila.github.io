@@ -2081,7 +2081,7 @@
             sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 240, damage: 100, target: 'wall', towerHp: 1500 },
             elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
             laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
-            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 28, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 15 },
+            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 28, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 24 },
 
             // Floor items
             sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", target: 'floor' },
@@ -2297,9 +2297,19 @@
                 hp: Infinity,
                 atk: Infinity,
                 atkCd: 0.5,
-                speed: 8.5,
-                visionRange: Infinity,
-                attackRange: 7,
+                speed: ({ baseAtLevel1 }) => {
+                    let baseSpeed = Number(baseAtLevel1 && baseAtLevel1.speed);
+                    if (!Number.isFinite(baseSpeed) || baseSpeed <= 0) return 8.5;
+                    return Math.min(baseSpeed * 3, 8 + baseSpeed / 10);
+                },
+                visionRange: ({ baseAtLevel1 }) => {
+                    let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
+                    return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 2) : 10;
+                },
+                attackRange: ({ baseAtLevel1 }) => {
+                    let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
+                    return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 2) : 7;
+                },
                 builderDps: Infinity,
                 healerHps: Infinity,
             },
@@ -2308,7 +2318,10 @@
                 damage: Infinity,
                 cd: 0.5,
                 spawnCd: 0.5,
-                visionRange: 16,
+                visionRange: ({ baseAtLevel1 }) => {
+                    let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
+                    return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
+                },
             }
         };
 
@@ -2339,10 +2352,17 @@
             return baseValue * mult;
         }
 
-        function getPrecomputedSoftCap(kind, statKey) {
+        function getPrecomputedSoftCap(kind, key, statKey, context = null) {
             let kindMap = (PRECOMPUTED_SOFT_CAP_MAP && PRECOMPUTED_SOFT_CAP_MAP[kind]) || null;
             if (!kindMap) return Infinity;
             let cap = kindMap[statKey];
+            if (typeof cap === 'function') {
+                try {
+                    cap = cap({ kind, key, statKey, ...(context || {}) });
+                } catch {
+                    return Infinity;
+                }
+            }
             return Number.isFinite(cap) ? Math.max(0, cap) : Infinity;
         }
 
@@ -2476,7 +2496,7 @@
                     let levelEntry = {};
                     for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
-                        let cap = getPrecomputedSoftCap('unit', statKey);
+                        let cap = getPrecomputedSoftCap('unit', unitType, statKey, { baseAtLevel1, baseAtMaxLevel });
                         let baselineValue = applyResearchLevelToBaseValue('unit', baseAtLevel1[statKey], statKey, 0);
                         let maxValueBeforeCap = applyResearchLevelToBaseValue('unit', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
@@ -2498,7 +2518,7 @@
                     let levelEntry = {};
                     for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
-                        let cap = getPrecomputedSoftCap('building', statKey);
+                        let cap = getPrecomputedSoftCap('building', buildingKey, statKey, { baseAtLevel1, baseAtMaxLevel });
                         let baselineValue = applyResearchLevelToBaseValue('building', baseAtLevel1[statKey], statKey, 0);
                         let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
