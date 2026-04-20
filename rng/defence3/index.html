@@ -1241,6 +1241,14 @@
                             <td><span class="kbd">Long Press</span> (touch)</td>
                             <td>Simulate right-click for rally/commands when enabled</td>
                         </tr>
+                        <tr>
+                            <td>
+                                <button id="btn-build-place-mode" style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Build place mode</button>
+                            </td>
+                            <td>
+                                <div id="build-place-mode-desc" style="font-size:11px; color:#9fb2c7; margin-top:4px;"></div>
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -3000,6 +3008,13 @@
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = true;
+
+    const BUILD_PLACE_MODE_DRAG_KEEP = 0;
+    const BUILD_PLACE_MODE_SHIFT_KEEP = 1;
+    const BUILD_PLACE_MODE_SHIFT_DRAG = 2;
+    let buildPlacementMode = BUILD_PLACE_MODE_SHIFT_DRAG;
+    let buildPlacementDragActive = false;
+    let buildPlacementDragVisitedTiles = null;
 
         // Input
         let keysDown = {};
@@ -4764,6 +4779,44 @@
             saveUiSettingsToStorage();
         }
 
+        function getBuildPlacementModeButtonText() {
+            return `Build place: ${buildPlacementMode + 1}`;
+        }
+
+        function getBuildPlacementModeDescription() {
+            if (buildPlacementMode === BUILD_PLACE_MODE_DRAG_KEEP) {
+                return 'Left Click: place + keep selected | Shift + Left Click: place + drag place + keep selected';
+            }
+            if (buildPlacementMode === BUILD_PLACE_MODE_SHIFT_KEEP) {
+                return 'Left Click: place + unselect | Shift + Left Click: place + keep selected';
+            }
+            return 'Left Click: place + unselect | Shift + Left Click: place + keep selected + drag place';
+        }
+
+        function updateBuildPlacementModeButton() {
+            let btn = document.getElementById('btn-build-place-mode');
+            if (btn) btn.textContent = getBuildPlacementModeButtonText();
+            let desc = document.getElementById('build-place-mode-desc');
+            if (desc) desc.textContent = getBuildPlacementModeDescription();
+        }
+
+        function cycleBuildPlacementMode() {
+            buildPlacementMode = (buildPlacementMode + 1) % 3;
+            updateBuildPlacementModeButton();
+            saveUiSettingsToStorage();
+        }
+
+        function shouldShiftDragBuildPlace(shiftHeld) {
+            if (!shiftHeld) return false;
+            return buildPlacementMode === BUILD_PLACE_MODE_DRAG_KEEP || buildPlacementMode === BUILD_PLACE_MODE_SHIFT_DRAG;
+        }
+
+        function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
+            if (buildPlacementMode === BUILD_PLACE_MODE_DRAG_KEEP) return true;
+            if (!shiftHeld) return false;
+            return buildPlacementMode === BUILD_PLACE_MODE_SHIFT_KEEP || buildPlacementMode === BUILD_PLACE_MODE_SHIFT_DRAG;
+        }
+
         function saveUiSettingsToStorage() {
             try {
                 localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify({
@@ -4774,7 +4827,8 @@
                     rallyLineType,
                     rallyLineScope,
                     selectionOutlineType,
-                    selectionOutlineScope
+                    selectionOutlineScope,
+                    buildPlacementMode
                 }));
             } catch { }
         }
@@ -4809,6 +4863,9 @@
                 }
                 if (s.selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS || s.selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS || s.selectionOutlineScope === OVERLAY_SCOPE_NONE) {
                     selectionOutlineScope = s.selectionOutlineScope;
+                }
+                if (Number.isFinite(s.buildPlacementMode)) {
+                    buildPlacementMode = Math.max(0, Math.min(2, Math.floor(s.buildPlacementMode)));
                 }
             } catch { }
         }
@@ -9799,6 +9856,61 @@
                 return screenToWorld(clampedX, clampedY);
             }
 
+            function stopBuildPlacementDrag() {
+                buildPlacementDragActive = false;
+                buildPlacementDragVisitedTiles = null;
+            }
+
+            function canPlaceSelectedBuildItemAt(gx, gy, purchaseCount) {
+                if (!selectedBuildItem) return false;
+                let _cd = BASE_CARD_TYPES[selectedBuildItem];
+                if (selectedBuildItem === 'area_upgrader') {
+                    let aId = grid[gy][gx].areaId;
+                    let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
+                    if (!area) return false;
+                    let filledCount = 0;
+                    for (let cp of area.cells) {
+                        let c = grid[cp.y][cp.x];
+                        if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) filledCount++;
+                        else if (c.item) filledCount++;
+                        else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) filledCount++;
+                        else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
+                    }
+                    let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
+                    return filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost * purchaseCount;
+                }
+                return _cd && players[localPlayerId].money >= (_cd.price * purchaseCount) &&
+                    (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
+            }
+
+            function tryPlaceSelectedBuildAt(gx, gy, playCantPlaceSound = true) {
+                if (!selectedBuildItem) return false;
+                if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || !isTileVisible(gx, gy)) {
+                    if (playCantPlaceSound) playSound('cant_place');
+                    return false;
+                }
+                let purchaseCount = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+                let canPlace = canPlaceSelectedBuildItemAt(gx, gy, purchaseCount);
+                if (!canPlace) {
+                    if (playCantPlaceSound) playSound('cant_place');
+                    return false;
+                }
+                queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled, count: purchaseCount });
+                updateBuildMenu();
+                return true;
+            }
+
+            function tryBuildPlacementDragAtClient(clientX, clientY) {
+                if (!buildPlacementDragActive || !selectedBuildItem || !buildPlacementDragVisitedTiles) return;
+                let world = screenToWorldClamped(clientX, clientY);
+                let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
+                if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return;
+                let tileKey = `${gx},${gy}`;
+                if (buildPlacementDragVisitedTiles.has(tileKey)) return;
+                buildPlacementDragVisitedTiles.add(tileKey);
+                tryPlaceSelectedBuildAt(gx, gy, false);
+            }
+
             gameArea.addEventListener('mousedown', (e) => {
                 if (!gameStarted || gameOver) return;
                 let world = screenToWorld(e.clientX, e.clientY);
@@ -9808,37 +9920,29 @@
                         if (localDefeated) {
                             selectedBuildItem = null;
                             updateBuildMenu();
+                            stopBuildPlacementDrag();
                             return;
                         }
-                        // Place building (only on visible tiles)
                         let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
-                        if (!isTileVisible(gx, gy)) { playSound('cant_place'); return; }
-                        // Short-circuit for immediate cant_place feedback (affordability / validity)
-                        let _cd = BASE_CARD_TYPES[selectedBuildItem];
-                        let purchaseCount = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
-                        let _canPlace = false;
-                        if (selectedBuildItem === 'area_upgrader') {
-                            let aId = grid[gy][gx].areaId;
-                            let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
-                            if (area) {
-                                let filledCount = 0;
-                                for (let cp of area.cells) {
-                                    let c = grid[cp.y][cp.x];
-                                    if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) filledCount++;
-                                    else if (c.item) filledCount++;
-                                    else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) filledCount++;
-                                    else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
-                                }
-                                let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
-                                _canPlace = filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost * purchaseCount;
-                            }
+                        let shiftHeld = !!e.shiftKey;
+                        let dragPlace = shouldShiftDragBuildPlace(shiftHeld);
+                        let keepSelected = shouldKeepBuildSelectionAfterLeftClick(shiftHeld);
+
+                        if (dragPlace) {
+                            buildPlacementDragActive = true;
+                            buildPlacementDragVisitedTiles = new Set();
+                            buildPlacementDragVisitedTiles.add(`${gx},${gy}`);
+                            tryPlaceSelectedBuildAt(gx, gy, true);
                         } else {
-                            _canPlace = _cd && players[localPlayerId].money >= (_cd.price * purchaseCount) &&
-                                (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
+                            stopBuildPlacementDrag();
+                            tryPlaceSelectedBuildAt(gx, gy, true);
                         }
-                        if (!_canPlace) { playSound('cant_place'); return; }
-                        queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled, count: purchaseCount });
-                        updateBuildMenu();
+
+                        if (!keepSelected) {
+                            selectedBuildItem = null;
+                            updateBuildMenu();
+                            stopBuildPlacementDrag();
+                        }
                         return;
                     }
                     // Start box selection
@@ -9847,7 +9951,7 @@
                 } else if (e.button === 2) { // Right click
                     e.preventDefault();
                     if (localDefeated) return;
-                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
+                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); stopBuildPlacementDrag(); return; }
                     let isCtrlMulti = isCtrlMultiCommand(e);
                     let clickGx = Math.floor(world.x / TILE), clickGy = Math.floor(world.y / TILE);
                     let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
@@ -10008,12 +10112,14 @@
                 let world = screenToWorldClamped(e.clientX, e.clientY);
                 mouseWorldX = world.x; mouseWorldY = world.y;
                 mouseScreenX = e.clientX; mouseScreenY = e.clientY;
+                tryBuildPlacementDragAtClient(e.clientX, e.clientY);
                 if (isBoxSelecting && selectionBox) {
                     selectionBox.ex = world.x; selectionBox.ey = world.y;
                 }
             });
 
             window.addEventListener('mousemove', (e) => {
+                tryBuildPlacementDragAtClient(e.clientX, e.clientY);
                 if (!isBoxSelecting || !selectionBox) return;
                 let world = screenToWorldClamped(e.clientX, e.clientY);
                 mouseWorldX = world.x; mouseWorldY = world.y;
@@ -10021,6 +10127,7 @@
             });
 
             gameArea.addEventListener('mouseup', (e) => {
+                if (e.button === 0) stopBuildPlacementDrag();
                 if (e.button === 0 && isBoxSelecting) {
                     isBoxSelecting = false;
                     if (selectionBox) {
@@ -10121,6 +10228,7 @@
             });
 
             window.addEventListener('mouseup', (e) => {
+                if (e.button === 0) stopBuildPlacementDrag();
                 if (e.button !== 0 || !isBoxSelecting) return;
                 let syntheticUp = new MouseEvent('mouseup', { button: 0, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey });
                 gameArea.dispatchEvent(syntheticUp);
@@ -10162,7 +10270,7 @@
                     e.preventDefault();
                     if (!gameStarted || gameOver) return;
                         if (localDefeated) return;
-                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); return; }
+                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); stopBuildPlacementDrag(); return; }
 
                     let isCtrlMulti = isCtrlMultiCommand(e);
                     let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
@@ -10208,6 +10316,7 @@
                 if (e.key === 'Escape') {
                     if (setResearchPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
+                    stopBuildPlacementDrag();
                     selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
                 }
 
@@ -10242,9 +10351,12 @@
                 }
             });
             document.addEventListener('keyup', (e) => { keysDown[e.key.toLowerCase()] = false; });
-            window.addEventListener('blur', () => { keysDown = {}; });
+            window.addEventListener('blur', () => { keysDown = {}; stopBuildPlacementDrag(); });
             document.addEventListener('visibilitychange', () => {
-                if (document.hidden) keysDown = {};
+                if (document.hidden) {
+                    keysDown = {};
+                    stopBuildPlacementDrag();
+                }
             });
 
             // HUD Settings
@@ -10356,6 +10468,14 @@
                 updateRenderRangeButton();
                 btnRenderRange.addEventListener('click', () => {
                     cycleRenderRangeMode();
+                });
+            }
+
+            const btnBuildPlaceMode = document.getElementById('btn-build-place-mode');
+            if (btnBuildPlaceMode) {
+                updateBuildPlacementModeButton();
+                btnBuildPlaceMode.addEventListener('click', () => {
+                    cycleBuildPlacementMode();
                 });
             }
 
@@ -14988,6 +15108,7 @@
             if (go) go.style.display = 'none';
 
             loadUiSettingsFromStorage();
+            updateBuildPlacementModeButton();
 
             rebuildPrecomputedStatsMap();
 
