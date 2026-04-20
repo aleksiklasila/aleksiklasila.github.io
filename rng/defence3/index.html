@@ -2274,20 +2274,37 @@
             return Number.isFinite(cap) ? Math.max(0, cap) : Infinity;
         }
 
-        function applyPrecomputedSoftCap(value, cap, statKey) {
+        function applyPrecomputedSoftCap(value, cap, statKey, baseValue, maxValueBeforeCap) {
             if (!Number.isFinite(value)) return value;
             if (!Number.isFinite(cap) || cap <= 0) return value;
-            if (RESEARCH_DECREASE_STATS[statKey]) {
-                // Smooth floor for cooldown-like stats: approaches cap as value gets small,
-                // but stays close to raw value when it is much larger than cap.
-                let raw = Math.max(0, value);
-                return Math.sqrt((raw * raw) + (cap * cap));
+            if (!Number.isFinite(baseValue) || !Number.isFinite(maxValueBeforeCap)) return value;
+
+            let denom = maxValueBeforeCap - baseValue;
+            if (!Number.isFinite(denom) || Math.abs(denom) < 1e-9) return value;
+
+            // Preserve multiplicative spacing where possible by projecting the raw value
+            // onto the baseline->max segment in log space, then mapping that position to
+            // baseline->cap in log space.
+            let canUseLog = value > 0 && baseValue > 0 && maxValueBeforeCap > 0 && cap > 0;
+            if (canUseLog) {
+                let logDenom = Math.log(maxValueBeforeCap / baseValue);
+                if (Number.isFinite(logDenom) && Math.abs(logDenom) >= 1e-9) {
+                    let tLog = Math.log(value / baseValue) / logDenom;
+                    if (Number.isFinite(tLog)) {
+                        tLog = Math.max(0, Math.min(1, tLog));
+                        let logCapSpan = Math.log(cap / baseValue);
+                        if (Number.isFinite(logCapSpan)) {
+                            return baseValue * Math.exp(logCapSpan * tLog);
+                        }
+                    }
+                }
             }
-            // Smooth soft cap: (cap*value)/sqrt((cap^2*(4/5)^2)+value^2)
-            let k = 4 / 5;
-            let denom = Math.sqrt((cap * cap * k * k) + (value * value));
-            if (denom <= 0) return value;
-            return (cap * value) / denom;
+
+            // Fallback for non-positive domains or degenerate logarithmic spans.
+            let t = (value - baseValue) / denom;
+            if (!Number.isFinite(t)) return value;
+            t = Math.max(0, Math.min(1, t));
+            return baseValue + (cap - baseValue) * t;
         }
 
         function computeBaseUnitStatsAtLevel(unitType, level) {
@@ -2380,15 +2397,19 @@
 
             for (let unitType in BASE_UNIT_STATS) {
                 PRECOMPUTED_STATS_MAP.unit[unitType] = [];
+                let baseAtLevel1 = computeBaseUnitStatsAtLevel(unitType, 1);
+                let baseAtMaxLevel = computeBaseUnitStatsAtLevel(unitType, MAX_THING_LEVEL);
                 for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
                     let base = computeBaseUnitStatsAtLevel(unitType, lvl);
                     let levelEntry = {};
                     for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                         let cap = getPrecomputedSoftCap('unit', statKey);
+                        let baselineValue = applyResearchLevelToBaseValue('unit', baseAtLevel1[statKey], statKey, 0);
+                        let maxValueBeforeCap = applyResearchLevelToBaseValue('unit', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                             let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r);
-                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
                         }
                         levelEntry[statKey] = arr;
                     }
@@ -2398,15 +2419,19 @@
 
             for (let buildingKey in BASE_CARD_TYPES) {
                 PRECOMPUTED_STATS_MAP.building[buildingKey] = [];
+                let baseAtLevel1 = computeBaseBuildingStatsAtLevel(buildingKey, 1);
+                let baseAtMaxLevel = computeBaseBuildingStatsAtLevel(buildingKey, MAX_THING_LEVEL);
                 for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
                     let base = computeBaseBuildingStatsAtLevel(buildingKey, lvl);
                     let levelEntry = {};
                     for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
                         let arr = new Array(MAX_RESEARCH_LEVEL + 1);
                         let cap = getPrecomputedSoftCap('building', statKey);
+                        let baselineValue = applyResearchLevelToBaseValue('building', baseAtLevel1[statKey], statKey, 0);
+                        let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                             let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r);
-                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey);
+                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
                         }
                         levelEntry[statKey] = arr;
                     }
