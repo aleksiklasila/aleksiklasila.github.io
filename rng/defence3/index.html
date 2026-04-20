@@ -247,7 +247,8 @@
 
         #help-popup,
         #research-popup,
-        #statsmap-popup {
+        #statsmap-popup,
+        #research-matrix-popup {
             position: fixed;
             inset: 0;
             z-index: 1200;
@@ -259,13 +260,15 @@
 
         #help-popup.hidden,
         #research-popup.hidden,
-        #statsmap-popup.hidden {
+        #statsmap-popup.hidden,
+        #research-matrix-popup.hidden {
             display: none;
         }
 
         #help-popup-card,
         #research-popup-card,
-        #statsmap-popup-card {
+        #statsmap-popup-card,
+        #research-matrix-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
             overflow: auto;
@@ -280,11 +283,16 @@
             width: min(900px, calc(100vw - 28px));
         }
 
+        #research-matrix-popup-card {
+            width: min(900px, calc(100vw - 28px));
+        }
+
         #research-popup-card {
             width: min(680px, calc(100vw - 28px));
         }
 
-        #statsmap-json {
+        #statsmap-json,
+        #research-matrix-json {
             width: 100%;
             min-height: 420px;
             box-sizing: border-box;
@@ -1164,6 +1172,18 @@
         </div>
     </div>
 
+    <div id="research-matrix-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="research-matrix-title">
+        <div id="research-matrix-popup-card">
+            <div class="help-title-row">
+                <h3 id="research-matrix-title" style="color:#8dc6ff; font-size:18px; margin:0">Research Stat Matrix</h3>
+                <button id="btn-research-matrix-close"
+                    style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+            </div>
+            <div class="help-mode">Preview helper only: research levels are shared and not tied to thing level.</div>
+            <textarea id="research-matrix-json" readonly spellcheck="false"></textarea>
+        </div>
+    </div>
+
     <div id="help-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
         <div id="help-popup-card">
             <div class="help-title-row">
@@ -1949,6 +1969,58 @@
             popup.classList.toggle('hidden', !open);
             if (open) refreshStatsMapPopupText();
             return wasOpen !== open;
+        }
+
+        function buildResearchStatMatrixGridText(kind, key, statKey) {
+            let lines = [];
+            let header = [''];
+            for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
+            lines.push(header.join('\t'));
+
+            for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
+                let row = [`L${tl}`];
+                for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
+                    let v = getResearchStatValueAtLevel(kind, key, statKey, rl, tl);
+                    row.push(formatResearchStatValue(statKey, v));
+                }
+                lines.push(row.join('\t'));
+            }
+
+            return lines.join('\n');
+        }
+
+        function refreshResearchStatMatrixPopupText() {
+            let ta = document.getElementById('research-matrix-json');
+            let title = document.getElementById('research-matrix-title');
+            if (!ta) return;
+            let p = researchStatMatrixPopupPayload;
+            if (!p) {
+                ta.value = '{"error":"No stat selected"}';
+                if (title) title.textContent = 'Research Stat Matrix';
+                ta.scrollTop = 0;
+                return;
+            }
+            if (title) title.textContent = `Research Stat Matrix: ${p.kind}:${p.key}:${p.statKey}`;
+            try {
+                ta.value = buildResearchStatMatrixGridText(p.kind, p.key, p.statKey);
+            } catch {
+                ta.value = 'Unable to build matrix';
+            }
+            ta.scrollTop = 0;
+        }
+
+        function setResearchStatMatrixPopupOpen(open) {
+            let popup = document.getElementById('research-matrix-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            if (open) refreshResearchStatMatrixPopupText();
+            return wasOpen !== open;
+        }
+
+        function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
+            researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
+            setResearchStatMatrixPopupOpen(true);
         }
 
         function mulberry32(seed) {
@@ -3033,6 +3105,7 @@
     let researchPreviewThingLevel = 1;
     let researchThingLevelDropdown = null;
     let researchThingLevelDropdownOutsideHandler = null;
+    let researchStatMatrixPopupPayload = null;
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = true;
@@ -10348,6 +10421,7 @@
                         e.stopPropagation();
                         return;
                     }
+                    if (setResearchStatMatrixPopupOpen(false)) return;
                     if (setResearchPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     stopBuildPlacementDrag();
@@ -10548,9 +10622,11 @@
             const btnShowStatsMap = document.getElementById('btn-show-statsmap');
             const btnRefreshStatsMap = document.getElementById('btn-refresh-statsmap');
             const btnStatsMapClose = document.getElementById('btn-statsmap-close');
+            const btnResearchMatrixClose = document.getElementById('btn-research-matrix-close');
             const helpPopup = document.getElementById('help-popup');
             const researchPopup = document.getElementById('research-popup');
             const statsMapPopup = document.getElementById('statsmap-popup');
+            const researchMatrixPopup = document.getElementById('research-matrix-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
             const goBtnGraph = document.getElementById('go-btn-graph');
@@ -10627,6 +10703,11 @@
                     setStatsMapPopupOpen(false);
                 });
             }
+            if (btnResearchMatrixClose) {
+                btnResearchMatrixClose.addEventListener('click', () => {
+                    setResearchStatMatrixPopupOpen(false);
+                });
+            }
             if (helpPopup) {
                 helpPopup.addEventListener('click', (e) => {
                     let tabBtn = e.target.closest('.help-tab-btn');
@@ -10644,6 +10725,11 @@
             if (statsMapPopup) {
                 statsMapPopup.addEventListener('mousedown', (e) => {
                     if (e.target === statsMapPopup) setStatsMapPopupOpen(false);
+                });
+            }
+            if (researchMatrixPopup) {
+                researchMatrixPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === researchMatrixPopup) setResearchStatMatrixPopupOpen(false);
                 });
             }
 
@@ -12761,6 +12847,41 @@
             menu.style.overflowY = 'auto';
             menu.style.minWidth = '220px';
             menu.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+
+            let head = document.createElement('div');
+            head.style.display = 'flex';
+            head.style.alignItems = 'center';
+            head.style.gap = '6px';
+            head.style.padding = '2px 4px 4px 4px';
+            head.style.borderBottom = '1px solid #2b3f50';
+            head.style.marginBottom = '4px';
+
+            let showAllBtn = document.createElement('button');
+            showAllBtn.type = 'button';
+            showAllBtn.textContent = '📊';
+            showAllBtn.title = 'Show all levels';
+            showAllBtn.style.cursor = 'pointer';
+            showAllBtn.style.background = '#1a2631';
+            showAllBtn.style.border = '1px solid #486179';
+            showAllBtn.style.color = '#cfe6ff';
+            showAllBtn.style.borderRadius = '3px';
+            showAllBtn.style.fontSize = '11px';
+            showAllBtn.style.padding = '1px 4px';
+            showAllBtn.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel);
+            });
+
+            let hint = document.createElement('span');
+            hint.textContent = ': visual only, R is L independent';
+            hint.style.color = '#9ab4cb';
+            hint.style.fontSize = '10px';
+            hint.style.whiteSpace = 'nowrap';
+
+            head.appendChild(showAllBtn);
+            head.appendChild(hint);
+            menu.appendChild(head);
 
             let selectedThingLevel = getResearchPreviewThingLevel();
             for (let thingLevel = 1; thingLevel <= MAX_THING_LEVEL; thingLevel++) {
