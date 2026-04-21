@@ -1309,6 +1309,10 @@
                             <td>Hold position for selected units</td>
                         </tr>
                         <tr>
+                            <td><span class="kbd">F</span></td>
+                            <td>Cycle level visibility (Everything -> Buildings -> Off)</td>
+                        </tr>
+                        <tr>
                             <td><span class="kbd">*</span> / <span class="kbd">/</span> / <span class="kbd">E</span> / <span class="kbd">Q</span></td>
                             <td>Apply subgroup unit <code>x2</code> / <code>/2</code> to each active selected unit subgroup (<span class="kbd">E</span>=<code>x2</code>, <span class="kbd">Q</span>=<code>/2</code>)</td>
                         </tr>
@@ -2404,24 +2408,24 @@
 
         // Unit combat stats
         const BASE_UNIT_STATS = {
-            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            mole: { hp: 10, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-            scout: { hp: 14, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, vis: 'rect', isWorker: true },
-            king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
+            norm: { hp: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+            fast: { hp: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+            tank: { hp: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+            boss: { hp: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+            flying: { hp: 45, price: 450, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            mole: { hp: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+            poison_resistant: { hp: 60, price: 600, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+            fire_resistant: { hp: 70, price: 700, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+            water_resistant: { hp: 50, price: 500, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+            ice_resistant: { hp: 65, price: 650, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+            laser_resistant: { hp: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+            snake: { hp: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+            scout: { hp: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            collector: { hp: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { hp: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, vis: 'rect', isWorker: true },
+            king: { hp: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
         const UNIT_LEVEL_SCALING = {
@@ -2447,7 +2451,7 @@
         let MAX_THING_LEVEL = 20;
         let MAX_RESEARCH_LEVEL = 10;
 
-        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true };
+        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true, unitPrice: true };
         const RESEARCH_STAT_LABELS = {
             maxHp: 'Max HP',
             damage: 'Damage',
@@ -2474,7 +2478,8 @@
             atkCd: 'Atk Cooldown',
             gatherPerTrip: 'Gather Speed',
             builderDps: 'Build Speed',
-            healerHps: 'Heal Speed'
+            healerHps: 'Heal Speed',
+            unitPrice: 'Unit Price'
         };
 
         const RESEARCHABLE_UNIT_STATS = {
@@ -2487,7 +2492,17 @@
         };
 
         const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps'];
-        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+
+        function getSpawnedUnitTypeForBuildingKey(key) {
+            if (!key) return null;
+            if (key.startsWith('barrack_')) return (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
+            if (key === 'spawner') return 'collector';
+            if (key === 'salvager') return 'salvager_unit';
+            if (key === 'builder_spawner') return 'builder_unit';
+            if (key === 'healer_spawner') return 'healer_unit';
+            return null;
+        }
 
         // Soft caps for precomputed stats. Infinity means "no soft cap".
         const PRECOMPUTED_SOFT_CAP_MAP = {
@@ -2553,10 +2568,15 @@
             return kind === 'unit' ? RESEARCH_BONUS_EXP_UNITS : RESEARCH_BONUS_EXP_OTHER;
         }
 
+        function getResearchBonusExpForStat(kind, statKey) {
+            if (statKey === 'unitPrice') return 1.8;
+            return getResearchBonusExp(kind);
+        }
+
         function applyResearchLevelToBaseValue(kind, baseValue, statKey, researchLevel) {
             if (!Number.isFinite(baseValue)) return NaN;
             let rLevel = clampResearchLevel(researchLevel);
-            let mult = Math.pow(getResearchBonusExp(kind), rLevel);
+            let mult = Math.pow(getResearchBonusExpForStat(kind, statKey), rLevel);
             if (RESEARCH_DECREASE_STATS[statKey]) return baseValue / Math.max(1e-6, mult);
             return baseValue * mult;
         }
@@ -2654,6 +2674,7 @@
                 blastRadius: NaN,
                 cd: NaN,
                 spawnCd: NaN,
+                unitPrice: NaN,
                 visionRange: NaN,
                 income: NaN,
                 burnDps: NaN,
@@ -2668,18 +2689,17 @@
                 efficiency: NaN,
             };
 
-            let spawnUnitType = null;
-            if (key.startsWith('barrack_')) spawnUnitType = (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
-            else if (key === 'spawner') spawnUnitType = 'collector';
-            else if (key === 'salvager') spawnUnitType = 'salvager_unit';
-            else if (key === 'builder_spawner') spawnUnitType = 'builder_unit';
-            else if (key === 'healer_spawner') spawnUnitType = 'healer_unit';
+            let spawnUnitType = getSpawnedUnitTypeForBuildingKey(key);
             if (spawnUnitType) {
                 let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
                 let baseSpawnCd = Number(cfg.baseTime);
                 let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
                 if (Number.isFinite(baseSpawnCd) && baseSpawnCd > 0) {
                     out.spawnCd = Math.max(0.05, baseSpawnCd * Math.pow(1 - reduction, lvl - 1));
+                }
+                let baseUnitPrice = Number((BASE_UNIT_STATS[spawnUnitType] || {}).price);
+                if (Number.isFinite(baseUnitPrice) && baseUnitPrice > 0) {
+                    out.unitPrice = Math.max(1, baseUnitPrice * Math.pow(2, lvl - 1));
                 }
             }
 
@@ -2876,10 +2896,8 @@
         }
 
         function getUnitBaseResearchPrice(unitType) {
-            if (unitType === 'collector') return 15;
-            if (unitType === 'salvager_unit') return 20;
-            if (unitType === 'builder_unit') return 18;
-            if (unitType === 'healer_unit') return 18;
+            let basePrice = Number((BASE_UNIT_STATS[unitType] || {}).price);
+            if (Number.isFinite(basePrice) && basePrice > 0) return Math.max(1, Math.round(basePrice));
             let cfg = BARRACK_SPAWN_CONFIG[unitType];
             if (cfg && Number.isFinite(cfg.baseTime)) return Math.max(1, Math.round(cfg.baseTime * 10));
             return 20;
@@ -2935,6 +2953,7 @@
             addStat('blastRadius', getBuildingStatFromMap(key, 1, 'blastRadius', 0));
             addStat('cd', d.cd);
             addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
+            addStat('unitPrice', getBuildingStatFromMap(key, 1, 'unitPrice', 0));
             addStat('visionRange', d.visionRange);
             addStat('income', getBuildingStatFromMap(key, 1, 'income', 0));
             addStat('burnDps', getBuildingStatFromMap(key, 1, 'burnDps', 0));
@@ -3023,7 +3042,7 @@
             let mults = ensurePlayerResearchMultipliers(playerId);
             let id = makeResearchLevelId(kind, key, statKey);
             if (!Number.isFinite(mults[id])) {
-                mults[id] = Math.pow(getResearchBonusExp(kind), getPlayerResearchLevel(playerId, kind, key, statKey));
+                mults[id] = Math.pow(getResearchBonusExpForStat(kind, statKey), getPlayerResearchLevel(playerId, kind, key, statKey));
             }
             return Math.max(1, mults[id]);
         }
@@ -3494,7 +3513,7 @@
     const LEVEL_VISIBILITY_BUILDINGS = 1;
     const LEVEL_VISIBILITY_NONE = 2;
     // Default keeps existing behavior (building labels only)
-    let levelVisibilityMode = LEVEL_VISIBILITY_BUILDINGS;
+    let levelVisibilityMode = LEVEL_VISIBILITY_NONE;
 
     const RENDER_RANGE_TURRETS = 0;
     const RENDER_RANGE_TURRETS_AND_UNITS = 1;
@@ -7214,10 +7233,10 @@
             }
 
             getUnitCost() {
-                // Cost scales linearly with effective level
-                let baseCost = Math.round(getBaseSpawnCooldownSeconds(this.unitType, `barrack_${this.unitType}`) * 10);
                 let lvl = getThingEffectiveLevel(this);
-                return Math.round(baseCost * (1 + (lvl - 1) * 0.5));
+                let mapped = getBuildingStatForOwner(this.owner, `barrack_${this.unitType}`, lvl, 'unitPrice');
+                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
+                return getUnitBaseResearchPrice(this.unitType);
             }
 
             update() {
@@ -7304,7 +7323,12 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level, this.owner, 'spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(15 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() {
+                let lvl = getThingEffectiveLevel(this);
+                let mapped = getBuildingStatForOwner(this.owner, 'spawner', lvl, 'unitPrice');
+                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
+                return getUnitBaseResearchPrice('collector');
+            }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
@@ -7374,7 +7398,12 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level, this.owner, 'salvager') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(20 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() {
+                let lvl = getThingEffectiveLevel(this);
+                let mapped = getBuildingStatForOwner(this.owner, 'salvager', lvl, 'unitPrice');
+                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
+                return getUnitBaseResearchPrice('salvager_unit');
+            }
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
@@ -7445,7 +7474,12 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level, this.owner, 'builder_spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() {
+                let lvl = getThingEffectiveLevel(this);
+                let mapped = getBuildingStatForOwner(this.owner, 'builder_spawner', lvl, 'unitPrice');
+                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
+                return getUnitBaseResearchPrice('builder_unit');
+            }
             // Builder DPS per unit: scales with effective level
             getBuilderDps() {
                 let lvl = getThingEffectiveLevel(this);
@@ -7523,7 +7557,12 @@
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level, this.owner, 'healer_spawner') * TICK_RATE);
                 updateItemTextCache(this);
             }
-            getUnitCost() { let lvl = getThingEffectiveLevel(this); return Math.round(18 * (1 + (lvl - 1) * 0.5)); }
+            getUnitCost() {
+                let lvl = getThingEffectiveLevel(this);
+                let mapped = getBuildingStatForOwner(this.owner, 'healer_spawner', lvl, 'unitPrice');
+                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
+                return getUnitBaseResearchPrice('healer_unit');
+            }
             getHealerHps() {
                 let lvl = getThingEffectiveLevel(this);
                 return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
@@ -7815,6 +7854,7 @@
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         // Building finished (maybe by another builder), find next
+                        _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -7858,8 +7898,9 @@
                                 if (task.workDone >= task.workRequired) {
                                     completeActiveResearchTaskForPlayer(t.owner, task);
                                     t.researchTask = getPlayerResearchTask(t.owner);
-                                    t.isResearching = false;
+                                    t.isResearching = !!(isAutoResearchEnabled(t) && !t.isUpgrading && t.researchTask && t.researchTask.workDone < t.researchTask.workRequired);
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+                                    _builderRememberWorkSite(u, t);
                                     u.workerTarget = null;
                                     _builderFindTarget(u, myGx, myGy);
                                 }
@@ -7875,6 +7916,7 @@
                                     createExplosion(t.x, t.y, '#8f8', 8);
                                     if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                     recalculateAdjacency();
+                                    _builderRememberWorkSite(u, t);
                                     u.workerTarget = null;
                                     _builderFindTarget(u, myGx, myGy);
                                 }
@@ -7895,6 +7937,7 @@
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                     recalculateAdjacency();
+                                    _builderRememberWorkSite(u, t);
                                     u.workerTarget = null;
                                     _builderFindTarget(u, myGx, myGy);
                                 }
@@ -7922,6 +7965,7 @@
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                        _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -7960,6 +8004,7 @@
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
                     // Building in place without returning for gold (every 20 ticks add 1 HP)
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                        _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
                         return;
@@ -7975,8 +8020,9 @@
                             if (task.workDone >= task.workRequired) {
                                 completeActiveResearchTaskForPlayer(t.owner, task);
                                 t.researchTask = getPlayerResearchTask(t.owner);
-                                t.isResearching = false;
+                                t.isResearching = !!(isAutoResearchEnabled(t) && !t.isUpgrading && t.researchTask && t.researchTask.workDone < t.researchTask.workRequired);
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+                                _builderRememberWorkSite(u, t);
                                 u.workerTarget = null;
                                 _builderFindTarget(u, myGx, myGy);
                             }
@@ -7991,6 +8037,7 @@
                                 createExplosion(t.x, t.y, '#8f8', 8);
                                 if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                 recalculateAdjacency();
+                                _builderRememberWorkSite(u, t);
                                 u.workerTarget = null;
                                 _builderFindTarget(u, myGx, myGy);
                             }
@@ -8010,6 +8057,7 @@
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                 recalculateAdjacency();
+                                _builderRememberWorkSite(u, t);
                                 u.workerTarget = null;
                                 _builderFindTarget(u, myGx, myGy);
                             }
@@ -8182,6 +8230,26 @@
             return true;
         }
 
+        function _builderRememberWorkSite(u, target = null) {
+            let t = target || (u ? u.workerTarget : null);
+            if (!u || !t) return;
+            if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                u._builderLastWorkX = t.x;
+                u._builderLastWorkY = t.y;
+            }
+            if (Number.isFinite(t.gx) && Number.isFinite(t.gy)) {
+                u._builderLastWorkGx = t.gx;
+                u._builderLastWorkGy = t.gy;
+            }
+        }
+
+        function _builderGetSearchOrigin(u) {
+            if (u && Number.isFinite(u._builderLastWorkX) && Number.isFinite(u._builderLastWorkY)) {
+                return { x: u._builderLastWorkX, y: u._builderLastWorkY };
+            }
+            return { x: u.x, y: u.y };
+        }
+
         function _getBuilderWorkTargetAt(gx, gy, owner, allowDisabledBuild = false) {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
             let target = towers.find(t => t.gx === gx && t.gy === gy && _isBuilderWorkTarget(t, owner, allowDisabledBuild));
@@ -8250,7 +8318,22 @@
 
         // Builder: find nearest building under construction
         function _builderFindTarget(u, myGx, myGy) {
-            let target = _findNearestUnderConstruction(u);
+            let target = null;
+
+            if (_isBuilderWorkTarget(u.workerTarget, u.owner)) {
+                target = u.workerTarget;
+            }
+            if (!target && Number.isFinite(u._builderLastWorkGx) && Number.isFinite(u._builderLastWorkGy)) {
+                target = _getBuilderWorkTargetAt(u._builderLastWorkGx, u._builderLastWorkGy, u.owner);
+            }
+            if (!target && Number.isFinite(u._builderLastWorkX) && Number.isFinite(u._builderLastWorkY)) {
+                target = _getBuilderWorkTargetNear(u._builderLastWorkX, u._builderLastWorkY, u.owner, Math.max(22, TILE * 1.5));
+            }
+            if (!target) {
+                let origin = _builderGetSearchOrigin(u);
+                target = _findNearestUnderConstruction(u, origin.x, origin.y);
+            }
+
             if (target) {
                 _builderAssignTarget(u, target, myGx, myGy);
             } else {
@@ -8266,6 +8349,7 @@
                 return;
             }
             u.workerTarget = target;
+            _builderRememberWorkSite(u, target);
             let canWalk = _builderCanWalk(u.owner);
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             if (u.builderHasMaterial) {
@@ -8411,14 +8495,14 @@
             }
         }
 
-        function _findNearestUnderConstruction(u) {
+        function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
             let owner = u.owner, bestDist = Infinity, best = null;
             let check = (b) => {
                 if (b.markedForSalvage) return;
                 if ((!b.underConstruction && !b.isUpgrading && !b.isResearching) || b.owner !== owner) return;
                 if (b.type === 'research' && !isAutoResearchEnabled(b)) return;
                 if (b.underConstruction && !isBuildEnabled(b)) return;
-                let d = Math.hypot(b.x - u.x, b.y - u.y);
+                let d = Math.hypot(b.x - originX, b.y - originY);
                 if (d < bestDist) { bestDist = d; best = b; }
             };
             for (let t of towers) check(t);
@@ -10889,6 +10973,9 @@
                 if ((e.key === 'z' || e.key === 'Z') && selectedUnits.length > 0) attackMoveMode = true;
                 if ((e.key === 'x' || e.key === 'X') && selectedUnits.length > 0) { let au = getActiveUnits(); if (au.length) queueAction({ action: 'stop', unitIds: au.map(u => u.id) }); }
                 if (e.key === 'c' || e.key === 'C') { let au = getActiveUnits(); if (au.length) queueAction({ action: 'hold', unitIds: au.map(u => u.id) }); }
+                if (e.key === 'f' || e.key === 'F') {
+                    cycleLevelVisibilityMode();
+                }
                 if (e.key === '/' || e.code === 'NumpadDivide' || e.key === 'q' || e.key === 'Q') {
                     queueResizeForEachActiveUnitSubgroup('d2');
                 }
@@ -12212,18 +12299,6 @@
                 return `$${formatBigNumber(approxCost)} / ${formatBigNumber(Math.max(0, Math.round(work)))}W`;
             };
 
-            let getQueueCostForBarrackLevel = (buildingKey, unitType, thingLevel) => {
-                let tl = Math.max(1, clampThingLevel(thingLevel));
-                let baseCost = Math.round(getBaseSpawnCooldownSeconds(unitType, buildingKey) * 10);
-                return Math.round(baseCost * (1 + (tl - 1) * 0.5));
-            };
-
-            let getQueueCostForSpawnerLevel = (spawnerKey, thingLevel) => {
-                let tl = Math.max(1, clampThingLevel(thingLevel));
-                let baseCost = spawnerKey === 'spawner' ? 15 : (spawnerKey === 'salvager' ? 20 : 18);
-                return Math.round(baseCost * (1 + (tl - 1) * 0.5));
-            };
-
             let getUnitDpsForMatrix = (unitType, thingLevel, researchLevel) => {
                 let tl = Math.max(1, clampThingLevel(thingLevel));
                 let rl = Math.max(0, clampResearchLevel(researchLevel));
@@ -12276,14 +12351,12 @@
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
                 let bStats = calculateItemStats(key, level, localPlayerId);
-                let unitCost = getQueueCostForBarrackLevel(key, unitType, level);
+                let unitCost = getBuildingStatForOwner(localPlayerId, key, level, 'unitPrice');
                 let spawnCd = getBarrackSpawnCooldown(unitType, level, localPlayerId, key);
                 let up = getUnitPreview(unitType, level);
                 addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
-                addRow('Queue Cost', `$${fmt(unitCost)}`, {
-                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForBarrackLevel(key, unitType, thingLevel))}`
-                });
+                addRow('Unit Price', `$${fmt(unitCost)}`, { kind: 'building', key, statKey: 'unitPrice' });
                 addRow('Unit HP', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
                 if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
                 else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'healerHps' });
@@ -12303,13 +12376,11 @@
                 let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : (key === 'builder_spawner' ? 'builder_unit' : 'healer_unit'));
                 let stats = calculateItemStats(key, level, localPlayerId);
                 let spawnCd = getBarrackSpawnCooldown(workerType, level, localPlayerId, key);
-                let unitCost = getQueueCostForSpawnerLevel(key, level);
+                let unitCost = getBuildingStatForOwner(localPlayerId, key, level, 'unitPrice');
                 let up = getUnitPreview(workerType, level);
                 addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
-                addRow('Queue Cost', `$${fmt(unitCost)}`, {
-                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForSpawnerLevel(key, thingLevel))}`
-                });
+                addRow('Unit Price', `$${fmt(unitCost)}`, { kind: 'building', key, statKey: 'unitPrice' });
                 addRow('Worker HP', fmt(up.hp), { kind: 'unit', key: workerType, statKey: 'hp' });
                 if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'builderDps' });
                 else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'healerHps' });
