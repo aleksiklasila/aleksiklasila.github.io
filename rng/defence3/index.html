@@ -302,7 +302,61 @@
             border-radius: 6px;
             padding: 8px;
             font: 11px/1.35 Consolas, monospace;
+        }
+
+        #statsmap-json {
             resize: vertical;
+        }
+
+        #research-matrix-json {
+            height: 420px;
+            overflow: auto;
+            padding: 0;
+        }
+
+        #research-matrix-json .matrix-table {
+            border-collapse: collapse;
+            width: max-content;
+            min-width: 100%;
+            table-layout: auto;
+            font: 11px/1.35 Consolas, monospace;
+        }
+
+        #research-matrix-json .matrix-table th,
+        #research-matrix-json .matrix-table td {
+            border: 1px solid #2e3943;
+            padding: 4px 7px;
+            white-space: nowrap;
+            text-align: right;
+            background: #0f1113;
+        }
+
+        #research-matrix-json .matrix-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            background: #17202a;
+            color: #bfe0ff;
+        }
+
+        #research-matrix-json .matrix-table .matrix-row-head {
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            text-align: left;
+            background: #161a1f;
+            color: #9fc3e2;
+        }
+
+        #research-matrix-json .matrix-table thead .matrix-row-head {
+            z-index: 4;
+            background: #1b2733;
+        }
+
+        #research-matrix-json .matrix-empty {
+            padding: 10px;
+            color: #c7d9ea;
+            white-space: pre-wrap;
         }
 
         .settings-list {
@@ -788,19 +842,42 @@
 
         #shop-stats-container .build-stat-row {
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 4px;
             padding: 1px 0;
             font-size: 9px;
         }
 
+        #shop-stats-container .build-stat-matrix-btn {
+            flex: 0 0 auto;
+            width: 14px;
+            height: 14px;
+            line-height: 12px;
+            border: 1px solid #35516a;
+            background: #121a21;
+            color: #9ec7e8;
+            border-radius: 3px;
+            font-size: 9px;
+            text-align: center;
+            padding: 0;
+            cursor: pointer;
+        }
+
+        #shop-stats-container .build-stat-matrix-btn:hover {
+            background: #1a2732;
+            border-color: #4f7696;
+            color: #d7ecff;
+        }
+
         #shop-stats-container .build-stat-label {
             color: #888;
+            flex: 1 1 auto;
         }
 
         #shop-stats-container .build-stat-value {
             color: #fff;
             text-align: right;
+            margin-left: auto;
         }
 
         #shop-stats-container .shop-stats-desc {
@@ -1180,7 +1257,7 @@
                     style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
             </div>
             <div class="help-mode">Preview helper only: research levels are shared and not tied to thing level.</div>
-            <textarea id="research-matrix-json" readonly spellcheck="false"></textarea>
+            <div id="research-matrix-json" role="region" aria-label="Research matrix table"></div>
         </div>
     </div>
 
@@ -1971,11 +2048,11 @@
             return wasOpen !== open;
         }
 
-        function buildResearchStatMatrixGridText(kind, key, statKey) {
-            let lines = [];
+        function buildResearchStatMatrixGrid(kind, key, statKey) {
+            let grid = [];
             let header = [''];
             for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
-            lines.push(header.join('\t'));
+            grid.push(header);
 
             for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
                 let row = [`L${tl}`];
@@ -1983,10 +2060,91 @@
                     let v = getResearchStatValueAtLevel(kind, key, statKey, rl, tl);
                     row.push(formatResearchStatValue(statKey, v));
                 }
-                lines.push(row.join('\t'));
+                grid.push(row);
             }
 
-            return lines.join('\n');
+            return grid;
+        }
+
+        function formatShopStatMatrixCellValue(value, statKey = '') {
+            if (Number.isFinite(value)) {
+                if (statKey) return formatResearchStatValue(statKey, value);
+                return formatBigNumber(value, 2);
+            }
+            if (value === null || value === undefined) return '-';
+            return String(value);
+        }
+
+        function buildShopStatMatrixGrid(matrixId) {
+            let d = shopStatMatrixDescriptorById[matrixId];
+            if (!d) return null;
+
+            let grid = [];
+            let header = [''];
+            for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
+            grid.push(header);
+
+            for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
+                let row = [`L${tl}`];
+                for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
+                    let raw = null;
+                    if (typeof d.getValue === 'function') {
+                        raw = d.getValue(tl, rl);
+                    } else if (d.kind && d.key && d.statKey) {
+                        let hasResearchEntry = !!getResearchStatEntry(d.kind, d.key, d.statKey);
+                        let useRl = hasResearchEntry ? rl : 0;
+                        raw = d.kind === 'unit'
+                            ? getUnitStatFromMap(d.key, tl, d.statKey, useRl)
+                            : getBuildingStatFromMap(d.key, tl, d.statKey, useRl);
+                    } else {
+                        raw = d.fixedValue;
+                    }
+                    row.push(formatShopStatMatrixCellValue(raw, d.statKey || ''));
+                }
+                grid.push(row);
+            }
+
+            return grid;
+        }
+
+        function _escapeHtml(text) {
+            return String(text === undefined || text === null ? '' : text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderMatrixGridToPopup(grid, emptyText = 'No matrix data.') {
+            let container = document.getElementById('research-matrix-json');
+            if (!container) return;
+            if (!Array.isArray(grid) || grid.length === 0 || !Array.isArray(grid[0]) || grid[0].length === 0) {
+                container.innerHTML = `<div class="matrix-empty">${_escapeHtml(emptyText)}</div>`;
+                return;
+            }
+
+            let html = '<table class="matrix-table"><thead><tr>';
+            let head = grid[0];
+            for (let i = 0; i < head.length; i++) {
+                if (i === 0) html += `<th class="matrix-row-head">${_escapeHtml(head[i])}</th>`;
+                else html += `<th>${_escapeHtml(head[i])}</th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (let r = 1; r < grid.length; r++) {
+                let row = grid[r] || [];
+                html += '<tr>';
+                for (let c = 0; c < row.length; c++) {
+                    if (c === 0) html += `<th class="matrix-row-head">${_escapeHtml(row[c])}</th>`;
+                    else html += `<td>${_escapeHtml(row[c])}</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+            container.innerHTML = html;
+            container.scrollTop = 0;
+            container.scrollLeft = 0;
         }
 
         function refreshResearchStatMatrixPopupText() {
@@ -1995,18 +2153,22 @@
             if (!ta) return;
             let p = researchStatMatrixPopupPayload;
             if (!p) {
-                ta.value = '{"error":"No stat selected"}';
+                renderMatrixGridToPopup(null, '{"error":"No stat selected"}');
                 if (title) title.textContent = 'Research Stat Matrix';
-                ta.scrollTop = 0;
                 return;
             }
-            if (title) title.textContent = `Research Stat Matrix: ${p.kind}:${p.key}:${p.statKey}`;
             try {
-                ta.value = buildResearchStatMatrixGridText(p.kind, p.key, p.statKey);
+                if (Number.isFinite(Number(p.shopMatrixId))) {
+                    let d = shopStatMatrixDescriptorById[p.shopMatrixId];
+                    if (title) title.textContent = d && d.title ? `Research Stat Matrix: ${d.title}` : 'Research Stat Matrix';
+                    renderMatrixGridToPopup(buildShopStatMatrixGrid(Number(p.shopMatrixId)), 'No stat descriptor found.');
+                } else {
+                    if (title) title.textContent = `Research Stat Matrix: ${p.kind}:${p.key}:${p.statKey}`;
+                    renderMatrixGridToPopup(buildResearchStatMatrixGrid(p.kind, p.key, p.statKey));
+                }
             } catch {
-                ta.value = 'Unable to build matrix';
+                renderMatrixGridToPopup(null, 'Unable to build matrix');
             }
-            ta.scrollTop = 0;
         }
 
         function setResearchStatMatrixPopupOpen(open) {
@@ -2021,6 +2183,18 @@
         function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
             researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
             setResearchStatMatrixPopupOpen(true);
+        }
+
+        function bindShopStatsMatrixButtons(container) {
+            if (!container) return;
+            container.querySelectorAll('.build-stat-matrix-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let matrixId = Number.parseInt(btn.dataset.matrixId || '', 10);
+                    if (!Number.isFinite(matrixId)) return;
+                    researchStatMatrixPopupPayload = { shopMatrixId: matrixId };
+                    setResearchStatMatrixPopupOpen(true);
+                });
+            });
         }
 
         function mulberry32(seed) {
@@ -2061,6 +2235,11 @@
     let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
         let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
 
+        function secondsToTicks(seconds) {
+            let sec = Math.max(0, Number(seconds) || 0);
+            return Math.max(1, Math.round(sec * TICK_RATE));
+        }
+
         const C_BG = '#111', C_WALL = '#3a3a3a', C_FLOOR = '#161616';
 
         const PLAYER_COLORS = ['#4488ff', '#ff4444'];
@@ -2071,17 +2250,17 @@
         // ============================================================
         const BASE_CARD_TYPES = {
             // Towers (target: wall)
-            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 40, damage: 8, target: 'wall', towerHp: 100 },
-            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 17, damage: 5, target: 'wall', towerHp: 120 },
-            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 35, damage: 10, target: 'wall', towerHp: 150 },
-            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 50, damage: 3, target: 'wall', towerHp: 200 },
-            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 110, damage: 45, target: 'wall', towerHp: 350 },
-            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 150, damage: 5, target: 'wall', towerHp: 180 },
-            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 40, damage: 33, target: 'wall', towerHp: 400 },
-            sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 240, damage: 100, target: 'wall', towerHp: 1500 },
-            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 35, damage: 1, target: 'wall', towerHp: 150 },
+            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 2.0, damage: 8, target: 'wall', towerHp: 100 },
+            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 0.85, damage: 5, target: 'wall', towerHp: 120 },
+            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 1.75, damage: 10, target: 'wall', towerHp: 150 },
+            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 2.5, damage: 3, target: 'wall', towerHp: 200 },
+            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 5.5, damage: 45, target: 'wall', towerHp: 350 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 7.5, damage: 5, target: 'wall', towerHp: 180 },
+            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 2.0, damage: 33, target: 'wall', towerHp: 400 },
+            sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 12.0, damage: 100, target: 'wall', towerHp: 1500 },
+            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 1.75, damage: 1, target: 'wall', towerHp: 150 },
             laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
-            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 28, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 24 },
+            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 1.4, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 24 },
 
             // Floor items
             sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", target: 'floor' },
@@ -2206,52 +2385,52 @@
 
         // Barrack spawn config
         const BARRACK_SPAWN_CONFIG = {
-            norm: { baseTime: 30, reduction: 0.10 }, fast: { baseTime: 25, reduction: 0.10 }, tank: { baseTime: 45, reduction: 0.08 },
-            boss: { baseTime: 90, reduction: 0.06 }, mole: { baseTime: 20, reduction: 0.12 }, snake: { baseTime: 120, reduction: 0.05 },
-            flying: { baseTime: 35, reduction: 0.09 }, poison_resistant: { baseTime: 40, reduction: 0.08 },
-            fire_resistant: { baseTime: 40, reduction: 0.08 }, water_resistant: { baseTime: 35, reduction: 0.09 },
-            ice_resistant: { baseTime: 40, reduction: 0.08 }, laser_resistant: { baseTime: 40, reduction: 0.08 },
-            scout: { baseTime: 18, reduction: 0.11 },
-            collector: { baseTime: 15, reduction: 0.10 },
-            salvager_unit: { baseTime: 20, reduction: 0.10 },
-            builder_unit: { baseTime: 25, reduction: 0.10 },
-            healer_unit: { baseTime: 25, reduction: 0.10 },
+            norm: { baseTime: 1.5, reduction: 0.10 }, fast: { baseTime: 1.25, reduction: 0.10 }, tank: { baseTime: 2.25, reduction: 0.08 },
+            boss: { baseTime: 4.5, reduction: 0.06 }, mole: { baseTime: 1.0, reduction: 0.12 }, snake: { baseTime: 6.0, reduction: 0.05 },
+            flying: { baseTime: 1.75, reduction: 0.09 }, poison_resistant: { baseTime: 2.0, reduction: 0.08 },
+            fire_resistant: { baseTime: 2.0, reduction: 0.08 }, water_resistant: { baseTime: 1.75, reduction: 0.09 },
+            ice_resistant: { baseTime: 2.0, reduction: 0.08 }, laser_resistant: { baseTime: 2.0, reduction: 0.08 },
+            scout: { baseTime: 0.9, reduction: 0.11 },
+            collector: { baseTime: 0.75, reduction: 0.10 },
+            salvager_unit: { baseTime: 1.0, reduction: 0.10 },
+            builder_unit: { baseTime: 1.25, reduction: 0.10 },
+            healer_unit: { baseTime: 1.25, reduction: 0.10 },
         };
 
         // Unit combat stats
         const BASE_UNIT_STATS = {
-            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 20, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 45, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 60, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 35, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            mole: { hp: 10, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 35, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 40, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 30, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 35, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-            scout: { hp: 14, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 32, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#fff', r: 6, vis: 'rect', isWorker: true },
-            king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 40, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
+            norm: { hp: 40, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+            fast: { hp: 20, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+            tank: { hp: 80, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+            boss: { hp: 400, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+            flying: { hp: 45, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            mole: { hp: 10, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+            poison_resistant: { hp: 60, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+            fire_resistant: { hp: 70, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+            water_resistant: { hp: 50, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+            ice_resistant: { hp: 65, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+            laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+            snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+            scout: { hp: 14, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, vis: 'rect', isWorker: true },
+            king: { hp: 250, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
         const UNIT_LEVEL_SCALING = {
-            _default: { hpExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 8, visionExp: 1.02, visionCapBonus: 1.2 },
-            boss: { hpExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 18, visionExp: 1.015, visionCapBonus: 1.0 },
-            flying: { hpExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 10, visionExp: 1.03, visionCapBonus: 1.8 },
-            snake: { hpExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 14, visionExp: 1.02, visionCapBonus: 1.3 },
-            tank: { hpExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 12, visionExp: 1.02, visionCapBonus: 1.0 },
-            scout: { hpExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 12, visionExp: 1.04, visionCapBonus: 3.2 },
-            collector: { hpExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
-            salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
-            builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
-            healer_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 999, visionExp: 1.015, visionCapBonus: 0.8 },
-            king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 12, visionExp: 1.02, visionCapBonus: 1.2 },
+            _default: { hpExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.02, visionCapBonus: 1.2 },
+            boss: { hpExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.015, visionCapBonus: 1.0 },
+            flying: { hpExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.03, visionCapBonus: 1.8 },
+            snake: { hpExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.02, visionCapBonus: 1.3 },
+            tank: { hpExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.0 },
+            scout: { hpExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 3.2 },
+            collector: { hpExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
+            salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
+            builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
+            healer_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
+            king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
         let RESEARCH_COST_EXP = 1.85;
@@ -2271,6 +2450,15 @@
             spawnCd: 'Spawn CD',
             visionRange: 'Vision',
             income: 'Income',
+            burnDps: 'Burn DPS',
+            burnDuration: 'Burn Duration',
+            poisonDps: 'Poison DPS',
+            poisonDuration: 'Poison Duration',
+            freezeDps: 'Freeze DPS',
+            freezeDuration: 'Freeze Duration',
+            wetDuration: 'Wet Duration',
+            sandDuration: 'Slow Duration',
+            watchDuration: 'Watch Duration',
             hp: 'HP',
             speed: 'Speed',
             atk: 'Attack',
@@ -2291,14 +2479,14 @@
         };
 
         const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps'];
-        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange', 'income'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration'];
 
         // Soft caps for precomputed stats. Infinity means "no soft cap".
         const PRECOMPUTED_SOFT_CAP_MAP = {
             unit: {
                 hp: Infinity,
                 atk: Infinity,
-                atkCd: 0.5,
+                atkCd: 0.025,
                 speed: ({ baseAtLevel1 }) => {
                     let baseSpeed = Number(baseAtLevel1 && baseAtLevel1.speed);
                     if (!Number.isFinite(baseSpeed) || baseSpeed <= 0) return 8.5;
@@ -2319,8 +2507,8 @@
             building: {
                 maxHp: Infinity,
                 damage: Infinity,
-                cd: 0.5,
-                spawnCd: 0.5,
+                cd: 0.025,
+                spawnCd: 0.025,
                 visionRange: ({ baseAtLevel1 }) => {
                     let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
                     return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
@@ -2417,9 +2605,9 @@
             let hp = Math.max(1, Math.floor((Number(s.hp) || 1) * hpMult));
             let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
 
-            let baseCd = Number(s.atkCd) || 30;
+            let baseCd = Number(s.atkCd) || 1.5;
             let atkCd = baseCd;
-            if (baseCd < 900) atkCd = Math.max(cfg.minCd || 8, Math.round(baseCd * cdMult));
+            atkCd = Math.max(cfg.minCd || 0.4, baseCd * cdMult);
 
             let baseSpeed = Number(s.speed) || 1;
             let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
@@ -2442,7 +2630,23 @@
             let key = type || 'farm';
             let lvl = Math.max(1, clampThingLevel(level));
             let mult = Math.pow(1.6, lvl - 1);
-            let out = { maxHp: NaN, damage: NaN, cd: NaN, spawnCd: NaN, visionRange: NaN, income: NaN };
+            let out = {
+                maxHp: NaN,
+                damage: NaN,
+                cd: NaN,
+                spawnCd: NaN,
+                visionRange: NaN,
+                income: NaN,
+                burnDps: NaN,
+                burnDuration: NaN,
+                poisonDps: NaN,
+                poisonDuration: NaN,
+                freezeDps: NaN,
+                freezeDuration: NaN,
+                wetDuration: NaN,
+                sandDuration: NaN,
+                watchDuration: NaN,
+            };
 
             let spawnUnitType = null;
             if (key.startsWith('barrack_')) spawnUnitType = (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
@@ -2452,7 +2656,7 @@
             else if (key === 'healer_spawner') spawnUnitType = 'healer_unit';
             if (spawnUnitType) {
                 let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
-                out.spawnCd = Math.max(1, (cfg.baseTime || 20) * Math.pow(1 - (cfg.reduction || 0), lvl - 1));
+                out.spawnCd = Math.max(0.05, (cfg.baseTime || 1) * Math.pow(1 - (cfg.reduction || 0), lvl - 1));
             }
 
             if (key === 'farm') {
@@ -2479,7 +2683,7 @@
             if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
 
             if (key === 'water' || key === 'smg' || key === 'pistol') {
-                if (Number.isFinite(def.cd)) out.cd = Math.max(5, def.cd * (1 - (lvl - 1) * 0.1));
+                if (Number.isFinite(def.cd)) out.cd = Math.max(0.25, def.cd * (1 - (lvl - 1) * 0.1));
                 if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
             } else if (key === 'fire' || key === 'poison') {
                 if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
@@ -2490,6 +2694,42 @@
             if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
                 out.visionRange = Math.min(out.visionRange, def.maxVisionRange);
             }
+
+            // Status effect stats are first-class precomputed values so research/matrix can use them.
+            if (Number.isFinite(out.damage)) {
+                if (key === 'fire') {
+                    out.burnDps = Math.max(0.1, out.damage * 0.05);
+                    out.burnDuration = 3 + lvl * 0.5;
+                } else if (key === 'poison') {
+                    out.poisonDps = Math.max(0.1, out.damage * 0.10);
+                    out.poisonDuration = 7.5 + lvl * 2.5;
+                } else if (key === 'ice') {
+                    out.freezeDps = Math.max(0.2, out.damage * 0.20);
+                    out.freezeDuration = 3 + lvl * 0.5;
+                } else if (key === 'elements') {
+                    let dot = Math.max(0.1, out.damage * 0.20);
+                    out.burnDps = dot;
+                    out.poisonDps = dot;
+                    out.freezeDps = dot;
+                    out.burnDuration = 5 + lvl;
+                    out.poisonDuration = 5 + lvl;
+                    out.freezeDuration = 5 + lvl;
+                } else if (key === 'lava') {
+                    out.burnDps = Math.max(0.1, out.damage);
+                    out.burnDuration = 1.5;
+                } else if (key === 'poison_puddle') {
+                    out.poisonDps = Math.max(0.1, out.damage);
+                    out.poisonDuration = 1.5;
+                } else if (key === 'ice_patch') {
+                    out.freezeDps = Math.max(0.2, out.damage);
+                    out.freezeDuration = 1.5;
+                }
+            }
+
+            if (key === 'water' || key === 'water_puddle') out.wetDuration = key === 'water' ? (6 + lvl) : 3;
+            if (key === 'sand_gun' || key === 'sand') out.sandDuration = key === 'sand_gun' ? 9 : 0.5;
+            if (key === 'watch_tower') out.watchDuration = 4 + lvl;
+
             return out;
         }
 
@@ -2583,7 +2823,7 @@
             if (unitType === 'builder_unit') return 18;
             if (unitType === 'healer_unit') return 18;
             let cfg = BARRACK_SPAWN_CONFIG[unitType];
-            if (cfg && Number.isFinite(cfg.baseTime)) return Math.max(1, Math.round(cfg.baseTime * 0.5));
+            if (cfg && Number.isFinite(cfg.baseTime)) return Math.max(1, Math.round(cfg.baseTime * 10));
             return 20;
         }
 
@@ -2637,6 +2877,15 @@
             addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
             addStat('visionRange', d.visionRange);
             addStat('income', getBuildingStatFromMap(key, 1, 'income', 0));
+            addStat('burnDps', getBuildingStatFromMap(key, 1, 'burnDps', 0));
+            addStat('burnDuration', getBuildingStatFromMap(key, 1, 'burnDuration', 0));
+            addStat('poisonDps', getBuildingStatFromMap(key, 1, 'poisonDps', 0));
+            addStat('poisonDuration', getBuildingStatFromMap(key, 1, 'poisonDuration', 0));
+            addStat('freezeDps', getBuildingStatFromMap(key, 1, 'freezeDps', 0));
+            addStat('freezeDuration', getBuildingStatFromMap(key, 1, 'freezeDuration', 0));
+            addStat('wetDuration', getBuildingStatFromMap(key, 1, 'wetDuration', 0));
+            addStat('sandDuration', getBuildingStatFromMap(key, 1, 'sandDuration', 0));
+            addStat('watchDuration', getBuildingStatFromMap(key, 1, 'watchDuration', 0));
             return out;
         }
 
@@ -2726,10 +2975,14 @@
 
         function formatResearchStatValue(statKey, value) {
             if (!Number.isFinite(value)) return '-';
+            if (statKey === 'burnDuration' || statKey === 'poisonDuration' || statKey === 'freezeDuration' || statKey === 'wetDuration' || statKey === 'sandDuration' || statKey === 'watchDuration') {
+                return `${value.toFixed(2)}s`;
+            }
+            if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return value.toFixed(2);
             if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'income') return value.toFixed(2);
             if (statKey === 'spawnCd') return `${value.toFixed(2)}s`;
             if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'gatherPerTrip') return value.toFixed(1);
-            if (statKey === 'cd' || statKey === 'atkCd') return Math.max(1, Math.round(value)).toString();
+            if (statKey === 'cd' || statKey === 'atkCd') return `${value.toFixed(2)}s`;
             return formatBigNumber(Math.round(value), 0);
         }
 
@@ -2953,7 +3206,7 @@
 
             let maxHp = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'hp');
             let attackDamage = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atk');
-            let attackCooldown = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atkCd');
+            let attackCooldownSec = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atkCd');
             let speed = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'speed');
             let visionRange = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'visionRange');
             let attackRangeTiles = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'attackRange');
@@ -2963,14 +3216,17 @@
 
             if (!Number.isFinite(maxHp)) maxHp = Math.max(1, Math.floor(unit.baseHp || unit.maxHp || 1));
             if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
-            if (!Number.isFinite(attackCooldown)) attackCooldown = Math.max(1, Number(unit.baseAttackCooldown || unit.attackCooldown || 30));
+            if (!Number.isFinite(attackCooldownSec)) {
+                let fallbackTicks = Math.max(1, Number(unit.baseAttackCooldown || unit.attackCooldown || secondsToTicks(1.5)));
+                attackCooldownSec = fallbackTicks / TICK_RATE;
+            }
             if (!Number.isFinite(speed)) speed = Math.max(0.1, Number(unit.baseSpeed || unit.speed || 1));
             if (!Number.isFinite(visionRange)) visionRange = Math.max(0.25, Number(unit.baseVisionRange || unit.visionRange || 4));
             if (!Number.isFinite(attackRangeTiles)) attackRangeTiles = Math.max(0, Number(unit.baseAttackRange || (unit.attackRange / TILE) || 0));
 
             maxHp = Math.max(1, Math.floor(maxHp));
             attackDamage = Math.max(0, Number(attackDamage) || 0);
-            attackCooldown = Math.max(1, Math.round(Number(attackCooldown) || 1));
+            let attackCooldown = secondsToTicks(attackCooldownSec);
             speed = Math.max(0.1, Number(speed) || 0.1);
             visionRange = Math.max(0.25, Number(visionRange) || 0.25);
             let attackRange = Math.max(0, Number(attackRangeTiles) || 0) * TILE;
@@ -3143,6 +3399,8 @@
     let researchThingLevelDropdown = null;
     let researchThingLevelDropdownOutsideHandler = null;
     let researchStatMatrixPopupPayload = null;
+    let shopStatMatrixDescriptorById = {};
+    let nextShopStatMatrixDescriptorId = 1;
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = true;
@@ -5208,30 +5466,62 @@
             return false;
         }
 
-        function applyStatusEffect(target, effect, level, baseDamage = 0) {
+        function _getEffectStatKey(effect, statKind) {
+            if (effect === 'fire') return statKind === 'dps' ? 'burnDps' : 'burnDuration';
+            if (effect === 'poison') return statKind === 'dps' ? 'poisonDps' : 'poisonDuration';
+            if (effect === 'ice') return statKind === 'dps' ? 'freezeDps' : 'freezeDuration';
+            if (effect === 'water') return statKind === 'duration' ? 'wetDuration' : '';
+            if (effect === 'sand') return statKind === 'duration' ? 'sandDuration' : '';
+            if (effect === 'watch') return statKind === 'duration' ? 'watchDuration' : '';
+            return '';
+        }
+
+        function _getBuildingEffectStat(owner, sourceType, level, effect, statKind) {
+            let statKey = _getEffectStatKey(effect, statKind);
+            if (!statKey || !sourceType) return NaN;
+            let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+            let lvl = Math.max(1, clampThingLevel(level || 1));
+            return getBuildingStatForOwner(ownerId, sourceType, lvl, statKey);
+        }
+
+        function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = null, sourceType = '') {
             if (!target) return false;
             ensureStatusState(target);
             if (isEffectImmune(target, effect)) return false;
 
             let lvl = Math.max(1, level || 1);
+            let mappedDuration = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');
+            let mappedDps = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'dps');
             if (effect === 'fire') {
-                target.burning = Math.max(target.burning, 60 + lvl * 10);
-                let d = Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+                let dur = secondsToTicks(durSec);
+                target.burning = Math.max(target.burning, dur);
+                let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
                 target.burnTickDamage = Math.max(target.burnTickDamage, d);
             } else if (effect === 'poison') {
-                target.poisoned = Math.max(target.poisoned, 100 + lvl * 20);
-                let d = Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (5 + lvl);
+                let dur = secondsToTicks(durSec);
+                target.poisoned = Math.max(target.poisoned, dur);
+                let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
                 target.poisonTickDamage = Math.max(target.poisonTickDamage, d);
             } else if (effect === 'ice') {
-                target.frozen = Math.max(target.frozen, 60 + lvl * 10);
-                let d = Math.max(0.2, baseDamage > 0 ? baseDamage : 0.5);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+                let dur = secondsToTicks(durSec);
+                target.frozen = Math.max(target.frozen, dur);
+                let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.2, baseDamage > 0 ? baseDamage : 0.5);
                 target.iceTickDamage = Math.max(target.iceTickDamage, d);
             } else if (effect === 'water') {
-                target.wet = Math.max(target.wet, 120 + lvl * 20);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (6 + lvl);
+                let dur = secondsToTicks(durSec);
+                target.wet = Math.max(target.wet, dur);
             } else if (effect === 'sand') {
-                target.sandy = Math.max(target.sandy, 180);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : 9;
+                let dur = secondsToTicks(durSec);
+                target.sandy = Math.max(target.sandy, dur);
             } else if (effect === 'watch') {
-                target.watched = Math.max(target.watched, 80 + lvl * 20);
+                let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (4 + lvl);
+                let dur = secondsToTicks(durSec);
+                target.watched = Math.max(target.watched, dur);
             }
             return true;
         }
@@ -5390,7 +5680,7 @@
                 let cd = getBuildingStatForOwner(this.owner, this.type, effLvl, 'cd');
                 let vr = getBuildingStatForOwner(this.owner, this.type, effLvl, 'visionRange');
                 if (Number.isFinite(dmg)) s.damage = dmg;
-                if (Number.isFinite(cd)) s.cd = Math.max(3, cd);
+                if (Number.isFinite(cd)) s.cd = Math.max(0.15, cd);
                 if (Number.isFinite(vr)) s.visionRange = vr;
                 return s;
             }
@@ -5462,7 +5752,7 @@
                 if (preferredTarget) {
                     let target = preferredTarget;
                     projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
-                    this.cd = this.currentStats.cd || 30;
+                    this.cd = secondsToTicks(this.currentStats.cd || 1.5);
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
                     if (this.owner === localPlayerId || true) {
@@ -5506,7 +5796,7 @@
                 if (!target) {
                     // Auto-find nearest enemy building: towers first, then barracks/spawners
                     let bestDist = rangePx;
-                    // Try towers (higher priority)
+                    this.cd = secondsToTicks(this.currentStats.cd || 1.5);
                     for (let t of towers) {
                         if (t === this || t.owner === this.owner || t.hp <= 0) continue;
                         let d = Math.hypot(t.x - this.x, t.y - this.y);
@@ -5529,7 +5819,7 @@
 
                 if (target) {
                     projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
-                    this.cd = this.currentStats.cd || 30;
+                    this.cd = secondsToTicks(this.currentStats.cd || 1.5);
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
                     if (this.owner === localPlayerId || true) {
@@ -5647,48 +5937,40 @@
                 if (t.turretImmune) { createExplosion(t.x, t.y, "#888", 3); return; }
                 let baseDmg = this.dmg;
                 if (this.type === 'fire') {
-                    t.burning = 60 + this.level * 10;
-                    let bd = Math.max(0.1, baseDmg * 0.05);
-                    if (bd > t.burnTickDamage) t.burnTickDamage = bd;
+                    applyStatusEffect(t, 'fire', this.level || 1, baseDmg * 0.05, this.sourceOwner, this.type);
                     if (!t.fireResistant) { t.hp -= this.dmg; }
                     let radius = 12 + this.level * 4;
                     createExplosion(this.x, this.y, "orange", Math.min(radius, 20));
                     forEachUnitInRange(this.x, this.y, 64, (e) => {
                         if (e.owner === this.sourceOwner || e.turretImmune) return;
-                        e.burning = 60 + this.level * 10;
-                        let sb = Math.max(0.1, baseDmg * 0.05);
-                        if (sb > e.burnTickDamage) e.burnTickDamage = sb;
+                        applyStatusEffect(e, 'fire', this.level || 1, baseDmg * 0.05, this.sourceOwner, this.type);
                         if (!e.fireResistant) e.hp -= this.dmg;
                         if (e.hp <= 0 && !e.dead) e.dead = true;
                     });
                 } else if (this.type === 'ice') {
-                    t.frozen = 60 + this.level * 10;
-                    let cd = Math.max(0.5, baseDmg * 0.2);
-                    if (cd > t.iceTickDamage) t.iceTickDamage = cd;
+                    applyStatusEffect(t, 'ice', this.level || 1, baseDmg * 0.2, this.sourceOwner, this.type);
                     if (!t.iceResistant) t.hp -= this.dmg;
                 } else if (this.type === 'elements') {
-                    t.poisoned = 100 + this.level * 20; t.burning = 100 + this.level * 20;
-                    t.wet = 100 + this.level * 20; t.frozen = 100 + this.level * 20; t.sandy = 60;
+                    applyStatusEffect(t, 'poison', this.level || 1, baseDmg * 0.2, this.sourceOwner, this.type);
+                    applyStatusEffect(t, 'fire', this.level || 1, baseDmg * 0.2, this.sourceOwner, this.type);
+                    applyStatusEffect(t, 'water', this.level || 1, 0, this.sourceOwner, this.type);
+                    applyStatusEffect(t, 'ice', this.level || 1, baseDmg * 0.2, this.sourceOwner, this.type);
+                    applyStatusEffect(t, 'sand', this.level || 1, 0, this.sourceOwner, this.type);
                     if (!t.poisonResistant && !t.fireResistant && !t.waterResistant && !t.iceResistant) {
-                        let td = Math.max(0.1, baseDmg * 0.2);
-                        if (td > t.poisonTickDamage) t.poisonTickDamage = td;
-                        if (td > t.burnTickDamage) t.burnTickDamage = td;
-                        if (td > t.iceTickDamage) t.iceTickDamage = td;
+                        // extra direct damage is handled below by projectile damage model
                     }
                 } else if (this.type === 'water') {
-                    t.wet = 120 + this.level * 20;
+                    applyStatusEffect(t, 'water', this.level || 1, 0, this.sourceOwner, this.type);
                     if (!t.waterResistant) t.hp -= this.dmg;
                     createExplosion(this.x, this.y, "#4af", 4);
                 } else if (this.type === 'poison') {
-                    t.poisoned = 150 + this.level * 50;
-                    let pd = baseDmg * 0.1;
-                    if (pd > t.poisonTickDamage) t.poisonTickDamage = pd;
+                    applyStatusEffect(t, 'poison', this.level || 1, baseDmg * 0.1, this.sourceOwner, this.type);
                     if (!t.poisonResistant) t.hp -= this.dmg;
                 } else if (this.type === 'sand_gun') {
-                    t.sandy = 180;
+                    applyStatusEffect(t, 'sand', this.level || 1, 0, this.sourceOwner, this.type);
                     if (!t.sandResistant) { t.hp -= this.dmg; createExplosion(this.x, this.y, "#c96", 4); }
                 } else if (this.type === 'watch_tower') {
-                    applyStatusEffect(t, 'watch', this.level || 1);
+                    applyStatusEffect(t, 'watch', this.level || 1, 0, this.sourceOwner, this.type);
                     if (this.dmg > 0) t.hp -= this.dmg;
                     createExplosion(this.x, this.y, "#fd0", 3);
                 } else {
@@ -5705,29 +5987,29 @@
                 }
 
                 if (this.type === 'watch_tower') {
-                    applyStatusEffect(b, 'watch', this.level || 1);
+                    applyStatusEffect(b, 'watch', this.level || 1, 0, this.sourceOwner, this.type);
                 } else if (this.type === 'fire') {
-                    applyStatusEffect(b, 'fire', this.level || 1, Math.max(0.1, this.dmg * 0.05));
+                    applyStatusEffect(b, 'fire', this.level || 1, this.dmg * 0.05, this.sourceOwner, this.type);
                     if (!isEffectImmune(b, 'fire')) b.hp -= actualDmg;
                 } else if (this.type === 'poison') {
-                    applyStatusEffect(b, 'poison', this.level || 1, Math.max(0.1, this.dmg * 0.1));
+                    applyStatusEffect(b, 'poison', this.level || 1, this.dmg * 0.1, this.sourceOwner, this.type);
                     if (!isEffectImmune(b, 'poison')) b.hp -= actualDmg;
                 } else if (this.type === 'water') {
-                    applyStatusEffect(b, 'water', this.level || 1);
+                    applyStatusEffect(b, 'water', this.level || 1, 0, this.sourceOwner, this.type);
                     if (!isEffectImmune(b, 'water')) b.hp -= actualDmg;
                 } else if (this.type === 'ice') {
-                    applyStatusEffect(b, 'ice', this.level || 1, Math.max(0.2, this.dmg * 0.2));
+                    applyStatusEffect(b, 'ice', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type);
                     if (!isEffectImmune(b, 'ice')) b.hp -= actualDmg;
                 } else if (this.type === 'sand_gun') {
-                    applyStatusEffect(b, 'sand', this.level || 1);
+                    applyStatusEffect(b, 'sand', this.level || 1, 0, this.sourceOwner, this.type);
                     if (!isEffectImmune(b, 'sand')) b.hp -= actualDmg;
                 } else if (this.type === 'elements') {
                     let appliedAny = false;
-                    appliedAny = applyStatusEffect(b, 'fire', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
-                    appliedAny = applyStatusEffect(b, 'poison', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
-                    appliedAny = applyStatusEffect(b, 'water', this.level || 1) || appliedAny;
-                    appliedAny = applyStatusEffect(b, 'ice', this.level || 1, Math.max(0.1, this.dmg * 0.2)) || appliedAny;
-                    appliedAny = applyStatusEffect(b, 'sand', this.level || 1) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'fire', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'poison', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'water', this.level || 1, 0, this.sourceOwner, this.type) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'ice', this.level || 1, this.dmg * 0.2, this.sourceOwner, this.type) || appliedAny;
+                    appliedAny = applyStatusEffect(b, 'sand', this.level || 1, 0, this.sourceOwner, this.type) || appliedAny;
                     if (appliedAny) b.hp -= actualDmg;
                 } else {
                     b.hp -= actualDmg;
@@ -5797,7 +6079,7 @@
                 this.attackDamage = s.atk;
                 this.attackRange = s.attackRange * TILE;
                 this.visionRange = s.visionRange || 4;
-                this.attackCooldown = s.atkCd;
+                this.attackCooldown = secondsToTicks(s.atkCd);
                 this.attackTimer = 0;
                 this.color = s.color; this.r = s.r;
                 this.vis = s.vis || 'circle';
@@ -5918,11 +6200,22 @@
                     let cell = grid[gy][gx];
                     if (cell.item && cell.owner !== this.owner && !cell.item.underConstruction) {
                         let item = cell.item;
-                        if (item.type === 'sand') { this.sandy = Math.max(this.sandy, 10); }
-                        else if (item.type === 'lava') { this.burning = Math.max(this.burning, 30); let d = item.damage || 1; if (d > this.burnTickDamage) this.burnTickDamage = d; }
-                        else if (item.type === 'poison_puddle') { this.poisoned = Math.max(this.poisoned, 30); let d = item.damage || 1; if (d > this.poisonTickDamage) this.poisonTickDamage = d; }
-                        else if (item.type === 'ice_patch') { this.frozen = Math.max(this.frozen, 30); let d = item.damage || 1; if (d > this.iceTickDamage) this.iceTickDamage = d; }
-                        else if (item.type === 'water_puddle') { this.wet = Math.max(this.wet, 60); }
+                        let itemLevel = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
+                        if (item.type === 'sand') {
+                            applyStatusEffect(this, 'sand', itemLevel, 0, item.owner, item.type);
+                        }
+                        else if (item.type === 'lava') {
+                            applyStatusEffect(this, 'fire', itemLevel, item.damage || 1, item.owner, item.type);
+                        }
+                        else if (item.type === 'poison_puddle') {
+                            applyStatusEffect(this, 'poison', itemLevel, item.damage || 1, item.owner, item.type);
+                        }
+                        else if (item.type === 'ice_patch') {
+                            applyStatusEffect(this, 'ice', itemLevel, item.damage || 1, item.owner, item.type);
+                        }
+                        else if (item.type === 'water_puddle') {
+                            applyStatusEffect(this, 'water', itemLevel, 0, item.owner, item.type);
+                        }
                         else if (item.type === 'mine') {
                             this.hp -= item.damage || 135;
                             createExplosion(this.x, this.y, "#f80", 15);
@@ -6770,10 +7063,10 @@
         // ============================================================
         function getBarrackSpawnCooldown(unitType, level, owner = null, buildingKey = null) {
             let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
-            let baseCd = Math.max(1, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
+            let baseCd = Math.max(0.05, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
             if (buildingKey && Number.isFinite(owner)) {
                 let researched = getBuildingStatForOwner(owner, buildingKey, level, 'spawnCd');
-                if (Number.isFinite(researched)) return Math.max(1, researched);
+                if (Number.isFinite(researched)) return Math.max(0.05, researched);
             }
             return baseCd;
         }
@@ -6815,7 +7108,7 @@
             getUnitCost() {
                 // Cost scales linearly with effective level
                 let cfg = BARRACK_SPAWN_CONFIG[this.unitType];
-                let baseCost = cfg ? Math.round(cfg.baseTime * 0.5) : 10;
+                let baseCost = cfg ? Math.round(cfg.baseTime * 10) : 10;
                 let lvl = getThingEffectiveLevel(this);
                 return Math.round(baseCost * (1 + (lvl - 1) * 0.5));
             }
@@ -7393,10 +7686,10 @@
                 if (!Number.isFinite(u._builderNextRecheckTick)) u._builderNextRecheckTick = gameTime + builderRecheckInterval;
                 if (!Number.isFinite(u._builderLastMoveTick)) u._builderLastMoveTick = gameTime;
 
-                if (u.workerState !== 'BUILDING_IN_PLACE' && gameTime >= u._builderNextRecheckTick) {
+                if (u.workerState === 'IDLE' && gameTime >= u._builderNextRecheckTick) {
                     u._builderNextRecheckTick = gameTime + builderRecheckInterval;
                     let stuckTooLong = (gameTime - u._builderLastMoveTick) >= builderStuckTicks;
-                    let shouldRetarget = u.workerState === 'IDLE' || !u.workerTarget || stuckTooLong;
+                    let shouldRetarget = !u.workerTarget || stuckTooLong;
                     if (shouldRetarget) {
                         if (stuckTooLong) {
                             // Drop stale route/spawner reservation and find a fresh task.
@@ -7421,6 +7714,15 @@
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
+                        if (dist > 24) {
+                            // If displaced while en route, re-path back to the same target.
+                            let canWalk = _builderCanWalk(u.owner);
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner, 'builder');
+                            u.pathIndex = 0;
+                            u.commandState = CMD_MOVING;
+                            return;
+                        }
                         if (dist <= 24) {
                             if (!u.builderHasMaterial) {
                                 let route = getSpawnerRoute('builder_spawner', null);
@@ -11751,6 +12053,7 @@
             let def = BASE_CARD_TYPES[selectedBuildItem] || {};
             let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
             statsCont.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
+            bindShopStatsMatrixButtons(statsCont);
             mapCont.style.display = 'none';
             statsCont.style.display = isCollapsed ? 'none' : 'block';
             if (titleEl) titleEl.textContent = 'Shop Stats';
@@ -11760,15 +12063,74 @@
             let def = BASE_CARD_TYPES[key];
             if (!def) return '';
 
+            shopStatMatrixDescriptorById = {};
+            nextShopStatMatrixDescriptorId = 1;
+
             let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
             let level = stackCountToLevel(stacks);
             let html = '<div class="build-stats-panel">';
+            let thingName = def.name || key;
 
-            let addRow = (label, value) => {
-                html += `<div class="build-stat-row"><span class="build-stat-label">${label}</span><span class="build-stat-value">${value}</span></div>`;
+            let addRow = (label, value, opts = null) => {
+                let o = opts || {};
+                let id = nextShopStatMatrixDescriptorId++;
+                shopStatMatrixDescriptorById[id] = {
+                    title: `${thingName} / ${label}`,
+                    kind: o.kind || '',
+                    key: o.key || '',
+                    statKey: o.statKey || '',
+                    fixedValue: value,
+                    getValue: (typeof o.getValue === 'function') ? o.getValue : null,
+                };
+                html += `<div class="build-stat-row"><button type="button" class="build-stat-matrix-btn" data-matrix-id="${id}" title="Open level/research matrix">M</button><span class="build-stat-label">${label}</span><span class="build-stat-value">${value}</span></div>`;
             };
 
             let fmt = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v)) ? formatBigNumber(v, d) : v;
+            let getLevelMatrixCostWorkText = (thingLevel, researchLevel) => {
+                let tl = Math.max(1, clampThingLevel(thingLevel));
+                let rl = Math.max(0, clampResearchLevel(researchLevel));
+                let stacksForLevel = getRequiredStacksForLevel(tl);
+                let baseCost = Math.max(0, Number(def.price) || 0);
+                let approxCost = Math.round(baseCost * stacksForLevel);
+                let work = getBuildingStatFromMap(key, tl, 'maxHp', rl);
+                if (!Number.isFinite(work)) {
+                    let fallbackStats = calculateItemStats(key, tl, localPlayerId);
+                    work = Number.isFinite(fallbackStats.maxHp) ? fallbackStats.maxHp : 0;
+                }
+                return `$${formatBigNumber(approxCost)} / ${formatBigNumber(Math.max(0, Math.round(work)))}W`;
+            };
+
+            let getQueueCostForBarrackLevel = (unitType, thingLevel) => {
+                let tl = Math.max(1, clampThingLevel(thingLevel));
+                let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
+                let baseCost = Math.round((cfg.baseTime || 1) * 10);
+                return Math.round(baseCost * (1 + (tl - 1) * 0.5));
+            };
+
+            let getQueueCostForSpawnerLevel = (spawnerKey, thingLevel) => {
+                let tl = Math.max(1, clampThingLevel(thingLevel));
+                let baseCost = spawnerKey === 'spawner' ? 15 : (spawnerKey === 'salvager' ? 20 : 18);
+                return Math.round(baseCost * (1 + (tl - 1) * 0.5));
+            };
+
+            let getUnitDpsForMatrix = (unitType, thingLevel, researchLevel) => {
+                let tl = Math.max(1, clampThingLevel(thingLevel));
+                let rl = Math.max(0, clampResearchLevel(researchLevel));
+                let atk = getUnitStatFromMap(unitType, tl, 'atk', rl);
+                let cd = getUnitStatFromMap(unitType, tl, 'atkCd', rl);
+                if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
+                return (atk / cd).toFixed(1);
+            };
+
+            let getBuildingDpsForMatrix = (buildingKey, thingLevel, researchLevel) => {
+                let tl = Math.max(1, clampThingLevel(thingLevel));
+                let rl = Math.max(0, clampResearchLevel(researchLevel));
+                let dmg = getBuildingStatFromMap(buildingKey, tl, 'damage', rl);
+                let cd = getBuildingStatFromMap(buildingKey, tl, 'cd', rl);
+                if (!Number.isFinite(dmg) || !Number.isFinite(cd) || cd <= 0) return '0';
+                return (dmg / cd).toFixed(1);
+            };
+
             let getUnitPreview = (unitType, lvl) => {
                 let safeLvl = Math.max(1, clampThingLevel(lvl));
                 let hp = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'hp');
@@ -11782,7 +12144,7 @@
                 return {
                     hp: Math.max(1, Math.floor(Number(hp) || 1)),
                     atk: Math.max(0, Math.floor(Number(atk) || 0)),
-                    cd: Math.max(1, Math.round(Number(cd) || 1)),
+                    cd: Math.max(0.05, Number(cd) || 0.05),
                     speed: Math.max(0.1, Number(speed) || 0.1),
                     range: Math.max(0, Number(range) || 0),
                     gatherPerTrip: Math.max(0, Number(gatherPerTrip) || 0),
@@ -11791,47 +12153,55 @@
                 };
             };
 
-            addRow('Stacks', `x${stacks}`);
-            addRow('Level', `L${level}`);
+            addRow('Stacks', `x${stacks}`, {
+                getValue: (thingLevel) => `x${getRequiredStacksForLevel(thingLevel)}`
+            });
+            addRow('Level', `L${level}`, {
+                getValue: (thingLevel, researchLevel) => getLevelMatrixCostWorkText(thingLevel, researchLevel)
+            });
 
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
                 let bStats = calculateItemStats(key, level, localPlayerId);
-                let baseCost = Math.round(((BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm).baseTime || 20) * 0.5);
-                let unitCost = Math.round(baseCost * (1 + (level - 1) * 0.5));
-                let spawnCd = getBarrackSpawnCooldown(unitType, level);
+                let unitCost = getQueueCostForBarrackLevel(unitType, level);
+                let spawnCd = getBarrackSpawnCooldown(unitType, level, localPlayerId, key);
                 let up = getUnitPreview(unitType, level);
-                addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`);
-                addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
-                addRow('Queue Cost', `$${fmt(unitCost)}`);
-                addRow('Unit HP', fmt(up.hp));
-                if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/tick`);
-                else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/tick`);
-                else if (unitType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`);
+                addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
+                addRow('Queue Cost', `$${fmt(unitCost)}`, {
+                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForBarrackLevel(unitType, thingLevel))}`
+                });
+                addRow('Unit HP', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
+                if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
+                else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'healerHps' });
+                else if (unitType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'gatherPerTrip' });
                 else if (unitType === 'salvager_unit') addRow('Salvage Yield', `10% x L${level}`);
                 else {
-                    addRow('Unit Attack', fmt(up.atk));
-                    let dps = up.cd > 0 ? (up.atk / up.cd * TICK_RATE).toFixed(1) : '0';
-                    addRow('Unit DPS', dps);
+                    addRow('Unit Attack', fmt(up.atk), { kind: 'unit', key: unitType, statKey: 'atk' });
+                    let dps = up.cd > 0 ? (up.atk / up.cd).toFixed(1) : '0';
+                    addRow('Unit DPS', dps, {
+                        getValue: (thingLevel, researchLevel) => getUnitDpsForMatrix(unitType, thingLevel, researchLevel)
+                    });
                 }
-                addRow('Unit Range', up.range > 0 ? up.range.toFixed(1) : '-');
-                addRow('Unit Speed', up.speed.toFixed(1));
+                addRow('Unit Range', up.range > 0 ? up.range.toFixed(1) : '-', { kind: 'unit', key: unitType, statKey: 'attackRange' });
+                addRow('Unit Speed', up.speed.toFixed(1), { kind: 'unit', key: unitType, statKey: 'speed' });
             } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner') {
                 let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : (key === 'builder_spawner' ? 'builder_unit' : 'healer_unit'));
                 let stats = calculateItemStats(key, level, localPlayerId);
-                let spawnCd = getBarrackSpawnCooldown(workerType, level);
-                let unitCost = key === 'spawner' ? 15 : (key === 'salvager' ? 20 : 18);
-                unitCost = Math.round(unitCost * (1 + (level - 1) * 0.5));
+                let spawnCd = getBarrackSpawnCooldown(workerType, level, localPlayerId, key);
+                let unitCost = getQueueCostForSpawnerLevel(key, level);
                 let up = getUnitPreview(workerType, level);
-                addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`);
-                addRow('Spawn CD', `${spawnCd.toFixed(1)}s`);
-                addRow('Queue Cost', `$${fmt(unitCost)}`);
-                addRow('Worker HP', fmt(up.hp));
-                if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/tick`);
-                else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/tick`);
-                else if (workerType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`);
+                addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
+                addRow('Queue Cost', `$${fmt(unitCost)}`, {
+                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForSpawnerLevel(key, thingLevel))}`
+                });
+                addRow('Worker HP', fmt(up.hp), { kind: 'unit', key: workerType, statKey: 'hp' });
+                if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'builderDps' });
+                else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'healerHps' });
+                else if (workerType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'gatherPerTrip' });
                 else addRow('Salvage Yield', `10% x L${level}`);
-                addRow('Worker Speed', up.speed.toFixed(1));
+                addRow('Worker Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
             } else if (def.target === 'wall') {
                 let hp = getBuildingStatForOwner(localPlayerId, key, level, 'maxHp');
                 let dmg = getBuildingStatForOwner(localPlayerId, key, level, 'damage');
@@ -11841,53 +12211,90 @@
                 if (!Number.isFinite(dmg)) dmg = null;
                 if (!Number.isFinite(cd)) cd = def.cd;
                 if (!Number.isFinite(vision)) vision = def.visionRange;
-                if (hp > 0) addRow('HP', `${fmt(hp)}/${fmt(hp)}`);
-                if (dmg !== null) addRow('Attack', fmt(dmg, 1));
+                if (hp > 0) addRow('HP', `${fmt(hp)}/${fmt(hp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                if (dmg !== null) addRow('Attack', fmt(dmg, 1), { kind: 'building', key, statKey: 'damage' });
                 if (cd) {
-                    addRow('Cooldown', `${(cd / TICK_RATE).toFixed(2)}s`);
-                    let dps = dmg !== null && cd > 0 ? (dmg / cd * TICK_RATE).toFixed(1) : '0';
-                    addRow('DPS', dps);
+                    addRow('Cooldown', `${cd.toFixed(2)}s`, { kind: 'building', key, statKey: 'cd' });
+                    let dps = dmg !== null && cd > 0 ? (dmg / cd).toFixed(1) : '0';
+                    addRow('DPS', dps, {
+                        getValue: (thingLevel, researchLevel) => getBuildingDpsForMatrix(key, thingLevel, researchLevel)
+                    });
                 }
-                if (vision !== undefined) addRow('Range', fmt(vision, 1));
+                if (vision !== undefined) addRow('Range', fmt(vision, 1), { kind: 'building', key, statKey: 'visionRange' });
                 if (dmg !== null) {
                     if (key === 'fire') {
-                        addRow('Burn DPS', (dmg * 0.05).toFixed(1));
-                        addRow('Burn Duration', `${((60 + level * 10) / TICK_RATE).toFixed(1)}s`);
+                        let burnDps = getBuildingStatForOwner(localPlayerId, key, level, 'burnDps');
+                        let burnDuration = getBuildingStatForOwner(localPlayerId, key, level, 'burnDuration');
+                        addRow('Burn DPS', Number.isFinite(burnDps) ? burnDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'burnDps' });
+                        addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
                         addRow('Splash Radius', `${(64 / TILE).toFixed(1)} tiles`);
                     } else if (key === 'poison') {
-                        addRow('Poison DPS', (dmg * 0.10).toFixed(1));
-                        addRow('Poison Duration', `${((150 + level * 50) / TICK_RATE).toFixed(1)}s`);
+                        let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
+                        let poisonDuration = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDuration');
+                        addRow('Poison DPS', Number.isFinite(poisonDps) ? poisonDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'poisonDps' });
+                        addRow('Poison Duration', Number.isFinite(poisonDuration) ? `${poisonDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'poisonDuration' });
                     } else if (key === 'ice') {
-                        addRow('Freeze DPS', (dmg * 0.20).toFixed(1));
-                        addRow('Freeze Duration', `${((60 + level * 10) / TICK_RATE).toFixed(1)}s`);
+                        let freezeDps = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDps');
+                        let freezeDuration = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDuration');
+                        addRow('Freeze DPS', Number.isFinite(freezeDps) ? freezeDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'freezeDps' });
+                        addRow('Freeze Duration', Number.isFinite(freezeDuration) ? `${freezeDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'freezeDuration' });
                     } else if (key === 'elements') {
-                        let dot = (dmg * 0.20).toFixed(1);
-                        addRow('Burn DPS', dot);
-                        addRow('Poison DPS', dot);
-                        addRow('Freeze DPS', dot);
+                        let burnDps = getBuildingStatForOwner(localPlayerId, key, level, 'burnDps');
+                        let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
+                        let freezeDps = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDps');
+                        let burnDuration = getBuildingStatForOwner(localPlayerId, key, level, 'burnDuration');
+                        let poisonDuration = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDuration');
+                        let freezeDuration = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDuration');
+                        addRow('Burn DPS', Number.isFinite(burnDps) ? burnDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'burnDps' });
+                        addRow('Poison DPS', Number.isFinite(poisonDps) ? poisonDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'poisonDps' });
+                        addRow('Freeze DPS', Number.isFinite(freezeDps) ? freezeDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'freezeDps' });
+                        addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
+                        addRow('Poison Duration', Number.isFinite(poisonDuration) ? `${poisonDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'poisonDuration' });
+                        addRow('Freeze Duration', Number.isFinite(freezeDuration) ? `${freezeDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'freezeDuration' });
                     }
                 }
                 if (key === 'water') {
-                    addRow('Wet Duration', `${((120 + level * 20) / TICK_RATE).toFixed(1)}s`);
+                    let wetDuration = getBuildingStatForOwner(localPlayerId, key, level, 'wetDuration');
+                    addRow('Wet Duration', Number.isFinite(wetDuration) ? `${wetDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'wetDuration' });
                 } else if (key === 'sand_gun') {
-                    addRow('Slow Duration', `${(180 / TICK_RATE).toFixed(1)}s`);
+                    let sandDuration = getBuildingStatForOwner(localPlayerId, key, level, 'sandDuration');
+                    addRow('Slow Duration', Number.isFinite(sandDuration) ? `${sandDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'sandDuration' });
                 } else if (key === 'watch_tower') {
-                    addRow('Watch Duration', `${((80 + level * 20) / TICK_RATE).toFixed(1)}s`);
+                    let watchDuration = getBuildingStatForOwner(localPlayerId, key, level, 'watchDuration');
+                    addRow('Watch Duration', Number.isFinite(watchDuration) ? `${watchDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'watchDuration' });
                 }
             } else {
                 let stats = calculateItemStats(key, level, localPlayerId);
-                if (stats.maxHp > 0) addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`);
+                if (stats.maxHp > 0) addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 if (key === 'farm') {
                     let income = Number.isFinite(stats.income) ? stats.income : level;
-                    addRow('Income', `+${income.toFixed(2)}/s`);
+                    addRow('Income', `+${income.toFixed(2)}/s`, { kind: 'building', key, statKey: 'income' });
                 }
                 if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
                 if (key === 'mine' && stats.damage > 0) addRow('Blast Dmg', fmt(stats.damage));
-                if (key === 'lava' && stats.damage > 0) addRow('Burn DPS', stats.damage.toFixed(1));
-                if (key === 'poison_puddle' && stats.damage > 0) addRow('Poison DPS', stats.damage.toFixed(1));
-                if (key === 'ice_patch' && stats.damage > 0) addRow('Freeze DPS', stats.damage.toFixed(1));
+                if (key === 'lava' && stats.damage > 0) {
+                    let burnDps = getBuildingStatForOwner(localPlayerId, key, level, 'burnDps');
+                    let burnDuration = getBuildingStatForOwner(localPlayerId, key, level, 'burnDuration');
+                    addRow('Burn DPS', Number.isFinite(burnDps) ? burnDps.toFixed(2) : stats.damage.toFixed(2), { kind: 'building', key, statKey: 'burnDps' });
+                    addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
+                }
+                if (key === 'poison_puddle' && stats.damage > 0) {
+                    let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
+                    let poisonDuration = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDuration');
+                    addRow('Poison DPS', Number.isFinite(poisonDps) ? poisonDps.toFixed(2) : stats.damage.toFixed(2), { kind: 'building', key, statKey: 'poisonDps' });
+                    addRow('Poison Duration', Number.isFinite(poisonDuration) ? `${poisonDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'poisonDuration' });
+                }
+                if (key === 'ice_patch' && stats.damage > 0) {
+                    let freezeDps = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDps');
+                    let freezeDuration = getBuildingStatForOwner(localPlayerId, key, level, 'freezeDuration');
+                    addRow('Freeze DPS', Number.isFinite(freezeDps) ? freezeDps.toFixed(2) : stats.damage.toFixed(2), { kind: 'building', key, statKey: 'freezeDps' });
+                    addRow('Freeze Duration', Number.isFinite(freezeDuration) ? `${freezeDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'freezeDuration' });
+                }
                 if (key === 'sand' && stats.damage > 0) addRow('Slow Power', stats.damage.toFixed(2));
-                if (key === 'water_puddle') addRow('Wet Duration', `${(60 / TICK_RATE).toFixed(1)}s`);
+                if (key === 'water_puddle') {
+                    let wetDuration = getBuildingStatForOwner(localPlayerId, key, level, 'wetDuration');
+                    addRow('Wet Duration', Number.isFinite(wetDuration) ? `${wetDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'wetDuration' });
+                }
                 if (key === 'area_upgrader') addRow('Effect', 'Area multiplier +1');
             }
 
@@ -12350,9 +12757,11 @@
             let html = '';
             let s = e.currentStats || e.baseStats;
             let bs = e.baseStats;
+            let baseLevel = stackCountToLevel(e.stacks || 1);
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
             let upg = getNextLevelUpgradeInfo(e);
-            let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
-            let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
+            let dps = s.cd > 0 ? (s.damage / s.cd).toFixed(1) : '0';
+            let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
             html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
@@ -12363,16 +12772,43 @@
             if (e.type !== 'laser') {
                 html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
                 html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Cooldown', bs ? `${((bs.cd || 0) / TICK_RATE).toFixed(2)}s` : `${((s.cd || 0) / TICK_RATE).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${((s.cd || 0) / TICK_RATE).toFixed(2)}s` : undefined);
+                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${(s.cd || 0).toFixed(2)}s` : undefined);
                 html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
             } else {
-                html += infoRow('DPS', `${(s.damage / 60).toFixed(1)}/tick`);
+                html += infoRow('DPS', `${(s.damage / 60 * TICK_RATE).toFixed(1)}/s`);
                 html += infoRow('Connections', e.connectedLasers.length);
                 html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
             }
-            if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
-            if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
-            if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
+            if (e.type === 'fire') {
+                let burnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
+                let burnDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDuration');
+                if (Number.isFinite(burnDps)) html += infoRow('Burn DPS', `${(burnDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(burnDuration)) html += infoRow('Burn Duration', `${burnDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'poison') {
+                let poisonDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDps');
+                let poisonDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDuration');
+                if (Number.isFinite(poisonDps)) html += infoRow('Poison DPS', `${(poisonDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(poisonDuration)) html += infoRow('Poison Duration', `${poisonDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'ice') {
+                let freezeDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDps');
+                let freezeDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDuration');
+                if (Number.isFinite(freezeDps)) html += infoRow('Freeze DPS', `${(freezeDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(freezeDuration)) html += infoRow('Freeze Duration', `${freezeDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'water') {
+                let wetDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'wetDuration');
+                if (Number.isFinite(wetDuration)) html += infoRow('Wet Duration', `${wetDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'sand_gun') {
+                let sandDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'sandDuration');
+                if (Number.isFinite(sandDuration)) html += infoRow('Slow Duration', `${sandDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'watch_tower') {
+                let watchDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'watchDuration');
+                if (Number.isFinite(watchDuration)) html += infoRow('Watch Duration', `${watchDuration.toFixed(1)}s`);
+            }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
@@ -12393,8 +12829,10 @@
             for (let t of group) { totalHp += t.hp; totalMaxHp += getEntityHpDisplayMax(t); }
             let s = e.currentStats || e.baseStats;
             let bs = e.baseStats;
-            let dps = s.cd > 0 ? (s.damage / s.cd * TICK_RATE).toFixed(1) : '0';
-            let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd * TICK_RATE).toFixed(1) : '0';
+            let baseLevel = stackCountToLevel(e.stacks || 1);
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
+            let dps = s.cd > 0 ? (s.damage / s.cd).toFixed(1) : '0';
+            let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
             html += infoRow('Count', group.length);
@@ -12405,15 +12843,42 @@
             if (e.type !== 'laser') {
                 html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
                 html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Cooldown', bs ? `${((bs.cd || 0) / TICK_RATE).toFixed(2)}s` : `${((s.cd || 0) / TICK_RATE).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${((s.cd || 0) / TICK_RATE).toFixed(2)}s` : undefined);
+                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${(s.cd || 0).toFixed(2)}s` : undefined);
                 html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
             } else {
-                html += infoRow('DPS', `${(s.damage / 60).toFixed(1)}/tick`);
+                html += infoRow('DPS', `${(s.damage / 60 * TICK_RATE).toFixed(1)}/s`);
                 html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
             }
-            if (e.type === 'fire') html += infoRow('Burn DPS', `${(s.damage * 0.05).toFixed(2)}/tick`);
-            if (e.type === 'poison') html += infoRow('Poison DPS', `${(s.damage * 0.1).toFixed(2)}/tick`);
-            if (e.type === 'ice') html += infoRow('Freeze DPS', `${(s.damage * 0.2).toFixed(2)}/tick`);
+            if (e.type === 'fire') {
+                let burnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
+                let burnDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDuration');
+                if (Number.isFinite(burnDps)) html += infoRow('Burn DPS', `${(burnDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(burnDuration)) html += infoRow('Burn Duration', `${burnDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'poison') {
+                let poisonDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDps');
+                let poisonDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDuration');
+                if (Number.isFinite(poisonDps)) html += infoRow('Poison DPS', `${(poisonDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(poisonDuration)) html += infoRow('Poison Duration', `${poisonDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'ice') {
+                let freezeDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDps');
+                let freezeDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDuration');
+                if (Number.isFinite(freezeDps)) html += infoRow('Freeze DPS', `${(freezeDps * TICK_RATE).toFixed(2)}/s`);
+                if (Number.isFinite(freezeDuration)) html += infoRow('Freeze Duration', `${freezeDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'water') {
+                let wetDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'wetDuration');
+                if (Number.isFinite(wetDuration)) html += infoRow('Wet Duration', `${wetDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'sand_gun') {
+                let sandDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'sandDuration');
+                if (Number.isFinite(sandDuration)) html += infoRow('Slow Duration', `${sandDuration.toFixed(1)}s`);
+            }
+            if (e.type === 'watch_tower') {
+                let watchDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'watchDuration');
+                if (Number.isFinite(watchDuration)) html += infoRow('Watch Duration', `${watchDuration.toFixed(1)}s`);
+            }
             html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
             if (e.owner === localPlayerId) {
@@ -12496,8 +12961,30 @@
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
                 if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);
-                else if (e.type === 'lava') html += infoRow('Burn DPS', baseDmg.toFixed(2) + '/t', baseDmg !== effDmg ? effDmg.toFixed(2) + '/t' : undefined);
-                else if (e.type === 'poison_puddle') html += infoRow('Poison DPS', baseDmg.toFixed(2) + '/t', baseDmg !== effDmg ? effDmg.toFixed(2) + '/t' : undefined);
+                else if (e.type === 'lava') {
+                    let baseBurnDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'burnDps');
+                    let effBurnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
+                    let baseBurnDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'burnDuration');
+                    let effBurnDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDuration');
+                    html += infoRow('Burn DPS', `${((Number.isFinite(baseBurnDps) ? baseBurnDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effBurnDps) && Math.abs((baseBurnDps || 0) - effBurnDps) > 1e-6 ? `${(effBurnDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(baseBurnDur) || Number.isFinite(effBurnDur)) html += infoRow('Burn Duration', `${(Number.isFinite(baseBurnDur) ? baseBurnDur : 0).toFixed(1)}s`, Number.isFinite(effBurnDur) && baseBurnDur !== effBurnDur ? `${effBurnDur.toFixed(1)}s` : undefined);
+                }
+                else if (e.type === 'poison_puddle') {
+                    let basePoisonDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'poisonDps');
+                    let effPoisonDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDps');
+                    let basePoisonDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'poisonDuration');
+                    let effPoisonDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDuration');
+                    html += infoRow('Poison DPS', `${((Number.isFinite(basePoisonDps) ? basePoisonDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effPoisonDps) && Math.abs((basePoisonDps || 0) - effPoisonDps) > 1e-6 ? `${(effPoisonDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(basePoisonDur) || Number.isFinite(effPoisonDur)) html += infoRow('Poison Duration', `${(Number.isFinite(basePoisonDur) ? basePoisonDur : 0).toFixed(1)}s`, Number.isFinite(effPoisonDur) && basePoisonDur !== effPoisonDur ? `${effPoisonDur.toFixed(1)}s` : undefined);
+                }
+                else if (e.type === 'ice_patch') {
+                    let baseFreezeDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'freezeDps');
+                    let effFreezeDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDps');
+                    let baseFreezeDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'freezeDuration');
+                    let effFreezeDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDuration');
+                    html += infoRow('Freeze DPS', `${((Number.isFinite(baseFreezeDps) ? baseFreezeDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effFreezeDps) && Math.abs((baseFreezeDps || 0) - effFreezeDps) > 1e-6 ? `${(effFreezeDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(baseFreezeDur) || Number.isFinite(effFreezeDur)) html += infoRow('Freeze Duration', `${(Number.isFinite(baseFreezeDur) ? baseFreezeDur : 0).toFixed(1)}s`, Number.isFinite(effFreezeDur) && baseFreezeDur !== effFreezeDur ? `${effFreezeDur.toFixed(1)}s` : undefined);
+                }
                 else html += infoRow('Damage', baseDmg.toFixed(2), baseDmg !== effDmg ? effDmg.toFixed(2) : undefined);
             }
             if (e.type === 'sand') html += infoRow('Effect', '50% slow');
@@ -12568,11 +13055,11 @@
             if (u.workerType === 'builder') {
                 let baseBuild = Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
                 let effBuild = Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
-                html += infoRow('Build Speed', `${formatBigNumber(baseBuild, 1)}/tick`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/tick` : undefined);
+                html += infoRow('Build Speed', `${formatBigNumber(baseBuild, 1)}/trip`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/trip` : undefined);
             } else if (u.workerType === 'healer') {
                 let baseHeal = Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0;
                 let effHeal = Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0;
-                html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/tick`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/tick` : undefined);
+                html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/trip`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/trip` : undefined);
             } else if (u.workerType === 'collector') {
                 let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
                 let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
@@ -12704,9 +13191,9 @@
             html += infoRow('Range', `${formatRangeStatTiles(avgBaseRange)} avg`, Math.abs(avgBaseRange - avgEffRange) > 0.001 ? `${formatRangeStatTiles(avgEffRange)} avg` : undefined);
             html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVision)} avg`, Math.abs(avgBaseVision - avgEffVision) > 0.001 ? `${formatRangeStatTiles(avgEffVision)} avg` : undefined);
             if (u0.workerType === 'builder') {
-                html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/tick`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/tick` : undefined);
+                html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
             } else if (u0.workerType === 'healer') {
-                html += infoRow('Heal Speed', `${formatBigNumber(totalHealSpeed, 1)}/tick`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/tick` : undefined);
+                html += infoRow('Heal Speed', `${formatBigNumber(totalHealSpeed, 1)}/trip`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/trip` : undefined);
             } else if (u0.workerType === 'collector') {
                 html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
             } else if (u0.workerType === 'salvager') {
@@ -13409,8 +13896,30 @@
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
                 if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);
-                else if (e.type === 'lava') html += infoRow('Burn DPS', baseDmg.toFixed(2) + '/t', baseDmg !== effDmg ? effDmg.toFixed(2) + '/t' : undefined);
-                else if (e.type === 'poison_puddle') html += infoRow('Poison DPS', baseDmg.toFixed(2) + '/t', baseDmg !== effDmg ? effDmg.toFixed(2) + '/t' : undefined);
+                else if (e.type === 'lava') {
+                    let baseBurnDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'burnDps');
+                    let effBurnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
+                    let baseBurnDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'burnDuration');
+                    let effBurnDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDuration');
+                    html += infoRow('Burn DPS', `${((Number.isFinite(baseBurnDps) ? baseBurnDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effBurnDps) && Math.abs((baseBurnDps || 0) - effBurnDps) > 1e-6 ? `${(effBurnDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(baseBurnDur) || Number.isFinite(effBurnDur)) html += infoRow('Burn Duration', `${(Number.isFinite(baseBurnDur) ? baseBurnDur : 0).toFixed(1)}s`, Number.isFinite(effBurnDur) && baseBurnDur !== effBurnDur ? `${effBurnDur.toFixed(1)}s` : undefined);
+                }
+                else if (e.type === 'poison_puddle') {
+                    let basePoisonDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'poisonDps');
+                    let effPoisonDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDps');
+                    let basePoisonDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'poisonDuration');
+                    let effPoisonDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'poisonDuration');
+                    html += infoRow('Poison DPS', `${((Number.isFinite(basePoisonDps) ? basePoisonDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effPoisonDps) && Math.abs((basePoisonDps || 0) - effPoisonDps) > 1e-6 ? `${(effPoisonDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(basePoisonDur) || Number.isFinite(effPoisonDur)) html += infoRow('Poison Duration', `${(Number.isFinite(basePoisonDur) ? basePoisonDur : 0).toFixed(1)}s`, Number.isFinite(effPoisonDur) && basePoisonDur !== effPoisonDur ? `${effPoisonDur.toFixed(1)}s` : undefined);
+                }
+                else if (e.type === 'ice_patch') {
+                    let baseFreezeDps = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'freezeDps');
+                    let effFreezeDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDps');
+                    let baseFreezeDur = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'freezeDuration');
+                    let effFreezeDur = getBuildingStatForOwner(e.owner, e.type, effLevel, 'freezeDuration');
+                    html += infoRow('Freeze DPS', `${((Number.isFinite(baseFreezeDps) ? baseFreezeDps : baseDmg) * TICK_RATE).toFixed(2)}/s`, Number.isFinite(effFreezeDps) && Math.abs((baseFreezeDps || 0) - effFreezeDps) > 1e-6 ? `${(effFreezeDps * TICK_RATE).toFixed(2)}/s` : undefined);
+                    if (Number.isFinite(baseFreezeDur) || Number.isFinite(effFreezeDur)) html += infoRow('Freeze Duration', `${(Number.isFinite(baseFreezeDur) ? baseFreezeDur : 0).toFixed(1)}s`, Number.isFinite(effFreezeDur) && baseFreezeDur !== effFreezeDur ? `${effFreezeDur.toFixed(1)}s` : undefined);
+                }
                 else html += infoRow('Damage', baseDmg.toFixed(2), baseDmg !== effDmg ? effDmg.toFixed(2) : undefined);
             }
             if (e.type === 'sand') html += infoRow('Effect', '50% slow');
