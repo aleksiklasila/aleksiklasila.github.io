@@ -2233,7 +2233,7 @@
             laser_resistant: { hp: 55, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 35, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
             snake: { hp: 800, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 30, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
             scout: { hp: 14, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 32, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            collector: { hp: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
             salvager_unit: { hp: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
             healer_unit: { hp: 25, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 999, color: '#fff', r: 6, vis: 'rect', isWorker: true },
@@ -2430,7 +2430,8 @@
             let visionRange = Math.min(visionCap, baseVision * visionMult);
 
             let attackRange = Math.max(0, Number(s.attackRange) || 0);
-            let gatherPerTrip = unitType === 'collector' ? Math.max(1, 10 * lvl) : 0;
+            let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
+            let gatherPerTrip = unitType === 'collector' ? Math.max(1, gatherBase * lvl) : 0;
             let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
             let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
 
@@ -2615,7 +2616,6 @@
                 let statOrder = getUnitResearchStatKeys(key);
                 for (let statKey of statOrder) {
                     let baseValue = s[statKey];
-                    if (statKey === 'gatherPerTrip') baseValue = 10;
                     if (statKey === 'builderDps' || statKey === 'healerHps') baseValue = 5;
                     if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
                     out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
@@ -7295,7 +7295,7 @@
                                     let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
                                     gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
                                 }
-                                if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 10;
+                                if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
                                 let extract = Math.min(gatherPerTrip, u.workerTarget.gold);
                                 u.workerTarget.gold -= extract;
                                 u.carryingValue = extract;
