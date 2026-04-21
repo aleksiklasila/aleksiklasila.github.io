@@ -7311,10 +7311,11 @@
 
             let cooldown = Math.max(1, Math.round(spawner.spawnCooldown || 1));
             spawner.spawnCooldown = cooldown;
-            spawner.spawnTimer = Math.min(cooldown, Math.max(0, Number(spawner.spawnTimer) || 0) + 1);
-            if (spawner.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
+            let paidPct = front.energyRequired > 0 ? (front.energyPaid / front.energyRequired) : 0;
+            spawner.spawnTimer = Math.max(0, Math.min(cooldown, Math.round(cooldown * paidPct)));
+            if (front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
                 spawner._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-            } else if (spawner.spawnTimer < cooldown || front.energyPaid < front.energyRequired) {
+            } else if (front.energyPaid < front.energyRequired) {
                 spawner._spawnReadyOrder = undefined;
             }
         }
@@ -7380,8 +7381,6 @@
                 let pushIfReady = (s) => {
                     if (!s || s.hp <= 0 || s.underConstruction) return;
                     if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
-                    let cooldown = Math.max(1, Math.round(s.spawnCooldown || 1));
-                    if ((Number(s.spawnTimer) || 0) < cooldown) return;
                     let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
                     let effLvl = getThingEffectiveLevel(s);
                     let fallbackType = getSpawnerFallbackUnitType(s);
@@ -7829,7 +7828,7 @@
 
             if (u.workerType === 'collector') {
                 if (u.workerState === 'IDLE') {
-                    if (!canRunHeavyAi) return;
+                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _collectorFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
                     if (!u.workerTarget) { u.workerState = 'RETURNING'; _workerReturnPath(u); return; }
@@ -7906,7 +7905,7 @@
                 }
             } else if (u.workerType === 'salvager') {
                 if (u.workerState === 'IDLE') {
-                    if (!canRunHeavyAi) return;
+                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _salvagerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
                     if (!u.workerTarget || !u.workerTarget.markedForSalvage) {
@@ -7973,7 +7972,7 @@
                 }
 
                 if (u.workerState === 'IDLE') {
-                    if (!canRunHeavyAi) return;
+                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
@@ -8168,7 +8167,7 @@
                 }
             } else if (u.workerType === 'healer') {
                 if (u.workerState === 'IDLE') {
-                    if (!canRunHeavyAi) return;
+                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _healerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_HEAL') {
                     let targetIsQueue = (u.workerTargetType === 'queue');
@@ -8321,7 +8320,7 @@
                 }
             } else if (u.workerType === 'researcher') {
                 if (u.workerState === 'IDLE') {
-                    if (!canRunHeavyAi) return;
+                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     let target = _findNearestResearchBuildingNeedingWork(u);
                     if (target) {
                         u.workerTarget = target;
@@ -8384,7 +8383,7 @@
                         task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
                         createExplosion(target.x, target.y, '#6bf', 3);
                         u.researcherHasMaterial = false;
-                        u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                        u.workerTransferCooldown = getWorkerTransferCooldownTicks();
 
                         if (task.workDone >= task.workRequired) {
                             completeActiveResearchTaskForPlayer(target.owner, task);
@@ -8429,7 +8428,7 @@
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
                                 u.researcherHasMaterial = true;
-                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                                u.workerTransferCooldown = getWorkerTransferCooldownTicks();
                             }
                             u._researchSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_RESEARCH';
@@ -8499,6 +8498,100 @@
             let dps = Number(u && u.builderDps);
             if (!Number.isFinite(dps) || dps <= 0) dps = 5;
             return Math.max(1, Math.round(dps));
+        }
+        function getWorkerTransferCooldownTicks() {
+            return Math.max(1, Math.floor(WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+        }
+
+        function getWorkerIdleRetargetTicks() {
+            return Math.max(30, Math.floor(TICK_RATE * 3));
+        }
+
+        function shouldRunWorkerIdleRetarget(u, canRunHeavyAi) {
+            if (!u) return false;
+            let interval = getWorkerIdleRetargetTicks();
+            if (!Number.isFinite(u._workerNextIdleRetargetTick)) {
+                u._workerNextIdleRetargetTick = gameTime + interval;
+            }
+            if (canRunHeavyAi) {
+                u._workerNextIdleRetargetTick = gameTime + interval;
+                return true;
+            }
+            if (gameTime >= u._workerNextIdleRetargetTick) {
+                u._workerNextIdleRetargetTick = gameTime + interval;
+                return true;
+            }
+            return false;
+        }
+
+        function _getWorkerVisionRangePx(u) {
+            let visTiles = Number(u && u.visionRange);
+            if (!Number.isFinite(visTiles) || visTiles <= 0) visTiles = 4;
+            return Math.max(TILE, visTiles * TILE);
+        }
+
+        function _getTargetPriorityLevel(target) {
+            if (!target) return 1;
+            if (target.workerType) return getUnitEffectiveLevel(target, getUnitBaseLevel(target));
+            if (Number.isFinite(target.effectiveLevel)) return Math.max(0, Math.floor(target.effectiveLevel));
+            if (Number.isFinite(target.level)) return Math.max(0, Math.floor(target.level));
+            if (Number.isFinite(target.stacks)) return Math.max(0, stackCountToLevel(target.stacks));
+            return 1;
+        }
+
+        function _countWorkersTargetingTarget(target, owner, workerType, targetType = null, excludeUnit = null) {
+            if (!target) return 0;
+            let count = 0;
+            for (let wu of units) {
+                if (!wu || wu.dead) continue;
+                if (excludeUnit && wu === excludeUnit) continue;
+                if (wu.owner !== owner || wu.workerType !== workerType) continue;
+                if (wu.workerState === 'IDLE' || wu.workerState === 'MANUAL_MOVE') continue;
+                if (targetType !== null && wu.workerTargetType !== targetType) continue;
+                if (wu.workerTarget === target) count++;
+            }
+            return count;
+        }
+
+        function _scoreWorkerTaskCandidate(u, candidate, hasAlternatives) {
+            let score = Number(candidate.dist) || 0;
+            if (hasAlternatives) {
+                let load = _countWorkersTargetingTarget(candidate.target, u.owner, u.workerType, candidate.targetType !== undefined ? candidate.targetType : null, u);
+                score += load * TILE * 1.5;
+                if (load > 3) score += (load - 3) * TILE * 8;
+                if (Number.isFinite(candidate.level)) score += candidate.level * TILE * 0.8;
+                if (candidate.isUpgrading) score += TILE * 0.4;
+            }
+            if (u.workerTarget && u.workerTarget === candidate.target) score -= TILE * 0.75;
+
+            let gx = Number.isFinite(candidate.target && candidate.target.gx) ? candidate.target.gx : Math.floor((candidate.target && candidate.target.x || 0) / TILE);
+            let gy = Number.isFinite(candidate.target && candidate.target.gy) ? candidate.target.gy : Math.floor((candidate.target && candidate.target.y || 0) / TILE);
+            let seed = ((u.id * 1103515245 + gx * 12345 + gy * 54321) >>> 0) % 1024;
+            score += (seed / 1024) * TILE * 0.35;
+            return score;
+        }
+
+        function _pickDistributedWorkerTarget(u, candidates) {
+            if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
+
+            let visibilityPx = _getWorkerVisionRangePx(u);
+            let nearby = candidates.filter(c => {
+                let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
+                return Number.isFinite(d) && d <= visibilityPx;
+            });
+            let pool = nearby.length > 0 ? nearby : candidates;
+            let hasAlternatives = pool.length > 1;
+
+            let best = null;
+            let bestScore = Infinity;
+            for (let c of pool) {
+                let score = _scoreWorkerTaskCandidate(u, c, hasAlternatives);
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = c;
+                }
+            }
+            return best ? best.target : null;
         }
 
         const BUILDER_CAN_WALK = (nx, ny) => {
@@ -8613,7 +8706,8 @@
             let target = null;
 
             if (_isBuilderWorkTarget(u.workerTarget, u.owner)) {
-                target = u.workerTarget;
+                let currentLoad = _countWorkersTargetingTarget(u.workerTarget, u.owner, 'builder', null, u);
+                if (currentLoad <= 3) target = u.workerTarget;
             }
             if (!target && Number.isFinite(u._builderLastWorkGx) && Number.isFinite(u._builderLastWorkGy)) {
                 target = _getBuilderWorkTargetAt(u._builderLastWorkGx, u._builderLastWorkGy, u.owner);
@@ -8765,22 +8859,25 @@
         }
 
         function _findNearestQueuedSpawnerNeedingWork(u) {
-            let best = null;
-            let bestDist = Infinity;
+            let candidates = [];
             let consider = (s) => {
                 if (!_isHealerQueueTarget(s, u.owner)) return;
                 let d = Math.hypot(s.x - u.x, s.y - u.y);
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = s;
-                }
+                candidates.push({
+                    target: s,
+                    targetType: 'queue',
+                    dist: d,
+                    worldDist: d,
+                    level: _getTargetPriorityLevel(s),
+                    isUpgrading: !!s.isUpgrading
+                });
             };
             for (let b of barracks) consider(b);
             for (let s of collectorSpawners) {
                 if (!s) continue;
                 consider(s);
             }
-            return best;
+            return _pickDistributedWorkerTarget(u, candidates);
         }
 
         function _isResearcherTargetBuilding(target, owner) {
@@ -8794,31 +8891,37 @@
         }
 
         function _findNearestResearchBuildingNeedingWork(u) {
-            let best = null;
-            let bestDist = Infinity;
+            let candidates = [];
             for (let s of collectorSpawners) {
                 if (!_isResearcherTargetBuilding(s, u.owner)) continue;
                 let d = Math.hypot(s.x - u.x, s.y - u.y);
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = s;
-                }
+                candidates.push({
+                    target: s,
+                    targetType: 'research',
+                    dist: d,
+                    worldDist: d,
+                    level: _getTargetPriorityLevel(s),
+                    isUpgrading: !!s.isUpgrading
+                });
             }
-            return best;
+            return _pickDistributedWorkerTarget(u, candidates);
         }
 
         function _findNearestDamagedFriendlyUnit(u) {
-            let best = null;
-            let bestDist = Infinity;
+            let candidates = [];
             for (let target of units) {
                 if (!_isHealerTargetUnit(target, u.owner)) continue;
                 let d = Math.hypot(target.x - u.x, target.y - u.y);
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = target;
-                }
+                candidates.push({
+                    target: target,
+                    targetType: 'unit',
+                    dist: d,
+                    worldDist: d,
+                    level: _getTargetPriorityLevel(target),
+                    isUpgrading: false
+                });
             }
-            return best;
+            return _pickDistributedWorkerTarget(u, candidates);
         }
 
         function _healerFindTarget(u, myGx, myGy) {
@@ -8886,13 +8989,21 @@
         }
 
         function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
-            let owner = u.owner, bestDist = Infinity, best = null;
+            let owner = u.owner;
+            let candidates = [];
             let check = (b) => {
                 if (b.markedForSalvage) return;
                 if ((!b.underConstruction && !b.isUpgrading) || b.owner !== owner) return;
                 if (b.underConstruction && !isBuildEnabled(b)) return;
                 let d = Math.hypot(b.x - originX, b.y - originY);
-                if (d < bestDist) { bestDist = d; best = b; }
+                let worldDist = Math.hypot(b.x - u.x, b.y - u.y);
+                candidates.push({
+                    target: b,
+                    dist: d,
+                    worldDist: worldDist,
+                    level: _getTargetPriorityLevel(b),
+                    isUpgrading: !!b.isUpgrading
+                });
             };
             for (let t of towers) check(t);
             for (let b of barracks) check(b);
@@ -8900,7 +9011,7 @@
             for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) {
                 let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading)) check(c.item);
             }
-            return best;
+            return _pickDistributedWorkerTarget(u, candidates);
         }
 
         function _findClosestSpawner(u, type) {
@@ -10206,8 +10317,8 @@
                     ctx.strokeRect(ex - 18, ey - 18, 36, 36);
                     ctx.setLineDash([]);
                 }
-                // Rally point for barracks and spawners
-                if (['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner'].includes(ent.type) && ent.rallyX !== null) {
+                // Rally point for barracks and spawners (including research labs)
+                if (['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
                     let rx = ent.rallyX, ry = ent.rallyY;
                     if (showRallyLinesForBuildings()) {
                         applyOverlayLineType(ctx, rallyLineType);
@@ -10810,7 +10921,7 @@
 
             function isRallyCapableEntity(ent) {
                 if (!ent || ent.owner !== localPlayerId) return false;
-                let byType = ['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner'].includes(ent.type);
+                let byType = ['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type);
                 let byShape = Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
                 return !!(byType || byShape);
             }
@@ -12739,10 +12850,8 @@
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
                 let bStats = calculateItemStats(key, level, localPlayerId);
-                let spawnCd = getBarrackSpawnCooldown(unitType, level, localPlayerId, key);
                 let up = getUnitPreview(unitType, level);
                 addRow('Energy', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
-                addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
                 addRow('Unit Energy', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
                 if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
                 else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'healerHps' });
@@ -12767,10 +12876,8 @@
                             ? 'builder_unit'
                             : (key === 'healer_spawner' ? 'healer_unit' : 'researcher_unit')));
                 let stats = calculateItemStats(key, level, localPlayerId);
-                let spawnCd = getBarrackSpawnCooldown(workerType, level, localPlayerId, key);
                 let up = getUnitPreview(workerType, level);
                 addRow('Energy', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
-                addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
                 addRow(key === 'research' ? 'Researcher Energy' : 'Worker Energy', fmt(up.hp), { kind: 'unit', key: workerType, statKey: 'hp' });
                 if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'builderDps' });
                 else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'healerHps' });
@@ -13041,6 +13148,10 @@
             return `<span class="info-build-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9f9' : '#888'}">Build: ${label}</span>`;
         }
 
+        function disabledInfoPill(label) {
+            return `<span style="cursor:default;background:#1a1a1a;padding:2px 8px;border:1px solid #333;border-radius:3px;font-size:9px;color:#555;">${label}</span>`;
+        }
+
         function formatInfoCurrency(n, d = 0) {
             return `⚡${formatBigNumber(n, d)}`;
         }
@@ -13120,6 +13231,23 @@
             html += `<div style="position:relative;width:100%;height:12px;border:1px solid #35516a;border-radius:3px;background:#0f161c;overflow:hidden;">`;
             html += `<div style="position:absolute;left:0;top:0;bottom:0;width:${(barPct * 100).toFixed(1)}%;background:linear-gradient(90deg,#2d7dd2,#49c0ff);"></div>`;
             html += `<div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#d6ecff;font-size:9px;font-weight:700;text-shadow:0 1px 1px #000;">${rightText}</div>`;
+            html += `</div>`;
+            html += `</div>`;
+            return html;
+        }
+
+        function renderResearchWorkProgressRow(workDone, workRequired) {
+            let required = Math.max(0, Number(workRequired) || 0);
+            let done = Math.max(0, Math.min(required, Number(workDone) || 0));
+            let pct = required > 0 ? (done / required) : 0;
+            let barPct = Math.max(0, Math.min(1, pct));
+            let text = `${formatInfoCurrency(done)}/${formatInfoCurrency(required)}`;
+
+            let html = '';
+            html += `<div class="info-row" style="padding-top:2px;">`;
+            html += `<div style="position:relative;width:100%;height:12px;border:1px solid #35516a;border-radius:3px;background:#0f161c;overflow:hidden;">`;
+            html += `<div style="position:absolute;left:0;top:0;bottom:0;width:${(barPct * 100).toFixed(1)}%;background:linear-gradient(90deg,#2d7dd2,#49c0ff);"></div>`;
+            html += `<div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#d6ecff;font-size:9px;font-weight:700;text-shadow:0 1px 1px #000;">${text}</div>`;
             html += `</div>`;
             html += `</div>`;
             return html;
@@ -13331,35 +13459,32 @@
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            if (!e.underConstruction) {
-                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-                html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
-                html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
-                html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
-                html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
-                if (e.owner === localPlayerId) {
-                    html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
-                }
+            html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+            html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
+            html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
+            html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
+            if (e.owner === localPlayerId) {
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
             }
-            if (e.owner === localPlayerId && e.underConstruction) {
-                let autoEnabled = isAutoUpgradeEnabled(e);
-                let buildEnabled = isBuildEnabled(e);
-                let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                let buildBtn = buildToggleBtn(e.gx, e.gy, buildEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
-            } else if (e.owner === localPlayerId && !e.underConstruction) {
+            if (e.owner === localPlayerId) {
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = true;
-                let subBtn = `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                let addBtn = `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let canQueue = !e.underConstruction;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let autoEnabled = isAutoUpgradeEnabled(e);
+                let buildEnabled = isBuildEnabled(e);
                 let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(e.spawnQueue.length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('Build: --');
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -13384,7 +13509,6 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
             html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
             html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
@@ -13404,16 +13528,18 @@
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = readyGroup.length > 0;
-                let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                let addBtn = `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let canQueue = readyGroup.length > 0;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                if (readyGroup.length > 0) {
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
-                }
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
@@ -13579,34 +13705,29 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            if (!e.underConstruction) {
-                html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-            }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
-                if (e.underConstruction) {
-                    let autoEnabled = isAutoUpgradeEnabled(e);
-                    let buildEnabled = isBuildEnabled(e);
-                    let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                    let buildBtn = buildToggleBtn(e.gx, e.gy, buildEnabled);
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
-                } else {
-                    let cost = e.getUnitCost();
-                    let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
-                    let totalCost = cost * purchaseCount;
-                    let canAfford = true;
-                    let subBtn = `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                    let addBtn = `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
-                    let autoEnabled = isAutoUpgradeEnabled(e);
-                    let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
-                    let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
-                    html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
-                }
+                let cost = e.getUnitCost();
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = cost * purchaseCount;
+                let canQueue = !e.underConstruction;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
+                let autoEnabled = isAutoUpgradeEnabled(e);
+                let buildEnabled = isBuildEnabled(e);
+                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
+                let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('Build: --');
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -13958,7 +14079,6 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
-            html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) {
@@ -13973,16 +14093,18 @@
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = readyGroup.length > 0;
-                let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
-                let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
+                let canQueue = readyGroup.length > 0;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                if (readyGroup.length > 0) {
-                    html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
-                }
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
@@ -14194,12 +14316,6 @@
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
                 let canAfford = !preview.atMax;
 
-                let activePctText = '';
-                if (t.isActiveTask) {
-                    let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
-                    activePctText = `<span style="color:#8cf">${pct}% </span>`;
-                }
-
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
                 let rowCursor = 'grab';
 
@@ -14209,12 +14325,15 @@
                 html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
                 html += `</div>`;
                 html += `</div>`;
+                if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
+                    html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
+                }
                 html += `</div>`;
             }
             html += `</div>`;
@@ -14251,12 +14370,6 @@
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
                 let canAfford = !preview.atMax;
 
-                let activePctText = '';
-                if (t.isActiveTask) {
-                    let pct = t.workRequired > 0 ? Math.floor(((t.workDone || 0) / t.workRequired) * 100) : 0;
-                    activePctText = `<span style="color:#8cf">${pct}% </span>`;
-                }
-
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
                 let rowCursor = 'grab';
 
@@ -14266,12 +14379,15 @@
                 html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${activePctText}${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
                 html += `</div>`;
                 html += `</div>`;
+                if (t.isActiveTask && Number.isFinite(t.workRequired) && t.workRequired > 0) {
+                    html += renderResearchWorkProgressRow(t.workDone || 0, t.workRequired);
+                }
                 html += `</div>`;
             }
 
@@ -14373,20 +14489,30 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            if (e.owner === localPlayerId) {
+                html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+            }
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
             html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
             html += `</div>`;
-            if (e.owner === localPlayerId && !e.underConstruction) {
+            if (e.owner === localPlayerId) {
                 let labLevel = getThingEffectiveLevel(e);
                 let researcherEnergy = getUnitStatForOwner(e.owner, 'researcher_unit', labLevel, 'hp');
                 let researcherQueue = Array.isArray(e.spawnQueue) ? e.spawnQueue : [];
                 let queueCount = researcherQueue.length;
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = Math.max(1, Math.floor(Number.isFinite(researcherEnergy) ? researcherEnergy : 1)) * purchaseCount;
+                let canQueue = !e.underConstruction;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[+]</span>`;
                 html += `<div class="info-row" style="align-items:center;justify-content:space-between;gap:8px;">`;
                 html += `<span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span>`;
                 html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(queueCount, 10)}</span>`;
-                html += `<span><span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span> <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span></span>`;
+                html += `<span>${subBtn} ${addBtn}</span>`;
                 html += `</div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
             }
@@ -14407,7 +14533,7 @@
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
                 let autoResearchEnabled = isAutoResearchEnabled(e);
                 let autoResearchToggle = autoResearchBtn(e.gx, e.gy, autoResearchEnabled);
-                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : '';
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : disabledInfoPill('Build: --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearchToggle}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
@@ -14432,6 +14558,17 @@
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            if (e.owner === localPlayerId) {
+                let rallyTokens = new Set(group.map(r => (r.rallyX !== null && r.rallyY !== null)
+                    ? `${Math.floor(r.rallyX / TILE)},${Math.floor(r.rallyY / TILE)}`
+                    : 'None'));
+                if (rallyTokens.size === 1) {
+                    let token = Array.from(rallyTokens)[0];
+                    html += infoRow('Rally', token === 'None' ? 'None' : `(${token})`);
+                } else {
+                    html += infoRow('Rally', 'Mixed');
+                }
+            }
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
             html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
             html += `</div>`;
@@ -14441,17 +14578,25 @@
                     if (!r || !Array.isArray(r.spawnQueue)) continue;
                     workerQueueCount += r.spawnQueue.length;
                 }
-                let workerCoordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
+                let readyGroup = group.filter(r => !r.underConstruction);
+                let workerCoordStr = readyGroup.map(r => `${r.gx},${r.gy}`).join(';');
                 let queueCostSource = group.find(r => !r.underConstruction) || group[0];
                 let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = Math.max(1, Math.floor(cost || 1)) * purchaseCount;
+                let canQueue = readyGroup.length > 0;
+                let subBtn = canQueue
+                    ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${workerCoordStr}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[-]</span>`;
+                let addBtn = canQueue
+                    ? `<span class="info-buy-worker-group-btn" data-coords="${workerCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span>`
+                    : `<span style="color:#444;font-weight:bold;">[+]</span>`;
                 html += `<div class="info-row" style="align-items:center;justify-content:space-between;gap:8px;">`;
                 html += `<span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span>`;
                 html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(workerQueueCount, group.length * 10)}</span>`;
-                html += `<span><span class="info-dequeue-group-btn" data-type="worker" data-coords="${workerCoordStr}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span> <span class="info-buy-worker-group-btn" data-coords="${workerCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span></span>`;
+                html += `<span>${subBtn} ${addBtn}</span>`;
                 html += `</div>`;
-                html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(group));
+                html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
 
                 if (queueOpen) {
                     html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
@@ -14476,7 +14621,7 @@
                 let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let autoResearch = autoResearchGroupBtn(coordStr, allAutoResearchEnabled, anyAutoResearchEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearch}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
