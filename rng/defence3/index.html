@@ -2248,25 +2248,25 @@
         // ============================================================
         const BASE_CARD_TYPES = {
             // Towers (target: wall)
-            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 2.0, damage: 8, target: 'wall', towerHp: 100 },
-            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 0.85, damage: 5, target: 'wall', towerHp: 120 },
-            water: { name: "Water", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 1.75, damage: 10, target: 'wall', towerHp: 150 },
-            poison: { name: "Poison", price: 80, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 2.5, damage: 3, target: 'wall', towerHp: 200 },
-            fire: { name: "Fire", price: 150, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 5.5, damage: 45, target: 'wall', towerHp: 350 },
-            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 7.5, damage: 5, target: 'wall', towerHp: 180 },
-            ice: { name: "Ice", price: 250, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 2.0, damage: 33, target: 'wall', towerHp: 400 },
-            sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 12.0, damage: 100, target: 'wall', towerHp: 1500 },
-            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 1.75, damage: 1, target: 'wall', towerHp: 150 },
+            pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 2.0, damage: 8, target: 'wall', towerHp: 30 },
+            smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 1.25, damage: 5, target: 'wall', towerHp: 25 },
+            water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 1.75, damage: 10, wetDuration: 7, target: 'wall', towerHp: 95 },
+            poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, target: 'wall', towerHp: 200 },
+            fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.30, target: 'wall', towerHp: 350 },
+            sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 7.5, damage: 5, sandDuration: 9, target: 'wall', towerHp: 180 },
+            ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, target: 'wall', towerHp: 400 },
+            sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 12.0, damage: 170, target: 'wall', towerHp: 1500 },
+            elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, target: 'wall', towerHp: 150 },
             laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerHp: 300 },
-            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 1.4, damage: 1, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 24 },
+            watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 1.4, damage: 1, watchDuration: 5, target: 'wall', towerHp: 15, isWatchTower: true, maxVisionRange: 24 },
 
             // Floor items
-            sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", target: 'floor' },
-            lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", target: 'floor' },
-            poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", target: 'floor' },
-            ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", target: 'floor' },
-            water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", target: 'floor' },
-            mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", target: 'floor' },
+            sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", sandDuration: 0.5, target: 'floor' },
+            lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", burnDps: 1, burnDuration: 1.5, target: 'floor' },
+            poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", poisonDps: 1, poisonDuration: 1.5, target: 'floor' },
+            ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
+            water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", wetDuration: 3, target: 'floor' },
+            mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", blastDamage: 135, blastRadius: 0.42, target: 'floor' },
             farm: { name: "Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", target: 'floor' },
 
             // Special
@@ -2309,11 +2309,11 @@
             // Towers
             pistol: "Basic single-shot tower. Reliable damage, decent range.",
             smg: "Rapid-fire tower. Low damage per hit but high fire rate.",
-            water: "Soaks enemies, making them vulnerable to ice.",
+            water: "Soaks enemies, making them vulnerable to freeze DPS.",
             poison: "Applies stacking poison DoT. Low base damage.",
             fire: "Splash damage and burn DoT. Strong vs groups.",
             sand_gun: "Slows enemies drastically. Low damage.",
-            ice: "Freezes enemies. Combo with water for bonus damage.",
+            ice: "Freezes enemies. Combo with water for freeze DPS.",
             sniper: "Long-range precision tower with very high single-shot damage.",
             elements: "Applies all status effects. Jack of all trades.",
             laser: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.",
@@ -2381,18 +2381,25 @@
             special: ['spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
 
-        // Barrack spawn config
+        // Spawn timing config for non-barrack producers and barrack level-reduction rules.
         const BARRACK_SPAWN_CONFIG = {
-            norm: { baseTime: 1.5, reduction: 0.10 }, fast: { baseTime: 1.25, reduction: 0.10 }, tank: { baseTime: 2.25, reduction: 0.08 },
-            boss: { baseTime: 4.5, reduction: 0.06 }, mole: { baseTime: 1.0, reduction: 0.12 }, snake: { baseTime: 6.0, reduction: 0.05 },
-            flying: { baseTime: 1.75, reduction: 0.09 }, poison_resistant: { baseTime: 2.0, reduction: 0.08 },
-            fire_resistant: { baseTime: 2.0, reduction: 0.08 }, water_resistant: { baseTime: 1.75, reduction: 0.09 },
-            ice_resistant: { baseTime: 2.0, reduction: 0.08 }, laser_resistant: { baseTime: 2.0, reduction: 0.08 },
-            scout: { baseTime: 0.9, reduction: 0.11 },
-            collector: { baseTime: 0.75, reduction: 0.10 },
-            salvager_unit: { baseTime: 1.0, reduction: 0.10 },
-            builder_unit: { baseTime: 1.25, reduction: 0.10 },
-            healer_unit: { baseTime: 1.25, reduction: 0.10 },
+            norm: { baseTime: 40, reduction: 0.10 },
+            fast: { baseTime: 20, reduction: 0.10 },
+            tank: { baseTime: 80, reduction: 0.08 },
+            boss: { baseTime: 400, reduction: 0.06 },
+            mole: { baseTime: 10, reduction: 0.12 },
+            snake: { baseTime: 800, reduction: 0.05 },
+            flying: { baseTime: 45, reduction: 0.09 },
+            poison_resistant: { baseTime: 60, reduction: 0.08 },
+            fire_resistant: { baseTime: 70, reduction: 0.08 },
+            water_resistant: { baseTime: 50, reduction: 0.09 },
+            ice_resistant: { baseTime: 65, reduction: 0.08 },
+            laser_resistant: { baseTime: 55, reduction: 0.08 },
+            scout: { baseTime: 14, reduction: 0.11 },
+            collector: { baseTime: 15, reduction: 0.10 },
+            salvager_unit: { baseTime: 20, reduction: 0.10 },
+            builder_unit: { baseTime: 25, reduction: 0.10 },
+            healer_unit: { baseTime: 25, reduction: 0.10 },
         };
 
         // Unit combat stats
@@ -2444,6 +2451,8 @@
         const RESEARCH_STAT_LABELS = {
             maxHp: 'Max HP',
             damage: 'Damage',
+            blastDamage: 'Blast Damage',
+            blastRadius: 'Blast Radius',
             cd: 'Cooldown',
             spawnCd: 'Spawn CD',
             visionRange: 'Vision',
@@ -2477,7 +2486,7 @@
         };
 
         const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps'];
-        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'cd', 'spawnCd', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration'];
 
         // Soft caps for precomputed stats. Infinity means "no soft cap".
         const PRECOMPUTED_SOFT_CAP_MAP = {
@@ -2505,8 +2514,16 @@
             building: {
                 maxHp: Infinity,
                 damage: Infinity,
-                cd: 0.025,
-                spawnCd: 0.025,
+                cd: ({ baseAtLevel1 }) => {
+                    let baseCd = Number(baseAtLevel1 && baseAtLevel1.cd);
+                    if (!Number.isFinite(baseCd) || baseCd <= 0) return 0.5;
+                    return Math.log(baseCd) / Math.log(3);
+                },
+                spawnCd: ({ baseAtLevel1 }) => {
+                    let baseSpawnCd = Number(baseAtLevel1 && baseAtLevel1.spawnCd);
+                    if (!Number.isFinite(baseSpawnCd) || baseSpawnCd <= 0) return 0.5;
+                    return Math.log(baseSpawnCd) / Math.log(15);
+                },
                 visionRange: ({ baseAtLevel1 }) => {
                     let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
                     return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
@@ -2631,6 +2648,8 @@
             let out = {
                 maxHp: NaN,
                 damage: NaN,
+                blastDamage: NaN,
+                blastRadius: NaN,
                 cd: NaN,
                 spawnCd: NaN,
                 visionRange: NaN,
@@ -2654,7 +2673,11 @@
             else if (key === 'healer_spawner') spawnUnitType = 'healer_unit';
             if (spawnUnitType) {
                 let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
-                out.spawnCd = Math.max(0.05, (cfg.baseTime || 1) * Math.pow(1 - (cfg.reduction || 0), lvl - 1));
+                let baseSpawnCd = Number(cfg.baseTime);
+                let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
+                if (Number.isFinite(baseSpawnCd) && baseSpawnCd > 0) {
+                    out.spawnCd = Math.max(0.05, baseSpawnCd * Math.pow(1 - reduction, lvl - 1));
+                }
             }
 
             if (key === 'farm') {
@@ -2677,6 +2700,8 @@
             let def = BASE_CARD_TYPES[key] || {};
             if (Number.isFinite(def.towerHp)) out.maxHp = Math.floor(def.towerHp * Math.pow(1.4, lvl - 1));
             if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(1.4, lvl - 1);
+            if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * Math.pow(1.4, lvl - 1);
+            if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
             if (Number.isFinite(def.cd)) out.cd = def.cd;
             if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
 
@@ -2695,38 +2720,66 @@
 
             // Status effect stats are first-class precomputed values so research/matrix can use them.
             if (Number.isFinite(out.damage)) {
+                let damageRatio = 1;
+                if (Number.isFinite(def.damage) && def.damage > 0) {
+                    damageRatio = out.damage / def.damage;
+                }
+                let burnDpsParam = Number.isFinite(def.burnDps) ? def.burnDps : def.fireDps;
+                let burnDurationParam = Number.isFinite(def.burnDuration) ? def.burnDuration : def.fireDuration;
                 if (key === 'fire') {
-                    out.burnDps = Math.max(0.1, out.damage * 0.05);
-                    out.burnDuration = 3 + lvl * 0.5;
+                    out.burnDps = Number.isFinite(burnDpsParam)
+                        ? Math.max(0.1, burnDpsParam * damageRatio)
+                        : Math.max(0.1, out.damage * 0.05);
+                    out.burnDuration = Number.isFinite(burnDurationParam)
+                        ? (burnDurationParam + (lvl - 1) * 0.5)
+                        : (3 + lvl * 0.5);
                 } else if (key === 'poison') {
-                    out.poisonDps = Math.max(0.1, out.damage * 0.10);
-                    out.poisonDuration = 7.5 + lvl * 2.5;
+                    out.poisonDps = Number.isFinite(def.poisonDps)
+                        ? Math.max(0.1, def.poisonDps * damageRatio)
+                        : Math.max(0.1, out.damage * 0.10);
+                    out.poisonDuration = Number.isFinite(def.poisonDuration)
+                        ? (def.poisonDuration + (lvl - 1) * 2.5)
+                        : (7.5 + lvl * 2.5);
                 } else if (key === 'ice') {
-                    out.freezeDps = Math.max(0.2, out.damage * 0.20);
-                    out.freezeDuration = 3 + lvl * 0.5;
+                    out.freezeDps = Number.isFinite(def.freezeDps)
+                        ? Math.max(0.2, def.freezeDps * damageRatio)
+                        : Math.max(0.2, out.damage * 0.20);
+                    out.freezeDuration = Number.isFinite(def.freezeDuration)
+                        ? (def.freezeDuration + (lvl - 1) * 0.5)
+                        : (3 + lvl * 0.5);
                 } else if (key === 'elements') {
                     let dot = Math.max(0.1, out.damage * 0.20);
-                    out.burnDps = dot;
-                    out.poisonDps = dot;
-                    out.freezeDps = dot;
-                    out.burnDuration = 5 + lvl;
-                    out.poisonDuration = 5 + lvl;
-                    out.freezeDuration = 5 + lvl;
+                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(0.1, burnDpsParam * damageRatio) : dot;
+                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(0.1, def.poisonDps * damageRatio) : dot;
+                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(0.1, def.freezeDps * damageRatio) : dot;
+                    out.burnDuration = Number.isFinite(burnDurationParam) ? (burnDurationParam + (lvl - 1)) : (5 + lvl);
+                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? (def.poisonDuration + (lvl - 1)) : (5 + lvl);
+                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? (def.freezeDuration + (lvl - 1)) : (5 + lvl);
                 } else if (key === 'lava') {
-                    out.burnDps = Math.max(0.1, out.damage);
-                    out.burnDuration = 1.5;
+                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(0.1, burnDpsParam * mult) : Math.max(0.1, out.damage);
+                    out.burnDuration = Number.isFinite(burnDurationParam) ? burnDurationParam : 1.5;
                 } else if (key === 'poison_puddle') {
-                    out.poisonDps = Math.max(0.1, out.damage);
-                    out.poisonDuration = 1.5;
+                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(0.1, def.poisonDps * mult) : Math.max(0.1, out.damage);
+                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? def.poisonDuration : 1.5;
                 } else if (key === 'ice_patch') {
-                    out.freezeDps = Math.max(0.2, out.damage);
-                    out.freezeDuration = 1.5;
+                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(0.2, def.freezeDps * mult) : Math.max(0.2, out.damage);
+                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? def.freezeDuration : 1.5;
                 }
             }
 
-            if (key === 'water' || key === 'water_puddle') out.wetDuration = key === 'water' ? (6 + lvl) : 3;
-            if (key === 'sand_gun' || key === 'sand') out.sandDuration = key === 'sand_gun' ? 9 : 0.5;
-            if (key === 'watch_tower') out.watchDuration = 4 + lvl;
+            if (key === 'water' || key === 'water_puddle' || key === 'elements') {
+                let defaultWet = key === 'water' ? (6 + lvl) : 3;
+                out.wetDuration = Number.isFinite(def.wetDuration)
+                    ? (key === 'water' ? (def.wetDuration + (lvl - 1)) : def.wetDuration)
+                    : defaultWet;
+            }
+            if (key === 'sand_gun' || key === 'sand' || key === 'elements') {
+                let defaultSand = key === 'sand_gun' ? 9 : 0.5;
+                out.sandDuration = Number.isFinite(def.sandDuration) ? def.sandDuration : defaultSand;
+            }
+            if (key === 'watch_tower') {
+                out.watchDuration = Number.isFinite(def.watchDuration) ? (def.watchDuration + (lvl - 1)) : (4 + lvl);
+            }
 
             return out;
         }
@@ -2871,6 +2924,8 @@
             addStat('maxHp', getBaseBuildingMaxHpForResearch(key));
             let d = BASE_CARD_TYPES[key] || {};
             addStat('damage', d.damage);
+            addStat('blastDamage', getBuildingStatFromMap(key, 1, 'blastDamage', 0));
+            addStat('blastRadius', getBuildingStatFromMap(key, 1, 'blastRadius', 0));
             addStat('cd', d.cd);
             addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
             addStat('visionRange', d.visionRange);
@@ -2977,6 +3032,8 @@
                 return `${value.toFixed(2)}s`;
             }
             if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return value.toFixed(2);
+            if (statKey === 'blastDamage') return value.toFixed(2);
+            if (statKey === 'blastRadius') return `${value.toFixed(2)} tiles`;
             if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'income') return value.toFixed(2);
             if (statKey === 'spawnCd') return `${value.toFixed(2)}s`;
             if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'gatherPerTrip') return value.toFixed(1);
@@ -5419,15 +5476,19 @@
         }
 
         function calculateItemStats(type, level, owner = null) {
-            let stats = { maxHp: 0, damage: 0, income: NaN };
+            let stats = { maxHp: 0, damage: 0, blastDamage: NaN, blastRadius: NaN, income: NaN };
             let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
             let bKey = normalizeBuildingResearchKey(type);
             let lvl = Math.max(1, clampThingLevel(level));
             let maxHp = getBuildingStatForOwner(ownerId, bKey, lvl, 'maxHp');
             let damage = getBuildingStatForOwner(ownerId, bKey, lvl, 'damage');
+            let blastDamage = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastDamage');
+            let blastRadius = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastRadius');
             let income = getBuildingStatForOwner(ownerId, bKey, lvl, 'income');
             if (Number.isFinite(maxHp)) stats.maxHp = Math.max(1, Math.floor(maxHp));
             if (Number.isFinite(damage)) stats.damage = damage;
+            if (Number.isFinite(blastDamage)) stats.blastDamage = blastDamage;
+            if (Number.isFinite(blastRadius)) stats.blastRadius = Math.max(0, blastRadius);
             if (Number.isFinite(income)) stats.income = income;
             return stats;
         }
@@ -5537,7 +5598,7 @@
                 if (target.poisonTickDamage > 0) target.hp -= target.poisonTickDamage;
             }
             if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
-                target.hp -= target.iceTickDamage * 1.5;
+                target.hp -= target.iceTickDamage;
             }
             if (target.frozen > 0) target.frozen--;
             if (target.wet > 0) target.wet--;
@@ -5675,9 +5736,13 @@
                 let s = { ...this.baseStats };
                 let effLvl = Math.max(1, clampThingLevel(lvl));
                 let dmg = getBuildingStatForOwner(this.owner, this.type, effLvl, 'damage');
+                let blastDamage = getBuildingStatForOwner(this.owner, this.type, effLvl, 'blastDamage');
+                let blastRadius = getBuildingStatForOwner(this.owner, this.type, effLvl, 'blastRadius');
                 let cd = getBuildingStatForOwner(this.owner, this.type, effLvl, 'cd');
                 let vr = getBuildingStatForOwner(this.owner, this.type, effLvl, 'visionRange');
                 if (Number.isFinite(dmg)) s.damage = dmg;
+                if (Number.isFinite(blastDamage)) s.blastDamage = blastDamage;
+                if (Number.isFinite(blastRadius)) s.blastRadius = Math.max(0, blastRadius);
                 if (Number.isFinite(cd)) s.cd = Math.max(0.15, cd);
                 if (Number.isFinite(vr)) s.visionRange = vr;
                 return s;
@@ -5749,7 +5814,7 @@
                 let preferredTarget = getTowerPreferredTargetInRange(this, rangePx);
                 if (preferredTarget) {
                     let target = preferredTarget;
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx, this.currentStats.blastDamage, this.currentStats.blastRadius));
                     this.cd = secondsToTicks(this.currentStats.cd || 1.5);
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
@@ -5816,7 +5881,7 @@
                 }
 
                 if (target) {
-                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx));
+                    projectiles.push(new Projectile(this.x, this.y, target, this.type, this.currentStats.damage, getThingEffectiveLevel(this), this, rangePx, this.currentStats.blastDamage, this.currentStats.blastRadius));
                     this.cd = secondsToTicks(this.currentStats.cd || 1.5);
                     this.angle = Math.atan2(target.y - this.y, target.x - this.x);
                     createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
@@ -5894,12 +5959,14 @@
         // PROJECTILE CLASS
         // ============================================================
         class Projectile {
-            constructor(x, y, t, type, dmg, level, source, maxRange) {
+            constructor(x, y, t, type, dmg, level, source, maxRange, blastDamage = NaN, blastRadius = NaN) {
                 this.x = x; this.y = y; this.prevX = x; this.prevY = y; this.type = type; this.speed = 8; this.life = 100;
                 this.startX = x; this.startY = y; this.maxRange = maxRange || 9999;
                 let a = Math.atan2(t.y - y, t.x - x);
                 this.vx = Math.cos(a) * 8; this.vy = Math.sin(a) * 8;
                 this.dmg = dmg; this.level = level;
+                this.blastDamage = Number.isFinite(blastDamage) ? Math.max(0, blastDamage) : NaN;
+                this.blastRadius = Number.isFinite(blastRadius) ? Math.max(0, blastRadius) : NaN;
                 this.sourceOwner = source ? source.owner : -1;
                 this.sx = source ? source.gx : -1;
                 this.sy = source ? source.gy : -1;
@@ -5934,17 +6001,14 @@
             hit(t) {
                 if (t.turretImmune) { createExplosion(t.x, t.y, "#888", 3); return; }
                 let baseDmg = this.dmg;
+                let splashDmg = Number.isFinite(this.blastDamage) ? this.blastDamage : baseDmg;
+                let splashRadiusPx = Math.max(0, (Number.isFinite(this.blastRadius) ? this.blastRadius : (64 / TILE)) * TILE);
+                let hasBlast = Number.isFinite(this.blastDamage) && this.blastDamage > 0 && Number.isFinite(this.blastRadius) && this.blastRadius > 0;
                 if (this.type === 'fire') {
                     applyStatusEffect(t, 'fire', this.level || 1, baseDmg * 0.05, this.sourceOwner, this.type);
                     if (!t.fireResistant) { t.hp -= this.dmg; }
                     let radius = 12 + this.level * 4;
                     createExplosion(this.x, this.y, "orange", Math.min(radius, 20));
-                    forEachUnitInRange(this.x, this.y, 64, (e) => {
-                        if (e.owner === this.sourceOwner || e.turretImmune) return;
-                        applyStatusEffect(e, 'fire', this.level || 1, baseDmg * 0.05, this.sourceOwner, this.type);
-                        if (!e.fireResistant) e.hp -= this.dmg;
-                        if (e.hp <= 0 && !e.dead) e.dead = true;
-                    });
                 } else if (this.type === 'ice') {
                     applyStatusEffect(t, 'ice', this.level || 1, baseDmg * 0.2, this.sourceOwner, this.type);
                     if (!t.iceResistant) t.hp -= this.dmg;
@@ -5974,6 +6038,15 @@
                 } else {
                     t.hp -= this.dmg;
                     createExplosion(this.x, this.y, "#fff", 4);
+                }
+
+                if (hasBlast) {
+                    forEachUnitInRange(this.x, this.y, splashRadiusPx, (e) => {
+                        if (e === t || e.owner === this.sourceOwner || e.turretImmune || e.dead) return;
+                        e.hp -= splashDmg;
+                        if (this.type === 'fire') applyStatusEffect(e, 'fire', this.level || 1, splashDmg * 0.05, this.sourceOwner, this.type);
+                        if (e.hp <= 0 && !e.dead) e.dead = true;
+                    });
                 }
                 if (t.hp <= 0 && !t.dead) { t.dead = true; createExplosion(t.x, t.y, "#e44", 6); }
             }
@@ -6215,7 +6288,18 @@
                             applyStatusEffect(this, 'water', itemLevel, 0, item.owner, item.type);
                         }
                         else if (item.type === 'mine') {
-                            this.hp -= item.damage || 135;
+                            let blastDamage = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastDamage');
+                            if (!Number.isFinite(blastDamage) || blastDamage <= 0) blastDamage = Number(item.damage) || 135;
+                            let blastRadiusTiles = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
+                            if (!Number.isFinite(blastRadiusTiles) || blastRadiusTiles <= 0) blastRadiusTiles = 1.2;
+                            let blastRadiusPx = Math.max(0, blastRadiusTiles * TILE);
+
+                            forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
+                                if (!u || u.dead || u.owner === item.owner) return;
+                                u.hp -= blastDamage;
+                                if (u.hp <= 0 && !u.dead) u.dead = true;
+                            });
+
                             createExplosion(this.x, this.y, "#f80", 15);
                             playSound('mine_explode', this.x, this.y);
                             cell.item = null;
@@ -7059,9 +7143,16 @@
         // ============================================================
         // BARRACK CLASS
         // ============================================================
+        function getBaseSpawnCooldownSeconds(unitType, buildingKey = null) {
+            let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
+            if (Number.isFinite(cfg.baseTime) && cfg.baseTime > 0) return cfg.baseTime;
+            return 1;
+        }
+
         function getBarrackSpawnCooldown(unitType, level, owner = null, buildingKey = null) {
             let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
-            let baseCd = Math.max(0.05, cfg.baseTime * Math.pow(1 - cfg.reduction, level - 1));
+            let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
+            let baseCd = Math.max(0.05, getBaseSpawnCooldownSeconds(unitType, buildingKey) * Math.pow(1 - reduction, level - 1));
             if (buildingKey && Number.isFinite(owner)) {
                 let researched = getBuildingStatForOwner(owner, buildingKey, level, 'spawnCd');
                 if (Number.isFinite(researched)) return Math.max(0.05, researched);
@@ -7105,8 +7196,7 @@
 
             getUnitCost() {
                 // Cost scales linearly with effective level
-                let cfg = BARRACK_SPAWN_CONFIG[this.unitType];
-                let baseCost = cfg ? Math.round(cfg.baseTime * 10) : 10;
+                let baseCost = Math.round(getBaseSpawnCooldownSeconds(this.unitType, `barrack_${this.unitType}`) * 10);
                 let lvl = getThingEffectiveLevel(this);
                 return Math.round(baseCost * (1 + (lvl - 1) * 0.5));
             }
@@ -12098,10 +12188,9 @@
                 return `$${formatBigNumber(approxCost)} / ${formatBigNumber(Math.max(0, Math.round(work)))}W`;
             };
 
-            let getQueueCostForBarrackLevel = (unitType, thingLevel) => {
+            let getQueueCostForBarrackLevel = (buildingKey, unitType, thingLevel) => {
                 let tl = Math.max(1, clampThingLevel(thingLevel));
-                let cfg = BARRACK_SPAWN_CONFIG[unitType] || BARRACK_SPAWN_CONFIG.norm;
-                let baseCost = Math.round((cfg.baseTime || 1) * 10);
+                let baseCost = Math.round(getBaseSpawnCooldownSeconds(unitType, buildingKey) * 10);
                 return Math.round(baseCost * (1 + (tl - 1) * 0.5));
             };
 
@@ -12161,13 +12250,13 @@
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
                 let bStats = calculateItemStats(key, level, localPlayerId);
-                let unitCost = getQueueCostForBarrackLevel(unitType, level);
+                let unitCost = getQueueCostForBarrackLevel(key, unitType, level);
                 let spawnCd = getBarrackSpawnCooldown(unitType, level, localPlayerId, key);
                 let up = getUnitPreview(unitType, level);
                 addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
                 addRow('Queue Cost', `$${fmt(unitCost)}`, {
-                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForBarrackLevel(unitType, thingLevel))}`
+                    getValue: (thingLevel) => `$${formatBigNumber(getQueueCostForBarrackLevel(key, unitType, thingLevel))}`
                 });
                 addRow('Unit HP', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
                 if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
@@ -12223,9 +12312,14 @@
                     if (key === 'fire') {
                         let burnDps = getBuildingStatForOwner(localPlayerId, key, level, 'burnDps');
                         let burnDuration = getBuildingStatForOwner(localPlayerId, key, level, 'burnDuration');
+                        let blastDamage = getBuildingStatForOwner(localPlayerId, key, level, 'blastDamage');
+                        let blastRadius = getBuildingStatForOwner(localPlayerId, key, level, 'blastRadius');
                         addRow('Burn DPS', Number.isFinite(burnDps) ? burnDps.toFixed(2) : '0', { kind: 'building', key, statKey: 'burnDps' });
                         addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
-                        addRow('Splash Radius', `${(64 / TILE).toFixed(1)} tiles`);
+                        if (Number.isFinite(blastDamage) && Number.isFinite(blastRadius) && blastDamage > 0 && blastRadius > 0) {
+                            addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
+                            addRow('Blast Radius', `${blastRadius.toFixed(2)} tiles`, { kind: 'building', key, statKey: 'blastRadius' });
+                        }
                     } else if (key === 'poison') {
                         let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
                         let poisonDuration = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDuration');
@@ -12269,7 +12363,16 @@
                     addRow('Income', `+${income.toFixed(2)}/s`, { kind: 'building', key, statKey: 'income' });
                 }
                 if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
-                if (key === 'mine' && stats.damage > 0) addRow('Blast Dmg', fmt(stats.damage));
+                if (key === 'mine') {
+                    let blastDamage = getBuildingStatForOwner(localPlayerId, key, level, 'blastDamage');
+                    let blastRadius = getBuildingStatForOwner(localPlayerId, key, level, 'blastRadius');
+                    if (Number.isFinite(blastDamage) && blastDamage > 0) {
+                        addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
+                    }
+                    if (Number.isFinite(blastRadius) && blastRadius > 0) {
+                        addRow('Blast Radius', `${blastRadius.toFixed(2)} tiles`, { kind: 'building', key, statKey: 'blastRadius' });
+                    }
+                }
                 if (key === 'lava' && stats.damage > 0) {
                     let burnDps = getBuildingStatForOwner(localPlayerId, key, level, 'burnDps');
                     let burnDuration = getBuildingStatForOwner(localPlayerId, key, level, 'burnDuration');
