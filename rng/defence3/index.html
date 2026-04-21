@@ -1119,7 +1119,7 @@
                         <input id="cfg-max-pop" type="number" min="1" max="100000" value="200" style="width:72px">
                     </div>
                     <div class="lobby-setting-row">
-                        <label>Starting Money</label>
+                        <label>Starting Energy</label>
                         <input id="cfg-starting-money" type="number" min="0" max="1000000000" value="2000" style="width:90px">
                     </div>
                     <div class="lobby-setting-row compact">
@@ -1135,11 +1135,11 @@
                 <div class="lobby-column" data-lobby-column="2">
                     <div class="lobby-column-title">Resources & Research</div>
                     <div class="lobby-setting-row">
-                        <label>Gold Mines</label>
+                        <label>Energy Mines</label>
                         <input id="cfg-gold-count" type="number" min="5" max="5000" value="2000" style="width:72px">
                     </div>
                     <div class="lobby-setting-row grouped">
-                        <label>Gold / Mine</label>
+                        <label>Energy / Mine</label>
                         <input id="cfg-gold-min" type="number" min="100" max="5000" value="500" style="width:60px">
                         <span class="range-sep">-</span>
                         <input id="cfg-gold-max" type="number" min="100" max="10000" value="1500" style="width:60px">
@@ -1196,7 +1196,7 @@
 
     <!-- HUD -->
     <div id="hud">
-        <span class="hud-money" id="hud-money">Gold: 300</span>
+    <span class="hud-money" id="hud-money">⚡ 300</span>
         <span class="hud-pop" id="hud-pop">Pop: 0/200/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
@@ -1373,7 +1373,7 @@
                         </label>
                     </div>
                     <div class="settings-row">
-                        <label for="setting-gold-mine-text">Gold mine amount text</label>
+                        <label for="setting-gold-mine-text">Energy mine amount text</label>
                         <label class="settings-toggle" for="setting-gold-mine-text">
                             <input type="checkbox" id="setting-gold-mine-text" style="margin-right:2px; cursor:pointer;">
                             Enabled
@@ -1432,7 +1432,7 @@
                 </ul>
                 <div class="help-subtitle">Economy basics</div>
                 <ul class="help-list">
-                    <li>Collectors gather from gold mines; farms provide passive income over time.</li>
+                    <li>Collectors gather energy from mines; farms provide passive energy income over time.</li>
                     <li>Barracks/spawners queue units at purchase-time costs and use their current rally target on spawn.</li>
                 </ul>
             </div>
@@ -1531,7 +1531,7 @@
         <div id="go-graph-wrap" style="display:none;width:min(900px,92vw);background:#111;border:1px solid #333;border-radius:8px;padding:10px;">
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;">
                 <button class="go-graph-metric" data-metric="money"
-                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Money</button>
+                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Energy</button>
                 <button class="go-graph-metric" data-metric="pop"
                     style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Population</button>
                 <button class="go-graph-metric" data-metric="units"
@@ -1551,14 +1551,15 @@
         // ============================================================
         // UTILS
         // ============================================================
-        function formatBigNumber(n, d = 0) {
+        function formatBigNumber(n, d = 1) {
             if (n == null) return "...";
             if (typeof n === 'string') return n;
             if (!Number.isFinite(n)) return '' + n;
 
+            let decimals = Math.max(1, Math.floor(Number.isFinite(d) ? d : 1));
             let sign = n < 0 ? '-' : '';
             let abs = Math.abs(n);
-            if (abs < 1000000) return sign + abs.toFixed(d).replace(/\.0+$/, '');
+            if (abs < 1000000) return sign + abs.toFixed(decimals);
 
             const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
             let tier = Math.floor(Math.log10(abs) / 3);
@@ -1569,7 +1570,6 @@
             }
 
             let scaled = abs / Math.pow(1000, tier);
-            let decimals = d > 0 ? d : 3;
 
             // Handle boundary rollover (e.g. 999.995K -> 1.00M)
             let rounded = Number(scaled.toFixed(decimals));
@@ -1580,7 +1580,6 @@
             }
 
             let text = rounded.toFixed(decimals);
-            if (d <= 0) text = text.replace(/\.0+$/, '');
             return sign + text + suffixes[tier];
         }
 
@@ -2308,6 +2307,44 @@
             barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", target: 'floor', unitType: 'scout' },
         };
 
+        // Single place for building Energy scaling across all building/card types.
+        const BUILDING_HP_LEVEL_EXP = 2;
+
+        // Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
+        // Keep towerHp mirrored for compatibility with existing checks/UI code paths.
+        const BASE_CARD_DEFAULT_HP = {
+            farm: 1000,
+            sand: 30,
+            lava: 30,
+            poison_puddle: 30,
+            ice_patch: 30,
+            water_puddle: 30,
+            mine: 30,
+            spawner: 60,
+            salvager: 60,
+            builder_spawner: 60,
+            healer_spawner: 60,
+            research: 70,
+            house: 120,
+            area_upgrader: 1,
+        };
+
+        for (let cardKey in BASE_CARD_TYPES) {
+            let def = BASE_CARD_TYPES[cardKey];
+            if (!def || typeof def !== 'object') continue;
+
+            if (!Number.isFinite(def.hp)) {
+                if (Number.isFinite(def.towerHp)) def.hp = def.towerHp;
+                else if (Number.isFinite(BASE_CARD_DEFAULT_HP[cardKey])) def.hp = BASE_CARD_DEFAULT_HP[cardKey];
+                else if (cardKey.startsWith('barrack_')) def.hp = 100;
+                else def.hp = 100;
+            }
+
+            if (def.target === 'wall' && !Number.isFinite(def.towerHp)) {
+                def.towerHp = def.hp;
+            }
+        }
+
         // Descriptions
         const DESCRIPTIONS = {
             // Towers
@@ -2321,7 +2358,7 @@
             sniper: "Long-range precision tower with very high single-shot damage.",
             elements: "Applies all status effects. Jack of all trades.",
             laser: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.",
-            watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low HP, large vision.",
+            watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low Energy, large vision.",
             // Floor
             sand: "Slows enemies walking over it. Fast to build. Strong agains moles. Low health.",
             lava: "Burns enemies walking over it. Fast to build. Strong agains moles. Low health.",
@@ -2329,13 +2366,13 @@
             ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
             water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
             mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-            farm: "Generates gold per second equal to its level.",
+            farm: "Generates energy per second equal to its level.",
             // Special
-            spawner: "Spawns collectors that gather gold from mines.",
+            spawner: "Spawns collectors that gather energy from mines.",
             salvager: "Spawns salvagers that recycle marked buildings.",
-            builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1hp and need builders to become functional.",
+            builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1 energy and need builders to become functional.",
             healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
-            research: "Runs queued research projects. Builders contribute build speed to complete research tasks one-by-one.",
+            research: "Runs queued research projects and spawns researchers that complete research tasks.",
             house: "Raises max population by 1.6^{level} while operational.",
             cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
             cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
@@ -2358,12 +2395,12 @@
             barrack_water_resistant: "Trains water-immune units.",
             barrack_ice_resistant: "Trains ice-immune units.",
             barrack_laser_resistant: "Trains laser-immune units.",
-            barrack_snake: "Trains snakes. Massive HP, leaves a trail.",
+            barrack_snake: "Trains snakes. Massive Energy, leaves a trail.",
             barrack_scout: "Trains scouts. Fast flying recon units that roam the map.",
             // Units
             norm: "Basic infantry. Balanced stats, cheap to produce.",
-            fast: "Fast scout. Low HP but high speed.",
-            tank: "Heavy infantry. High HP and damage, slow.",
+            fast: "Fast scout. Low Energy but high speed.",
+            tank: "Heavy infantry. High Energy and damage, slow.",
             boss: "Super-heavy unit. Extremely tough and powerful.",
             flying: "Air unit. Ignores walls, has ranged attack.",
             mole: "Stealth unit. Immune to tower fire, very fragile.",
@@ -2373,8 +2410,9 @@
             ice_resistant: "Ice-immune. Attacks with frost shards.",
             laser_resistant: "Laser-immune. Shoots laser beams from range.",
             snake: "Massive serpent. Rams targets, takes self-damage.",
-            scout: "Fast flying recon. Very high vision, low HP, low attack. Patrols random points continuously.",
+            scout: "Fast flying recon. Very high vision, low Energy, low attack. Patrols random points continuously.",
             healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
+            researcher_unit: "Research worker. Fetches supplies from research labs and converts them into research progress.",
         };
 
         // Build menu categories
@@ -2404,6 +2442,7 @@
             salvager_unit: { baseTime: 20, reduction: 0.10 },
             builder_unit: { baseTime: 25, reduction: 0.10 },
             healer_unit: { baseTime: 25, reduction: 0.10 },
+            researcher_unit: { baseTime: 25, reduction: 0.10 },
         };
 
         // Unit combat stats
@@ -2425,6 +2464,7 @@
             salvager_unit: { hp: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
             healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, vis: 'rect', isWorker: true },
+            researcher_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#aaf', r: 6, vis: 'rect', isWorker: true },
             king: { hp: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
@@ -2439,6 +2479,7 @@
             salvager_unit: { hpExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
             builder_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
             healer_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
+            researcher_unit: { hpExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
             king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
@@ -2453,14 +2494,14 @@
 
         const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true, unitPrice: true };
         const RESEARCH_STAT_LABELS = {
-            maxHp: 'Max HP',
+            maxHp: 'Max Energy',
             damage: 'Damage',
             blastDamage: 'Blast Damage',
             blastRadius: 'Blast Radius',
             cd: 'Cooldown',
             spawnCd: 'Spawn CD',
             visionRange: 'Vision',
-            income: 'Income',
+            income: 'Energy Income',
             burnDps: 'Burn DPS',
             burnDuration: 'Burn Duration',
             poisonDps: 'Poison DPS',
@@ -2471,7 +2512,7 @@
             sandDuration: 'Slow Duration',
             watchDuration: 'Watch Duration',
             efficiency: 'Efficiency',
-            hp: 'HP',
+            hp: 'Energy',
             speed: 'Speed',
             atk: 'Attack',
             attackRange: 'Range',
@@ -2479,7 +2520,8 @@
             gatherPerTrip: 'Gather Speed',
             builderDps: 'Build Speed',
             healerHps: 'Heal Speed',
-            unitPrice: 'Unit Price'
+            researcherDps: 'Research Speed',
+            unitPrice: 'Unit Energy'
         };
 
         const RESEARCHABLE_UNIT_STATS = {
@@ -2488,10 +2530,11 @@
             salvager_unit: ['hp', 'speed', 'visionRange'],
             builder_unit: ['hp', 'speed', 'visionRange', 'builderDps'],
             healer_unit: ['hp', 'speed', 'visionRange', 'healerHps'],
+            researcher_unit: ['hp', 'speed', 'visionRange', 'researcherDps'],
             king: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd']
         };
 
-        const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps'];
+        const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps', 'researcherDps'];
         const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
 
         function getSpawnedUnitTypeForBuildingKey(key) {
@@ -2501,6 +2544,7 @@
             if (key === 'salvager') return 'salvager_unit';
             if (key === 'builder_spawner') return 'builder_unit';
             if (key === 'healer_spawner') return 'healer_unit';
+            if (key === 'research') return 'researcher_unit';
             return null;
         }
 
@@ -2526,6 +2570,7 @@
                 gatherPerTrip: Infinity,
                 builderDps: Infinity,
                 healerHps: Infinity,
+                researcherDps: Infinity,
             },
             building: {
                 maxHp: Infinity,
@@ -2659,14 +2704,16 @@
             let gatherPerTrip = unitType === 'collector' ? Math.max(1, gatherBase * lvl) : 0;
             let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
             let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
+            let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
 
-            return { hp, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerHps };
+            return { hp, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerHps, researcherDps };
         }
 
         function computeBaseBuildingStatsAtLevel(type, level) {
             let key = type || 'farm';
             let lvl = Math.max(1, clampThingLevel(level));
             let mult = Math.pow(1.6, lvl - 1);
+            let hpMult = Math.pow(BUILDING_HP_LEVEL_EXP, lvl - 1);
             let out = {
                 maxHp: NaN,
                 damage: NaN,
@@ -2689,6 +2736,11 @@
                 efficiency: NaN,
             };
 
+            let def = BASE_CARD_TYPES[key] || {};
+            if (Number.isFinite(def.hp) && def.hp > 0) {
+                out.maxHp = Math.floor(def.hp * hpMult);
+            }
+
             let spawnUnitType = getSpawnedUnitTypeForBuildingKey(key);
             if (spawnUnitType) {
                 let cfg = BARRACK_SPAWN_CONFIG[spawnUnitType] || BARRACK_SPAWN_CONFIG.norm;
@@ -2704,24 +2756,14 @@
             }
 
             if (key === 'farm') {
-                out.maxHp = Math.floor(1000 * mult);
-                out.income = 1 + Math.floor(lvl * Math.log(lvl + 1) * lvl);
+                out.income = 1 + Math.floor(lvl * Math.log(lvl + 1) * Math.log(lvl + 1) * lvl);
             }
-            else if (key === 'house') out.maxHp = Math.floor(120 * mult);
-            else if (key === 'sand') { out.maxHp = Math.floor(30 * mult); out.damage = 0.05 * mult; }
-            else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
-                let baseHp = Number.isFinite((BASE_CARD_TYPES[key] || {}).hp) ? BASE_CARD_TYPES[key].hp : (key === 'research' ? 70 : 60);
-                out.maxHp = Math.floor(baseHp * mult);
-            }
-            else if (key === 'lava') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
-            else if (key === 'mine') { out.maxHp = Math.floor(30 * mult); out.damage = Math.floor(135 * mult); }
-            else if (key === 'poison_puddle') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
-            else if (key === 'ice_patch') { out.maxHp = Math.floor(30 * mult); out.damage = mult; }
-            else if (key === 'water_puddle') { out.maxHp = Math.floor(30 * mult); }
-            else if (key.startsWith('barrack_')) { out.maxHp = Math.floor(100 * mult); }
+            else if (key === 'sand') { out.damage = 0.05 * mult; }
+            else if (key === 'lava') { out.damage = mult; }
+            else if (key === 'mine') { out.damage = Math.floor(135 * mult); }
+            else if (key === 'poison_puddle') { out.damage = mult; }
+            else if (key === 'ice_patch') { out.damage = mult; }
 
-            let def = BASE_CARD_TYPES[key] || {};
-            if (Number.isFinite(def.towerHp)) out.maxHp = Math.floor(def.towerHp * Math.pow(1.4, lvl - 1));
             if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(1.4, lvl - 1);
             if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * Math.pow(1.4, lvl - 1);
             if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
@@ -2909,18 +2951,9 @@
 
         function getBaseBuildingMaxHpForResearch(buildingKey) {
             if (!buildingKey) return 1;
-            if (buildingKey.startsWith('barrack_')) return 100;
-            if (buildingKey === 'farm') return 1000;
-            if (buildingKey === 'house') return 120;
-            if (buildingKey === 'sand' || buildingKey === 'lava' || buildingKey === 'mine' || buildingKey === 'poison_puddle' || buildingKey === 'ice_patch' || buildingKey === 'water_puddle') return 30;
-            if (buildingKey === 'spawner' || buildingKey === 'salvager' || buildingKey === 'builder_spawner' || buildingKey === 'healer_spawner' || buildingKey === 'research') {
-                let d = BASE_CARD_TYPES[buildingKey] || {};
-                return Number.isFinite(d.hp) ? d.hp : (buildingKey === 'research' ? 70 : 60);
-            }
             let def = BASE_CARD_TYPES[buildingKey] || {};
-            if (Number.isFinite(def.towerHp)) return def.towerHp;
             if (Number.isFinite(def.hp)) return def.hp;
-            return 100;
+            return 1;
         }
 
         function getResearchStatEntriesForThing(kind, key) {
@@ -2932,7 +2965,7 @@
                 let statOrder = getUnitResearchStatKeys(key);
                 for (let statKey of statOrder) {
                     let baseValue = s[statKey];
-                    if (statKey === 'builderDps' || statKey === 'healerHps') baseValue = 5;
+                    if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps') baseValue = 5;
                     if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
                     out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
                 }
@@ -3055,18 +3088,19 @@
 
         function formatResearchStatValue(statKey, value) {
             if (!Number.isFinite(value)) return '-';
+            let compact = (v, d = 2) => formatBigNumber(v, d);
             if (statKey === 'burnDuration' || statKey === 'poisonDuration' || statKey === 'freezeDuration' || statKey === 'wetDuration' || statKey === 'sandDuration' || statKey === 'watchDuration') {
-                return `${value.toFixed(2)}s`;
+                return `${compact(value, 2)}s`;
             }
-            if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return value.toFixed(2);
-            if (statKey === 'blastDamage') return value.toFixed(2);
-            if (statKey === 'blastRadius') return `${value.toFixed(2)} tiles`;
-            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'income') return value.toFixed(2);
-            if (statKey === 'efficiency') return value.toFixed(2);
-            if (statKey === 'spawnCd') return `${value.toFixed(2)}s`;
-            if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'gatherPerTrip') return value.toFixed(1);
-            if (statKey === 'cd' || statKey === 'atkCd') return `${value.toFixed(2)}s`;
-            return formatBigNumber(Math.round(value), 0);
+            if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
+            if (statKey === 'blastDamage') return compact(value, 2);
+            if (statKey === 'blastRadius') return `${compact(value, 2)} tiles`;
+            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'income') return compact(value, 2);
+            if (statKey === 'efficiency') return compact(value, 2);
+            if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
+            if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
+            if (statKey === 'cd' || statKey === 'atkCd') return `${compact(value, 2)}s`;
+            return compact(value, 0);
         }
 
         function getResearchBuildingEfficiency(researchBuilding) {
@@ -3094,8 +3128,8 @@
                 let val = getResearchCurrentStatValue(playerId, 'building', key, stat.statKey);
                 if (!Number.isFinite(val)) continue;
                 if (stat.statKey === 'maxHp') {
+                    out.hp = val;
                     if (Number.isFinite(base.towerHp)) out.towerHp = val;
-                    else if (Number.isFinite(base.hp)) out.hp = val;
                 } else {
                     out[stat.statKey] = val;
                 }
@@ -3120,7 +3154,8 @@
             if (!thing || !stat) return 0;
             let lvl = Math.max(0, Math.floor(currentLevel || 0));
             if (lvl >= MAX_RESEARCH_LEVEL) return 0;
-            return Math.max(1, Math.floor(thing.basePrice * Math.pow(RESEARCH_COST_EXP, lvl)));
+            // Research queueing is free; research consumes energy as work over time.
+            return 0;
         }
 
         function getResearchWork(kind, key, statKey, currentLevel) {
@@ -3306,6 +3341,7 @@
             let gatherPerTrip = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'gatherPerTrip');
             let builderDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'builderDps');
             let healerHps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'healerHps');
+            let researcherDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'researcherDps');
 
             if (!Number.isFinite(maxHp)) maxHp = Math.max(1, Math.floor(unit.baseHp || unit.maxHp || 1));
             if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
@@ -3326,10 +3362,12 @@
 
             if (!Number.isFinite(builderDps)) builderDps = 0;
             if (!Number.isFinite(healerHps)) healerHps = 0;
+            if (!Number.isFinite(researcherDps)) researcherDps = 0;
             if (!Number.isFinite(gatherPerTrip)) gatherPerTrip = 0;
             if (unit.workerType === 'collector') gatherPerTrip = Math.max(1, Number(gatherPerTrip) || 1);
             if (unit.workerType === 'builder') builderDps = Math.max(1, Math.round(builderDps));
             if (unit.workerType === 'healer') healerHps = Math.max(1, Math.round(healerHps));
+            if (unit.workerType === 'researcher') researcherDps = Math.max(1, Math.round(researcherDps));
 
             return {
                 level: lvl,
@@ -3341,7 +3379,8 @@
                 attackRange,
                 gatherPerTrip,
                 builderDps,
-                healerHps
+                healerHps,
+                researcherDps
             };
         }
 
@@ -3377,6 +3416,7 @@
             if (unit.workerType === 'collector') unit.gatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
+            if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
 
             unit.baseLevel = lvl;
             unit.baseLevelMaxHp = scaled.maxHp;
@@ -3388,6 +3428,7 @@
             if (unit.workerType === 'collector') unit.baseLevelGatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.baseLevelHealerHps = scaled.healerHps;
+            if (unit.workerType === 'researcher') unit.baseLevelResearcherDps = scaled.researcherDps;
 
             unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
             unit.effectiveLevel = lvl;
@@ -3410,6 +3451,7 @@
             if (unit.workerType === 'collector') unit.gatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
+            if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
 
             unit.effectiveLevel = lvl;
         }
@@ -5117,7 +5159,7 @@
                 return calculateItemStats(bType, nextLevel, item.owner).maxHp;
             }
             if (item.type === 'spawner' || item.type === 'salvager' || item.type === 'builder_spawner' || item.type === 'healer_spawner' || item.type === 'research') return calculateItemStats(item.type, nextLevel, item.owner).maxHp;
-            if (item instanceof Tower) return item.baseStats.towerHp ? Math.floor(item.baseStats.towerHp * Math.pow(1.4, nextLevel - 1)) : 100 * nextLevel;
+            if (item instanceof Tower) return calculateItemStats(item.type, nextLevel, item.owner).maxHp;
             return calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxHp;
         }
 
@@ -5374,7 +5416,7 @@
         function getUnitRenderActionRangePx(u) {
             if (!u) return 0;
             // Worker interaction checks use a fixed touch distance in AI logic.
-            if (u.workerType === 'collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer') {
+            if (u.workerType === 'collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
                 return 24;
             }
             let atkRange = Math.max(0, Number(u.attackRange) || 0);
@@ -5707,7 +5749,7 @@
                 this.currentStats = { ...this.baseStats };
 
                 // HP
-                let baseHp = this.baseStats.towerHp || 100;
+                let baseHp = calculateItemStats(type, this.level, owner).maxHp;
                 this.maxHp = baseHp;
                 this.hp = baseHp;
 
@@ -5986,7 +6028,7 @@
                 }
                 if (shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
 
-                // HP bar (single bar for damage/progress)
+                // Energy bar (single bar for damage/progress)
                 if (!this.underConstruction && !this.isUpgrading) {
                     drawBuildingHpProgressBar(ctx, this, this.x, this.y + 14, 24, 3);
                 }
@@ -6990,6 +7032,13 @@
                     let rr = this.r;
                     ctx.fillStyle = this.color; ctx.fillRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
                     ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.strokeRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
+                    if (this.unitType === 'researcher_unit') {
+                        ctx.fillStyle = '#5af';
+                        ctx.fillRect(this.x - rr * 0.3, this.y - rr * 0.35, rr * 0.6, rr * 0.7);
+                        ctx.strokeStyle = '#93f';
+                        ctx.lineWidth = Math.max(1, lw * 0.8);
+                        ctx.strokeRect(this.x - rr * 0.3, this.y - rr * 0.35, rr * 0.6, rr * 0.7);
+                    }
                 } else if (this.vis === 'king') {
                     let rr = this.r;
                     // Crown shape
@@ -7017,7 +7066,7 @@
                 ctx.fillStyle = PLAYER_COLORS[this.owner];
                 ctx.beginPath(); ctx.arc(this.x, this.y - this.r - 3, 2, 0, 6.28); ctx.fill();
 
-                // HP bar
+                // Energy bar
                 if (this.hp < this.maxHp) {
                     let bw = this.r * 2 + 4, bh = 2, bx = this.x - bw / 2, by = this.y - this.r - 7;
                     ctx.fillStyle = '#600'; ctx.fillRect(bx, by, bw, bh);
@@ -7160,19 +7209,25 @@
 
                 // Carrying value indicator for workers
                 if (this.carryingValue > 0) {
-                    ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                    ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
                 } else if (this.workerType === 'builder' && this.workerState) {
-                    // Builder visual: hammer when building, $ when fetching gold
+                    // Builder visual: hammer when building, ⚡ when fetching energy.
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
-                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
                     } else if (this.workerState === 'MOVING_TO_BUILD' || this.workerState === 'BUILDING_IN_PLACE') {
                         ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('\uD83D\uDD28', this.x, this.y - this.r - 9);
                     }
                 } else if (this.workerType === 'healer' && this.workerState) {
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
-                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', this.x, this.y - this.r - 9);
+                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
                     } else if (this.workerState === 'MOVING_TO_HEAL' || this.workerState === 'HEALING') {
                         ctx.fillStyle = '#fff'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('+', this.x, this.y - this.r - 9);
+                    }
+                } else if (this.workerType === 'researcher' && this.workerState) {
+                    if (this.workerState === 'RETURNING_FOR_GOLD') {
+                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
+                    } else if (this.workerState === 'MOVING_TO_RESEARCH' || this.workerState === 'RESEARCHING') {
+                        ctx.fillStyle = '#7bf'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('R', this.x, this.y - this.r - 9);
                     }
                 }
             }
@@ -7198,17 +7253,166 @@
             return baseCd;
         }
 
-        function getQueuedSpawnInfo(entry, fallbackType, fallbackLevel) {
+        function getQueuedSpawnInfo(entry, fallbackType, fallbackLevel, owner = null) {
             if (entry && typeof entry === 'object') {
+                let level = Math.max(1, entry.level || fallbackLevel || 1);
+                let unitType = entry.unitType || fallbackType;
+                let required = Number(entry.energyRequired);
+                if (!Number.isFinite(required) || required < 1) {
+                    let energyCost = getUnitStatForOwner(Number.isFinite(owner) ? owner : localPlayerId, unitType, level, 'hp');
+                    required = Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
+                }
+                let paid = Number(entry.energyPaid);
+                if (!Number.isFinite(paid) || paid < 0) paid = 0;
                 return {
-                    unitType: entry.unitType || fallbackType,
-                    level: Math.max(1, entry.level || fallbackLevel || 1)
+                    unitType,
+                    level,
+                    energyRequired: required,
+                    energyPaid: Math.max(0, Math.min(required, paid))
                 };
             }
+            let level = Math.max(1, fallbackLevel || 1);
+            let unitType = entry || fallbackType;
+            let energyCost = getUnitStatForOwner(Number.isFinite(owner) ? owner : localPlayerId, unitType, level, 'hp');
+            let required = Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             return {
-                unitType: entry || fallbackType,
-                level: Math.max(1, fallbackLevel || 1)
+                unitType,
+                level,
+                energyRequired: required,
+                energyPaid: 0
             };
+        }
+
+        function getSpawnerFallbackUnitType(spawner) {
+            if (!spawner) return 'norm';
+            if (spawner.type === 'barrack') return spawner.unitType || 'norm';
+            if (spawner.type === 'spawner') return 'collector';
+            if (spawner.type === 'salvager') return 'salvager_unit';
+            if (spawner.type === 'builder_spawner') return 'builder_unit';
+            if (spawner.type === 'healer_spawner') return 'healer_unit';
+            if (spawner.type === 'research') return 'researcher_unit';
+            return 'norm';
+        }
+
+        let globalSpawnerReadyOrderCounter = 1;
+
+        function updateSpawnerProductionProgress(spawner) {
+            if (!spawner) return;
+            if (!Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) {
+                spawner.spawnTimer = 0;
+                spawner._spawnReadyOrder = undefined;
+                return;
+            }
+            let owner = Number.isFinite(spawner.owner) ? spawner.owner : localPlayerId;
+            let effLvl = getThingEffectiveLevel(spawner);
+            let fallbackType = getSpawnerFallbackUnitType(spawner);
+            let front = getQueuedSpawnInfo(spawner.spawnQueue[0], fallbackType, effLvl, owner);
+            spawner.spawnQueue[0] = front;
+
+            let cooldown = Math.max(1, Math.round(spawner.spawnCooldown || 1));
+            spawner.spawnCooldown = cooldown;
+            spawner.spawnTimer = Math.min(cooldown, Math.max(0, Number(spawner.spawnTimer) || 0) + 1);
+            if (spawner.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
+                spawner._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+            } else if (spawner.spawnTimer < cooldown || front.energyPaid < front.energyRequired) {
+                spawner._spawnReadyOrder = undefined;
+            }
+        }
+
+        function spawnQueuedUnitFromSpawner(spawner) {
+            if (!spawner || !Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) return false;
+            if (spawner.hp <= 0 || spawner.underConstruction) return false;
+            let owner = spawner.owner;
+            if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
+
+            let effLvl = getThingEffectiveLevel(spawner);
+            let fallbackType = getSpawnerFallbackUnitType(spawner);
+            if (!fallbackType) return false;
+
+            let queued = spawner.spawnQueue.shift();
+            let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
+            let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
+            let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+
+            if (spawner.type === 'spawner') {
+                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+            } else if (spawner.type === 'salvager') {
+                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
+            } else if (spawner.type === 'builder_spawner') {
+                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
+                u.builderHasMaterial = false;
+            } else if (spawner.type === 'healer_spawner') {
+                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
+                u.healerHasMaterial = false;
+            } else if (spawner.type === 'research') {
+                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null;
+                u.researcherHasMaterial = false;
+            }
+
+            applyUnitLevelScaling(u, spawnInfo.level);
+            units.push(u);
+            players[owner].popCount++;
+
+            let rallyTarget = getSpawnerRallyTargetWorld(spawner);
+            if (rallyTarget) {
+                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
+                if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                    u.pathIndex = 0;
+                    if (spawner.type === 'barrack') {
+                        u.commandState = CMD_ATTACK_MOVING;
+                    } else {
+                        u.commandState = CMD_MOVING;
+                        u.workerState = 'MANUAL_MOVE';
+                    }
+                    pathfindBudget++;
+                }
+            }
+
+            spawner.spawnTimer = 0;
+            spawner._spawnReadyOrder = undefined;
+            return true;
+        }
+
+        function processGlobalSpawnerQueue() {
+            let collectReady = () => {
+                let ready = [];
+                let pushIfReady = (s) => {
+                    if (!s || s.hp <= 0 || s.underConstruction) return;
+                    if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
+                    let cooldown = Math.max(1, Math.round(s.spawnCooldown || 1));
+                    if ((Number(s.spawnTimer) || 0) < cooldown) return;
+                    let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
+                    let effLvl = getThingEffectiveLevel(s);
+                    let fallbackType = getSpawnerFallbackUnitType(s);
+                    let front = getQueuedSpawnInfo(s.spawnQueue[0], fallbackType, effLvl, owner);
+                    if (front.energyPaid < front.energyRequired) return;
+                    if (!Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+                    ready.push(s);
+                };
+                for (let b of barracks) pushIfReady(b);
+                for (let s of collectorSpawners) pushIfReady(s);
+                return ready;
+            };
+
+            let guard = 0;
+            while (guard++ < 2048) {
+                let ready = collectReady();
+                if (ready.length <= 0) break;
+
+                let chosen = null;
+                let chosenOrder = Infinity;
+                for (let s of ready) {
+                    if (!(players[s.owner].popCount < getPlayerPopCap(s.owner))) continue;
+                    let ord = Number(s._spawnReadyOrder) || Infinity;
+                    if (ord < chosenOrder) {
+                        chosenOrder = ord;
+                        chosen = s;
+                    }
+                }
+                if (!chosen) break;
+                if (!spawnQueuedUnitFromSpawner(chosen)) break;
+            }
         }
 
         class Barrack {
@@ -7234,9 +7438,8 @@
 
             getUnitCost() {
                 let lvl = getThingEffectiveLevel(this);
-                let mapped = getBuildingStatForOwner(this.owner, `barrack_${this.unitType}`, lvl, 'unitPrice');
-                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
-                return getUnitBaseResearchPrice(this.unitType);
+                let energyCost = getUnitStatForOwner(this.owner, this.unitType, lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             }
 
             update() {
@@ -7245,31 +7448,10 @@
                 let effLvl = getThingEffectiveLevel(this);
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
-                    this.spawnTimer++;
-                    if (this.spawnTimer >= this.spawnCooldown) {
-                        this.spawnTimer = 0;
-                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
-                            let queued = this.spawnQueue.shift();
-                            let spawnInfo = getQueuedSpawnInfo(queued, this.unitType, effLvl);
-                            let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            applyUnitLevelScaling(u, spawnInfo.level);
-                            units.push(u);
-                            players[this.owner].popCount++;
-                            // Send to rally point if set
-                            let rallyTarget = getSpawnerRallyTargetWorld(this);
-                            if (rallyTarget) {
-                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
-                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u.commandState = CMD_ATTACK_MOVING;
-                                    pathfindBudget++;
-                                }
-                            }
-                        }
-                    }
+                    updateSpawnerProductionProgress(this);
                 } else {
                     this.spawnTimer = 0;
+                    this._spawnReadyOrder = undefined;
                 }
             }
 
@@ -7325,9 +7507,8 @@
             }
             getUnitCost() {
                 let lvl = getThingEffectiveLevel(this);
-                let mapped = getBuildingStatForOwner(this.owner, 'spawner', lvl, 'unitPrice');
-                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
-                return getUnitBaseResearchPrice('collector');
+                let energyCost = getUnitStatForOwner(this.owner, 'collector', lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             }
             update() {
                 tickStatusEffects(this);
@@ -7335,29 +7516,8 @@
                 let effLvl = getThingEffectiveLevel(this);
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl, this.owner, 'spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
-                    this.spawnTimer++;
-                    if (this.spawnTimer >= this.spawnCooldown) {
-                        this.spawnTimer = 0;
-                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
-                            let queued = this.spawnQueue.shift();
-                            let spawnInfo = getQueuedSpawnInfo(queued, 'collector', effLvl);
-                            let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
-                            applyUnitLevelScaling(u, spawnInfo.level);
-                            units.push(u); players[this.owner].popCount++;
-                            let rallyTarget = getSpawnerRallyTargetWorld(this);
-                            if (rallyTarget) {
-                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
-                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
-                                    pathfindBudget++;
-                                }
-                            }
-                        }
-                    }
-                } else { this.spawnTimer = 0; }
+                    updateSpawnerProductionProgress(this);
+                } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
             }
             draw(ctx) {
                 ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
@@ -7400,9 +7560,8 @@
             }
             getUnitCost() {
                 let lvl = getThingEffectiveLevel(this);
-                let mapped = getBuildingStatForOwner(this.owner, 'salvager', lvl, 'unitPrice');
-                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
-                return getUnitBaseResearchPrice('salvager_unit');
+                let energyCost = getUnitStatForOwner(this.owner, 'salvager_unit', lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             }
             update() {
                 tickStatusEffects(this);
@@ -7410,29 +7569,8 @@
                 let effLvl = getThingEffectiveLevel(this);
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl, this.owner, 'salvager') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
-                    this.spawnTimer++;
-                    if (this.spawnTimer >= this.spawnCooldown) {
-                        this.spawnTimer = 0;
-                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
-                            let queued = this.spawnQueue.shift();
-                            let spawnInfo = getQueuedSpawnInfo(queued, 'salvager_unit', effLvl);
-                            let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
-                            applyUnitLevelScaling(u, spawnInfo.level);
-                            units.push(u); players[this.owner].popCount++;
-                            let rallyTarget = getSpawnerRallyTargetWorld(this);
-                            if (rallyTarget) {
-                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
-                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
-                                    pathfindBudget++;
-                                }
-                            }
-                        }
-                    }
-                } else { this.spawnTimer = 0; }
+                    updateSpawnerProductionProgress(this);
+                } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
             }
             draw(ctx) {
                 ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
@@ -7476,9 +7614,8 @@
             }
             getUnitCost() {
                 let lvl = getThingEffectiveLevel(this);
-                let mapped = getBuildingStatForOwner(this.owner, 'builder_spawner', lvl, 'unitPrice');
-                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
-                return getUnitBaseResearchPrice('builder_unit');
+                let energyCost = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             }
             // Builder DPS per unit: scales with effective level
             getBuilderDps() {
@@ -7491,30 +7628,8 @@
                 let effLvl = getThingEffectiveLevel(this);
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl, this.owner, 'builder_spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
-                    this.spawnTimer++;
-                    if (this.spawnTimer >= this.spawnCooldown) {
-                        this.spawnTimer = 0;
-                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
-                            let queued = this.spawnQueue.shift();
-                            let spawnInfo = getQueuedSpawnInfo(queued, 'builder_unit', effLvl);
-                            let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
-                            u.builderHasMaterial = false;
-                            applyUnitLevelScaling(u, spawnInfo.level);
-                            units.push(u); players[this.owner].popCount++;
-                            let rallyTarget = getSpawnerRallyTargetWorld(this);
-                            if (rallyTarget) {
-                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
-                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
-                                    pathfindBudget++;
-                                }
-                            }
-                        }
-                    }
-                } else { this.spawnTimer = 0; }
+                    updateSpawnerProductionProgress(this);
+                } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
             }
             draw(ctx) {
                 ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
@@ -7559,9 +7674,8 @@
             }
             getUnitCost() {
                 let lvl = getThingEffectiveLevel(this);
-                let mapped = getBuildingStatForOwner(this.owner, 'healer_spawner', lvl, 'unitPrice');
-                if (Number.isFinite(mapped) && mapped > 0) return Math.max(1, Math.round(mapped));
-                return getUnitBaseResearchPrice('healer_unit');
+                let energyCost = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
             }
             getHealerHps() {
                 let lvl = getThingEffectiveLevel(this);
@@ -7573,30 +7687,8 @@
                 let effLvl = getThingEffectiveLevel(this);
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl, this.owner, 'healer_spawner') * TICK_RATE);
                 if (this.spawnQueue.length > 0) {
-                    this.spawnTimer++;
-                    if (this.spawnTimer >= this.spawnCooldown) {
-                        this.spawnTimer = 0;
-                        if (players[this.owner].popCount < getPlayerPopCap(this.owner)) {
-                            let queued = this.spawnQueue.shift();
-                            let spawnInfo = getQueuedSpawnInfo(queued, 'healer_unit', effLvl);
-                            let spawnPos = findNearestWalkable(this.gx, this.gy);
-                            let u = new Unit(spawnInfo.unitType, this.owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-                            u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
-                            u.healerHasMaterial = false;
-                            applyUnitLevelScaling(u, spawnInfo.level);
-                            units.push(u); players[this.owner].popCount++;
-                            let rallyTarget = getSpawnerRallyTargetWorld(this);
-                            if (rallyTarget) {
-                                let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
-                                if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u.commandState = CMD_MOVING; u.workerState = 'MANUAL_MOVE';
-                                    pathfindBudget++;
-                                }
-                            }
-                        }
-                    }
-                } else { this.spawnTimer = 0; }
+                    updateSpawnerProductionProgress(this);
+                } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
             }
             draw(ctx) {
                 ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
@@ -7627,6 +7719,11 @@
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.spawnTimer = 0;
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', this.level, this.owner, 'research') * TICK_RATE);
+                this.spawnQueue = [];
+                this.rallyX = null; this.rallyY = null;
+                this.rallyTargetUnitId = null;
                 let stats = calculateItemStats('research', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.underConstruction = true;
@@ -7639,9 +7736,30 @@
                 updateItemTextCache(this);
             }
 
+            getUnitCost() {
+                let lvl = getThingEffectiveLevel(this);
+                let energyCost = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'hp');
+                return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
+            }
+
+            getResearcherDps() {
+                let lvl = getThingEffectiveLevel(this);
+                let dps = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'researcherDps');
+                return Math.max(1, Math.round(Number.isFinite(dps) ? dps : 5));
+            }
+
             update() {
                 tickStatusEffects(this);
                 if (this.hp <= 0 || this.underConstruction) return;
+
+                let effLvl = getThingEffectiveLevel(this);
+                this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', effLvl, this.owner, 'research') * TICK_RATE);
+                if (this.spawnQueue.length > 0) {
+                    updateSpawnerProductionProgress(this);
+                } else {
+                    this.spawnTimer = 0;
+                    this._spawnReadyOrder = undefined;
+                }
 
                 let task = tryAdvancePlayerResearchTask(this.owner);
                 this.researchTask = task || null;
@@ -7666,10 +7784,15 @@
                 if (this.underConstruction) {
                     drawBuildingHpProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
                 } else {
+                    if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+                        let pct = this.spawnTimer / this.spawnCooldown;
+                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
+                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
+                    }
                     if (this.researchTask && this.researchTask.workRequired > 0) {
                         let pct = Math.max(0, Math.min(1, (this.researchTask.workDone || 0) / this.researchTask.workRequired));
-                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
-                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#4af'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
+                        ctx.fillStyle = '#333'; ctx.fillRect(this.x - 12, this.y + 2, 24, 3);
+                        ctx.fillStyle = pct > 0.8 ? '#4f4' : '#4af'; ctx.fillRect(this.x - 12, this.y + 2, 24 * pct, 3);
                     }
                     drawBuildingHpProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
                 }
@@ -7736,7 +7859,8 @@
                                 }
                                 if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
                                 let extract = Math.min(gatherPerTrip, u.workerTarget.gold);
-                                u.workerTarget.gold -= extract;
+                                // u.workerTarget.gold -= extract;
+                                u.workerTarget.gold -= 1
                                 u.carryingValue = extract;
                                 if (u.workerTarget.gold <= 0) {
                                     let mine = u.workerTarget;
@@ -7852,7 +7976,7 @@
                     if (!canRunHeavyAi) return;
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         // Building finished (maybe by another builder), find next
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
@@ -7873,7 +7997,8 @@
                         if (dist <= 24) {
                             if (!u.builderHasMaterial) {
                                 let route = getSpawnerRoute('builder_spawner', null);
-                                if (route && players[owner].money >= 1) {
+                                let tripCost = getBuilderTripGoldCost(u);
+                                if (route && players[owner].money >= tripCost) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     u.path = route.path;
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -7885,26 +8010,11 @@
                                 }
                             }
                             if (u.workerTransferCooldown > 0) return;
-                            // Add HP to building
+                            // Add Energy to building
                             let dps = u.builderDps || 5;
                             let t = u.workerTarget;
                             let didWork = false;
-                            if (t.type === 'research' && t.isResearching && t.researchTask) {
-                                let task = t.researchTask;
-                                let efficiency = getResearchBuildingEfficiency(t);
-                                let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
-                                task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
-                                didWork = true;
-                                if (task.workDone >= task.workRequired) {
-                                    completeActiveResearchTaskForPlayer(t.owner, task);
-                                    t.researchTask = getPlayerResearchTask(t.owner);
-                                    t.isResearching = !!(isAutoResearchEnabled(t) && !t.isUpgrading && t.researchTask && t.researchTask.workDone < t.researchTask.workRequired);
-                                    if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
-                                    _builderRememberWorkSite(u, t);
-                                    u.workerTarget = null;
-                                    _builderFindTarget(u, myGx, myGy);
-                                }
-                            } else if (t.underConstruction) {
+                            if (t.underConstruction) {
                                 t.hp = Math.min(t.maxHp, t.hp + dps);
                                 didWork = true;
                                 if (t.hp >= t.maxHp) {
@@ -7913,7 +8023,6 @@
                                     if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
                                         beginUpgradeProgress(t, (t.level || 1) + 1);
                                     }
-                                    createExplosion(t.x, t.y, '#8f8', 8);
                                     if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                     recalculateAdjacency();
                                     _builderRememberWorkSite(u, t);
@@ -7933,7 +8042,6 @@
                                         t.isUpgrading = false;
                                         t.upgradeMaxHp = 0;
                                     }
-                                    createExplosion(t.x, t.y, '#8f8', 8);
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                     recalculateAdjacency();
@@ -7951,7 +8059,8 @@
                             if (u.workerTarget) {
                                 // Not done yet â€” loop back to spawner for more gold, then come back
                                 let route = getSpawnerRoute('builder_spawner', null);
-                                if (route && players[owner].money >= 1) {
+                                let tripCost = getBuilderTripGoldCost(u);
+                                if (route && players[owner].money >= tripCost) {
                                     u.workerState = 'RETURNING_FOR_GOLD';
                                     u.path = route.path;
                                     u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -7964,7 +8073,7 @@
                         }
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -7975,8 +8084,9 @@
                         let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
                         if (!spawner || dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
-                            if (spawner && players[owner].money >= 1) {
-                                players[owner].money -= 1;
+                            let tripCost = getBuilderTripGoldCost(u);
+                            if (spawner && players[owner].money >= tripCost) {
+                                players[owner].money -= tripCost;
                                 u.builderHasMaterial = true;
                                 u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             }
@@ -8003,7 +8113,7 @@
                     }
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
                     // Building in place without returning for gold (every 20 ticks add 1 HP)
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isResearching) || (u.workerTarget.type === 'research' && !isAutoResearchEnabled(u.workerTarget)) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -8011,22 +8121,7 @@
                     }
                     if (gameTime % 20 === 0) {
                         let t = u.workerTarget;
-                        if (t.type === 'research' && t.isResearching && t.researchTask) {
-                            let task = t.researchTask;
-                            let dps = u.builderDps || 5;
-                            let efficiency = getResearchBuildingEfficiency(t);
-                            let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
-                            task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
-                            if (task.workDone >= task.workRequired) {
-                                completeActiveResearchTaskForPlayer(t.owner, task);
-                                t.researchTask = getPlayerResearchTask(t.owner);
-                                t.isResearching = !!(isAutoResearchEnabled(t) && !t.isUpgrading && t.researchTask && t.researchTask.workDone < t.researchTask.workRequired);
-                                if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
-                                _builderRememberWorkSite(u, t);
-                                u.workerTarget = null;
-                                _builderFindTarget(u, myGx, myGy);
-                            }
-                        } else if (t.underConstruction) {
+                        if (t.underConstruction) {
                             t.hp = Math.min(t.maxHp, t.hp + 1);
                             if (t.hp >= t.maxHp) {
                                 markConstructionComplete(t);
@@ -8034,7 +8129,6 @@
                                 if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
                                     beginUpgradeProgress(t, (t.level || 1) + 1);
                                 }
-                                createExplosion(t.x, t.y, '#8f8', 8);
                                 if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                 recalculateAdjacency();
                                 _builderRememberWorkSite(u, t);
@@ -8053,7 +8147,6 @@
                                     t.isUpgrading = false;
                                     t.upgradeMaxHp = 0;
                                 }
-                                createExplosion(t.x, t.y, '#8f8', 8);
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                 recalculateAdjacency();
@@ -8065,7 +8158,8 @@
                     }
                     // Check if money became available â€” switch back to gold trips
                     let route = getSpawnerRoute('builder_spawner', null);
-                    if (route && players[owner].money >= 1 && u.workerTarget) {
+                    let tripCost = getBuilderTripGoldCost(u);
+                    if (route && players[owner].money >= tripCost && u.workerTarget) {
                         u.workerState = 'RETURNING_FOR_GOLD';
                         u.path = route.path;
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -8077,16 +8171,20 @@
                     if (!canRunHeavyAi) return;
                     _healerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_HEAL') {
-                    if (!_isHealerTargetUnit(u.workerTarget, owner)) {
+                    let targetIsQueue = (u.workerTargetType === 'queue');
+                    if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         u.workerTarget = null;
+                        u.workerTargetType = null;
                         _healerFindTarget(u, myGx, myGy);
                         return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
-                        let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
+                        let tx = targetIsQueue ? u.workerTarget.x : u.workerTarget.x;
+                        let ty = targetIsQueue ? u.workerTarget.y : u.workerTarget.y;
+                        let dist = Math.hypot(tx - u.x, ty - u.y);
                         if (dist > 24) {
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                            let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
+                            let targetGx = Math.floor(tx / TILE), targetGy = Math.floor(ty / TILE);
                             u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
                             u.pathIndex = 0;
                             u.commandState = CMD_MOVING;
@@ -8106,10 +8204,57 @@
                             return;
                         }
                         if (u.workerTransferCooldown > 0) return;
+
+                        if (targetIsQueue) {
+                            let sp = u.workerTarget;
+                            let fallbackType = getSpawnerFallbackUnitType(sp);
+                            let effLvl = getThingEffectiveLevel(sp);
+                            let front = getQueuedSpawnInfo(sp.spawnQueue[0], fallbackType, effLvl, owner);
+                            let didWork = false;
+                            let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number(u.healerHps) || 1)));
+
+                            if (front.energyPaid < front.energyRequired) {
+                                front.energyPaid = Math.min(front.energyRequired, front.energyPaid + healWork);
+                                didWork = true;
+                            }
+                            sp.spawnQueue[0] = front;
+
+                            if (didWork) {
+                                u.healerHasMaterial = false;
+                                u._healerQueueTripCost = 0;
+                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            }
+
+                            let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
+                            if (sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
+                                sp._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+                            }
+
+                            if (!_isHealerQueueTarget(sp, owner)) {
+                                u.workerTarget = null;
+                                u.workerTargetType = null;
+                                _healerFindTarget(u, myGx, myGy);
+                                return;
+                            }
+
+                            let route = getSpawnerRoute('healer_spawner', null);
+                            let tripCost = _getHealerQueueTripCost(u, sp);
+                            if (route && players[owner].money >= tripCost && tripCost > 0) {
+                                u.workerState = 'RETURNING_FOR_GOLD';
+                                u.path = route.path;
+                                u.pathIndex = 0; u.commandState = CMD_MOVING;
+                                u._healerSpawnerTarget = route.spawner;
+                                u._healerQueueTripCost = tripCost;
+                            } else {
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
+                            return;
+                        }
+
                         u.workerState = 'HEALING';
                         let hps = u.healerHps || 5;
                         u.workerTarget.hp = Math.min(u.workerTarget.maxHp, u.workerTarget.hp + hps);
-                        createExplosion(u.workerTarget.x, u.workerTarget.y, '#fff', 4);
                         u.healerHasMaterial = false;
                         u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
 
@@ -8131,8 +8276,11 @@
                         }
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-                    if (!_isHealerTargetUnit(u.workerTarget, owner)) {
+                    let targetIsQueue = (u.workerTargetType === 'queue');
+                    if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         u.workerTarget = null;
+                        u.workerTargetType = null;
+                        u._healerQueueTripCost = 0;
                         _healerFindTarget(u, myGx, myGy);
                         return;
                     }
@@ -8141,9 +8289,11 @@
                         let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
                         if (!spawner || dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
-                            if (spawner && players[owner].money >= 1) {
-                                players[owner].money -= 1;
+                            let tripCost = targetIsQueue ? _getHealerQueueTripCost(u, u.workerTarget) : 1;
+                            if (spawner && tripCost > 0 && players[owner].money >= tripCost) {
+                                players[owner].money -= tripCost;
                                 u.healerHasMaterial = true;
+                                u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
                                 u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
                             }
                             u._healerSpawnerTarget = null;
@@ -8168,6 +8318,142 @@
                     }
                 } else if (u.workerState === 'HEALING') {
                     u.workerState = 'MOVING_TO_HEAL';
+                }
+            } else if (u.workerType === 'researcher') {
+                if (u.workerState === 'IDLE') {
+                    if (!canRunHeavyAi) return;
+                    let target = _findNearestResearchBuildingNeedingWork(u);
+                    if (target) {
+                        u.workerTarget = target;
+                        u.workerTargetType = 'research';
+                        u.workerState = 'MOVING_TO_RESEARCH';
+                        let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                        u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, null, u.owner);
+                        u.pathIndex = 0;
+                        u.commandState = CMD_MOVING;
+                    } else {
+                        u.commandState = CMD_IDLE;
+                    }
+                } else if (u.workerState === 'MOVING_TO_RESEARCH') {
+                    if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
+                        u.workerTarget = null;
+                        u.workerTargetType = null;
+                        u.workerState = 'IDLE';
+                        u.commandState = CMD_IDLE;
+                        return;
+                    }
+                    if (!u.path || u.pathIndex >= u.path.length) {
+                        let target = u.workerTarget;
+                        let dist = Math.hypot(target.x - u.x, target.y - u.y);
+                        if (dist > 24) {
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, null, u.owner);
+                            u.pathIndex = 0;
+                            u.commandState = CMD_MOVING;
+                            return;
+                        }
+                        if (!u.researcherHasMaterial) {
+                            let route = getSpawnerRoute('research', null);
+                            if (route && players[owner].money >= 1) {
+                                u.workerState = 'RETURNING_FOR_GOLD';
+                                u.path = route.path;
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                                u._researchSpawnerTarget = route.spawner;
+                            } else {
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
+                            return;
+                        }
+                        if (u.workerTransferCooldown > 0) return;
+
+                        u.workerState = 'RESEARCHING';
+                        let task = target.researchTask;
+                        if (!task) {
+                            u.workerTarget = null;
+                            u.workerTargetType = null;
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                            return;
+                        }
+
+                        let dps = u.researcherDps || target.getResearcherDps() || 5;
+                        let efficiency = getResearchBuildingEfficiency(target);
+                        let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
+                        task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
+                        createExplosion(target.x, target.y, '#6bf', 3);
+                        u.researcherHasMaterial = false;
+                        u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+
+                        if (task.workDone >= task.workRequired) {
+                            completeActiveResearchTaskForPlayer(target.owner, task);
+                            target.researchTask = getPlayerResearchTask(target.owner);
+                            target.isResearching = !!(isAutoResearchEnabled(target) && !target.isUpgrading && target.researchTask && target.researchTask.workDone < target.researchTask.workRequired);
+                            if (target.owner === localPlayerId) playSound('upgrade_complete', target.x, target.y);
+                        }
+
+                        if (!_isResearcherTargetBuilding(target, owner)) {
+                            u.workerTarget = null;
+                            u.workerTargetType = null;
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                            return;
+                        }
+
+                        let route = getSpawnerRoute('research', null);
+                        if (route && players[owner].money >= 1) {
+                            u.workerState = 'RETURNING_FOR_GOLD';
+                            u.path = route.path;
+                            u.pathIndex = 0;
+                            u.commandState = CMD_MOVING;
+                            u._researchSpawnerTarget = route.spawner;
+                        } else {
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                        }
+                    }
+                } else if (u.workerState === 'RETURNING_FOR_GOLD') {
+                    if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
+                        u.workerTarget = null;
+                        u.workerTargetType = null;
+                        u.workerState = 'IDLE';
+                        u.commandState = CMD_IDLE;
+                        return;
+                    }
+                    if (!u.path || u.pathIndex >= u.path.length) {
+                        let spawner = u._researchSpawnerTarget || _findClosestSpawner(u, 'research');
+                        let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
+                        if (!spawner || dist <= 24) {
+                            if (u.workerTransferCooldown > 0) return;
+                            if (spawner && players[owner].money >= 1) {
+                                players[owner].money -= 1;
+                                u.researcherHasMaterial = true;
+                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            }
+                            u._researchSpawnerTarget = null;
+                            u.workerState = 'MOVING_TO_RESEARCH';
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
+                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.pathIndex = 0;
+                            u.commandState = CMD_MOVING;
+                        } else {
+                            let route = getSpawnerRoute('research', null);
+                            if (route) {
+                                u._researchSpawnerTarget = route.spawner;
+                                u.path = route.path;
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                            } else {
+                                u._researchSpawnerTarget = null;
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
+                        }
+                    }
+                } else if (u.workerState === 'RESEARCHING') {
+                    u.workerState = 'MOVING_TO_RESEARCH';
                 }
             }
         }
@@ -8209,6 +8495,12 @@
             return BUILDER_CAN_WALK;
         }
 
+        function getBuilderTripGoldCost(u) {
+            let dps = Number(u && u.builderDps);
+            if (!Number.isFinite(dps) || dps <= 0) dps = 5;
+            return Math.max(1, Math.round(dps));
+        }
+
         const BUILDER_CAN_WALK = (nx, ny) => {
             return _hasUnderConstructionOrUpgradingAt(nx, ny);
         };
@@ -8225,7 +8517,7 @@
             if (!target) return false;
             if (target.owner !== owner) return false;
             if (target.markedForSalvage) return false;
-            if (!target.underConstruction && !target.isUpgrading && !target.isResearching) return false;
+            if (!target.underConstruction && !target.isUpgrading) return false;
             if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
             return true;
         }
@@ -8359,7 +8651,8 @@
                 return;
             }
             let route = _findBestSpawnerRoute(u, 'builder_spawner', null);
-            if (route && players[u.owner].money >= 1) {
+            let tripCost = getBuilderTripGoldCost(u);
+            if (route && players[u.owner].money >= tripCost) {
                 u.workerState = 'RETURNING_FOR_GOLD';
                 u.path = route.path;
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -8449,6 +8742,71 @@
             return target.hp > 0 && target.hp < target.maxHp;
         }
 
+        function _isHealerQueueTarget(target, owner) {
+            if (!target || target.owner !== owner) return false;
+            if (target.hp <= 0 || target.underConstruction) return false;
+            if (!Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return false;
+            let fallbackType = getSpawnerFallbackUnitType(target);
+            let effLvl = getThingEffectiveLevel(target);
+            let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+            return front.energyPaid < front.energyRequired;
+        }
+
+        function _getHealerQueueTripCost(u, target) {
+            if (!u || !target || !Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return 0;
+            let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
+            let fallbackType = getSpawnerFallbackUnitType(target);
+            let effLvl = getThingEffectiveLevel(target);
+            let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+            let remaining = Math.max(0, Math.floor((front.energyRequired || 0) - (front.energyPaid || 0)));
+            if (remaining <= 0) return 0;
+            let healWork = Math.max(1, Math.round(Number(u.healerHps) || 1));
+            return Math.max(0, Math.min(healWork, remaining));
+        }
+
+        function _findNearestQueuedSpawnerNeedingWork(u) {
+            let best = null;
+            let bestDist = Infinity;
+            let consider = (s) => {
+                if (!_isHealerQueueTarget(s, u.owner)) return;
+                let d = Math.hypot(s.x - u.x, s.y - u.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = s;
+                }
+            };
+            for (let b of barracks) consider(b);
+            for (let s of collectorSpawners) {
+                if (!s) continue;
+                consider(s);
+            }
+            return best;
+        }
+
+        function _isResearcherTargetBuilding(target, owner) {
+            if (!target || target.type !== 'research') return false;
+            if (target.owner !== owner) return false;
+            if (target.hp <= 0 || target.underConstruction || target.markedForSalvage) return false;
+            if (!isAutoResearchEnabled(target) || target.isUpgrading) return false;
+            let task = target.researchTask;
+            if (!task) return false;
+            return (task.workDone || 0) < task.workRequired;
+        }
+
+        function _findNearestResearchBuildingNeedingWork(u) {
+            let best = null;
+            let bestDist = Infinity;
+            for (let s of collectorSpawners) {
+                if (!_isResearcherTargetBuilding(s, u.owner)) continue;
+                let d = Math.hypot(s.x - u.x, s.y - u.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = s;
+                }
+            }
+            return best;
+        }
+
         function _findNearestDamagedFriendlyUnit(u) {
             let best = null;
             let bestDist = Infinity;
@@ -8464,9 +8822,40 @@
         }
 
         function _healerFindTarget(u, myGx, myGy) {
+            let queueTarget = _findNearestQueuedSpawnerNeedingWork(u);
+            if (queueTarget) {
+                u.workerTarget = queueTarget;
+                u.workerTargetType = 'queue';
+                if (u.healerHasMaterial) {
+                    u.workerState = 'MOVING_TO_HEAL';
+                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                    u.path = findPathAStar(startGx, startGy, queueTarget.gx, queueTarget.gy, false, null, u.owner);
+                    u.pathIndex = 0;
+                    u.commandState = CMD_MOVING;
+                    return;
+                }
+
+                let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
+                let tripCost = _getHealerQueueTripCost(u, queueTarget);
+                if (route && players[u.owner].money >= tripCost && tripCost > 0) {
+                    u.workerState = 'RETURNING_FOR_GOLD';
+                    u.path = route.path;
+                    u.pathIndex = 0;
+                    u.commandState = CMD_MOVING;
+                    u._healerSpawnerTarget = route.spawner;
+                    u._healerQueueTripCost = tripCost;
+                    return;
+                }
+
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
+
             let target = _findNearestDamagedFriendlyUnit(u);
             if (target) {
                 u.workerTarget = target;
+                u.workerTargetType = 'unit';
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -8490,6 +8879,7 @@
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
             } else {
+                u.workerTargetType = null;
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
             }
@@ -8499,8 +8889,7 @@
             let owner = u.owner, bestDist = Infinity, best = null;
             let check = (b) => {
                 if (b.markedForSalvage) return;
-                if ((!b.underConstruction && !b.isUpgrading && !b.isResearching) || b.owner !== owner) return;
-                if (b.type === 'research' && !isAutoResearchEnabled(b)) return;
+                if ((!b.underConstruction && !b.isUpgrading) || b.owner !== owner) return;
                 if (b.underConstruction && !isBuildEnabled(b)) return;
                 let d = Math.hypot(b.x - originX, b.y - originY);
                 if (d < bestDist) { bestDist = d; best = b; }
@@ -8509,7 +8898,7 @@
             for (let b of barracks) check(b);
             for (let s of collectorSpawners) check(s);
             for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) {
-                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading || c.item.isResearching)) check(c.item);
+                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading)) check(c.item);
             }
             return best;
         }
@@ -8860,21 +9249,14 @@
                 });
                 if (!allFilled) return false;
                 if ((area.multiplierLevel || 0) >= 5) return false;
-                let cost = getAreaUpgradeCost(area.multiplierLevel || 0);
-                if (players[playerId].money < cost) return false;
-                players[playerId].money -= cost;
                 area.multiplierLevel = (area.multiplierLevel || 0) + 1;
                 dirtyAreas = true;
                 recalculateAdjacency();
                 return true;
             }
 
-            let cost = cardDef.price;
-            if (players[playerId].money < cost) return false;
             // Allow stacking on existing same-type buildings, otherwise check canBuildAt
             if (!canStackAt(gx, gy, itemKey, playerId) && !canBuildAt(gx, gy, playerId)) return false;
-
-            players[playerId].money -= cost;
 
             if (cardDef.target === 'wall') {
                 // Tower - check if same type exists for stacking
@@ -9324,6 +9706,13 @@
                 } else if (us.vis === 'rect') {
                     ctx.fillStyle = us.color; ctx.fillRect(cx - r, cy - r * 0.7, r * 2, r * 1.4);
                     ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(cx - r, cy - r * 0.7, r * 2, r * 1.4);
+                    if (key === 'researcher_unit') {
+                        ctx.fillStyle = '#5af';
+                        ctx.fillRect(cx - r * 0.3, cy - r * 0.35, r * 0.6, r * 0.7);
+                        ctx.strokeStyle = '#93f';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(cx - r * 0.3, cy - r * 0.35, r * 0.6, r * 0.7);
+                    }
                 } else if (us.vis === 'mole') {
                     ctx.fillStyle = us.color; ctx.beginPath();
                     ctx.ellipse(cx, cy, r * 0.8, r * 1.1, 0, 0, Math.PI * 2);
@@ -9733,7 +10122,7 @@
                 if (d.gx < minGx || d.gx > maxGx || d.gy < minGy || d.gy > maxGy) continue;
                 if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
                 ctx.fillStyle = '#fd0'; ctx.font = "900 20px Arial"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('$', d.x, d.y);
+                ctx.fillText('⚡', d.x, d.y);
             }
 
             // Towers
@@ -10021,7 +10410,6 @@
                             }
                             canBuild = filledCount === area.cells.length && (area.multiplierLevel || 0) < 5;
                             let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
-                            if (canBuild && players[localPlayerId].money < upgCost) canBuild = false;
                             // Draw area boundary thick (outside building borders)
                             ctx.strokeStyle = canBuild ? 'rgba(0,255,0,0.9)' : 'rgba(255,200,0,0.9)';
                             ctx.lineWidth = 3;
@@ -10043,7 +10431,7 @@
                                 ctx.fillStyle = canBuild ? '#4f4' : '#fd0';
                                 ctx.fillText(`M${area.multiplierLevel || 0}\u2192${(area.multiplierLevel || 0) + 1}`, cx, cy + 14);
                                 ctx.fillStyle = canBuild ? '#4f4' : '#f88';
-                                ctx.fillText(`${upgCost}g`, cx, cy + 26);
+                                ctx.fillText(`⚡${upgCost}`, cx, cy + 26);
                             }
                         } else { canBuild = false; }
                     } else {
@@ -10347,6 +10735,8 @@
                 cs.update();
             }
 
+            processGlobalSpawnerQueue();
+
             // Dropped items decay
             for (let i = droppedItems.length - 1; i >= 0; i--) {
                 droppedItems[i].timer--;
@@ -10513,10 +10903,9 @@
                         else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) filledCount++;
                         else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
                     }
-                    let upgCost = getAreaUpgradeCost(area.multiplierLevel || 0);
-                    return filledCount === area.cells.length && (area.multiplierLevel || 0) < 5 && players[localPlayerId].money >= upgCost * purchaseCount;
+                    return filledCount === area.cells.length && (area.multiplierLevel || 0) < 5;
                 }
-                return _cd && players[localPlayerId].money >= (_cd.price * purchaseCount) &&
+                return _cd &&
                     (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
             }
 
@@ -10674,7 +11063,8 @@
                         let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
                         let salvagerUnits = activeUnits.filter(u => u.workerType === 'salvager');
                         let healerUnits = activeUnits.filter(u => u.workerType === 'healer');
-                        let workerIds = [...builderUnits, ...collectorUnits, ...salvagerUnits, ...healerUnits].map(u => u.id);
+                        let researcherUnits = activeUnits.filter(u => u.workerType === 'researcher');
+                        let workerIds = [...builderUnits, ...collectorUnits, ...salvagerUnits, ...healerUnits, ...researcherUnits].map(u => u.id);
 
                         if (builderUnits.length > 0) {
                             // Generic builder-targeting for any placeable object that can be built/upgraded.
@@ -11553,6 +11943,9 @@
             } else if (u.unitType === 'healer_unit') {
                 u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
                 u.healerHasMaterial = false;
+            } else if (u.unitType === 'researcher_unit') {
+                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.researcherHasMaterial = false;
             }
         }
 
@@ -11659,7 +12052,7 @@
                 u.stackCount = stackCount;
             }
 
-            // Preserve total HP as much as possible without exceeding new total max HP.
+            // Preserve total Energy as much as possible without exceeding new total max Energy.
             let maxHpCaps = survivors.map(u => Math.max(1, Number(u.maxHp) || 1));
             let hpTarget = Math.min(sumHp, maxHpCaps.reduce((s, v) => s + v, 0));
             let hpShares = distributeEvenWithCaps(hpTarget, maxHpCaps);
@@ -11789,11 +12182,9 @@
                     if (b && b.hp > 0 && !b.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
-                            let cost = b.getUnitCost();
-                            if (players[playerId].money < cost || b.spawnQueue.length >= 20) break;
-                            players[playerId].money -= cost;
+                            if (b.spawnQueue.length >= 20) break;
                             let queuedLevel = getThingEffectiveLevel(b);
-                            b.spawnQueue.push({ unitType: b.unitType, level: queuedLevel });
+                            b.spawnQueue.push(getQueuedSpawnInfo({ unitType: b.unitType, level: queuedLevel }, b.unitType, queuedLevel, playerId));
                         }
                     }
                 } else if (a.action === 'queueWorker') {
@@ -11801,12 +12192,18 @@
                     if (s && s.hp > 0 && !s.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
-                            let cost = s.getUnitCost();
-                            if (players[playerId].money < cost || s.spawnQueue.length >= 10) break;
-                            players[playerId].money -= cost;
+                            if (s.spawnQueue.length >= 10) break;
                             let queuedLevel = getThingEffectiveLevel(s);
-                            let queuedType = s.type === 'spawner' ? 'collector' : s.type === 'builder_spawner' ? 'builder_unit' : s.type === 'healer_spawner' ? 'healer_unit' : 'salvager_unit';
-                            s.spawnQueue.push({ unitType: queuedType, level: queuedLevel });
+                            let queuedType = s.type === 'spawner'
+                                ? 'collector'
+                                : s.type === 'builder_spawner'
+                                    ? 'builder_unit'
+                                    : s.type === 'healer_spawner'
+                                        ? 'healer_unit'
+                                        : s.type === 'research'
+                                            ? 'researcher_unit'
+                                            : 'salvager_unit';
+                            s.spawnQueue.push(getQueuedSpawnInfo({ unitType: queuedType, level: queuedLevel }, queuedType, queuedLevel, playerId));
                         }
                     }
                 } else if (a.action === 'queueResearch') {
@@ -11822,8 +12219,6 @@
                             let projected = baseLevel + queuedDepth;
                             if (projected >= MAX_RESEARCH_LEVEL) break;
                             let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
-                            if (players[playerId].money < task.cost) break;
-                            players[playerId].money -= task.cost;
                             p.researchQueue.push(task);
                             tryAdvancePlayerResearchTask(playerId);
                         }
@@ -11879,9 +12274,7 @@
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (b.spawnQueue.length <= 0) break;
-                            let cost = b.getUnitCost();
                             b.spawnQueue.shift();
-                            players[playerId].money += cost * 0.1;
                         }
                     }
                 } else if (a.action === 'dequeueWorker') {
@@ -11890,9 +12283,7 @@
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (s.spawnQueue.length <= 0) break;
-                            let cost = s.getUnitCost();
                             s.spawnQueue.shift();
-                            players[playerId].money += cost * 0.1;
                         }
                     }
                 } else if (a.action === 'dequeueResearch') {
@@ -11915,14 +12306,12 @@
                             }
 
                             if (idx >= 0) {
-                                let [task] = p.researchQueue.splice(idx, 1);
-                                if (task && Number.isFinite(task.cost)) players[playerId].money += task.cost * 0.1;
+                                p.researchQueue.splice(idx, 1);
                                 continue;
                             }
 
                             if (p.researchTask) {
                                 if (!a.kind || !a.key || !a.statKey || (p.researchTask.kind === a.kind && p.researchTask.key === a.key && p.researchTask.statKey === a.statKey)) {
-                                    players[playerId].money += (Number(p.researchTask.cost) || 0) * 0.1;
                                     p.researchTask = null;
                                     tryAdvancePlayerResearchTask(playerId);
                                 }
@@ -12114,7 +12503,7 @@
             }
             let p = players[localPlayerId];
             let money = Math.floor(p.money);
-            if (_hudCache.money !== money) { _hudCache.money = money; _hudEls.money.textContent = `Gold: ${formatBigNumber(money)}`; }
+            if (_hudCache.money !== money) { _hudCache.money = money; _hudEls.money.textContent = `⚡ ${formatBigNumber(money)}`; }
             let playerCap = getPlayerPopCap(localPlayerId);
             let cfgCap = getConfiguredMaxPop();
             let popText = `Pop: ${p.popCount}/${playerCap}/${cfgCap}`;
@@ -12288,15 +12677,12 @@
             let getLevelMatrixCostWorkText = (thingLevel, researchLevel) => {
                 let tl = Math.max(1, clampThingLevel(thingLevel));
                 let rl = Math.max(0, clampResearchLevel(researchLevel));
-                let stacksForLevel = getRequiredStacksForLevel(tl);
-                let baseCost = Math.max(0, Number(def.price) || 0);
-                let approxCost = Math.round(baseCost * stacksForLevel);
                 let work = getBuildingStatFromMap(key, tl, 'maxHp', rl);
                 if (!Number.isFinite(work)) {
                     let fallbackStats = calculateItemStats(key, tl, localPlayerId);
                     work = Number.isFinite(fallbackStats.maxHp) ? fallbackStats.maxHp : 0;
                 }
-                return `$${formatBigNumber(approxCost)} / ${formatBigNumber(Math.max(0, Math.round(work)))}W`;
+                return `⚡${formatBigNumber(Math.max(0, Math.round(work)))}`;
             };
 
             let getUnitDpsForMatrix = (unitType, thingLevel, researchLevel) => {
@@ -12305,7 +12691,7 @@
                 let atk = getUnitStatFromMap(unitType, tl, 'atk', rl);
                 let cd = getUnitStatFromMap(unitType, tl, 'atkCd', rl);
                 if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
-                return (atk / cd).toFixed(1);
+                return formatBigNumber(atk / cd, 1);
             };
 
             let getBuildingDpsForMatrix = (buildingKey, thingLevel, researchLevel) => {
@@ -12314,12 +12700,12 @@
                 let dmg = getBuildingStatFromMap(buildingKey, tl, 'damage', rl);
                 let cd = getBuildingStatFromMap(buildingKey, tl, 'cd', rl);
                 if (!Number.isFinite(dmg) || !Number.isFinite(cd) || cd <= 0) return '0';
-                return (dmg / cd).toFixed(1);
+                return formatBigNumber(dmg / cd, 1);
             };
 
             let getUnitPreview = (unitType, lvl) => {
                 let safeLvl = Math.max(1, clampThingLevel(lvl));
-                let hp = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'hp');
+                let energy = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'hp');
                 let atk = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atk');
                 let cd = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atkCd');
                 let speed = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'speed');
@@ -12328,8 +12714,9 @@
                 let gatherPerTrip = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'gatherPerTrip');
                 let builderDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'builderDps');
                 let healerHps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'healerHps');
+                let researcherDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'researcherDps');
                 return {
-                    hp: Math.max(1, Math.floor(Number(hp) || 1)),
+                    hp: Math.max(1, Math.floor(Number(energy) || 1)),
                     atk: Math.max(0, Math.floor(Number(atk) || 0)),
                     cd: Math.max(0.05, Number(cd) || 0.05),
                     speed: Math.max(0.1, Number(speed) || 0.1),
@@ -12337,7 +12724,8 @@
                     vision: Math.max(0.1, Number(vision) || 0.1),
                     gatherPerTrip: Math.max(0, Number(gatherPerTrip) || 0),
                     builderDps: Math.max(0, Number(builderDps) || 0),
-                    healerHps: Math.max(0, Number(healerHps) || 0)
+                    healerHps: Math.max(0, Number(healerHps) || 0),
+                    researcherDps: Math.max(0, Number(researcherDps) || 0)
                 };
             };
 
@@ -12351,20 +12739,18 @@
             if (key.startsWith('barrack_')) {
                 let unitType = def.unitType || 'norm';
                 let bStats = calculateItemStats(key, level, localPlayerId);
-                let unitCost = getBuildingStatForOwner(localPlayerId, key, level, 'unitPrice');
                 let spawnCd = getBarrackSpawnCooldown(unitType, level, localPlayerId, key);
                 let up = getUnitPreview(unitType, level);
-                addRow('HP', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                addRow('Energy', `${fmt(bStats.maxHp)}/${fmt(bStats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
-                addRow('Unit Price', `$${fmt(unitCost)}`, { kind: 'building', key, statKey: 'unitPrice' });
-                addRow('Unit HP', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
+                addRow('Unit Energy', fmt(up.hp), { kind: 'unit', key: unitType, statKey: 'hp' });
                 if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
                 else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'healerHps' });
                 else if (unitType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'gatherPerTrip' });
                 else if (unitType === 'salvager_unit') addRow('Salvage Yield', `10% x L${level}`);
                 else {
                     addRow('Unit Attack', fmt(up.atk), { kind: 'unit', key: unitType, statKey: 'atk' });
-                    let dps = up.cd > 0 ? (up.atk / up.cd).toFixed(1) : '0';
+                    let dps = up.cd > 0 ? formatBigNumber(up.atk / up.cd, 1) : '0';
                     addRow('Unit DPS', dps, {
                         getValue: (thingLevel, researchLevel) => getUnitDpsForMatrix(unitType, thingLevel, researchLevel)
                     });
@@ -12372,22 +12758,31 @@
                 addRow('Unit Range', up.range > 0 ? up.range.toFixed(1) : '-', { kind: 'unit', key: unitType, statKey: 'attackRange' });
                 addRow('Unit Vision', up.vision.toFixed(1), { kind: 'unit', key: unitType, statKey: 'visionRange' });
                 addRow('Unit Speed', up.speed.toFixed(1), { kind: 'unit', key: unitType, statKey: 'speed' });
-            } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner') {
-                let workerType = key === 'spawner' ? 'collector' : (key === 'salvager' ? 'salvager_unit' : (key === 'builder_spawner' ? 'builder_unit' : 'healer_unit'));
+            } else if (key === 'spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
+                let workerType = key === 'spawner'
+                    ? 'collector'
+                    : (key === 'salvager'
+                        ? 'salvager_unit'
+                        : (key === 'builder_spawner'
+                            ? 'builder_unit'
+                            : (key === 'healer_spawner' ? 'healer_unit' : 'researcher_unit')));
                 let stats = calculateItemStats(key, level, localPlayerId);
                 let spawnCd = getBarrackSpawnCooldown(workerType, level, localPlayerId, key);
-                let unitCost = getBuildingStatForOwner(localPlayerId, key, level, 'unitPrice');
                 let up = getUnitPreview(workerType, level);
-                addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                addRow('Energy', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 addRow('Spawn CD', `${spawnCd.toFixed(2)}s`, { kind: 'building', key, statKey: 'spawnCd' });
-                addRow('Unit Price', `$${fmt(unitCost)}`, { kind: 'building', key, statKey: 'unitPrice' });
-                addRow('Worker HP', fmt(up.hp), { kind: 'unit', key: workerType, statKey: 'hp' });
+                addRow(key === 'research' ? 'Researcher Energy' : 'Worker Energy', fmt(up.hp), { kind: 'unit', key: workerType, statKey: 'hp' });
                 if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'builderDps' });
                 else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerHps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'healerHps' });
+                else if (workerType === 'researcher_unit') addRow('Research Speed', `${fmt(up.researcherDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'researcherDps' });
                 else if (workerType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'gatherPerTrip' });
                 else addRow('Salvage Yield', `10% x L${level}`);
-                addRow('Worker Vision', up.vision.toFixed(1), { kind: 'unit', key: workerType, statKey: 'visionRange' });
-                addRow('Worker Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
+                addRow(key === 'research' ? 'Researcher Vision' : 'Worker Vision', up.vision.toFixed(1), { kind: 'unit', key: workerType, statKey: 'visionRange' });
+                addRow(key === 'research' ? 'Researcher Speed' : 'Worker Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
+                if (key === 'research') {
+                    let efficiency = getBuildingStatForOwner(localPlayerId, key, level, 'efficiency');
+                    if (Number.isFinite(efficiency)) addRow('Efficiency', efficiency.toFixed(2), { kind: 'building', key, statKey: 'efficiency' });
+                }
             } else if (def.target === 'wall') {
                 let hp = getBuildingStatForOwner(localPlayerId, key, level, 'maxHp');
                 let dmg = getBuildingStatForOwner(localPlayerId, key, level, 'damage');
@@ -12397,11 +12792,11 @@
                 if (!Number.isFinite(dmg)) dmg = null;
                 if (!Number.isFinite(cd)) cd = def.cd;
                 if (!Number.isFinite(vision)) vision = def.visionRange;
-                if (hp > 0) addRow('HP', `${fmt(hp)}/${fmt(hp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                if (hp > 0) addRow('Energy', `${fmt(hp)}/${fmt(hp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 if (dmg !== null) addRow('Attack', fmt(dmg, 1), { kind: 'building', key, statKey: 'damage' });
                 if (cd) {
                     addRow('Cooldown', `${cd.toFixed(2)}s`, { kind: 'building', key, statKey: 'cd' });
-                    let dps = dmg !== null && cd > 0 ? (dmg / cd).toFixed(1) : '0';
+                    let dps = dmg !== null && cd > 0 ? formatBigNumber(dmg / cd, 1) : '0';
                     addRow('DPS', dps, {
                         getValue: (thingLevel, researchLevel) => getBuildingDpsForMatrix(key, thingLevel, researchLevel)
                     });
@@ -12465,10 +12860,10 @@
                 }
             } else {
                 let stats = calculateItemStats(key, level, localPlayerId);
-                if (stats.maxHp > 0) addRow('HP', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
+                if (stats.maxHp > 0) addRow('Energy', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 if (key === 'farm') {
                     let income = Number.isFinite(stats.income) ? stats.income : level;
-                    addRow('Income', `+${income.toFixed(2)}/s`, { kind: 'building', key, statKey: 'income' });
+                    addRow('Income', `+⚡${income.toFixed(2)}/s`, { kind: 'building', key, statKey: 'income' });
                 }
                 if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
                 if (key === 'research') {
@@ -12524,10 +12919,18 @@
             return true;
         }
 
+        function getBuildMenuEnergyCost(key, purchaseCount) {
+            let count = Math.max(1, Math.floor(purchaseCount || 1));
+            if (key === 'area_upgrader') return Math.max(0, Math.floor(getAreaUpgradeCost(0) * count));
+            let level = stackCountToLevel(count);
+            let stats = calculateItemStats(key, level, localPlayerId);
+            if (!stats || !Number.isFinite(stats.maxHp)) return 0;
+            return Math.max(0, Math.floor(stats.maxHp));
+        }
+
         function updateBuildMenu() {
             let container = document.getElementById('build-items');
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
-            let money = players[localPlayerId].money;
 
             // Full rebuild only when tab changes
             if (_buildMenuTab !== activeBuildTab) {
@@ -12539,10 +12942,7 @@
                     let div = document.createElement('div');
                     div.className = 'build-item';
                     div.dataset.key = key;
-                    let displayPrice = def.price;
-                    if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
-                    displayPrice *= Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
-                    if (money < displayPrice) div.classList.add('cant-afford');
+                    let displayPrice = getBuildMenuEnergyCost(key, buildPurchaseMultiplier);
                     if (!isBuildItemAvailable(key)) div.classList.add('unavailable');
                     if (selectedBuildItem === key) div.classList.add('selected');
                     let thumbUrl = getItemThumbnail(key, 28);
@@ -12558,38 +12958,36 @@
                     div.appendChild(nameSpan);
                     let priceSpan = document.createElement('span');
                     priceSpan.className = 'bi-price';
-                    priceSpan.textContent = (key === 'area_upgrader' ? formatBigNumber(displayPrice) + 'g+' : formatBigNumber(displayPrice) + 'g');
+                    priceSpan.textContent = `⚡${formatBigNumber(displayPrice)}`;
                     div.appendChild(priceSpan);
                     bindInstantPress(div, () => {
                         if (!isBuildItemAvailable(key)) return;
                         selectedBuildItem = selectedBuildItem === key ? null : key;
-                        _patchBuildMenuClasses(players[localPlayerId].money);
+                        _patchBuildMenuClasses();
                     });
                     container.appendChild(div);
                     _buildMenuItems[key] = div;
                 }
             } else {
                 // Stable update: just patch classes and prices
-                _patchBuildMenuClasses(money);
+                _patchBuildMenuClasses();
             }
             updateSelectedBuildDescription();
         }
 
-        function _patchBuildMenuClasses(money) {
+        function _patchBuildMenuClasses() {
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
             for (let key of items) {
                 let def = BASE_CARD_TYPES[key]; if (!def) continue;
                 let div = _buildMenuItems[key]; if (!div) continue;
-                let displayPrice = def.price;
-                if (key === 'area_upgrader') displayPrice = getAreaUpgradeCost(0);
-                displayPrice *= Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+                let displayPrice = getBuildMenuEnergyCost(key, buildPurchaseMultiplier);
                 let available = isBuildItemAvailable(key);
-                div.classList.toggle('cant-afford', money < displayPrice);
+                div.classList.remove('cant-afford');
                 div.classList.toggle('unavailable', !available);
                 if (!available && selectedBuildItem === key) selectedBuildItem = null;
                 div.classList.toggle('selected', selectedBuildItem === key);
                 let priceSpan = div.querySelector('.bi-price');
-                if (priceSpan) priceSpan.textContent = (key === 'area_upgrader' ? formatBigNumber(displayPrice) + 'g+' : formatBigNumber(displayPrice) + 'g');
+                if (priceSpan) priceSpan.textContent = `⚡${formatBigNumber(displayPrice)}`;
             }
             updateSelectedBuildDescription();
         }
@@ -12644,7 +13042,7 @@
         }
 
         function formatInfoCurrency(n, d = 0) {
-            return `$${formatBigNumber(n, d)}`;
+            return `⚡${formatBigNumber(n, d)}`;
         }
 
         function formatInfoFraction(a, b, d = 0) {
@@ -12674,6 +13072,57 @@
                 return `<div class="info-row"><span class="info-label">${label}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
             }
             return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
+        }
+
+        function getSpawnerEnergyProgress(spawner) {
+            if (!spawner || !Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) {
+                return { paid: 0, required: 0, left: 0, pct: 0, hasQueue: false };
+            }
+            let owner = Number.isFinite(spawner.owner) ? spawner.owner : localPlayerId;
+            let effLvl = getThingEffectiveLevel(spawner);
+            let fallbackType = getSpawnerFallbackUnitType(spawner);
+            let front = getQueuedSpawnInfo(spawner.spawnQueue[0], fallbackType, effLvl, owner);
+            let required = Math.max(1, Math.floor(Number(front.energyRequired) || 1));
+            let paid = Math.max(0, Math.min(required, Math.floor(Number(front.energyPaid) || 0)));
+            let left = Math.max(0, required - paid);
+            let pct = required > 0 ? (paid / required) : 0;
+            return { paid, required, left, pct, hasQueue: true };
+        }
+
+        function getSpawnerGroupEnergyProgress(spawnerGroup) {
+            if (!Array.isArray(spawnerGroup) || spawnerGroup.length <= 0) {
+                return { paid: 0, required: 0, left: 0, pct: 0, hasQueue: false };
+            }
+            let paid = 0;
+            let required = 0;
+            let hasQueue = false;
+            for (let s of spawnerGroup) {
+                let p = getSpawnerEnergyProgress(s);
+                if (!p.hasQueue) continue;
+                hasQueue = true;
+                paid += p.paid;
+                required += p.required;
+            }
+            let left = Math.max(0, required - paid);
+            let pct = required > 0 ? (paid / required) : 0;
+            return { paid, required, left, pct, hasQueue };
+        }
+
+        function renderSpawnerEnergyProgressRow(progress, label = 'Spawn Progress') {
+            let p = progress || { paid: 0, required: 0, left: 0, pct: 0, hasQueue: false };
+            let barPct = Math.max(0, Math.min(1, Number(p.pct) || 0));
+            let rightText = p.hasQueue
+                ? `${formatInfoCurrency(p.paid)}/${formatInfoCurrency(p.required)}`
+                : `${formatInfoCurrency(0)}/${formatInfoCurrency(0)}`;
+
+            let html = '';
+            html += `<div class="info-row" style="padding-top:0;">`;
+            html += `<div style="position:relative;width:100%;height:12px;border:1px solid #35516a;border-radius:3px;background:#0f161c;overflow:hidden;">`;
+            html += `<div style="position:absolute;left:0;top:0;bottom:0;width:${(barPct * 100).toFixed(1)}%;background:linear-gradient(90deg,#2d7dd2,#49c0ff);"></div>`;
+            html += `<div style="position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#d6ecff;font-size:9px;font-weight:700;text-shadow:0 1px 1px #000;">${rightText}</div>`;
+            html += `</div>`;
+            html += `</div>`;
+            return html;
         }
 
         function getLevelHtml(obj) {
@@ -12784,7 +13233,7 @@
         }
 
         function getEntityGroupLabel(e) {
-            if (e._isGoldMine) return 'Gold Mine';
+            if (e._isGoldMine) return 'Energy Mine';
             if (e.type === 'barrack') return ((BASE_CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
             if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).name || e.type;
             if (e.type === 'spawner') return 'Collector';
@@ -12876,7 +13325,7 @@
             let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
@@ -12884,7 +13333,7 @@
             // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             if (!e.underConstruction) {
                 html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-                html += infoRow('Unit HP', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+                html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
                 html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
                 html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
                 html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
@@ -12902,13 +13351,14 @@
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = players[localPlayerId].money >= totalCost;
+                let canAfford = true;
                 let subBtn = `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(e.spawnQueue.length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -12930,12 +13380,12 @@
             for (let b of group) { totalHp += b.hp; totalMaxHp += getEntityHpDisplayMax(b); }
             for (let b of readyGroup) totalQueue += b.spawnQueue.length;
             html += infoRow('Count', group.length);
-            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
-            html += infoRow('Unit HP', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
+            html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
             html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
             html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
             html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
@@ -12954,7 +13404,7 @@
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= totalCost;
+                let canAfford = readyGroup.length > 0;
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
@@ -12964,6 +13414,7 @@
                 if (readyGroup.length > 0) {
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 }
+                html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
@@ -12981,7 +13432,7 @@
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
-            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
@@ -13027,7 +13478,7 @@
                 if (Number.isFinite(watchDuration)) html += infoRow('Watch Duration', `${watchDuration.toFixed(1)}s`);
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
             if (e.owner === localPlayerId) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
@@ -13053,7 +13504,7 @@
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
             html += infoRow('Count', group.length);
-            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
@@ -13096,7 +13547,7 @@
                 let watchDuration = getBuildingStatForOwner(e.owner, e.type, effLevel, 'watchDuration');
                 if (Number.isFinite(watchDuration)) html += infoRow('Watch Duration', `${watchDuration.toFixed(1)}s`);
             }
-            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) html += infoRow('Rally', getTowerPreferredTargetDisplay(e));
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(t => t.markedForSalvage);
@@ -13123,7 +13574,7 @@
             let effLevel = getThingEffectiveLevel(e, sLevel);
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
@@ -13133,7 +13584,7 @@
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
                 if (e.underConstruction) {
@@ -13146,13 +13597,14 @@
                     let cost = e.getUnitCost();
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     let totalCost = cost * purchaseCount;
-                    let canAfford = players[localPlayerId].money >= totalCost;
+                    let canAfford = true;
                     let subBtn = `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                     let addBtn = `<span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                     let autoEnabled = isAutoUpgradeEnabled(e);
                     let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
                     let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
+                    html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;">${autoBtn}</div></div>`;
                 }
             }
@@ -13171,7 +13623,7 @@
             let effStats = calculateItemStats(e.type, effLevel, e.owner);
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
-            if (baseStats.maxHp > 0) html += infoRow('HP', formatInfoFraction(Math.floor(e.hp || baseStats.maxHp), getEntityHpDisplayMax(e)));
+            if (baseStats.maxHp > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp || baseStats.maxHp), getEntityHpDisplayMax(e)));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
@@ -13212,10 +13664,10 @@
                 let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'income');
                 if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-                html += infoRow('Income', `${baseInc.toFixed(2)}g/s`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}g/s` : undefined);
+                html += infoRow('Income', `⚡${baseInc.toFixed(2)}/s`, Math.abs(baseInc - effInc) > 1e-6 ? `⚡${effInc.toFixed(2)}/s` : undefined);
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
-            html += infoRow('Value', `${formatBigNumber(def.price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
             let fgx = e.gx !== undefined ? e.gx : e._gx, fgy = e.gy !== undefined ? e.gy : e._gy;
             if (fgx !== undefined && fgy !== undefined) {
                 let autoEnabled = isAutoUpgradeEnabled(e);
@@ -13229,10 +13681,10 @@
 
         function renderGoldMineInfo(e) {
             let html = '';
-            html += infoRow('Gold', formatInfoFraction(Math.floor(e.gold), e.maxGold));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.gold), e.maxGold));
             let pct = e.maxGold > 0 ? Math.round(e.gold / e.maxGold * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
-            html += infoDesc('Natural gold deposit. Send collectors to gather.');
+            html += infoDesc('Natural energy deposit. Send collectors to gather.');
             return html;
         }
 
@@ -13264,7 +13716,7 @@
             let baseVisionRange = Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
             let effVisionRange = Math.max(0, Number(u.visionRange) || 0);
 
-            html += infoRow('HP', formatInfoFraction(baseHpNow, baseMaxHp), formatInfoFraction(Math.floor(u.hp), u.maxHp));
+            html += infoRow('Energy', formatInfoFraction(baseHpNow, baseMaxHp), formatInfoFraction(Math.floor(u.hp), u.maxHp));
             html += infoRow('Level', `L${lvl}`, effLvl !== lvl ? `L${effLvl}` : undefined);
             html += infoRowStacks(stacks, lvl, effStacks, effLvl);
             html += infoRow('Range', formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
@@ -13277,6 +13729,10 @@
                 let baseHeal = Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0;
                 let effHeal = Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0;
                 html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/trip`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/trip` : undefined);
+            } else if (u.workerType === 'researcher') {
+                let baseResearch = Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
+                let effResearch = Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
+                html += infoRow('Research Speed', `${formatBigNumber(baseResearch, 1)}/trip`, baseResearch !== effResearch ? `${formatBigNumber(effResearch, 1)}/trip` : undefined);
             } else if (u.workerType === 'collector') {
                 let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
                 let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
@@ -13380,6 +13836,9 @@
                 } else if (u.workerType === 'healer') {
                     totalHealSpeed += (Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0);
                     totalEffHealSpeed += (Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0);
+                } else if (u.workerType === 'researcher') {
+                    totalBuildSpeed += (Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0);
+                    totalEffBuildSpeed += (Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
                 } else if (u.workerType === 'collector') {
                     totalCollectorPerTrip += (Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
                     totalEffCollectorPerTrip += (Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
@@ -13398,7 +13857,7 @@
             let effLevelSummary = isEffectiveMixed ? 'Mixed' : `L${getUnitEffectiveLevel(u0)}`;
 
             html += infoRow('Count', group.length);
-            html += infoRow('HP', formatInfoFraction(Math.floor(totalBaseHp), totalBaseMaxHp), formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalBaseHp), totalBaseMaxHp), formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRow('Level', levelSummary, levelSummary !== effLevelSummary ? effLevelSummary : undefined);
             html += infoRow('Stacks', `${formatBigNumber(totalStacks)}/${formatBigNumber(Math.max(totalStacks, totalBaseNextStacks))}`, totalStacks !== totalEffStacks ? `${formatBigNumber(totalEffStacks)}/${formatBigNumber(Math.max(totalEffStacks, totalEffNextStacks))}` : undefined);
             let avgBaseRange = totalBaseRange / Math.max(1, group.length);
@@ -13411,6 +13870,8 @@
                 html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
             } else if (u0.workerType === 'healer') {
                 html += infoRow('Heal Speed', `${formatBigNumber(totalHealSpeed, 1)}/trip`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/trip` : undefined);
+            } else if (u0.workerType === 'researcher') {
+                html += infoRow('Research Speed', `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
             } else if (u0.workerType === 'collector') {
                 html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
             } else if (u0.workerType === 'salvager') {
@@ -13471,10 +13932,10 @@
             let totalGold = 0, totalMax = 0;
             for (let m of group) { totalGold += m.gold; totalMax += m.maxGold; }
             html += infoRow('Count', group.length);
-            html += infoRow('Gold', formatInfoFraction(Math.floor(totalGold), totalMax));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalGold), totalMax));
             let pct = totalMax > 0 ? Math.round(totalGold / totalMax * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
-            html += infoDesc('Natural gold deposit. Send collectors to gather.');
+            html += infoDesc('Natural energy deposit. Send collectors to gather.');
             return html;
         }
 
@@ -13493,13 +13954,13 @@
             for (let s of group) { totalHp += s.hp; totalMaxHp += getEntityHpDisplayMax(s); }
             for (let s of readyGroup) totalQueue += (s.spawnQueue || []).length;
             html += infoRow('Count', group.length);
-            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += infoRow('Spawn CD', `${(e.spawnCooldown / TICK_RATE).toFixed(1)}s`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
-            html += infoRow('Value', `${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) {
                 let anyMarked = group.some(s => s.markedForSalvage);
                 let allAutoEnabled = group.every(s => isAutoUpgradeEnabled(s));
@@ -13512,7 +13973,7 @@
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canAfford = readyGroup.length > 0 && players[localPlayerId].money >= totalCost;
+                let canAfford = readyGroup.length > 0;
                 let subBtn = `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`;
                 let addBtn = `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:${canAfford ? '#4f4' : '#242'};font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
@@ -13522,6 +13983,7 @@
                 if (readyGroup.length > 0) {
                     html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, readyGroup.length * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 }
+                html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
@@ -13730,7 +14192,7 @@
                 let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
                 let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
-                let canAfford = !preview.atMax && players[localPlayerId].money >= preview.cost;
+                let canAfford = !preview.atMax;
 
                 let activePctText = '';
                 if (t.isActiveTask) {
@@ -13787,7 +14249,7 @@
                 let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
                 let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
-                let canAfford = !preview.atMax && players[localPlayerId].money >= preview.cost;
+                let canAfford = !preview.atMax;
 
                 let activePctText = '';
                 if (t.isActiveTask) {
@@ -13861,7 +14323,7 @@
                 let nextCost = getResearchCost(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
                 let nextWork = getResearchWork(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
                 let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
-                let canAfford = !atMax && players[localPlayerId].money >= nextCost;
+                let canAfford = !atMax;
                 let selectedThingLevel = getResearchPreviewThingLevel();
                 let displayFromLevel = currentLevel;
                 let displayToLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
@@ -13906,7 +14368,7 @@
             let queueLen = getResearchQueueTotalLength(e);
             let queueCap = getResearchQueueCapacityForPlayer(e.owner);
             let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('HP', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
             html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isResearching ? '\uD83E\uDDEA Researching' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready')));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
@@ -13914,6 +14376,20 @@
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
             html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
             html += `</div>`;
+            if (e.owner === localPlayerId && !e.underConstruction) {
+                let labLevel = getThingEffectiveLevel(e);
+                let researcherEnergy = getUnitStatForOwner(e.owner, 'researcher_unit', labLevel, 'hp');
+                let researcherQueue = Array.isArray(e.spawnQueue) ? e.spawnQueue : [];
+                let queueCount = researcherQueue.length;
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = Math.max(1, Math.floor(Number.isFinite(researcherEnergy) ? researcherEnergy : 1)) * purchaseCount;
+                html += `<div class="info-row" style="align-items:center;justify-content:space-between;gap:8px;">`;
+                html += `<span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span>`;
+                html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(queueCount, 10)}</span>`;
+                html += `<span><span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span> <span class="info-buy-worker-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span></span>`;
+                html += `</div>`;
+                html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
+            }
             if (e.owner === localPlayerId && !e.underConstruction) {
                 if (queueOpen) {
                     html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
@@ -13952,15 +14428,31 @@
             let queueCap = getResearchQueueCapacityForPlayer(e.owner);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Count', group.length);
-            html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
             html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
             html += `</div>`;
-
             if (e.owner === localPlayerId) {
+                let workerQueueCount = 0;
+                for (let r of group) {
+                    if (!r || !Array.isArray(r.spawnQueue)) continue;
+                    workerQueueCount += r.spawnQueue.length;
+                }
+                let workerCoordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
+                let queueCostSource = group.find(r => !r.underConstruction) || group[0];
+                let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
+                let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
+                let totalCost = Math.max(1, Math.floor(cost || 1)) * purchaseCount;
+                html += `<div class="info-row" style="align-items:center;justify-content:space-between;gap:8px;">`;
+                html += `<span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span>`;
+                html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(workerQueueCount, group.length * 10)}</span>`;
+                html += `<span><span class="info-dequeue-group-btn" data-type="worker" data-coords="${workerCoordStr}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span> <span class="info-buy-worker-group-btn" data-coords="${workerCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;">[+]</span></span>`;
+                html += `</div>`;
+                html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(group));
+
                 if (queueOpen) {
                     html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
                     html += renderQueuedResearchTasksForGroup(group);
@@ -14106,7 +14598,7 @@
             let totalHp = 0, totalMaxHp = 0;
             for (let f of group) { totalHp += (f.hp || 0); totalMaxHp += getEntityHpDisplayMax(f); }
             html += infoRow('Count', group.length);
-            if (baseStats.maxHp > 0) html += infoRow('HP', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
+            if (baseStats.maxHp > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel);
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
@@ -14147,9 +14639,9 @@
                 let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'income');
                 if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-                html += infoRow('Income', `${baseInc.toFixed(2)}g/s`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}g/s` : undefined);
+                html += infoRow('Income', `⚡${baseInc.toFixed(2)}/s`, Math.abs(baseInc - effInc) > 1e-6 ? `⚡${effInc.toFixed(2)}/s` : undefined);
             }
-            html += infoRow('Value', `${formatBigNumber(def.price || '?')}g`);
+            html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
             if (e._gx !== undefined || e.gx !== undefined) {
                 let anyMarked = group.some(f => f.markedForSalvage);
                 let allAutoEnabled = group.every(f => isAutoUpgradeEnabled(f));
@@ -14264,7 +14756,7 @@
                 for (let e of selectedEntities) { if (e.hp !== undefined) { totalHp += e.hp; totalMaxHp += e.maxHp; } }
                 for (let u of selectedUnits) { totalHp += u.hp; totalMaxHp += u.maxHp; }
                 html += `<div class="info-title">${totalSel} selected</div>`;
-                html += infoRow('Total HP', `${Math.floor(totalHp)}/${Math.floor(totalMaxHp)}`);
+                html += infoRow('Total Energy', `${Math.floor(totalHp)}/${Math.floor(totalMaxHp)}`);
                 html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
             }
 
@@ -16211,6 +16703,7 @@
             generateGoldMines(spawns);
 
             let teamSpawners = {};
+            let teamHealerSpawners = {};
             let teamSpawnPos = {};
 
             for (let i = 0; i < teams.length; i++) {
@@ -16242,6 +16735,17 @@
                 collectorSpawners.push(s);
                 grid[pos.gy][pos.gx].item = s;
                 grid[pos.gy][pos.gx].owner = pid;
+
+                // Starter healer spawner near base (fully built)
+                let healerPos = findStarterBuildSpot(pos, 10);
+                if (healerPos) {
+                    let hs = new HealerSpawner(healerPos.gx, healerPos.gy, pid);
+                    hs.underConstruction = false;
+                    teamHealerSpawners[pid] = hs;
+                    collectorSpawners.push(hs);
+                    grid[healerPos.gy][healerPos.gx].item = hs;
+                    grid[healerPos.gy][healerPos.gx].owner = pid;
+                }
 
                 // Starter farm near base (fully built)
                 let farmPos = findStarterBuildSpot(pos, 10);
@@ -16298,6 +16802,35 @@
                     grid[housePos.gy][housePos.gx].owner = pid;
                     updateItemTextCache(house);
                 }
+
+                // Additional starter house near base (fully built, L4)
+                let extraHousePos = findStarterBuildSpot(pos, 10);
+                if (extraHousePos) {
+                    let houseLevel = 4;
+                    let houseStacks = getRequiredStacksForLevel(houseLevel);
+                    let hs = calculateItemStats('house', houseLevel, pid);
+                    let house = {
+                        type: 'house',
+                        stacks: houseStacks,
+                        level: houseLevel,
+                        effectiveLevel: houseLevel,
+                        potentialEffectiveLevel: houseLevel,
+                        hp: hs.maxHp,
+                        maxHp: hs.maxHp,
+                        damage: 0,
+                        gx: extraHousePos.gx,
+                        gy: extraHousePos.gy,
+                        x: extraHousePos.gx * TILE + 16,
+                        y: extraHousePos.gy * TILE + 16,
+                        underConstruction: false,
+                        owner: pid,
+                        autoUpgradeEnabled: true,
+                        buildEnabled: true
+                    };
+                    grid[extraHousePos.gy][extraHousePos.gx].item = house;
+                    grid[extraHousePos.gy][extraHousePos.gx].owner = pid;
+                    updateItemTextCache(house);
+                }
             }
 
             recomputePlayerPopCaps();
@@ -16314,6 +16847,23 @@
                     u.builderHasMaterial = false;
                     applyUnitLevelScaling(u, getThingEffectiveLevel(spawner));
                     u.builderDps = spawner.getBuilderDps();
+                    units.push(u); players[pid].popCount++;
+                }
+            }
+
+            // Spawn 3 healer units for each team
+            for (let pid of teams) {
+                let pos = teamSpawnPos[pid];
+                let bgx = pos.gx, bgy = pos.gy;
+                let healerSpawner = teamHealerSpawners[pid];
+                for (let i = 0; i < 3; i++) {
+                    let sp = findNearestWalkable(bgx, bgy);
+                    let u = new Unit('healer_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
+                    u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
+                    u.workerTargetType = null;
+                    u.healerHasMaterial = false;
+                    applyUnitLevelScaling(u, healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
+                    if (healerSpawner && healerSpawner.getHealerHps) u.healerHps = healerSpawner.getHealerHps();
                     units.push(u); players[pid].popCount++;
                 }
             }
