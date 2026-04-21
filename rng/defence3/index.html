@@ -1224,11 +1224,9 @@
     <div id="research-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="research-popup-title">
         <div id="research-popup-card">
             <div class="help-title-row">
-                <h3 id="research-popup-title" style="color:#8dc6ff; font-size:18px; margin:0">Research</h3>
                 <button id="btn-research-close"
                     style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
             </div>
-            <div class="help-mode">Shared research queue for all of your labs</div>
             <div id="research-popup-content"></div>
         </div>
     </div>
@@ -12499,7 +12497,8 @@
                 }
             }
             let areaLevelColor = AREA_LEVEL_COLORS[areaLevel] || '#888';
-            let html = `<div class="info-title">${name} `;
+            let leftBtn = (opts && opts.leftButtonHtml) ? opts.leftButtonHtml : '';
+            let html = `<div class="info-title">${leftBtn}${name} `;
             if (opts && opts.mixedLevel) html += `<span style="color:#fc8">Mixed</span> `;
             else html += getLevelHtml(obj) + ` `;
             if (groupSize > 1) html += `<span style="color:#4af;font-size:10px">G${groupSize}</span> `;
@@ -12513,7 +12512,8 @@
         function infoHeaderUnit(name, u, opts = null) {
             let lvl = Math.max(1, Math.floor(u.unitLevel || 1));
             let effLvl = Math.max(1, Math.floor(u.effectiveLevel || lvl));
-            let html = `<div class="info-title">${name} `;
+            let leftBtn = (opts && opts.leftButtonHtml) ? opts.leftButtonHtml : '';
+            let html = `<div class="info-title">${leftBtn}${name} `;
             if (opts && opts.mixedLevel) html += `<span style="color:#fc8">Mixed</span>`;
             else html += `<span style="color:#888">L${lvl}</span>`;
             if (!(opts && opts.mixedLevel) && effLvl !== lvl) html += ` <span style="color:#4f4">L${effLvl}</span>`;
@@ -13390,7 +13390,7 @@
 
             let showAllBtn = document.createElement('button');
             showAllBtn.type = 'button';
-            showAllBtn.textContent = '📊';
+            showAllBtn.textContent = 'M';
             showAllBtn.title = 'Show all levels';
             showAllBtn.style.cursor = 'pointer';
             showAllBtn.style.background = '#1a2631';
@@ -14059,6 +14059,7 @@
 
                 let items = grp.items;
                 let label = grp.label;
+                let subgroupPopupBtnHtml = `<button type="button" class="info-subgroup-research-btn" data-key="${key}" title="Open research popup for this subgroup" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;margin-right:4px;line-height:1.2">P</button>`;
 
                 if (grp.isUnit) {
                     let u0 = items[0];
@@ -14071,7 +14072,7 @@
                         mixedUnitLevels = unitLevels.size > 1;
                         mixedEffectiveLevels = effectiveLevels.size > 1;
                     }
-                    html += infoHeaderUnit(prefix + label, u0, { mixedLevel: mixedUnitLevels || mixedEffectiveLevels });
+                    html += infoHeaderUnit(prefix + label, u0, { mixedLevel: mixedUnitLevels || mixedEffectiveLevels, leftButtonHtml: subgroupPopupBtnHtml });
                     if (items.length === 1) {
                         html += renderUnitInfo(items[0]);
                     } else {
@@ -14081,14 +14082,14 @@
                     let e0 = items[0];
                     let prefix = items.length > 1 ? `${items.length}x ` : '';
                     if (e0._isGoldMine) {
-                        html += `<div class="info-title">${prefix}${label}</div>`;
+                        html += `<div class="info-title">${subgroupPopupBtnHtml}${prefix}${label}</div>`;
                     } else {
                         let mixedEntityLevels = false;
                         if (items.length > 1) {
                             let levelTokens = new Set(items.map(it => getEntityLevelToken(it)));
                             mixedEntityLevels = levelTokens.size > 1;
                         }
-                        html += infoHeader(prefix + label, e0, { mixedLevel: mixedEntityLevels });
+                        html += infoHeader(prefix + label, e0, { mixedLevel: mixedEntityLevels, leftButtonHtml: subgroupPopupBtnHtml });
                     }
                     if (items.length === 1) {
                         html += renderEntityBlock(items[0]);
@@ -14421,6 +14422,26 @@
                     for (let [k] of allGroups) subgroupState[k] = val;
                     commitSubgroupState();
                     refreshThisPanel();
+                });
+            });
+
+            // Open research popup with only this subgroup, equivalent to assigning only
+            // this subgroup to a popup control group and opening that popup group.
+            panel.querySelectorAll('.info-subgroup-research-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let key = btn.dataset.key;
+                    if (!key) return;
+                    let pair = allGroups.find(([groupKey]) => groupKey === key);
+                    if (!pair || !pair[1] || !Array.isArray(pair[1].items)) return;
+                    let grp = pair[1];
+                    let popupKey = '__single_subgroup_popup__';
+                    popupControlGroups[popupKey] = {
+                        units: grp.isUnit ? grp.items.filter(u => u && !u.dead) : [],
+                        entities: grp.isUnit ? [] : grp.items.filter(e => e && !(e.hp !== undefined && e.hp <= 0)),
+                        activeSubGroups: {}
+                    };
+                    activePopupControlGroupKey = popupKey;
+                    setResearchPopupOpen(true);
                 });
             });
             // Wire up salvage buttons (single building)
