@@ -1139,10 +1139,9 @@
                         <input id="cfg-gold-count" type="number" min="5" max="5000" value="2000" style="width:72px">
                     </div>
                     <div class="lobby-setting-row grouped">
-                        <label>Energy / Mine</label>
-                        <input id="cfg-gold-min" type="number" min="100" max="5000" value="500" style="width:60px">
+                        <input id="cfg-gold-min" type="number" min="100" max="500000000000" value="10000" >
                         <span class="range-sep">-</span>
-                        <input id="cfg-gold-max" type="number" min="100" max="10000" value="1500" style="width:60px">
+                        <input id="cfg-gold-max" type="number" min="100" max="500000000000" value="10000" >
                     </div>
                     <div class="lobby-setting-row">
                         <label>Mine Spread (%)</label>
@@ -1432,7 +1431,7 @@
                 </ul>
                 <div class="help-subtitle">Economy basics</div>
                 <ul class="help-list">
-                    <li>Collectors gather energy from mines; farms provide passive energy income over time.</li>
+                    <li>Collectors gather energy from mines and farms; farms multiply collector gather speed.</li>
                     <li>Barracks/spawners queue units at purchase-time costs and use their current rally target on spawn.</li>
                 </ul>
             </div>
@@ -2270,14 +2269,14 @@
             ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
             water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", wetDuration: 3, target: 'floor' },
             mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", blastDamage: 135, blastRadius: 0.42, target: 'floor' },
-            farm: { name: "Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", target: 'floor' },
+            farm: { name: "Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", multiplier: 0.02, target: 'floor' },
 
             // Special
             spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", hp: 60, target: 'floor' },
             salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", hp: 60, target: 'floor' },
             builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", hp: 60, target: 'floor' },
-            healer_spawner: { name: "Healer", price: 180, icon: "\u2695\uFE0F", color: "#355", hp: 60, target: 'floor' },
-            research: { name: "Research", price: 260, icon: "\uD83E\uDDEA", color: "#446", hp: 70, efficiency: 1, target: 'floor' },
+            healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", hp: 60, target: 'floor' },
+            research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", hp: 70, efficiency: 1, target: 'floor' },
             house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 120, target: 'floor' },
             area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
 
@@ -2366,7 +2365,7 @@
             ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
             water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
             mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-            farm: "Generates energy per second equal to its level.",
+            farm: "Collectors can harvest here; farm level multiplies collector gather speed.",
             // Special
             spawner: "Spawns collectors that gather energy from mines.",
             salvager: "Spawns salvagers that recycle marked buildings.",
@@ -2460,11 +2459,11 @@
             laser_resistant: { hp: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
             snake: { hp: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
             scout: { hp: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { hp: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 1, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            collector: { hp: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 23, color: '#aaa', r: 6, vis: 'star', isWorker: true },
             salvager_unit: { hp: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
             builder_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, vis: 'rect', isWorker: true },
-            researcher_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#aaf', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            researcher_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
             king: { hp: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
@@ -2501,7 +2500,7 @@
             cd: 'Cooldown',
             spawnCd: 'Spawn CD',
             visionRange: 'Vision',
-            income: 'Energy Income',
+            multiplier: 'Multiplier',
             burnDps: 'Burn DPS',
             burnDuration: 'Burn Duration',
             poisonDps: 'Poison DPS',
@@ -2535,7 +2534,7 @@
         };
 
         const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps', 'researcherDps'];
-        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'income', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
 
         function getSpawnedUnitTypeForBuildingKey(key) {
             if (!key) return null;
@@ -2589,7 +2588,7 @@
                     let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
                     return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
                 },
-                income: Infinity,
+                multiplier: ({ key }) => key === 'farm' ? 10 : Infinity,
                 efficiency: 3,
             }
         };
@@ -2723,7 +2722,7 @@
                 spawnCd: NaN,
                 unitPrice: NaN,
                 visionRange: NaN,
-                income: NaN,
+                multiplier: NaN,
                 burnDps: NaN,
                 burnDuration: NaN,
                 poisonDps: NaN,
@@ -2756,7 +2755,8 @@
             }
 
             if (key === 'farm') {
-                out.income = 1 + Math.floor(lvl * Math.log(lvl + 1) * Math.log(lvl + 1) * lvl);
+                let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : 1;
+                out.multiplier = baseMultiplier + Math.floor(lvl * Math.log(lvl + 1) * lvl * lvl * lvl);
             }
             else if (key === 'sand') { out.damage = 0.05 * mult; }
             else if (key === 'lava') { out.damage = mult; }
@@ -2988,7 +2988,7 @@
             addStat('spawnCd', getBuildingStatFromMap(key, 1, 'spawnCd', 0));
             addStat('unitPrice', getBuildingStatFromMap(key, 1, 'unitPrice', 0));
             addStat('visionRange', d.visionRange);
-            addStat('income', getBuildingStatFromMap(key, 1, 'income', 0));
+            addStat('multiplier', getBuildingStatFromMap(key, 1, 'multiplier', 0));
             addStat('burnDps', getBuildingStatFromMap(key, 1, 'burnDps', 0));
             addStat('burnDuration', getBuildingStatFromMap(key, 1, 'burnDuration', 0));
             addStat('poisonDps', getBuildingStatFromMap(key, 1, 'poisonDps', 0));
@@ -3095,7 +3095,7 @@
             if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
             if (statKey === 'blastDamage') return compact(value, 2);
             if (statKey === 'blastRadius') return `${compact(value, 2)} tiles`;
-            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'income') return compact(value, 2);
+            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'multiplier') return compact(value, 2);
             if (statKey === 'efficiency') return compact(value, 2);
             if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
             if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
@@ -5556,7 +5556,7 @@
         }
 
         function calculateItemStats(type, level, owner = null) {
-            let stats = { maxHp: 0, damage: 0, blastDamage: NaN, blastRadius: NaN, income: NaN };
+            let stats = { maxHp: 0, damage: 0, blastDamage: NaN, blastRadius: NaN, multiplier: NaN };
             let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
             let bKey = normalizeBuildingResearchKey(type);
             let lvl = Math.max(1, clampThingLevel(level));
@@ -5564,12 +5564,12 @@
             let damage = getBuildingStatForOwner(ownerId, bKey, lvl, 'damage');
             let blastDamage = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastDamage');
             let blastRadius = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastRadius');
-            let income = getBuildingStatForOwner(ownerId, bKey, lvl, 'income');
+            let multiplier = getBuildingStatForOwner(ownerId, bKey, lvl, 'multiplier');
             if (Number.isFinite(maxHp)) stats.maxHp = Math.max(1, Math.floor(maxHp));
             if (Number.isFinite(damage)) stats.damage = damage;
             if (Number.isFinite(blastDamage)) stats.blastDamage = blastDamage;
             if (Number.isFinite(blastRadius)) stats.blastRadius = Math.max(0, blastRadius);
-            if (Number.isFinite(income)) stats.income = income;
+            if (Number.isFinite(multiplier)) stats.multiplier = multiplier;
             return stats;
         }
 
@@ -6233,6 +6233,7 @@
                 this.attackCooldown = secondsToTicks(s.atkCd);
                 this.attackTimer = 0;
                 this.color = s.color; this.r = s.r;
+                this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
                 this.vis = s.vis || 'circle';
                 this.isFlying = s.isFlying || false;
                 this.turretImmune = s.turretImmune || false;
@@ -6297,10 +6298,13 @@
             }
 
             getCollisionLayer() {
-                if (this.unitType === 'scout') return 'scout';
                 if (this.isFlying) return 'air';
                 if (this.unitType === 'mole') return 'mole';
                 return 'ground';
+            }
+
+            getCollisionRadius() {
+                return Math.max(0.1, Number(this.collisionR) || Number(this.r) || 0.1);
             }
 
             pickScoutDestination() {
@@ -6423,7 +6427,8 @@
                     case CMD_HOLDING: this.doHolding(); break;
                 }
                 // Separation from nearby units
-                let sepRange = this.r * 2;
+                let selfCollisionR = this.getCollisionRadius();
+                let sepRange = selfCollisionR * 2;
                 let pushX = 0, pushY = 0;
                 let myLayer = this.getCollisionLayer();
                 forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
@@ -6431,7 +6436,7 @@
                     if (other.getCollisionLayer() !== myLayer) return;
                     dx = -dx; dy = -dy;
                     let d = Math.sqrt(Math.max(0, d2));
-                    let minDist = this.r + other.r;
+                    let minDist = selfCollisionR + other.getCollisionRadius();
                     if (d < minDist) {
                         let nx = 0, ny = 0;
                         if (d > 0.001) {
@@ -7224,7 +7229,7 @@
                         ctx.fillStyle = '#fff'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('+', this.x, this.y - this.r - 9);
                     }
                 } else if (this.workerType === 'researcher' && this.workerState) {
-                    if (this.workerState === 'RETURNING_FOR_GOLD') {
+                    if (this.workerState === 'RETURNING_FOR_GOLD' || !this.researcherHasMaterial) {
                         ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
                     } else if (this.workerState === 'MOVING_TO_RESEARCH' || this.workerState === 'RESEARCHING') {
                         ctx.fillStyle = '#7bf'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('R', this.x, this.y - this.r - 9);
@@ -7838,6 +7843,9 @@
                     if (u.workerTargetType === 'mine' && u.workerTarget.gold <= 0) {
                         u.workerTarget = null; _collectorFindTarget(u, myGx, myGy); return;
                     }
+                    if (u.workerTargetType === 'farm' && (!u.workerTarget || u.workerTarget.type !== 'farm' || u.workerTarget.owner !== owner || u.workerTarget.underConstruction || u.workerTarget.hp <= 0)) {
+                        u.workerTarget = null; _collectorFindTarget(u, myGx, myGy); return;
+                    }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
@@ -7850,6 +7858,17 @@
                                         grid[u.workerTarget.gy][u.workerTarget.gx].droppedItem = null;
                                     droppedItems.splice(idx, 1);
                                 }
+                            } else if (u.workerTargetType === 'farm') {
+                                let gatherPerTrip = Number(u.gatherPerTrip);
+                                if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
+                                    let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
+                                    gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
+                                }
+                                if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
+                                let farmLvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.stacks || 1));
+                                let mult = getBuildingStatForOwner(owner, 'farm', farmLvl, 'multiplier');
+                                if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
+                                u.carryingValue = Math.max(1, gatherPerTrip * mult);
                             } else {
                                 let gatherPerTrip = Number(u.gatherPerTrip);
                                 if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
@@ -8352,6 +8371,20 @@
                             return;
                         }
                         if (!u.researcherHasMaterial) {
+                            // If we're already next to a research lab, pick material here and wait normal transfer cooldown.
+                            let sourceLab = _findClosestSpawner(u, 'research');
+                            let sourceDist = sourceLab ? Math.hypot(sourceLab.x - u.x, sourceLab.y - u.y) : Infinity;
+                            if (sourceLab && sourceDist <= 24) {
+                                if (u.workerTransferCooldown > 0) return;
+                                if (players[owner].money >= 1) {
+                                    players[owner].money -= 1;
+                                    u.researcherHasMaterial = true;
+                                    u._researcherMaterialReadyTick = gameTime + getWorkerTransferCooldownTicks();
+                                    u.workerTransferCooldown = getWorkerTransferCooldownTicks();
+                                }
+                                return;
+                            }
+
                             let route = getSpawnerRoute('research', null);
                             if (route && players[owner].money >= 1) {
                                 u.workerState = 'RETURNING_FOR_GOLD';
@@ -8365,6 +8398,8 @@
                             }
                             return;
                         }
+                        let materialReadyTick = Number.isFinite(u._researcherMaterialReadyTick) ? u._researcherMaterialReadyTick : 0;
+                        if (gameTime < materialReadyTick) return;
                         if (u.workerTransferCooldown > 0) return;
 
                         u.workerState = 'RESEARCHING';
@@ -8381,8 +8416,8 @@
                         let efficiency = getResearchBuildingEfficiency(target);
                         let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
                         task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
-                        createExplosion(target.x, target.y, '#6bf', 3);
                         u.researcherHasMaterial = false;
+                        u._researcherMaterialReadyTick = 0;
                         u.workerTransferCooldown = getWorkerTransferCooldownTicks();
 
                         if (task.workDone >= task.workRequired) {
@@ -8400,17 +8435,9 @@
                             return;
                         }
 
-                        let route = getSpawnerRoute('research', null);
-                        if (route && players[owner].money >= 1) {
-                            u.workerState = 'RETURNING_FOR_GOLD';
-                            u.path = route.path;
-                            u.pathIndex = 0;
-                            u.commandState = CMD_MOVING;
-                            u._researchSpawnerTarget = route.spawner;
-                        } else {
-                            u.workerState = 'IDLE';
-                            u.commandState = CMD_IDLE;
-                        }
+                        // Stay on research target; next loop will pick material again when cooldown allows.
+                        u.workerState = 'MOVING_TO_RESEARCH';
+                        u.commandState = CMD_IDLE;
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
@@ -8428,6 +8455,7 @@
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
                                 u.researcherHasMaterial = true;
+                                u._researcherMaterialReadyTick = gameTime + getWorkerTransferCooldownTicks();
                                 u.workerTransferCooldown = getWorkerTransferCooldownTicks();
                             }
                             u._researchSpawnerTarget = null;
@@ -8468,6 +8496,17 @@
                 if (mine.gold <= 0) continue;
                 let d = Math.hypot(mine.x - u.x, mine.y - u.y);
                 if (d < bestDist) { bestDist = d; bestTarget = mine; bestType = 'mine'; }
+            }
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = grid[y][x];
+                    let item = cell && cell.item;
+                    if (!item || item.type !== 'farm') continue;
+                    if (item.owner !== u.owner) continue;
+                    if (item.underConstruction || item.hp <= 0) continue;
+                    let d = Math.hypot(item.x - u.x, item.y - u.y);
+                    if (d < bestDist) { bestDist = d; bestTarget = item; bestType = 'farm'; }
+                }
             }
             if (bestTarget) {
                 _collectorAssignTarget(u, bestTarget, bestType, myGx, myGy);
@@ -10750,19 +10789,6 @@
 
             recomputePlayerPopCaps();
 
-            if (gameTime % TICK_RATE === 0) {
-                for (let y = 0; y < GRID_H; y++) {
-                    for (let x = 0; x < GRID_W; x++) {
-                        let item = grid[y][x].item;
-                        if (!item || item.type !== 'farm' || item.underConstruction || item.hp <= 0) continue;
-                        let lvl = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
-                        let income = getBuildingStatForOwner(item.owner, 'farm', lvl, 'income');
-                        if (!Number.isFinite(income)) income = lvl;
-                        players[item.owner].money += Math.max(0, income);
-                    }
-                }
-            }
-
             // Save previous positions for interpolation
             for (let u of units) { u.prevX = u.x; u.prevY = u.y; }
             for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
@@ -10926,14 +10952,227 @@
                 return !!(byType || byShape);
             }
 
-            function findEnemyUnitNear(worldX, worldY) {
+            function pickNearestHitCandidate(candidates, worldX, worldY) {
+                let best = null;
+                let bestD2 = Infinity;
+                for (let c of candidates) {
+                    if (!c) continue;
+                    let cx = Number(c.x), cy = Number(c.y), hr = Number(c.hitRadius);
+                    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(hr) || hr <= 0) continue;
+                    let dx = cx - worldX, dy = cy - worldY;
+                    let d2 = dx * dx + dy * dy;
+                    if (d2 > hr * hr) continue;
+                    if (d2 < bestD2) {
+                        best = c;
+                        bestD2 = d2;
+                    }
+                }
+                return best;
+            }
+
+            function collectEnemyClickTargetCandidates(worldX, worldY, includeUnits = true) {
+                let out = [];
+                if (includeUnits) {
+                    for (let u of units) {
+                        if (u.owner === localPlayerId || u.dead) continue;
+                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                        if (!isTileVisible(ugx, ugy)) continue;
+                        out.push({ kind: 'unit', ref: u, x: u.x, y: u.y, hitRadius: (Number(u.r) || 0) + 10 });
+                    }
+                }
+                for (let t of towers) {
+                    if (t.owner === localPlayerId || t.hp <= 0) continue;
+                    if (!isTileVisible(t.gx, t.gy)) continue;
+                    out.push({ kind: 'tower', ref: t, x: t.x, y: t.y, hitRadius: 20 });
+                }
+                for (let b of barracks) {
+                    if (b.owner === localPlayerId || b.hp <= 0) continue;
+                    if (!isTileVisible(b.gx, b.gy)) continue;
+                    out.push({ kind: 'barrack', ref: b, x: b.x, y: b.y, hitRadius: 20 });
+                }
+                for (let s of collectorSpawners) {
+                    if (s.owner === localPlayerId || s.hp <= 0) continue;
+                    if (!isTileVisible(s.gx, s.gy)) continue;
+                    out.push({ kind: 'spawner', ref: s, x: s.x, y: s.y, hitRadius: 20 });
+                }
+                let clickGx = Math.floor(worldX / TILE), clickGy = Math.floor(worldY / TILE);
+                if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isTileVisible(clickGx, clickGy)) {
+                    let cell = grid[clickGy][clickGx];
+                    if (cell.item && cell.item.hp > 0 && cell.owner !== localPlayerId) {
+                        out.push({
+                            kind: 'item',
+                            ref: cell.item,
+                            x: clickGx * TILE + TILE * 0.5,
+                            y: clickGy * TILE + TILE * 0.5,
+                            hitRadius: 20,
+                            gx: clickGx,
+                            gy: clickGy,
+                        });
+                    }
+                }
+                return out;
+            }
+
+            function findNearestOwnedSelectableClickTarget(worldX, worldY) {
+                let candidates = [];
                 for (let u of units) {
-                    if (u.owner === localPlayerId || u.dead) continue;
+                    if (u.owner !== localPlayerId || u.dead) continue;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                     if (!isTileVisible(ugx, ugy)) continue;
-                    if (Math.hypot(u.x - worldX, u.y - worldY) < u.r + 8) return u;
+                    candidates.push({ kind: 'unit', ref: u, x: u.x, y: u.y, hitRadius: (Number(u.r) || 0) + 8 });
                 }
-                return null;
+                for (let b of barracks) {
+                    if (b.owner !== localPlayerId || b.hp <= 0) continue;
+                    if (!isTileVisible(b.gx, b.gy)) continue;
+                    candidates.push({ kind: 'entity', ref: b, x: b.x, y: b.y, hitRadius: 20 });
+                }
+                for (let t of towers) {
+                    if (t.owner !== localPlayerId || t.hp <= 0) continue;
+                    if (!isTileVisible(t.gx, t.gy)) continue;
+                    candidates.push({ kind: 'entity', ref: t, x: t.x, y: t.y, hitRadius: 20 });
+                }
+                for (let s of collectorSpawners) {
+                    if (s.owner !== localPlayerId || s.hp <= 0) continue;
+                    if (!isTileVisible(s.gx, s.gy)) continue;
+                    candidates.push({ kind: 'entity', ref: s, x: s.x, y: s.y, hitRadius: 20 });
+                }
+                let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && isTileVisible(gx, gy)) {
+                    let cell = grid[gy][gx];
+                    if (cell.item && cell.owner === localPlayerId) {
+                        candidates.push({
+                            kind: 'entity',
+                            ref: cell.item,
+                            x: gx * TILE + TILE * 0.5,
+                            y: gy * TILE + TILE * 0.5,
+                            hitRadius: 20,
+                            post: () => { cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell; }
+                        });
+                    }
+                }
+                for (let m of goldMines) {
+                    if (!isTileVisible(m.gx, m.gy)) continue;
+                    candidates.push({
+                        kind: 'entity',
+                        ref: m,
+                        x: m.x,
+                        y: m.y,
+                        hitRadius: 20,
+                        post: () => { m._isGoldMine = true; }
+                    });
+                }
+                return pickNearestHitCandidate(candidates, worldX, worldY);
+            }
+
+            function getVisibleSameTypeUnits(sampleUnit) {
+                if (!sampleUnit) return [];
+                let typeKey = sampleUnit.unitType;
+                let out = [];
+                for (let u of units) {
+                    if (!u || u.dead || u.owner !== localPlayerId) continue;
+                    if (u.unitType !== typeKey) continue;
+                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                    if (!isTileVisible(ugx, ugy)) continue;
+                    out.push(u);
+                }
+                return out;
+            }
+
+            function getVisibleSameTypeEntities(sampleEntity) {
+                if (!sampleEntity) return [];
+                let out = [];
+
+                if (sampleEntity._isGoldMine) {
+                    for (let m of goldMines) {
+                        if (!m || !isTileVisible(m.gx, m.gy)) continue;
+                        m._isGoldMine = true;
+                        out.push(m);
+                    }
+                    return out;
+                }
+
+                if (barracks.includes(sampleEntity)) {
+                    for (let b of barracks) {
+                        if (!b || b.hp <= 0) continue;
+                        if (b.unitType !== sampleEntity.unitType) continue;
+                        if (!isTileVisible(b.gx, b.gy)) continue;
+                        out.push(b);
+                    }
+                    return out;
+                }
+
+                if (towers.includes(sampleEntity)) {
+                    for (let t of towers) {
+                        if (!t || t.hp <= 0) continue;
+                        if (t.type !== sampleEntity.type) continue;
+                        if (!isTileVisible(t.gx, t.gy)) continue;
+                        out.push(t);
+                    }
+                    return out;
+                }
+
+                if (collectorSpawners.includes(sampleEntity)) {
+                    for (let s of collectorSpawners) {
+                        if (!s || s.hp <= 0) continue;
+                        if (s.type !== sampleEntity.type) continue;
+                        if (!isTileVisible(s.gx, s.gy)) continue;
+                        out.push(s);
+                    }
+                    return out;
+                }
+
+                let sampleType = sampleEntity.type;
+                for (let gy = 0; gy < GRID_H; gy++) {
+                    for (let gx = 0; gx < GRID_W; gx++) {
+                        if (!isTileVisible(gx, gy)) continue;
+                        let cell = grid[gy][gx];
+                        if (!cell || !cell.item || cell.item.hp <= 0) continue;
+                        if (cell.item.type !== sampleType) continue;
+                        cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
+                        out.push(cell.item);
+                    }
+                }
+                return out;
+            }
+
+            function toggleVisibleSameTypeSelectionFromHit(hit) {
+                if (!hit || !hit.ref) return;
+
+                if (hit.kind === 'unit') {
+                    let group = getVisibleSameTypeUnits(hit.ref);
+                    if (group.length <= 0) return;
+                    let isSelected = selectedUnits.includes(hit.ref);
+                    if (isSelected) {
+                        let groupSet = new Set(group);
+                        selectedUnits = selectedUnits.filter(u => !groupSet.has(u));
+                    } else {
+                        for (let u of group) {
+                            if (!selectedUnits.includes(u)) selectedUnits.push(u);
+                        }
+                    }
+                    return;
+                }
+
+                if (hit.kind === 'entity') {
+                    let group = getVisibleSameTypeEntities(hit.ref);
+                    if (group.length <= 0) return;
+                    let isSelected = selectedEntities.includes(hit.ref);
+                    if (isSelected) {
+                        let groupSet = new Set(group);
+                        selectedEntities = selectedEntities.filter(ent => !groupSet.has(ent));
+                    } else {
+                        for (let ent of group) {
+                            if (!selectedEntities.includes(ent)) selectedEntities.push(ent);
+                        }
+                    }
+                }
+            }
+
+            function findEnemyUnitNear(worldX, worldY) {
+                let cands = collectEnemyClickTargetCandidates(worldX, worldY, true)
+                    .filter(c => c.kind === 'unit');
+                let best = pickNearestHitCandidate(cands, worldX, worldY);
+                return best ? best.ref : null;
             }
 
             function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
@@ -11090,7 +11329,6 @@
                     if (localDefeated) return;
                     if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); stopBuildPlacementDrag(); return; }
                     let isCtrlMulti = isCtrlMultiCommand(e);
-                    let clickGx = Math.floor(world.x / TILE), clickGy = Math.floor(world.y / TILE);
                     let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
                     let issuedStructureCommand = false;
                     // Set rally for active selected barracks and spawners
@@ -11106,40 +11344,15 @@
                     // Set preferred target for selected own towers
                     let selTowers = getActiveEntities().filter(e => e instanceof Tower && e.owner === localPlayerId && e.hp > 0);
                     if (selTowers.length > 0) {
-                        // Find what was right-clicked: enemy unit, tower, barrack, spawner
+                        // Pick nearest clicked enemy target (unit/building/item) by center distance.
                         let towerTarget = null;
-                        for (let u of units) {
-                            if (u.owner === localPlayerId || u.dead) continue;
-                            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                            if (!isTileVisible(ugx, ugy)) continue;
-                            if (Math.hypot(u.x - world.x, u.y - world.y) < u.r + 10) { towerTarget = { type: 'unit', id: u.id }; break; }
-                        }
-                        if (!towerTarget) {
-                            for (let t of towers) {
-                                if (t.owner === localPlayerId || t.hp <= 0) continue;
-                                if (!isTileVisible(t.gx, t.gy)) continue;
-                                if (Math.hypot(t.x - world.x, t.y - world.y) < 20) { towerTarget = { type: 'tower', gx: t.gx, gy: t.gy }; break; }
-                            }
-                        }
-                        if (!towerTarget) {
-                            for (let b of barracks) {
-                                if (b.owner === localPlayerId || b.hp <= 0) continue;
-                                if (!isTileVisible(b.gx, b.gy)) continue;
-                                if (Math.hypot(b.x - world.x, b.y - world.y) < 20) { towerTarget = { type: 'barrack', gx: b.gx, gy: b.gy }; break; }
-                            }
-                        }
-                        if (!towerTarget) {
-                            for (let s of collectorSpawners) {
-                                if (s.owner === localPlayerId || s.hp <= 0) continue;
-                                if (!isTileVisible(s.gx, s.gy)) continue;
-                                if (Math.hypot(s.x - world.x, s.y - world.y) < 20) { towerTarget = { type: 'spawner', gx: s.gx, gy: s.gy }; break; }
-                            }
-                        }
-                        if (!towerTarget && clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isTileVisible(clickGx, clickGy)) {
-                            let cell = grid[clickGy][clickGx];
-                            if (cell.item && cell.item.hp > 0 && cell.owner !== localPlayerId) {
-                                towerTarget = { type: 'item', gx: clickGx, gy: clickGy };
-                            }
+                        let targetHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                        if (targetHit) {
+                            if (targetHit.kind === 'unit') towerTarget = { type: 'unit', id: targetHit.ref.id };
+                            else if (targetHit.kind === 'tower') towerTarget = { type: 'tower', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
+                            else if (targetHit.kind === 'barrack') towerTarget = { type: 'barrack', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
+                            else if (targetHit.kind === 'spawner') towerTarget = { type: 'spawner', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
+                            else if (targetHit.kind === 'item') towerTarget = { type: 'item', gx: targetHit.gx, gy: targetHit.gy };
                         }
                         if (towerTarget) {
                             let towerCoords = selTowers.map(t => ({ gx: t.gx, gy: t.gy }));
@@ -11158,17 +11371,20 @@
                     }
                     // Right-click own barrack to queue unit (only if no workers or combat units selected)
                     if (selSpawners.length === 0) {
+                        let ownBarrackHits = [];
                         for (let b of barracks) {
-                            if (b.owner === localPlayerId && b.hp > 0 && !b.underConstruction && Math.hypot(b.x - world.x, b.y - world.y) < 20) {
-                                queueAction({ action: 'queueUnit', gx: b.gx, gy: b.gy, count: queuePurchaseMultiplier });
-                                return;
-                            }
+                            if (b.owner !== localPlayerId || b.hp <= 0 || b.underConstruction) continue;
+                            if (!isTileVisible(b.gx, b.gy)) continue;
+                            ownBarrackHits.push({ ref: b, x: b.x, y: b.y, hitRadius: 20 });
+                        }
+                        let clickedBarrack = pickNearestHitCandidate(ownBarrackHits, world.x, world.y);
+                        if (clickedBarrack) {
+                            queueAction({ action: 'queueUnit', gx: clickedBarrack.ref.gx, gy: clickedBarrack.ref.gy, count: queuePurchaseMultiplier });
+                            return;
                         }
                     }
                     let activeUnits = getActiveUnits();
                     if (activeUnits.length > 0) {
-                        let gx = Math.floor(world.x / TILE), gy = Math.floor(world.y / TILE);
-
                         // --- Worker targeting logic ---
                         let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
                         let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
@@ -11210,14 +11426,20 @@
                         // --- Normal combat unit targeting ---
                         let combatUnits = activeUnits.filter(u => !u.workerType);
                         if (combatUnits.length > 0) {
-                            let targetUnit = clickedEnemyUnit, targetBuilding = null;
-                            if (!targetUnit) {
-                                for (let t of towers) { if (t.owner !== localPlayerId && t.hp > 0 && isTileVisible(t.gx, t.gy) && Math.hypot(t.x - world.x, t.y - world.y) < 20) { targetBuilding = t; break; } }
-                                if (!targetBuilding) for (let b of barracks) { if (b.owner !== localPlayerId && b.hp > 0 && isTileVisible(b.gx, b.gy) && Math.hypot(b.x - world.x, b.y - world.y) < 20) { targetBuilding = b; break; } }
-                                if (!targetBuilding) for (let s of collectorSpawners) { if (s.owner !== localPlayerId && s.hp > 0 && isTileVisible(s.gx, s.gy) && Math.hypot(s.x - world.x, s.y - world.y) < 20) { targetBuilding = s; break; } }
-                                if (!targetBuilding && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && isTileVisible(gx, gy)) {
-                                    let cell = grid[gy][gx];
-                                    if (cell.item && cell.owner !== localPlayerId && cell.item.hp > 0) targetBuilding = cell.item;
+                            let targetUnit = null, targetBuilding = null;
+                            let targetBuildingGx = null, targetBuildingGy = null;
+                            let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                            if (combatHit) {
+                                if (combatHit.kind === 'unit') targetUnit = combatHit.ref;
+                                else {
+                                    targetBuilding = combatHit.ref;
+                                    if (combatHit.kind === 'item') {
+                                        targetBuildingGx = combatHit.gx;
+                                        targetBuildingGy = combatHit.gy;
+                                    } else {
+                                        targetBuildingGx = combatHit.ref.gx;
+                                        targetBuildingGy = combatHit.ref.gy;
+                                    }
                                 }
                             }
                             let unitIds = combatUnits.map(u => u.id);
@@ -11225,7 +11447,7 @@
                                 queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
                                 if (!isCtrlMulti) multiUnitCommandPoints = [];
                             } else if (targetBuilding) {
-                                queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuilding.gx, targetGy: targetBuilding.gy });
+                                queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
                                 if (!isCtrlMulti) multiUnitCommandPoints = [];
                             } else if (attackMoveMode) {
                                 applyUnitCommandTargets(unitIds, world.x, world.y, isCtrlMulti, 'attackMove');
@@ -11276,42 +11498,28 @@
                         let w = ex - sx, h = ey - sy;
 
                         if (w < 5 && h < 5) {
-                            // Click select
-                            let clicked = null;
-                            for (let u of units) {
-                                if (u.owner !== localPlayerId || u.dead) continue;
-                                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                                if (!isTileVisible(ugx, ugy)) continue;
-                                if (Math.hypot(u.x - selectionBox.sx, u.y - selectionBox.sy) < u.r + 8) { clicked = u; break; }
-                            }
-                            if (clicked) {
+                            // Click select: choose nearest hit among units/buildings/items/mines.
+                            let clickHit = findNearestOwnedSelectableClickTarget(selectionBox.sx, selectionBox.sy);
+                            if (clickHit && clickHit.post) clickHit.post();
+                            let isCtrlLeftClick = !!(e.ctrlKey || e.metaKey || (e.getModifierState && (e.getModifierState('Control') || e.getModifierState('Meta'))));
+                            if (isCtrlLeftClick && clickHit) {
+                                toggleVisibleSameTypeSelectionFromHit(clickHit);
+                            } else if (clickHit && clickHit.kind === 'unit') {
+                                let clicked = clickHit.ref;
                                 if (e.shiftKey) {
                                     let idx = selectedUnits.indexOf(clicked);
                                     if (idx >= 0) selectedUnits.splice(idx, 1);
                                     else selectedUnits.push(clicked);
                                 } else { selectedUnits = [clicked]; selectedEntities = []; }
+                            } else if (clickHit && clickHit.kind === 'entity') {
+                                let clickedEntity = clickHit.ref;
+                                if (e.shiftKey) {
+                                    let idx = selectedEntities.indexOf(clickedEntity);
+                                    if (idx >= 0) selectedEntities.splice(idx, 1);
+                                    else selectedEntities.push(clickedEntity);
+                                } else { selectedEntities = [clickedEntity]; selectedUnits = []; }
                             } else {
-                                // Check if clicking any entity: barrack, tower, floor item, gold mine, collector
-                                let cx = selectionBox.sx, cy = selectionBox.sy;
-                                let clickedEntity = null;
-                                for (let b of barracks) { if (b.hp > 0 && isTileVisible(b.gx, b.gy) && Math.hypot(b.x - cx, b.y - cy) < 20) { clickedEntity = b; break; } }
-                                if (!clickedEntity) for (let t of towers) { if (t.hp > 0 && isTileVisible(t.gx, t.gy) && Math.hypot(t.x - cx, t.y - cy) < 20) { clickedEntity = t; break; } }
-                                if (!clickedEntity) for (let s of collectorSpawners) { if (s.hp > 0 && isTileVisible(s.gx, s.gy) && Math.hypot(s.x - cx, s.y - cy) < 20) { clickedEntity = s; break; } }
-                                if (!clickedEntity) {
-                                    let gx = Math.floor(cx / TILE), gy = Math.floor(cy / TILE);
-                                    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].item && isTileVisible(gx, gy)) {
-                                        clickedEntity = grid[gy][gx].item;
-                                        clickedEntity._gx = gx; clickedEntity._gy = gy; clickedEntity._cell = grid[gy][gx];
-                                    }
-                                }
-                                if (!clickedEntity) for (let m of goldMines) { if (isTileVisible(m.gx, m.gy) && Math.hypot(m.x - cx, m.y - cy) < 20) { clickedEntity = m; clickedEntity._isGoldMine = true; break; } }
-                                if (clickedEntity) {
-                                    if (e.shiftKey) {
-                                        let idx = selectedEntities.indexOf(clickedEntity);
-                                        if (idx >= 0) selectedEntities.splice(idx, 1);
-                                        else selectedEntities.push(clickedEntity);
-                                    } else { selectedEntities = [clickedEntity]; selectedUnits = []; }
-                                } else if (!e.shiftKey) { selectedUnits = []; selectedEntities = []; }
+                                if (!e.shiftKey) { selectedUnits = []; selectedEntities = []; }
                             }
                         } else {
                             // Box select â€” pick up units AND buildings
@@ -12969,8 +13177,8 @@
                 let stats = calculateItemStats(key, level, localPlayerId);
                 if (stats.maxHp > 0) addRow('Energy', `${fmt(stats.maxHp)}/${fmt(stats.maxHp)}`, { kind: 'building', key, statKey: 'maxHp' });
                 if (key === 'farm') {
-                    let income = Number.isFinite(stats.income) ? stats.income : level;
-                    addRow('Income', `+⚡${income.toFixed(2)}/s`, { kind: 'building', key, statKey: 'income' });
+                    let multiplier = Number.isFinite(stats.multiplier) ? stats.multiplier : level;
+                    addRow('Multiplier', `${multiplier.toFixed(2)}x gather`, { kind: 'building', key, statKey: 'multiplier' });
                 }
                 if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
                 if (key === 'research') {
@@ -13781,11 +13989,11 @@
             if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
             if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
             if (e.type === 'farm') {
-                let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'income');
-                let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'income');
+                let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'multiplier');
+                let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'multiplier');
                 if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-                html += infoRow('Income', `⚡${baseInc.toFixed(2)}/s`, Math.abs(baseInc - effInc) > 1e-6 ? `⚡${effInc.toFixed(2)}/s` : undefined);
+                html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
             }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
@@ -14780,11 +14988,11 @@
             if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
             if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
             if (e.type === 'farm') {
-                let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'income');
-                let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'income');
+                let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'multiplier');
+                let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'multiplier');
                 if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-                html += infoRow('Income', `⚡${baseInc.toFixed(2)}/s`, Math.abs(baseInc - effInc) > 1e-6 ? `⚡${effInc.toFixed(2)}/s` : undefined);
+                html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
             }
             html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
             if (e._gx !== undefined || e.gx !== undefined) {
