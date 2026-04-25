@@ -295,6 +295,17 @@
 
         #research-popup-card {
             width: min(680px, calc(100vw - 28px));
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #research-popup-content {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
         }
 
         #starting-resources-popup-card {
@@ -773,6 +784,7 @@
             font-size: 11px;
             overflow-y: auto;
             flex: 1;
+            min-height: 0;
             display: none;
         }
 
@@ -1271,30 +1283,6 @@
                         <input id="cfg-gold-min" type="number" min="100" max="500000000000" value="10000" >
                         <span class="range-sep">-</span>
                         <input id="cfg-gold-max" type="number" min="100" max="500000000000" value="10000" >
-                    </div>
-                    <div class="lobby-setting-row">
-                        <label>Mine Spread (%)</label>
-                        <input id="cfg-gold-area" type="number" min="30" max="100" value="85" style="width:56px">
-                    </div>
-                    <div class="lobby-setting-row compact">
-                        <label>Research Cost Exp</label>
-                        <input id="cfg-research-cost-exp" type="number" min="1" max="10" step="0.01" value="1.85" style="width:72px">
-                    </div>
-                    <div class="lobby-setting-row compact">
-                        <label>Research Work Exp</label>
-                        <input id="cfg-research-work-exp" type="number" min="1" max="10" step="0.01" value="1.7" style="width:72px">
-                    </div>
-                    <div class="lobby-setting-row compact">
-                        <label>Research Work Base</label>
-                        <input id="cfg-research-work-base" type="number" min="1" max="1000000" step="1" value="110" style="width:72px">
-                    </div>
-                    <div class="lobby-setting-row compact">
-                        <label>Unit Bonus Exp</label>
-                        <input id="cfg-research-bonus-exp-units" type="number" min="1" max="10" step="0.01" value="2" style="width:72px">
-                    </div>
-                    <div class="lobby-setting-row compact">
-                        <label>Other Bonus Exp</label>
-                        <input id="cfg-research-bonus-exp-other" type="number" min="1" max="10" step="0.01" value="1.25" style="width:72px">
                     </div>
                     <div class="lobby-setting-row compact">
                         <label>Max Research Level</label>
@@ -2157,20 +2145,28 @@
                 ? { ...(popupSnapshot.activeSubGroups || {}) }
                 : { ...activeSubGroups };
 
-            holder.innerHTML = `
+            let infoPanel = holder.querySelector('#research-popup-info-panel');
+            if (!infoPanel) {
+                holder.innerHTML = `
                 <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
                     <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
                 </div>
                 <div id="research-popup-info-panel"></div>
             `;
+                infoPanel = holder.querySelector('#research-popup-info-panel');
+            }
 
-            let popupIgnoreBtn = document.getElementById('btn-ignore-level-popup');
-            if (popupIgnoreBtn) {
+            let popupIgnoreBtn = holder.querySelector('#btn-ignore-level-popup');
+            if (popupIgnoreBtn && popupIgnoreBtn.dataset.bound !== '1') {
+                popupIgnoreBtn.dataset.bound = '1';
                 bindInstantPress(popupIgnoreBtn, () => {
                     ignoreLevelSubgroups = !ignoreLevelSubgroups;
                     updateIgnoreLevelButton();
-                    subgroupSnapshot = {};
-                    if (popupSnapshot) popupSnapshot.activeSubGroups = {};
+                    if (activePopupControlGroupKey) {
+                        normalizePopupControlGroup(activePopupControlGroupKey);
+                        let snap = getPopupControlGroupSnapshot(activePopupControlGroupKey);
+                        if (snap) snap.activeSubGroups = {};
+                    }
                     renderResearchPopupContent();
                     updateInfoPanel();
                 });
@@ -2181,7 +2177,7 @@
 
             selectedUnits = unitsSnapshot;
             selectedEntities = entitiesSnapshot;
-            updateInfoPanel(document.getElementById('research-popup-info-panel'), {
+            updateInfoPanel(infoPanel, {
                 skipGlobalSync: true,
                 subgroupState: subgroupSnapshot,
                 onRefresh: () => {
@@ -2259,8 +2255,7 @@
             return String(value);
         }
 
-        function buildShopStatMatrixGrid(matrixId) {
-            let d = shopStatMatrixDescriptorById[matrixId];
+        function buildStatMatrixGridFromDescriptor(d) {
             if (!d) return null;
 
             let grid = [];
@@ -2289,6 +2284,16 @@
             }
 
             return grid;
+        }
+
+        function buildShopStatMatrixGrid(matrixId) {
+            let d = shopStatMatrixDescriptorById[matrixId];
+            return buildStatMatrixGridFromDescriptor(d);
+        }
+
+        function buildInfoPanelStatMatrixGrid(matrixId) {
+            let d = infoPanelStatMatrixDescriptorById[matrixId];
+            return buildStatMatrixGridFromDescriptor(d);
         }
 
         function _escapeHtml(text) {
@@ -2346,6 +2351,10 @@
                     let d = shopStatMatrixDescriptorById[p.shopMatrixId];
                     if (title) title.textContent = d && d.title ? `Research Stat Matrix: ${d.title}` : 'Research Stat Matrix';
                     renderMatrixGridToPopup(buildShopStatMatrixGrid(Number(p.shopMatrixId)), 'No stat descriptor found.');
+                } else if (Number.isFinite(Number(p.infoPanelMatrixId))) {
+                    let d = infoPanelStatMatrixDescriptorById[p.infoPanelMatrixId];
+                    if (title) title.textContent = d && d.title ? `Research Stat Matrix: ${d.title}` : 'Research Stat Matrix';
+                    renderMatrixGridToPopup(buildInfoPanelStatMatrixGrid(Number(p.infoPanelMatrixId)), 'No stat descriptor found.');
                 } else {
                     if (title) title.textContent = `Research Stat Matrix: ${p.kind}:${p.key}:${p.statKey}`;
                     renderMatrixGridToPopup(buildResearchStatMatrixGrid(p.kind, p.key, p.statKey));
@@ -2943,6 +2952,7 @@
                     RESEARCH_WORK_BASE,
                     RESEARCH_BONUS_EXP_UNITS,
                     RESEARCH_BONUS_EXP_OTHER,
+                    RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
                     MAX_THING_LEVEL,
                     MAX_RESEARCH_LEVEL,
                     BUILDING_ENERGY_LEVEL_EXP: BUILDING_HP_LEVEL_EXP,
@@ -2998,17 +3008,11 @@
             setValue('cfg-gold-count', GOLD_MINE_COUNT);
             setValue('cfg-gold-min', GOLD_MINE_MIN);
             setValue('cfg-gold-max', GOLD_MINE_MAX);
-            setValue('cfg-gold-area', Math.floor((Number(GOLD_MINE_AREA) || 0) * 100 / Math.max(1, Number(GRID_W) || 1)));
             setValue('cfg-max-pop', CONFIG_MAX_POP);
             setValue('cfg-starting-money', STARTING_MONEY);
             setValue('cfg-map-type', MAP_TYPE);
             setValue('cfg-tick-rate', TICK_RATE);
             setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
-            setValue('cfg-research-cost-exp', RESEARCH_COST_EXP);
-            setValue('cfg-research-work-exp', RESEARCH_WORK_EXP);
-            setValue('cfg-research-work-base', RESEARCH_WORK_BASE);
-            setValue('cfg-research-bonus-exp-units', RESEARCH_BONUS_EXP_UNITS);
-            setValue('cfg-research-bonus-exp-other', RESEARCH_BONUS_EXP_OTHER);
             setValue('cfg-max-thing-level', MAX_THING_LEVEL);
             setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
         }
@@ -3056,6 +3060,7 @@
             if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
             if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_UNITS))) RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_UNITS));
             if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER))) RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER));
+            if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP))) RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP));
             if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
             if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
             if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_HP_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
@@ -3161,9 +3166,8 @@
         function createMainMenuSettingsSnapshot() {
             let numberIds = [
                 'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-money',
-                'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-gold-area',
-                'cfg-research-cost-exp', 'cfg-research-work-exp', 'cfg-research-work-base',
-                'cfg-research-bonus-exp-units', 'cfg-research-bonus-exp-other', 'cfg-max-research-level'
+                'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max',
+                'cfg-max-research-level'
             ];
             let selectIds = ['cfg-gamemode', 'cfg-map-type'];
             let checkboxIds = ['cfg-full-vis'];
@@ -3310,12 +3314,6 @@
         let TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
         let TICK_RATE = 20; // ticks per second (menu configurable)
-        let WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.5s between pickup/putdown
-        let COLLECTOR_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between collector transfer actions
-        let SALVAGER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between salvager transfer actions
-        let BUILDER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between builder material transfers
-        let HEALER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between healer transfer actions
-        let RESEARCHER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between researcher transfer actions
         let TICK_MS = 1000 / TICK_RATE;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
@@ -3367,7 +3365,7 @@
             builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", hp: 60, target: 'floor' },
             healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", hp: 60, target: 'floor' },
             research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", hp: 70, efficiency: 1, target: 'floor' },
-            house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 120, target: 'floor' },
+            house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", hp: 30, target: 'floor' },
             area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
 
             // Clouds
@@ -3467,7 +3465,8 @@
         const UNIT_FORMULA_CONFIG = {
             collectorGatherLevelExp: 1,
             workerSpecialistBaseRate: 5,
-            workerSpecialistLevelExp: 1.22,
+            workerSpecialistLevelExp: 1.46,
+            workerTransferCooldownLevelExp: 0.9,
             baseAttackCooldownFallback: 1.5,
             baseSpeedFallback: 1,
             baseVisionMin: 0.25,
@@ -3632,11 +3631,11 @@
             laser_resistant: { hp: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
             snake: { hp: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
             scout: { hp: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { hp: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 23, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { hp: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-            researcher_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            collector: { hp: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 23, transferCooldown: 2.0, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { hp: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, transferCooldown: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, builderDps: 25, transferCooldown: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, healerHps: 5, transferCooldown: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            researcher_unit: { hp: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, researcherDps: 15, transferCooldown: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
             king: { hp: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
@@ -3655,18 +3654,20 @@
             king: { hpExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.2 },
         };
 
-        let RESEARCH_COST_EXP = 1.85;
-        let RESEARCH_WORK_EXP = 1.7;
+        let RESEARCH_COST_EXP = 3;
+        let RESEARCH_WORK_EXP = 3;
         let RESEARCH_WORK_BASE = 110;
         let RESEARCH_BONUS_EXP_UNITS = 2.0;
         let RESEARCH_BONUS_EXP_OTHER = 1.25;
+        let RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = 1.5;
 
         let MAX_THING_LEVEL = 20;
         let MAX_RESEARCH_LEVEL = 10;
 
-        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, baseTime: true, spawnCd: true, unitPrice: true };
+        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, baseTime: true, spawnCd: true };
         const RESEARCH_STAT_LABELS = {
             maxHp: 'Max Energy',
+            popCap: 'Pop Cap',
             damage: 'Damage',
             blastDamage: 'Blast Damage',
             blastRadius: 'Blast Radius',
@@ -3689,6 +3690,7 @@
             atk: 'Attack',
             attackRange: 'Range',
             atkCd: 'Atk Cooldown',
+            transferCooldown: 'Transfer Cooldown',
             gatherPerTrip: 'Gather Speed',
             builderDps: 'Build Speed',
             healerHps: 'Heal Speed',
@@ -3698,16 +3700,16 @@
 
         const RESEARCHABLE_UNIT_STATS = {
             _default: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd'],
-            collector: ['hp', 'speed', 'visionRange', 'gatherPerTrip'],
-            salvager_unit: ['hp', 'speed', 'visionRange'],
-            builder_unit: ['hp', 'speed', 'visionRange', 'builderDps'],
-            healer_unit: ['hp', 'speed', 'visionRange', 'healerHps'],
-            researcher_unit: ['hp', 'speed', 'visionRange', 'researcherDps'],
+            collector: ['hp', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown'],
+            salvager_unit: ['hp', 'speed', 'visionRange', 'transferCooldown'],
+            builder_unit: ['hp', 'speed', 'visionRange', 'builderDps', 'transferCooldown'],
+            healer_unit: ['hp', 'speed', 'visionRange', 'healerHps', 'transferCooldown'],
+            researcher_unit: ['hp', 'speed', 'visionRange', 'researcherDps', 'transferCooldown'],
             king: ['hp', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd']
         };
 
-        const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps', 'researcherDps'];
-        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+        const PRECOMPUTED_UNIT_STAT_KEYS = ['hp', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerHps', 'researcherDps', 'transferCooldown'];
+        const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxHp', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
 
         function getSpawnedUnitTypeForBuildingKey(key) {
             if (!key) return null;
@@ -3743,9 +3745,11 @@
                 builderDps: Infinity,
                 healerHps: Infinity,
                 researcherDps: Infinity,
+                transferCooldown: 0.3,
             },
             building: {
                 maxHp: Infinity,
+                popCap: ({ key }) => key === 'house' ? getConfiguredMaxPop() : Infinity,
                 damage: Infinity,
                 cd: ({ baseAtLevel1 }) => {
                     let baseCd = Number(baseAtLevel1 && baseAtLevel1.cd);
@@ -3787,6 +3791,7 @@
 
         function getResearchBonusExpForStat(kind, statKey) {
             if (statKey === 'unitPrice') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitPriceBonusExp) || 1);
+            if (kind === 'building' && statKey === 'popCap') return Math.max(1, Number(RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP) || 2);
             return getResearchBonusExp(kind);
         }
 
@@ -3879,11 +3884,20 @@
             let gatherPerTrip = unitType === 'collector' ? Math.max(1, gatherBase * Math.pow(lvl, gatherLvlExp)) : 0;
             let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
             let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
-            let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
-            let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
-            let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
+            let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
+            let healerBase = Math.max(0, Number(s.healerHps) || workerBaseRate);
+            let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
+            let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let transferCooldown = NaN;
+            if (s.isWorker) {
+                let baseTransferCooldown = Math.max(0.01, Number(s.transferCooldown) || 0.01);
+                transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
+            }
 
-            return { hp, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerHps, researcherDps };
+            return { hp, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerHps, researcherDps, transferCooldown };
         }
 
         function computeBaseBuildingStatsAtLevel(type, level) {
@@ -3902,6 +3916,7 @@
             let hpMult = Math.pow(hpExp, lvl - 1);
             let out = {
                 maxHp: NaN,
+                popCap: NaN,
                 damage: NaN,
                 blastDamage: NaN,
                 blastRadius: NaN,
@@ -3948,6 +3963,10 @@
                 let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
                 let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
                 out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * Math.log(lvl + 1) * Math.pow(lvl, farmPowExp));
+            }
+            else if (key === 'house') {
+                let housePopExp = Math.max(1, Number(bCfg.levelMultExp * 1) || 1);
+                out.popCap = Math.pow(housePopExp, lvl) * Math.pow(housePopExp, lvl) * Math.max(1, Math.floor(Math.pow(housePopExp, lvl)));
             }
             else if (key === 'sand') { out.damage = (Number(bCfg.sandFloorDamageBase) || 0) * mult; }
             else if (key === 'lava') { out.damage = (Number(bCfg.lavaFloorDamageBase) || 0) * mult; }
@@ -4185,7 +4204,6 @@
                 let statOrder = getUnitResearchStatKeys(key);
                 for (let statKey of statOrder) {
                     let baseValue = s[statKey];
-                    if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps') baseValue = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0;
                     if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
                     out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
                 }
@@ -4200,6 +4218,7 @@
             };
 
             addStat('maxHp', getBaseBuildingMaxHpForResearch(key));
+            addStat('popCap', getBuildingStatFromMap(key, 1, 'popCap', 0));
             let d = BASE_CARD_TYPES[key] || {};
             addStat('damage', d.damage);
             addStat('blastDamage', getBuildingStatFromMap(key, 1, 'blastDamage', 0));
@@ -4319,8 +4338,13 @@
             if (statKey === 'efficiency') return compact(value, 2);
             if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
             if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
-            if (statKey === 'cd' || statKey === 'atkCd') return `${compact(value, 2)}s`;
+            if (statKey === 'cd' || statKey === 'atkCd' || statKey === 'transferCooldown') return `${compact(value, 2)}s`;
             return compact(value, 0);
+        }
+
+        function formatResearchMultiplierValue(mult) {
+            if (!Number.isFinite(mult)) return '-';
+            return formatBigNumber(mult, 2);
         }
 
         function getResearchBuildingEfficiency(researchBuilding) {
@@ -4368,14 +4392,43 @@
             return out;
         }
 
+        function getResearchStatCostWeight(kind, key, statKey, currentLevel) {
+            let stat = getResearchStatEntry(kind, key, statKey);
+            if (!stat) return 1;
+
+            let lvl = Math.max(0, Math.floor(currentLevel || 0));
+            let baseValue = getResearchStatValueAtLevel(kind, key, statKey, 0, 1);
+            if (!Number.isFinite(baseValue)) baseValue = Number(stat.baseValue);
+
+            let value = getResearchStatValueAtLevel(kind, key, statKey, lvl, 1);
+            if (!Number.isFinite(value)) value = baseValue;
+
+            let orientedBase = RESEARCH_DECREASE_STATS[statKey]
+                ? (1 / Math.max(1e-6, Math.abs(baseValue || 0)))
+                : Math.abs(baseValue || 0);
+            let orientedValue = RESEARCH_DECREASE_STATS[statKey]
+                ? (1 / Math.max(1e-6, Math.abs(value || 0)))
+                : Math.abs(value || 0);
+
+            if (!Number.isFinite(orientedBase) || orientedBase <= 0) orientedBase = 1;
+            if (!Number.isFinite(orientedValue) || orientedValue <= 0) orientedValue = orientedBase;
+
+            // Normalize different stat scales while still rewarding higher-value upgrades.
+            let magnitudeNorm = Math.log10(1 + orientedBase);
+            let relativeNorm = Math.max(1, orientedValue / orientedBase);
+            let weight = Math.pow(1 + magnitudeNorm, 0.85) * Math.pow(relativeNorm, 0.65);
+
+            return Math.max(0.1, Math.min(1000, weight));
+        }
+
         function getResearchCost(kind, key, statKey, currentLevel) {
             let thing = getResearchThing(kind, key);
             let stat = getResearchStatEntry(kind, key, statKey);
             if (!thing || !stat) return 0;
             let lvl = Math.max(0, Math.floor(currentLevel || 0));
             if (lvl >= MAX_RESEARCH_LEVEL) return 0;
-            // Research queueing is free; research consumes energy as work over time.
-            return 0;
+            let weight = getResearchStatCostWeight(kind, key, statKey, lvl);
+            return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * Math.pow(RESEARCH_COST_EXP, lvl)));
         }
 
         function getResearchWork(kind, key, statKey, currentLevel) {
@@ -4384,7 +4437,8 @@
             if (!thing || !stat) return 0;
             let lvl = Math.max(0, Math.floor(currentLevel || 0));
             if (lvl >= MAX_RESEARCH_LEVEL) return 0;
-            return Math.max(1, Math.floor(RESEARCH_WORK_BASE * thing.basePrice * Math.pow(RESEARCH_WORK_EXP, lvl)));
+            let weight = getResearchStatCostWeight(kind, key, statKey, lvl);
+            return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * Math.pow(RESEARCH_WORK_EXP, lvl)));
         }
 
         function ensurePlayerResearchQueueState(playerId) {
@@ -4531,6 +4585,9 @@
             mults[id] = Math.pow(getResearchBonusExp(task.kind), nextLevel);
             if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
             if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
+            if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {
+                recomputePlayerPopCaps();
+            }
             recalculateAdjacency();
         }
 
@@ -4562,6 +4619,7 @@
             let builderDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'builderDps');
             let healerHps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'healerHps');
             let researcherDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'researcherDps');
+            let transferCooldownSec = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'transferCooldown');
 
             if (!Number.isFinite(maxHp)) maxHp = Math.max(1, Math.floor(unit.baseHp || unit.maxHp || 1));
             if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
@@ -4584,10 +4642,13 @@
             if (!Number.isFinite(healerHps)) healerHps = 0;
             if (!Number.isFinite(researcherDps)) researcherDps = 0;
             if (!Number.isFinite(gatherPerTrip)) gatherPerTrip = 0;
+            if (!Number.isFinite(transferCooldownSec)) transferCooldownSec = Number((BASE_UNIT_STATS[unit.unitType] || {}).transferCooldown);
             if (unit.workerType === 'collector') gatherPerTrip = Math.max(1, Number(gatherPerTrip) || 1);
             if (unit.workerType === 'builder') builderDps = Math.max(1, Math.round(builderDps));
             if (unit.workerType === 'healer') healerHps = Math.max(1, Math.round(healerHps));
             if (unit.workerType === 'researcher') researcherDps = Math.max(1, Math.round(researcherDps));
+            if (unit.workerType) transferCooldownSec = Math.max(0.01, Number(transferCooldownSec) || 0.01);
+            let transferCooldownTicks = unit.workerType ? secondsToTicks(transferCooldownSec) : 0;
 
             return {
                 level: lvl,
@@ -4600,7 +4661,9 @@
                 gatherPerTrip,
                 builderDps,
                 healerHps,
-                researcherDps
+                researcherDps,
+                transferCooldownSec,
+                transferCooldownTicks
             };
         }
 
@@ -4637,6 +4700,10 @@
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
             if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
+            if (unit.workerType) {
+                unit.transferCooldownSec = scaled.transferCooldownSec;
+                unit.transferCooldownTicks = scaled.transferCooldownTicks;
+            }
 
             unit.baseLevel = lvl;
             unit.baseLevelMaxHp = scaled.maxHp;
@@ -4672,6 +4739,10 @@
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerHps = scaled.healerHps;
             if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
+            if (unit.workerType) {
+                unit.transferCooldownSec = scaled.transferCooldownSec;
+                unit.transferCooldownTicks = scaled.transferCooldownTicks;
+            }
 
             unit.effectiveLevel = lvl;
         }
@@ -4758,6 +4829,16 @@
     let startingResourcesSelectedThingId = '';
     let shopStatMatrixDescriptorById = {};
     let nextShopStatMatrixDescriptorId = 1;
+    let infoPanelStatMatrixDescriptorById = {};
+    let nextInfoPanelStatMatrixDescriptorId = 1;
+    let activeInfoPanelStatMatrixContext = null;
+    let infoPanelGlobalMouseTrackingBound = false;
+    let infoPanelInteractionTrackingBoundByEl = new WeakSet();
+    let infoPanelLastManualScrollTsByEl = new WeakMap();
+    let infoPanelManualScrollInteractionUntilByEl = new WeakMap();
+    let infoPanelProgrammaticScrollUntilByEl = new WeakMap();
+    let uiMouseClientX = 0;
+    let uiMouseClientY = 0;
     let defaultAutoBuildEnabled = true;
     let defaultAutoUpgradeEnabled = true;
     let ignoreLevelSubgroups = true;
@@ -4900,12 +4981,6 @@
             LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.min(12, pipelineMin));
 
             TICK_MS = 1000 / TICK_RATE;
-            WORKER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 0.5));
-            COLLECTOR_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
-            SALVAGER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
-            BUILDER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
-            HEALER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
-            RESEARCHER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
             LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN);
             LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
             LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
@@ -6536,6 +6611,13 @@
             return Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
         }
 
+        function getHousePopCapContribution(ownerId, level) {
+            let lvl = Math.max(1, clampThingLevel(Math.floor(Number(level) || 1)));
+            let mapped = getBuildingStatForOwner(ownerId, 'house', lvl, 'popCap');
+            if (Number.isFinite(mapped)) return Math.max(1, Math.floor(mapped));
+            return Math.max(1, Math.floor(Math.pow(1.6, lvl)));
+        }
+
         function recomputePlayerPopCaps() {
             let cfgCap = getConfiguredMaxPop();
             for (let pid = 0; pid < players.length; pid++) {
@@ -6547,7 +6629,7 @@
                         if (!item || item.type !== 'house' || cell.owner !== pid) continue;
                         if (item.hp <= 0 || item.underConstruction) continue;
                         let level = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
-                        housePop += Math.floor(Math.pow(1.6, level));
+                        housePop += getHousePopCapContribution(pid, level);
                     }
                 }
                 playerPopCaps[pid] = Math.min(cfgCap, housePop);
@@ -6566,6 +6648,10 @@
             let potentialLevel = item && item.potentialEffectiveLevel !== undefined
                 ? Math.max(0, Math.floor(item.potentialEffectiveLevel || 0))
                 : currentLevel;
+            if (item && !item.underConstruction) {
+                let manualLevel = stackCountToLevel(getThingManualStacks(item));
+                potentialLevel = Math.max(potentialLevel, manualLevel);
+            }
             return potentialLevel !== currentLevel
                 ? `L${currentLevel}->L${potentialLevel}`
                 : `L${currentLevel}`;
@@ -8675,6 +8761,7 @@
         function spawnQueuedUnitFromSpawner(spawner) {
             if (!spawner || !Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) return false;
             if (spawner.hp <= 0 || spawner.underConstruction) return false;
+            if (!isQueueEnabled(spawner)) return false;
             let owner = spawner.owner;
             if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
 
@@ -8732,6 +8819,7 @@
                 let ready = [];
                 let pushIfReady = (s) => {
                     if (!s || s.hp <= 0 || s.underConstruction) return;
+                    if (!isQueueEnabled(s)) return;
                     if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
                     let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
                     let effLvl = getThingEffectiveLevel(s);
@@ -8985,7 +9073,9 @@
             // Builder DPS per unit: scales with effective level
             getBuilderDps() {
                 let lvl = getThingEffectiveLevel(this);
-                return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+                let dps = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'builderDps');
+                let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
             }
             update() {
                 tickStatusEffects(this);
@@ -9048,7 +9138,9 @@
             }
             getHealerHps() {
                 let lvl = getThingEffectiveLevel(this);
-                return Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1)));
+                let hps = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'healerHps');
+                let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                return Math.max(1, Math.round(Number.isFinite(hps) ? hps : fallback));
             }
             update() {
                 tickStatusEffects(this);
@@ -9118,7 +9210,8 @@
             getResearcherDps() {
                 let lvl = getThingEffectiveLevel(this);
                 let dps = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'researcherDps');
-                return Math.max(1, Math.round(Number.isFinite(dps) ? dps : 5));
+                let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
             }
 
             update() {
@@ -9172,6 +9265,46 @@
 
                 if (this.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
             }
+        }
+
+        function _researcherTryPickupMaterial(u, target, owner) {
+            if (!u || !target) return false;
+            let task = target.researchTask;
+            if (!task) return false;
+
+            let required = Math.max(0, Number(task.workRequired) || 0);
+            let done = Math.max(0, Number(task.workDone) || 0);
+            let remainingWork = Math.max(0, required - done);
+            if (remainingWork <= 0) return false;
+
+            let workerBaseFallback = Math.max(1, Math.round(Number((BASE_UNIT_STATS.researcher_unit || {}).researcherDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1));
+            let dps = u.researcherDps || target.getResearcherDps() || workerBaseFallback;
+            let efficiency = getResearchBuildingEfficiency(target);
+            let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
+            let tripWork = Math.min(remainingWork, researchWorkPerTrip);
+            if (!(tripWork > 0)) return false;
+
+            let cost = Math.max(0, Number(task.cost) || 0);
+            let costPerWork = required > 0 ? (cost / required) : 0;
+            let tripCost = Math.max(0, tripWork * costPerWork);
+            let available = Math.max(0, Number(players[owner].money) || 0);
+
+            if (tripCost > available + 1e-9) {
+                if (!(costPerWork > 0)) return false;
+                tripWork = Math.min(tripWork, available / costPerWork);
+                if (!(tripWork > 1e-6)) return false;
+                tripCost = Math.max(0, tripWork * costPerWork);
+            }
+
+            if (tripCost > 0) players[owner].money = Math.max(0, players[owner].money - tripCost);
+
+            u.researcherHasMaterial = true;
+            u._researcherTripWork = tripWork;
+            u._researcherTripCost = tripCost;
+            let researcherCooldown = getWorkerTypeTransferCooldownTicks('researcher', u);
+            u._researcherMaterialReadyTick = gameTime + researcherCooldown;
+            u.workerTransferCooldown = researcherCooldown;
+            return true;
         }
 
         // Worker AI logic - runs inside Unit.update() for collector/salvager/builder/healer types
@@ -9257,7 +9390,7 @@
                                     dirtyGrid = true;
                                 }
                             }
-                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector');
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector', u);
                             _collectorRememberGatherSite(u, u.workerTarget, u.workerTargetType);
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
@@ -9270,6 +9403,10 @@
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let closest = _findClosestSpawner(u, 'spawner');
                         let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
+                        if (isAtDropoff && closest) {
+                            u._collectorLastDropoffSpawner = closest;
+                            u._collectorNextSpawner = closest;
+                        }
                         if (u.carryingValue > 0 && !isAtDropoff) {
                             _workerReturnPath(u);
                             return;
@@ -9277,7 +9414,7 @@
                         if (u.carryingValue > 0 && isAtDropoff) {
                             if (u.workerTransferCooldown > 0) return;
                             players[owner].money += u.carryingValue;
-                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector');
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector', u);
                             if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
@@ -9308,7 +9445,7 @@
                             let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
                             u.carryingValue = refund * getUnitBaseLevel(u);
                             destroyBuilding(u.workerTarget);
-                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager');
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
@@ -9320,7 +9457,7 @@
                             if (u.workerTransferCooldown > 0) return;
                             let closest = _findClosestSpawner(u, 'salvager');
                             players[owner].money += u.carryingValue;
-                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager');
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
                             if (owner === localPlayerId) playSound('salvage_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
@@ -9403,7 +9540,8 @@
                             }
                             if (u.workerTransferCooldown > 0) return;
                             // Add Energy to building
-                            let dps = u.builderDps || 5;
+                            let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                            let dps = u.builderDps || baseBuild;
                             let t = u.workerTarget;
                             let didWork = false;
                             if (t.underConstruction) {
@@ -9465,7 +9603,7 @@
 
                             if (didWork) {
                                 u.builderHasMaterial = false;
-                                u.workerTransferCooldown = getBuilderTransferCooldownTicks();
+                                u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
                             }
 
                             if (u.workerTarget) {
@@ -9500,7 +9638,7 @@
                             if (spawner && players[owner].money >= tripCost) {
                                 players[owner].money -= tripCost;
                                 u.builderHasMaterial = true;
-                                u.workerTransferCooldown = getBuilderTransferCooldownTicks();
+                                u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
                             }
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
@@ -9653,7 +9791,7 @@
                             if (didWork) {
                                 u.healerHasMaterial = false;
                                 u._healerQueueTripCost = 0;
-                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
+                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
                             }
 
                             let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
@@ -9684,10 +9822,11 @@
                         }
 
                         u.workerState = 'HEALING';
-                        let hps = u.healerHps || 5;
+                        let baseHeal = Number((BASE_UNIT_STATS[u.unitType] || {}).healerHps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                        let hps = u.healerHps || baseHeal;
                         u.workerTarget.hp = Math.min(u.workerTarget.maxHp, u.workerTarget.hp + hps);
                         u.healerHasMaterial = false;
-                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
+                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
 
                         if (!_isHealerTargetUnit(u.workerTarget, owner)) {
                             u.workerTarget = null;
@@ -9726,7 +9865,7 @@
                                 players[owner].money -= tripCost;
                                 u.healerHasMaterial = true;
                                 u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
-                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
+                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
                             }
                             u._healerSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_HEAL';
@@ -9790,18 +9929,12 @@
                             let sourceDist = sourceLab ? Math.hypot(sourceLab.x - u.x, sourceLab.y - u.y) : Infinity;
                             if (sourceLab && sourceDist <= 24) {
                                 if (u.workerTransferCooldown > 0) return;
-                                if (players[owner].money >= 1) {
-                                    players[owner].money -= 1;
-                                    u.researcherHasMaterial = true;
-                                    let researcherCooldown = getWorkerTypeTransferCooldownTicks('researcher');
-                                    u._researcherMaterialReadyTick = gameTime + researcherCooldown;
-                                    u.workerTransferCooldown = researcherCooldown;
-                                }
+                                _researcherTryPickupMaterial(u, target, owner);
                                 return;
                             }
 
                             let route = getSpawnerRoute('research', null);
-                            if (route && players[owner].money >= 1) {
+                            if (route) {
                                 u.workerState = 'RETURNING_FOR_GOLD';
                                 u.path = route.path;
                                 u.pathIndex = 0;
@@ -9827,13 +9960,17 @@
                             return;
                         }
 
-                        let dps = u.researcherDps || target.getResearcherDps() || 5;
-                        let efficiency = getResearchBuildingEfficiency(target);
-                        let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
-                        task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
+                        let fallbackDps = Math.max(0.1, Number(u.researcherDps || target.getResearcherDps() || 0));
+                        let fallbackWork = Math.max(0.1, fallbackDps * getResearchBuildingEfficiency(target));
+                        let tripWork = Number.isFinite(u._researcherTripWork) && u._researcherTripWork > 0 ? u._researcherTripWork : fallbackWork;
+                        let remainingWork = Math.max(0, (task.workRequired || 0) - (task.workDone || 0));
+                        let appliedWork = Math.min(remainingWork, tripWork);
+                        if (appliedWork > 0) task.workDone = Math.min(task.workRequired, (task.workDone || 0) + appliedWork);
                         u.researcherHasMaterial = false;
+                        u._researcherTripWork = 0;
+                        u._researcherTripCost = 0;
                         u._researcherMaterialReadyTick = 0;
-                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('researcher');
+                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('researcher', u);
 
                         if (task.workDone >= task.workRequired) {
                             completeActiveResearchTaskForPlayer(target.owner, task);
@@ -9867,13 +10004,7 @@
                         let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
                         if (!spawner || dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
-                            if (spawner && players[owner].money >= 1) {
-                                players[owner].money -= 1;
-                                u.researcherHasMaterial = true;
-                                let researcherCooldown = getWorkerTypeTransferCooldownTicks('researcher');
-                                u._researcherMaterialReadyTick = gameTime + researcherCooldown;
-                                u.workerTransferCooldown = researcherCooldown;
-                            }
+                                if (spawner) _researcherTryPickupMaterial(u, u.workerTarget, owner);
                             u._researchSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_RESEARCH';
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -9926,6 +10057,14 @@
                 u._collectorLastGatherGy = target.gy;
             }
             if (targetType) u._collectorLastGatherType = targetType;
+        }
+
+        function _isCollectorSpawnerValidForUnit(u, spawner) {
+            if (!u || !spawner) return false;
+            return spawner.type === 'spawner'
+                && spawner.owner === u.owner
+                && spawner.hp > 0
+                && !spawner.underConstruction;
         }
 
         function _collectorGetSearchOrigin(u) {
@@ -9992,15 +10131,31 @@
             u._collectorPinnedTargetType = null;
 
             let origin = _collectorGetSearchOrigin(u);
-            let bestDist = 99999, bestTarget = null, bestType = null;
+            let anchorSpawner = null;
+            if (_isCollectorSpawnerValidForUnit(u, u._collectorNextSpawner)) {
+                anchorSpawner = u._collectorNextSpawner;
+            } else if (_isCollectorSpawnerValidForUnit(u, u._collectorLastDropoffSpawner)) {
+                anchorSpawner = u._collectorLastDropoffSpawner;
+            } else {
+                anchorSpawner = _findClosestSpawner(u, 'spawner');
+            }
+
+            let candidates = [];
+            let pushCandidate = (target, type) => {
+                if (!target) return;
+                let originDist = Math.hypot(target.x - origin.x, target.y - origin.y);
+                let spawnerDist = anchorSpawner
+                    ? Math.hypot(target.x - anchorSpawner.x, target.y - anchorSpawner.y)
+                    : Math.hypot(target.x - u.x, target.y - u.y);
+                candidates.push({ target, type, originDist, spawnerDist });
+            };
+
             for (let drop of droppedItems) {
-                let d = Math.hypot(drop.x - origin.x, drop.y - origin.y);
-                if (d < bestDist) { bestDist = d; bestTarget = drop; bestType = 'drop'; }
+                pushCandidate(drop, 'drop');
             }
             for (let mine of goldMines) {
                 if (mine.gold <= 0) continue;
-                let d = Math.hypot(mine.x - origin.x, mine.y - origin.y);
-                if (d < bestDist) { bestDist = d; bestTarget = mine; bestType = 'mine'; }
+                pushCandidate(mine, 'mine');
             }
             for (let y = 0; y < GRID_H; y++) {
                 for (let x = 0; x < GRID_W; x++) {
@@ -10009,15 +10164,38 @@
                     if (!item || item.type !== 'farm') continue;
                     if (item.owner !== u.owner) continue;
                     if (item.underConstruction || item.hp <= 0) continue;
-                    let d = Math.hypot(item.x - origin.x, item.y - origin.y);
-                    if (d < bestDist) { bestDist = d; bestTarget = item; bestType = 'farm'; }
+                    pushCandidate(item, 'farm');
                 }
             }
-            if (bestTarget) {
-                _collectorAssignTarget(u, bestTarget, bestType, myGx, myGy);
-            } else {
-                u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
+
+            if (candidates.length > 0) {
+                candidates.sort((a, b) => a.originDist - b.originDist);
+                let nearRadius = Math.max(TILE * 4, candidates[0].originDist + TILE * 3);
+                let neighborhood = candidates.filter(c => c.originDist <= nearRadius);
+                let pool = neighborhood.length > 0 ? neighborhood : candidates;
+
+                let best = null;
+                let bestScore = Infinity;
+                for (let c of pool) {
+                    let score = c.spawnerDist + c.originDist * 0.22;
+                    if (c.type === 'drop') score += TILE * 0.5;
+                    if (u.workerTarget && u.workerTarget === c.target) score -= TILE * 0.75;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = c;
+                    }
+                }
+
+                if (best) {
+                    _collectorAssignTarget(u, best.target, best.type, myGx, myGy);
+                    return;
+                }
             }
+
+            if (anchorSpawner) {
+                u._collectorNextSpawner = anchorSpawner;
+            }
+            u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
         }
 
         function _collectorCanWalk(nx, ny) {
@@ -10043,21 +10221,36 @@
             if (!Number.isFinite(dps) || dps <= 0) dps = 5;
             return Math.max(1, Math.round(dps));
         }
-        function getWorkerTransferCooldownTicks() {
-            return Math.max(1, Math.floor(WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+
+        function getWorkerUnitTypeFromWorkerType(workerType) {
+            if (workerType === 'collector') return 'collector';
+            if (workerType === 'salvager') return 'salvager_unit';
+            if (workerType === 'builder') return 'builder_unit';
+            if (workerType === 'healer') return 'healer_unit';
+            if (workerType === 'researcher') return 'researcher_unit';
+            return null;
         }
 
-        function getBuilderTransferCooldownTicks() {
-            return Math.max(1, Math.floor(BUILDER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+        function getWorkerTransferCooldownSeconds(workerType, unit = null) {
+            let unitType = (unit && unit.unitType) ? unit.unitType : getWorkerUnitTypeFromWorkerType(workerType);
+            let owner = (unit && Number.isFinite(unit.owner)) ? unit.owner : localPlayerId;
+            let lvl = unit ? getUnitEffectiveLevel(unit) : 1;
+            let sec = Number.isFinite(lvl) ? getUnitStatForOwner(owner, unitType, lvl, 'transferCooldown') : NaN;
+            if (!Number.isFinite(sec) || sec <= 0) sec = Number((BASE_UNIT_STATS[unitType] || {}).transferCooldown);
+            if (!Number.isFinite(sec) || sec <= 0) sec = 0.01;
+            return Math.max(0.01, sec);
         }
 
-        function getWorkerTypeTransferCooldownTicks(workerType) {
-            if (workerType === 'collector') return Math.max(1, Math.floor(COLLECTOR_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
-            if (workerType === 'salvager') return Math.max(1, Math.floor(SALVAGER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
-            if (workerType === 'builder') return getBuilderTransferCooldownTicks();
-            if (workerType === 'healer') return Math.max(1, Math.floor(HEALER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
-            if (workerType === 'researcher') return Math.max(1, Math.floor(RESEARCHER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
-            return getWorkerTransferCooldownTicks();
+        function getBuilderTransferCooldownTicks(unit = null) {
+            return secondsToTicks(getWorkerTransferCooldownSeconds('builder', unit));
+        }
+
+        function getWorkerTypeTransferCooldownTicks(workerType, unit = null) {
+            if (workerType === 'builder') return getBuilderTransferCooldownTicks(unit);
+            if (workerType === 'collector' || workerType === 'salvager' || workerType === 'healer' || workerType === 'researcher') {
+                return secondsToTicks(getWorkerTransferCooldownSeconds(workerType, unit));
+            }
+            return secondsToTicks(getWorkerTransferCooldownSeconds(workerType, unit));
         }
 
         function getWorkerIdleRetargetTicks() {
@@ -10400,6 +10593,7 @@
         function _isHealerQueueTarget(target, owner) {
             if (!target || target.owner !== owner) return false;
             if (target.hp <= 0 || target.underConstruction) return false;
+            if (!isQueueEnabled(target)) return false;
             if (!Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return false;
             let fallbackType = getSpawnerFallbackUnitType(target);
             let effLvl = getThingEffectiveLevel(target);
@@ -10409,6 +10603,7 @@
 
         function _getHealerQueueTripCost(u, target) {
             if (!u || !target || !Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return 0;
+            if (!isQueueEnabled(target)) return 0;
             let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
             let fallbackType = getSpawnerFallbackUnitType(target);
             let effLvl = getThingEffectiveLevel(target);
@@ -10692,6 +10887,9 @@
             let cacheOnly = ((gameTime + u.id) % WORKER_HEAVY_AI_STRIDE) !== 0;
             let route = _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: cacheOnly });
             if (route) {
+                if (u.workerType === 'collector' && route.spawner) {
+                    u._collectorNextSpawner = route.spawner;
+                }
                 u.path = route.path || [];
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             } else {
@@ -10995,6 +11193,8 @@
         function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             let cardDef = BASE_CARD_TYPES[itemKey];
             if (!cardDef) return false;
+            let placedNewStructure = false;
+            let placedNewWallStructure = false;
 
             let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
             let useDefaultBuild = defaultAutoBuildEnabled;
@@ -11055,10 +11255,10 @@
                     t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
                     t.updateTextCache();
                     towers.push(t);
+                    placedNewStructure = true;
+                    placedNewWallStructure = true;
                 }
                 dirtyGrid = true;
-                recalculateAdjacency();
-                recalculateLaserConnections();
             } else if (itemKey.startsWith('barrack_')) {
                 let unitType = cardDef.unitType || 'norm';
                 let existing = barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
@@ -11075,8 +11275,8 @@
                     barracks.push(b);
                     grid[gy][gx].item = b;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else if (itemKey === 'spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'spawner' && s.owner === playerId);
                 if (existing) {
@@ -11092,8 +11292,8 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else if (itemKey === 'salvager') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'salvager' && s.owner === playerId);
                 if (existing) {
@@ -11109,8 +11309,8 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else if (itemKey === 'builder_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'builder_spawner' && s.owner === playerId);
                 if (existing) {
@@ -11127,8 +11327,8 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else if (itemKey === 'healer_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'healer_spawner' && s.owner === playerId);
                 if (existing) {
@@ -11144,8 +11344,8 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else if (itemKey === 'research') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'research' && s.owner === playerId);
                 if (existing) {
@@ -11161,8 +11361,8 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             } else {
                 // Floor item
                 let cell = grid[gy][gx];
@@ -11174,9 +11374,13 @@
                     cell.item = item;
                     cell.owner = playerId;
                     updateItemTextCache(item);
+                    placedNewStructure = true;
                 }
-                recalculateAdjacency();
             }
+            // Newly placed structures start under construction, so they don't affect adjacency yet.
+            // Avoid expensive full-map adjacency recalculation on every placement.
+            if (placedNewStructure) _bumpPathTopologyVersion();
+            if (placedNewWallStructure) recalculateLaserConnections();
             if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
             return true;
         }
@@ -12992,7 +13196,6 @@
                         let ownBarrackHits = [];
                         for (let b of barracks) {
                             if (b.owner !== localPlayerId || b.hp <= 0 || b.underConstruction) continue;
-                            if (!isQueueEnabled(b)) continue;
                             if (!isTileVisible(b.gx, b.gy)) continue;
                             ownBarrackHits.push({ ref: b, x: b.x, y: b.y, hitRadius: 20 });
                         }
@@ -14219,7 +14422,7 @@
                     }
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
-                    if (b && b.hp > 0 && !b.underConstruction && isQueueEnabled(b)) {
+                    if (b && b.hp > 0 && !b.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (b.spawnQueue.length >= 20) break;
@@ -14229,7 +14432,7 @@
                     }
                 } else if (a.action === 'queueWorker') {
                     let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (s && s.hp > 0 && !s.underConstruction && isQueueEnabled(s)) {
+                    if (s && s.hp > 0 && !s.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (s.spawnQueue.length >= 10) break;
@@ -14249,7 +14452,7 @@
                 } else if (a.action === 'queueResearch') {
                     let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
                     let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
-                    if (r && r.hp > 0 && !r.underConstruction && stat && isQueueEnabled(r)) {
+                    if (r && r.hp > 0 && !r.underConstruction && stat) {
                         let p = ensurePlayerResearchQueueState(playerId);
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -14781,6 +14984,7 @@
                 let builderDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'builderDps');
                 let healerHps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'healerHps');
                 let researcherDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'researcherDps');
+                let transferCooldown = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'transferCooldown');
                 return {
                     hp: Math.max(1, Math.floor(Number(energy) || 1)),
                     atk: Math.max(0, Math.floor(Number(atk) || 0)),
@@ -14791,7 +14995,8 @@
                     gatherPerTrip: Math.max(0, Number(gatherPerTrip) || 0),
                     builderDps: Math.max(0, Number(builderDps) || 0),
                     healerHps: Math.max(0, Number(healerHps) || 0),
-                    researcherDps: Math.max(0, Number(researcherDps) || 0)
+                    researcherDps: Math.max(0, Number(researcherDps) || 0),
+                    transferCooldown: Math.max(0.01, Number(transferCooldown) || Number((BASE_UNIT_STATS[unitType] || {}).transferCooldown) || 0.01)
                 };
             };
 
@@ -14819,6 +15024,9 @@
                         getValue: (thingLevel, researchLevel) => getUnitDpsForMatrix(unitType, thingLevel, researchLevel)
                     });
                 }
+                if (unitType === 'collector' || unitType === 'salvager_unit' || unitType === 'builder_unit' || unitType === 'healer_unit' || unitType === 'researcher_unit') {
+                    addRow('Transfer CD', `${up.transferCooldown.toFixed(2)}s`, { kind: 'unit', key: unitType, statKey: 'transferCooldown' });
+                }
                 addRow('Unit Range', up.range > 0 ? up.range.toFixed(1) : '-', { kind: 'unit', key: unitType, statKey: 'attackRange' });
                 addRow('Unit Vision', up.vision.toFixed(1), { kind: 'unit', key: unitType, statKey: 'visionRange' });
                 addRow('Unit Speed', up.speed.toFixed(1), { kind: 'unit', key: unitType, statKey: 'speed' });
@@ -14839,6 +15047,7 @@
                 else if (workerType === 'researcher_unit') addRow('Research Speed', `${fmt(up.researcherDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'researcherDps' });
                 else if (workerType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'gatherPerTrip' });
                 else addRow('Salvage Yield', `10% x L${level}`);
+                addRow('Transfer CD', `${up.transferCooldown.toFixed(2)}s`, { kind: 'unit', key: workerType, statKey: 'transferCooldown' });
                 addRow(key === 'research' ? 'Researcher Vision' : 'Worker Vision', up.vision.toFixed(1), { kind: 'unit', key: workerType, statKey: 'visionRange' });
                 addRow(key === 'research' ? 'Researcher Speed' : 'Worker Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
                 if (key === 'research') {
@@ -14927,7 +15136,11 @@
                     let multiplier = Number.isFinite(stats.multiplier) ? stats.multiplier : level;
                     addRow('Multiplier', `${multiplier.toFixed(2)}x gather`, { kind: 'building', key, statKey: 'multiplier' });
                 }
-                if (key === 'house') addRow('Pop Cap', `+${fmt(Math.floor(Math.pow(1.6, level)))}`);
+                if (key === 'house') {
+                    let popCap = getBuildingStatForOwner(localPlayerId, key, level, 'popCap');
+                    if (!Number.isFinite(popCap)) popCap = getHousePopCapContribution(localPlayerId, level);
+                    addRow('Pop Cap', `+${fmt(Math.floor(popCap))}`, { kind: 'building', key, statKey: 'popCap' });
+                }
                 if (key === 'research') {
                     let efficiency = getBuildingStatForOwner(localPlayerId, key, level, 'efficiency');
                     if (Number.isFinite(efficiency)) {
@@ -15153,11 +15366,358 @@
             return `${badge}${label}`;
         }
 
-        function infoRow(label, value, effValue) {
-            if (effValue !== undefined && effValue !== value) {
-                return `<div class="info-row"><span class="info-label">${label}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
+        function infoRow(label, value, effValue, matrixOpts = null) {
+            let labelHtml = String(label === undefined || label === null ? '' : label);
+            if (!labelHtml.includes('info-stat-matrix-btn')) {
+                let opts = matrixOpts || deriveInfoPanelMatrixOptsFromLabel(labelHtml);
+                if (opts) labelHtml = withInfoPanelStatMatrixButton(labelHtml, opts);
             }
-            return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
+            if (effValue !== undefined && effValue !== value) {
+                return `<div class="info-row"><span class="info-label">${labelHtml}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
+            }
+            return `<div class="info-row"><span class="info-label">${labelHtml}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
+        }
+
+        function registerInfoPanelStatMatrixDescriptor(label, opts = {}) {
+            let id = nextInfoPanelStatMatrixDescriptorId++;
+            infoPanelStatMatrixDescriptorById[id] = {
+                title: String(opts.title || label || 'Stat'),
+                kind: opts.kind || '',
+                key: opts.key || '',
+                statKey: opts.statKey || '',
+                fixedValue: opts.fixedValue,
+                getValue: (typeof opts.getValue === 'function') ? opts.getValue : null,
+            };
+            return id;
+        }
+
+        function withInfoPanelStatMatrixButton(label, opts = null) {
+            if (!opts) return label;
+            let id = registerInfoPanelStatMatrixDescriptor(label, opts);
+            return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-stat-matrix-btn" data-matrix-id="${id}" title="Open level/research matrix" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">M</button><span>${label}</span></span>`;
+        }
+
+        function runWithInfoPanelStatMatrixContext(ctx, fn) {
+            let prev = activeInfoPanelStatMatrixContext;
+            activeInfoPanelStatMatrixContext = ctx || null;
+            try {
+                return fn();
+            } finally {
+                activeInfoPanelStatMatrixContext = prev;
+            }
+        }
+
+        function getInfoPanelWorkerUnitTypeForSpawnerType(type) {
+            if (type === 'spawner') return 'collector';
+            if (type === 'salvager') return 'salvager_unit';
+            if (type === 'builder_spawner') return 'builder_unit';
+            if (type === 'healer_spawner') return 'healer_unit';
+            if (type === 'research') return 'researcher_unit';
+            return '';
+        }
+
+        function getInfoPanelMatrixContextForEntity(e) {
+            if (!e) return null;
+            if (e.type === 'barrack' && e.unitType) {
+                return { kind: 'building', key: `barrack_${e.unitType}`, unitType: e.unitType };
+            }
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') {
+                return { kind: 'building', key: e.type, unitType: getInfoPanelWorkerUnitTypeForSpawnerType(e.type) };
+            }
+            if (e.type && BASE_CARD_TYPES[e.type]) {
+                return { kind: 'building', key: e.type };
+            }
+            return null;
+        }
+
+        function getInfoPanelMatrixContextForUnit(u) {
+            if (!u) return null;
+            return { kind: 'unit', key: u.unitType || 'norm', unitType: u.unitType || 'norm' };
+        }
+
+        function deriveInfoPanelMatrixOptsFromLabel(label) {
+            let ctx = activeInfoPanelStatMatrixContext;
+            if (!ctx || !ctx.kind || !ctx.key) return null;
+
+            let text = String(label === undefined || label === null ? '' : label);
+            let plain = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+            if (!plain) return null;
+
+            let kind = ctx.kind;
+            let key = ctx.key;
+            let unitType = ctx.unitType || (kind === 'unit' ? key : '');
+            let statKey = '';
+            let customGetValue = null;
+
+            if (plain.startsWith('unit energy')) {
+                kind = 'unit'; key = unitType || key; statKey = 'hp';
+            } else if (plain.startsWith('unit atk') || plain === 'attack') {
+                if (plain.startsWith('unit atk') || kind === 'unit') {
+                    kind = 'unit'; key = unitType || key; statKey = 'atk';
+                } else {
+                    statKey = 'damage';
+                }
+            } else if (plain.startsWith('unit range')) {
+                kind = 'unit'; key = unitType || key; statKey = 'attackRange';
+            } else if (plain.startsWith('unit spd') || plain === 'speed') {
+                kind = 'unit'; key = unitType || key; statKey = 'speed';
+            } else if (plain === 'energy') {
+                statKey = kind === 'unit' ? 'hp' : 'maxHp';
+            } else if (plain === 'range') {
+                statKey = kind === 'unit' ? 'attackRange' : 'visionRange';
+            } else if (plain === 'visibility') {
+                statKey = 'visionRange';
+            } else if (plain === 'damage') {
+                statKey = 'damage';
+            } else if (plain === 'cooldown') {
+                statKey = kind === 'unit' ? 'atkCd' : 'cd';
+            } else if (plain === 'dps') {
+                customGetValue = (thingLevel, researchLevel) => {
+                    let tl = Math.max(1, clampThingLevel(thingLevel));
+                    let rl = Math.max(0, clampResearchLevel(researchLevel));
+                    if (kind === 'unit') {
+                        let atk = getUnitStatFromMap(key, tl, 'atk', rl);
+                        let cd = getUnitStatFromMap(key, tl, 'atkCd', rl);
+                        if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
+                        return formatBigNumber(atk / cd * TICK_RATE, 1);
+                    }
+                    if (key === 'laser') {
+                        let dmg = getBuildingStatFromMap(key, tl, 'damage', rl);
+                        if (!Number.isFinite(dmg)) return '0';
+                        return formatBigNumber(dmg / 60 * TICK_RATE, 1);
+                    }
+                    let dmg = getBuildingStatFromMap(key, tl, 'damage', rl);
+                    let cd = getBuildingStatFromMap(key, tl, 'cd', rl);
+                    if (!Number.isFinite(dmg) || !Number.isFinite(cd) || cd <= 0) return '0';
+                    return formatBigNumber(dmg / cd, 1);
+                };
+            } else if (plain === 'build speed') {
+                kind = 'unit'; key = unitType || key; statKey = 'builderDps';
+            } else if (plain === 'heal speed') {
+                kind = 'unit'; key = unitType || key; statKey = 'healerHps';
+            } else if (plain === 'research speed') {
+                kind = 'unit'; key = unitType || key; statKey = 'researcherDps';
+            } else if (plain === 'gather speed') {
+                kind = 'unit'; key = unitType || key; statKey = 'gatherPerTrip';
+            } else if (plain === 'transfer cd') {
+                kind = 'unit'; key = unitType || key; statKey = 'transferCooldown';
+            } else if (plain === 'burn dps') {
+                statKey = 'burnDps';
+            } else if (plain === 'burn duration') {
+                statKey = 'burnDuration';
+            } else if (plain === 'poison dps') {
+                statKey = 'poisonDps';
+            } else if (plain === 'poison duration') {
+                statKey = 'poisonDuration';
+            } else if (plain === 'freeze dps') {
+                statKey = 'freezeDps';
+            } else if (plain === 'freeze duration') {
+                statKey = 'freezeDuration';
+            } else if (plain === 'wet duration') {
+                statKey = 'wetDuration';
+            } else if (plain === 'slow duration') {
+                statKey = 'sandDuration';
+            } else if (plain === 'watch duration') {
+                statKey = 'watchDuration';
+            } else if (plain === 'multiplier') {
+                statKey = 'multiplier';
+            } else if (plain === 'pop cap') {
+                statKey = 'popCap';
+            } else {
+                return null;
+            }
+
+            if (customGetValue) {
+                return {
+                    title: `${key} / ${plain}`,
+                    getValue: customGetValue
+                };
+            }
+            return {
+                title: `${key} / ${plain}`,
+                kind,
+                key,
+                statKey
+            };
+        }
+
+        function getInfoPanelLevelMatrixEnergyText(obj, thingLevel, researchLevel) {
+            let tl = Math.max(1, clampThingLevel(thingLevel));
+            let rl = Math.max(0, clampResearchLevel(researchLevel));
+
+            let toEnergyText = (v) => {
+                if (!Number.isFinite(v)) return null;
+                return `⚡${formatBigNumber(Math.max(0, Math.round(v)))}`;
+            };
+
+            if (!obj) return `L${tl}`;
+
+            if (obj.unitType && (obj.id !== undefined || obj.commandState !== undefined)) {
+                let hp = getUnitStatFromMap(obj.unitType, tl, 'hp', rl);
+                return toEnergyText(hp) || `L${tl}`;
+            }
+
+            let buildingKey = null;
+            if (obj.type === 'barrack') buildingKey = `barrack_${obj.unitType || 'norm'}`;
+            else if (obj.type) buildingKey = obj.type;
+
+            if (buildingKey) {
+                let hp = getBuildingStatFromMap(buildingKey, tl, 'maxHp', rl);
+                return toEnergyText(hp) || `L${tl}`;
+            }
+
+            return `L${tl}`;
+        }
+
+        function bindInfoPanelInteractionTracking(panel) {
+            if (!panel) return;
+            if (!infoPanelGlobalMouseTrackingBound) {
+                infoPanelGlobalMouseTrackingBound = true;
+                document.addEventListener('mousemove', (ev) => {
+                    uiMouseClientX = ev.clientX;
+                    uiMouseClientY = ev.clientY;
+                }, { passive: true });
+            }
+            if (infoPanelInteractionTrackingBoundByEl.has(panel)) return;
+            infoPanelInteractionTrackingBoundByEl.add(panel);
+
+            let markManualScroll = () => {
+                infoPanelLastManualScrollTsByEl.set(panel, performance.now());
+            };
+            let markManualInteraction = () => {
+                infoPanelManualScrollInteractionUntilByEl.set(panel, performance.now() + 1200);
+            };
+
+            panel.addEventListener('wheel', () => {
+                markManualInteraction();
+                markManualScroll();
+            }, { passive: true });
+            panel.addEventListener('touchstart', markManualInteraction, { passive: true });
+            panel.addEventListener('touchmove', () => {
+                markManualInteraction();
+                markManualScroll();
+            }, { passive: true });
+            panel.addEventListener('pointerdown', (ev) => {
+                if (!ev) return;
+                if (ev.pointerType && ev.pointerType !== 'mouse') {
+                    markManualInteraction();
+                    return;
+                }
+
+                let rect = panel.getBoundingClientRect();
+                let vScrollbar = Math.max(0, panel.offsetWidth - panel.clientWidth);
+                let hScrollbar = Math.max(0, panel.offsetHeight - panel.clientHeight);
+                let onVScrollbar = vScrollbar > 0
+                    && ev.clientX >= (rect.right - vScrollbar - 2)
+                    && ev.clientX <= (rect.right + 2)
+                    && ev.clientY >= rect.top
+                    && ev.clientY <= rect.bottom;
+                let onHScrollbar = hScrollbar > 0
+                    && ev.clientY >= (rect.bottom - hScrollbar - 2)
+                    && ev.clientY <= (rect.bottom + 2)
+                    && ev.clientX >= rect.left
+                    && ev.clientX <= rect.right;
+
+                if (onVScrollbar || onHScrollbar) {
+                    markManualInteraction();
+                }
+            }, { passive: true });
+            panel.addEventListener('scroll', (ev) => {
+                let now = performance.now();
+                let programmaticUntil = infoPanelProgrammaticScrollUntilByEl.get(panel) || 0;
+                if (now <= programmaticUntil) return;
+                let until = infoPanelManualScrollInteractionUntilByEl.get(panel) || 0;
+                if (now <= until) markManualScroll();
+            }, { passive: true });
+        }
+
+        function getInfoPanelAnchorKey(el) {
+            if (!el) return '';
+            let cls = String(el.className || '').trim();
+            let ds = el.dataset || {};
+            let keyParts = [
+                el.tagName || '',
+                cls,
+                ds.type || '',
+                ds.kind || '',
+                ds.key || '',
+                ds.statKey || '',
+                ds.gx || '',
+                ds.gy || '',
+                ds.coords || '',
+                ds.scope || '',
+                ds.thingId || '',
+                ds.unitId || '',
+                ds.matrixId || ''
+            ];
+            let text = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+            keyParts.push(text);
+            return keyParts.join('|');
+        }
+
+        function captureInfoPanelMouseAnchor(panel) {
+            if (!panel) return null;
+            let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
+            if (performance.now() - lastManualTs < 250) return null;
+
+            let rect = panel.getBoundingClientRect();
+            let mx = uiMouseClientX;
+            let my = uiMouseClientY;
+            let mouseInside = Number.isFinite(mx) && Number.isFinite(my)
+                && mx >= rect.left && mx <= rect.right && my >= rect.top && my <= rect.bottom;
+            if (!mouseInside) {
+                mx = rect.left + rect.width / 2;
+                my = rect.top + rect.height / 2;
+            }
+
+            let rawEl = document.elementFromPoint(mx, my);
+            if (!rawEl || !panel.contains(rawEl)) {
+                let list = document.elementsFromPoint(mx, my);
+                rawEl = Array.isArray(list) ? (list.find(el => panel.contains(el)) || null) : null;
+            }
+            if (!rawEl) rawEl = panel.firstElementChild || panel;
+
+            let anchorEl = rawEl.closest('[data-kind],[data-key],[data-stat-key],[data-gx],[data-gy],[data-coords],[data-scope],[data-thing-id],[data-unit-id],[data-matrix-id],button,.info-row,.info-title');
+            if (!anchorEl || !panel.contains(anchorEl)) anchorEl = rawEl;
+
+            let anchorRect = anchorEl.getBoundingClientRect();
+            return {
+                key: getInfoPanelAnchorKey(anchorEl),
+                mouseX: mx,
+                mouseY: my,
+                offsetX: mx - anchorRect.left,
+                offsetY: my - anchorRect.top
+            };
+        }
+
+        function restoreInfoPanelMouseAnchor(panel, anchor) {
+            if (!panel || !anchor || !anchor.key) return;
+            let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
+            if (performance.now() - lastManualTs < 250) return;
+
+            let candidates = panel.querySelectorAll('*');
+            let best = null;
+            let bestScore = Infinity;
+            let desiredTop = anchor.mouseY - anchor.offsetY;
+            let desiredLeft = anchor.mouseX - anchor.offsetX;
+
+            for (let el of candidates) {
+                if (getInfoPanelAnchorKey(el) !== anchor.key) continue;
+                let top = el.getBoundingClientRect().top;
+                let score = Math.abs(top - desiredTop);
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = el;
+                }
+            }
+
+            if (!best) return;
+            let afterRect = best.getBoundingClientRect();
+            let deltaY = afterRect.top - desiredTop;
+            let deltaX = afterRect.left - desiredLeft;
+            infoPanelProgrammaticScrollUntilByEl.set(panel, performance.now() + 80);
+            if (Math.abs(deltaY) > 0.5) panel.scrollTop += deltaY;
+            if (Math.abs(deltaX) > 0.5) panel.scrollLeft += deltaX;
         }
 
         function getSpawnerEnergyProgress(spawner) {
@@ -15235,11 +15795,18 @@
             let potLvl = obj.underConstruction
                 ? Math.max(0, Math.floor(Number(obj.potentialEffectiveLevel || effLvl || actualLvl) || 0))
                 : getThingPotentialLevel(obj, Math.max(1, effLvl || actualLvl));
+            let manualLvl = obj.underConstruction
+                ? actualLvl
+                : stackCountToLevel(getThingManualStacks(obj));
+            potLvl = Math.max(potLvl, manualLvl);
 
             let html = `<span style="color:#888">L${actualLvl}</span>`;
-            if (effLvl !== actualLvl || potLvl !== actualLvl) {
+            if (effLvl !== actualLvl && effLvl > 0) {
                 html += ` <span style="color:#4f4">L${effLvl}</span>`;
-                if (potLvl > effLvl) {
+            }
+            if (potLvl > Math.max(actualLvl, effLvl)) {
+                let arrowFrom = (effLvl !== actualLvl && effLvl > 0) ? effLvl : actualLvl;
+                if (arrowFrom > 0) {
                     html += `<span style="color:#aaa">-></span><span style="color:#f44">L${potLvl}</span>`;
                 }
             }
@@ -15247,7 +15814,12 @@
         }
 
         function infoRowLevel(label, obj) {
-            return `<div class="info-row"><span class="info-label">${label}</span><span class="info-value" style="text-align:right" class="level-display">${getLevelHtml(obj)}</span></div>`;
+            let valueHtml = getLevelHtml(obj);
+            let matrixLabel = withInfoPanelStatMatrixButton(label, {
+                title: `${obj && (obj.type || obj.unitType || 'Thing')} / Level`,
+                getValue: (thingLevel, researchLevel) => getInfoPanelLevelMatrixEnergyText(obj, thingLevel, researchLevel)
+            });
+            return `<div class="info-row"><span class="info-label">${matrixLabel}</span><span class="info-value" style="text-align:right" class="level-display">${valueHtml}</span></div>`;
         }
 
         function infoHeader(name, obj, opts = null) {
@@ -15423,9 +15995,13 @@
         function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, manualStacks = baseStacks) {
             let baseText = getStackProgressText(baseStacks, manualStacks);
             let hasEff = Number.isFinite(effStacks) && Number.isFinite(effLevel);
-            if (!hasEff) return infoRow('Stacks', baseText);
+            let matrixOpts = {
+                title: 'Stacks',
+                getValue: (thingLevel) => `x${getRequiredStacksForLevel(Math.max(1, Math.floor(Number(thingLevel) || 1)))}`
+            };
+            if (!hasEff) return infoRow('Stacks', baseText, undefined, matrixOpts);
             let effText = getStackProgressText(effStacks, manualStacks);
-            return infoRow('Stacks', baseText, effText !== baseText ? effText : undefined);
+            return infoRow('Stacks', baseText, effText !== baseText ? effText : undefined, matrixOpts);
         }
 
         function renderBarrackInfo(e) {
@@ -15455,7 +16031,7 @@
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = !e.underConstruction && isQueueEnabled(e);
+                let canQueue = !e.underConstruction;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -15510,7 +16086,7 @@
                 let hasUnderConstruction = group.some(b => b.underConstruction);
                 let allBuildEnabled = group.every(b => isBuildEnabled(b));
                 let anyBuildEnabled = group.some(b => isBuildEnabled(b));
-                let queueReady = readyGroup.filter(b => isQueueEnabled(b));
+                let queueReady = readyGroup;
                 let queueCoordStr = queueReady.map(b => `${b.gx},${b.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
@@ -15705,7 +16281,7 @@
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = !e.underConstruction && isQueueEnabled(e);
+                let canQueue = !e.underConstruction;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -15781,6 +16357,13 @@
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
                 html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
             }
+            if (e.type === 'house') {
+                let basePopCap = getBuildingStatForOwner(e.owner, 'house', baseLevel, 'popCap');
+                let effPopCap = getBuildingStatForOwner(e.owner, 'house', effLevel, 'popCap');
+                if (!Number.isFinite(basePopCap)) basePopCap = getHousePopCapContribution(e.owner, baseLevel);
+                if (!Number.isFinite(effPopCap)) effPopCap = getHousePopCapContribution(e.owner, effLevel);
+                html += infoRow('Pop Cap', `+${formatBigNumber(Math.floor(basePopCap))}`, Math.floor(basePopCap) !== Math.floor(effPopCap) ? `+${formatBigNumber(Math.floor(effPopCap))}` : undefined);
+            }
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
             let fgx = e.gx !== undefined ? e.gx : e._gx, fgy = e.gy !== undefined ? e.gy : e._gy;
@@ -15832,34 +16415,57 @@
             let baseVisionRange = Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
             let effVisionRange = Math.max(0, Number(u.visionRange) || 0);
 
-            html += infoRow('Energy', formatInfoFraction(baseHpNow, baseMaxHp), formatInfoFraction(Math.floor(u.hp), u.maxHp));
+            html += infoRow(withInfoPanelStatMatrixButton('Energy', { title: `${u.unitType} / Energy`, kind: 'unit', key: u.unitType, statKey: 'hp' }), formatInfoFraction(baseHpNow, baseMaxHp), formatInfoFraction(Math.floor(u.hp), u.maxHp));
             html += infoRow('Level', `L${lvl}`, effLvl !== lvl ? `L${effLvl}` : undefined);
             html += infoRowStacks(stacks, lvl, effStacks, effLvl, stacks);
-            html += infoRow('Range', formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
-            html += infoRow('Visibility', formatRangeStatTiles(baseVisionRange), Math.abs(baseVisionRange - effVisionRange) > 0.001 ? formatRangeStatTiles(effVisionRange) : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Vision`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatRangeStatTiles(baseVisionRange), Math.abs(baseVisionRange - effVisionRange) > 0.001 ? formatRangeStatTiles(effVisionRange) : undefined);
             if (u.workerType === 'builder') {
                 let baseBuild = Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
                 let effBuild = Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
-                html += infoRow('Build Speed', `${formatBigNumber(baseBuild, 1)}/trip`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/trip` : undefined);
+                let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
+                let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
+                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u.unitType} / Build Speed`, kind: 'unit', key: u.unitType, statKey: 'builderDps' }), `${formatBigNumber(baseBuild, 1)}/trip`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/trip` : undefined);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
             } else if (u.workerType === 'healer') {
                 let baseHeal = Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0;
                 let effHeal = Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0;
-                html += infoRow('Heal Speed', `${formatBigNumber(baseHeal, 1)}/trip`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/trip` : undefined);
+                let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
+                let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
+                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u.unitType} / Heal Speed`, kind: 'unit', key: u.unitType, statKey: 'healerHps' }), `${formatBigNumber(baseHeal, 1)}/trip`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/trip` : undefined);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
             } else if (u.workerType === 'researcher') {
                 let baseResearch = Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
                 let effResearch = Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
-                html += infoRow('Research Speed', `${formatBigNumber(baseResearch, 1)}/trip`, baseResearch !== effResearch ? `${formatBigNumber(effResearch, 1)}/trip` : undefined);
+                let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
+                let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
+                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u.unitType} / Research Speed`, kind: 'unit', key: u.unitType, statKey: 'researcherDps' }), `${formatBigNumber(baseResearch, 1)}/trip`, baseResearch !== effResearch ? `${formatBigNumber(effResearch, 1)}/trip` : undefined);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
             } else if (u.workerType === 'collector') {
                 let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
                 let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
-                html += infoRow('Gather Speed', `${formatBigNumber(baseGather, 1)}/trip`, baseGather !== effGather ? `${formatBigNumber(effGather, 1)}/trip` : undefined);
+                let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
+                let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
+                html += infoRow(withInfoPanelStatMatrixButton('Gather Speed', { title: `${u.unitType} / Gather Speed`, kind: 'unit', key: u.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(baseGather, 1)}/trip`, baseGather !== effGather ? `${formatBigNumber(effGather, 1)}/trip` : undefined);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
             } else if (u.workerType === 'salvager') {
+                let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
+                let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
                 html += infoRow('Salvage Yield', `10% x L${lvl}`, effLvl !== lvl ? `10% x L${effLvl}` : undefined);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
             } else {
-                html += infoRow('Attack', baseAtk, baseAtk !== effAtk ? effAtk : undefined);
-                html += infoRow('DPS', baseDps, baseDps !== effDps ? effDps : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u.unitType} / Attack`, kind: 'unit', key: u.unitType, statKey: 'atk' }), baseAtk, baseAtk !== effAtk ? effAtk : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('DPS', {
+                    title: `${u.unitType} / DPS`,
+                    getValue: (thingLevel, researchLevel) => {
+                        let atk = getUnitStatFromMap(u.unitType, thingLevel, 'atk', researchLevel);
+                        let cd = getUnitStatFromMap(u.unitType, thingLevel, 'atkCd', researchLevel);
+                        if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
+                        return formatBigNumber(atk / cd * TICK_RATE, 1);
+                    }
+                }), baseDps, baseDps !== effDps ? effDps : undefined);
             }
-            html += infoRow('Speed', `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, Math.abs(baseSpd - effSpd) > 0.001 ? `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, Math.abs(baseSpd - effSpd) > 0.001 ? `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}` : undefined);
             html += infoRow('State', ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][u.commandState]);
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -15899,6 +16505,7 @@
             let totalHealSpeed = 0, totalEffHealSpeed = 0;
             let totalCollectorPerTrip = 0, totalEffCollectorPerTrip = 0;
             let totalSalvagerLevel = 0, totalEffSalvagerLevel = 0;
+            let totalTransferCd = 0, totalEffTransferCd = 0;
             let totalBaseAttack = 0, totalEffAttack = 0;
             let totalBaseDps = 0, totalEffDps = 0;
             let totalBaseSpeed = 0, totalEffSpeed = 0;
@@ -15949,18 +16556,28 @@
                 if (u.workerType === 'builder') {
                     totalBuildSpeed += (Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0);
                     totalEffBuildSpeed += (Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0);
+                    totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+                    totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
                 } else if (u.workerType === 'healer') {
                     totalHealSpeed += (Number(u.baseLevelHealerHps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerHps') || 0);
                     totalEffHealSpeed += (Number(u.healerHps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerHps') || 0);
+                    totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+                    totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
                 } else if (u.workerType === 'researcher') {
                     totalBuildSpeed += (Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0);
                     totalEffBuildSpeed += (Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
+                    totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+                    totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
                 } else if (u.workerType === 'collector') {
                     totalCollectorPerTrip += (Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
                     totalEffCollectorPerTrip += (Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
+                    totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+                    totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
                 } else if (u.workerType === 'salvager') {
                     totalSalvagerLevel += lvl;
                     totalEffSalvagerLevel += effLvl;
+                    totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+                    totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
                 }
             }
 
@@ -15980,25 +16597,38 @@
             let avgEffRange = totalEffRange / Math.max(1, group.length);
             let avgBaseVision = totalBaseVision / Math.max(1, group.length);
             let avgEffVision = totalEffVision / Math.max(1, group.length);
-            html += infoRow('Range', `${formatRangeStatTiles(avgBaseRange)} avg`, Math.abs(avgBaseRange - avgEffRange) > 0.001 ? `${formatRangeStatTiles(avgEffRange)} avg` : undefined);
-            html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVision)} avg`, Math.abs(avgBaseVision - avgEffVision) > 0.001 ? `${formatRangeStatTiles(avgEffVision)} avg` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, Math.abs(avgBaseRange - avgEffRange) > 0.001 ? `${formatRangeStatTiles(avgEffRange)} avg` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Vision`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, Math.abs(avgBaseVision - avgEffVision) > 0.001 ? `${formatRangeStatTiles(avgEffVision)} avg` : undefined);
             if (u0.workerType === 'builder') {
-                html += infoRow('Build Speed', `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u0.unitType} / Build Speed`, kind: 'unit', key: u0.unitType, statKey: 'builderDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
             } else if (u0.workerType === 'healer') {
-                html += infoRow('Heal Speed', `${formatBigNumber(totalHealSpeed, 1)}/trip`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u0.unitType} / Heal Speed`, kind: 'unit', key: u0.unitType, statKey: 'healerHps' }), `${formatBigNumber(totalHealSpeed, 1)}/trip`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
             } else if (u0.workerType === 'researcher') {
-                html += infoRow('Research Speed', `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u0.unitType} / Research Speed`, kind: 'unit', key: u0.unitType, statKey: 'researcherDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
             } else if (u0.workerType === 'collector') {
-                html += infoRow('Gather Speed', `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Gather Speed', { title: `${u0.unitType} / Gather Speed`, kind: 'unit', key: u0.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
             } else if (u0.workerType === 'salvager') {
                 html += infoRow('Salvage Yield', `10% x SumL${totalSalvagerLevel}`, totalSalvagerLevel !== totalEffSalvagerLevel ? `10% x SumL${totalEffSalvagerLevel}` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
             } else {
-                html += infoRow('Attack', formatBigNumber(totalBaseAttack, 1), totalBaseAttack !== totalEffAttack ? formatBigNumber(totalEffAttack, 1) : undefined);
-                html += infoRow('DPS', totalBaseDps.toFixed(1), Math.abs(totalBaseDps - totalEffDps) > 0.01 ? totalEffDps.toFixed(1) : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u0.unitType} / Attack`, kind: 'unit', key: u0.unitType, statKey: 'atk' }), formatBigNumber(totalBaseAttack, 1), totalBaseAttack !== totalEffAttack ? formatBigNumber(totalEffAttack, 1) : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('DPS', {
+                    title: `${u0.unitType} / DPS`,
+                    getValue: (thingLevel, researchLevel) => {
+                        let atk = getUnitStatFromMap(u0.unitType, thingLevel, 'atk', researchLevel);
+                        let cd = getUnitStatFromMap(u0.unitType, thingLevel, 'atkCd', researchLevel);
+                        if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
+                        return formatBigNumber(atk / cd * TICK_RATE, 1);
+                    }
+                }), totalBaseDps.toFixed(1), Math.abs(totalBaseDps - totalEffDps) > 0.01 ? totalEffDps.toFixed(1) : undefined);
             }
             let avgBaseSpeed = totalBaseSpeed / Math.max(1, group.length);
             let avgEffSpeed = totalEffSpeed / Math.max(1, group.length);
-            html += infoRow('Speed', `${avgBaseSpeed.toFixed(1)} avg`, Math.abs(avgBaseSpeed - avgEffSpeed) > 0.001 ? `${avgEffSpeed.toFixed(1)} avg` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u0.unitType} / Speed`, kind: 'unit', key: u0.unitType, statKey: 'speed' }), `${avgBaseSpeed.toFixed(1)} avg`, Math.abs(avgBaseSpeed - avgEffSpeed) > 0.001 ? `${avgEffSpeed.toFixed(1)} avg` : undefined);
             if (isEffectiveMixed) html += infoRow('Levels (Eff)', `Mixed (L${minEffLevel}-L${maxEffLevel})`);
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -16024,22 +16654,24 @@
 
         function renderEntityBlock(e) {
             if (e._isGoldMine) return renderGoldMineInfo(e);
-            if (e.type === 'barrack' && e.unitType) return renderBarrackInfo(e);
-            if (e instanceof Tower) return renderTowerInfo(e);
-            if (e.type === 'research') return renderResearchInfo(e);
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerInfo(e);
-            if (e.type && BASE_CARD_TYPES[e.type]) return renderFloorItemInfo(e);
+            let ctx = getInfoPanelMatrixContextForEntity(e);
+            if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackInfo(e));
+            if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerInfo(e));
+            if (e.type === 'research') return runWithInfoPanelStatMatrixContext(ctx, () => renderResearchInfo(e));
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return runWithInfoPanelStatMatrixContext(ctx, () => renderSpawnerInfo(e));
+            if (e.type && BASE_CARD_TYPES[e.type]) return runWithInfoPanelStatMatrixContext(ctx, () => renderFloorItemInfo(e));
             return '';
         }
 
         function renderEntityGroupBlock(group) {
             let e = group[0];
-            if (e.type === 'barrack' && e.unitType) return renderBarrackGroupInfo(group);
-            if (e instanceof Tower) return renderTowerGroupInfo(group);
+            let ctx = getInfoPanelMatrixContextForEntity(e);
+            if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackGroupInfo(group));
+            if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerGroupInfo(group));
             if (e._isGoldMine) return renderGoldMineGroupInfo(group);
-            if (e.type === 'research') return renderResearchGroupInfo(group);
-            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return renderSpawnerGroupInfo(group);
-            if (e.type && BASE_CARD_TYPES[e.type]) return renderFloorItemGroupInfo(group);
+            if (e.type === 'research') return runWithInfoPanelStatMatrixContext(ctx, () => renderResearchGroupInfo(group));
+            if (e.type === 'spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return runWithInfoPanelStatMatrixContext(ctx, () => renderSpawnerGroupInfo(group));
+            if (e.type && BASE_CARD_TYPES[e.type]) return runWithInfoPanelStatMatrixContext(ctx, () => renderFloorItemGroupInfo(group));
             return '';
         }
 
@@ -16083,7 +16715,7 @@
                 let hasUnderConstruction = group.some(s => s.underConstruction);
                 let allBuildEnabled = group.every(s => isBuildEnabled(s));
                 let anyBuildEnabled = group.some(s => isBuildEnabled(s));
-                let queueReady = readyGroup.filter(s => isQueueEnabled(s));
+                let queueReady = readyGroup;
                 let queueCoordStr = queueReady.map(s => `${s.gx},${s.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
@@ -16313,17 +16945,22 @@
                 let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
                 let canAfford = !preview.atMax;
+                let selectedThingLevel = getResearchPreviewThingLevel();
+                let baseValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, 0, selectedThingLevel);
+                let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(preview.toValue))
+                    ? (preview.toValue / baseValue)
+                    : NaN;
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
                 let rowCursor = 'grab';
 
                 html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-                html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
+                html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
+                html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -16367,17 +17004,22 @@
                 let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
                 let statLabel = stat ? stat.label : (t.statKey || 'stat');
                 let canAfford = !preview.atMax;
+                let selectedThingLevel = getResearchPreviewThingLevel();
+                let baseValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, 0, selectedThingLevel);
+                let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(preview.toValue))
+                    ? (preview.toValue / baseValue)
+                    : NaN;
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
                 let rowCursor = 'grab';
 
                 html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-                html += `<span style="color:#bbb">${thingLabel} / ${statLabel}</span>`;
-                html += `<span class="info-research-level-preview-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(t.statKey, preview.fromValue)}->${formatResearchStatValue(t.statKey, preview.toValue)}</span>`;
+                html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
+                html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)}<span style="color:#8af">/${preview.atMax ? '-' : ('W' + formatBigNumber(preview.work, 0))}</span> <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -16435,7 +17077,6 @@
                 let globalQueuedDepth = getResearchQueuedDepthForPlayer(owner, selectedThing.kind, selectedThing.key, stat.statKey);
                 let projectedLevel = currentLevel + globalQueuedDepth;
                 let nextCost = getResearchCost(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
-                let nextWork = getResearchWork(selectedThing.kind, selectedThing.key, stat.statKey, projectedLevel);
                 let atMax = projectedLevel >= MAX_RESEARCH_LEVEL;
                 let canAfford = !atMax;
                 let selectedThingLevel = getResearchPreviewThingLevel();
@@ -16443,20 +17084,25 @@
                 let displayToLevel = Math.min(MAX_RESEARCH_LEVEL, projectedLevel);
                 let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayFromLevel, selectedThingLevel);
                 let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
+                let baseValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, 0, selectedThingLevel);
                 if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
                 if (!atMax && displayToLevel <= displayFromLevel) {
                     displayToLevel = Math.min(MAX_RESEARCH_LEVEL, displayFromLevel + 1);
                     let nextPreview = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
                     if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
                 }
+                let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(projectedValue))
+                    ? (projectedValue / baseValue)
+                    : NaN;
 
                 html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-                html += `<span style="color:#bbb">${stat.label}</span><span class="info-research-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="color:#8fc;background:#000;cursor:pointer;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
+                html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${stat.label}</span></span>`;
+                html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
                 html += `<span style="color:#9cf">Q:${queuedDepth}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}<span style="color:#8af">/${atMax ? '-' : ('W' + formatBigNumber(nextWork, 0))}</span> <span style="color:#9cf">R${displayToLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+                html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)} <span style="color:#9cf">R${displayToLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
                 if (scope.startsWith('single:')) {
                     html += `<div style="display:flex;align-items:center;gap:4px">`;
                     html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
@@ -16500,7 +17146,7 @@
                 let queueCount = researcherQueue.length;
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = Math.max(1, Math.floor(Number.isFinite(researcherEnergy) ? researcherEnergy : 1)) * purchaseCount;
-                let canQueue = !e.underConstruction && isQueueEnabled(e);
+                let canQueue = !e.underConstruction;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -16579,7 +17225,7 @@
                     workerQueueCount += r.spawnQueue.length;
                 }
                 let readyGroup = group.filter(r => !r.underConstruction);
-                let queueReady = readyGroup.filter(r => isQueueEnabled(r));
+                let queueReady = readyGroup;
                 let workerCoordStr = queueReady.map(r => `${r.gx},${r.gy}`).join(';');
                 let queueCostSource = group.find(r => !r.underConstruction) || group[0];
                 let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
@@ -16659,6 +17305,16 @@
                     let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
                     let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
                     openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
+                    return;
+                }
+
+                if (btn.classList.contains('info-research-stat-matrix-btn')) {
+                    let kind = btn.dataset.kind;
+                    let key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+                    let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+                    openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel);
                     return;
                 }
 
@@ -16789,6 +17445,21 @@
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
                 html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
             }
+            if (e.type === 'house') {
+                let totalBasePopCap = 0;
+                let totalEffPopCap = 0;
+                for (let h of group) {
+                    let hBaseLevel = stackCountToLevel(h.stacks || 1);
+                    let hEffLevel = getThingEffectiveLevel(h, hBaseLevel);
+                    let hBasePop = getBuildingStatForOwner(h.owner, 'house', hBaseLevel, 'popCap');
+                    let hEffPop = getBuildingStatForOwner(h.owner, 'house', hEffLevel, 'popCap');
+                    if (!Number.isFinite(hBasePop)) hBasePop = getHousePopCapContribution(h.owner, hBaseLevel);
+                    if (!Number.isFinite(hEffPop)) hEffPop = getHousePopCapContribution(h.owner, hEffLevel);
+                    totalBasePopCap += Math.max(1, Math.floor(hBasePop));
+                    totalEffPopCap += Math.max(1, Math.floor(hEffPop));
+                }
+                html += infoRow('Pop Cap', `+${formatBigNumber(totalBasePopCap)}`, totalBasePopCap !== totalEffPopCap ? `+${formatBigNumber(totalEffPopCap)}` : undefined);
+            }
             html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
             if (e._gx !== undefined || e.gx !== undefined) {
                 let anyMarked = group.some(f => f.markedForSalvage);
@@ -16846,6 +17517,11 @@
                 return;
             }
             panel.style.display = 'block';
+            bindInfoPanelInteractionTracking(panel);
+
+            infoPanelStatMatrixDescriptorById = {};
+            nextInfoPanelStatMatrixDescriptorId = 1;
+            let panelMouseAnchor = captureInfoPanelMouseAnchor(panel);
 
             let html = '';
             // --- GROUP ENTITIES by key ---
@@ -16932,9 +17608,9 @@
                     }
                     html += infoHeaderUnit(prefix + label, u0, { mixedLevel: mixedUnitLevels || mixedEffectiveLevels, leftButtonHtml: subgroupPopupBtnHtml });
                     if (items.length === 1) {
-                        html += renderUnitInfo(items[0]);
+                        html += runWithInfoPanelStatMatrixContext(getInfoPanelMatrixContextForUnit(items[0]), () => renderUnitInfo(items[0]));
                     } else {
-                        html += renderUnitGroupInfo(items);
+                        html += runWithInfoPanelStatMatrixContext(getInfoPanelMatrixContextForUnit(items[0]), () => renderUnitGroupInfo(items));
                     }
                 } else {
                     let e0 = items[0];
@@ -17111,6 +17787,28 @@
                     openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
                 });
             });
+
+            panel.querySelectorAll('.info-research-stat-matrix-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let kind = btn.dataset.kind;
+                    let key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+                    let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+                    openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel);
+                });
+            });
+
+            panel.querySelectorAll('.info-stat-matrix-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let matrixId = Number.parseInt(btn.dataset.matrixId || '', 10);
+                    if (!Number.isFinite(matrixId)) return;
+                    researchStatMatrixPopupPayload = { infoPanelMatrixId: matrixId };
+                    setResearchStatMatrixPopupOpen(true);
+                });
+            });
+
+            restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
 
             // Drag/drop reorder for research queue (includes active-task swapping at top)
             panel.querySelectorAll('.info-research-queue-item').forEach(item => {
@@ -17795,6 +18493,7 @@
                 RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(data.cfg.researchWorkBase) || 110));
                 RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(data.cfg.researchBonusExpUnits) || 2.0);
                 RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(data.cfg.researchBonusExpOther) || 1.25);
+                RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(data.cfg.researchBonusExpOtherHousePopCap) || 2.0);
                 MAX_THING_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxThingLevel) || 20));
                 MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxResearchLevel) || 10));
                 startingResourcesConfig = normalizeStartingResourcesConfig(data.cfg.startingResources || makeDefaultStartingResourcesConfig());
@@ -18675,6 +19374,7 @@
                 researchWorkBase: RESEARCH_WORK_BASE,
                 researchBonusExpUnits: RESEARCH_BONUS_EXP_UNITS,
                 researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
+                researchBonusExpOtherHousePopCap: RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
                 maxThingLevel: MAX_THING_LEVEL,
                 maxResearchLevel: MAX_RESEARCH_LEVEL,
                 startingResources: cloneStartingResourcesConfig(),
@@ -18753,8 +19453,6 @@
             GOLD_MINE_COUNT = parseInt(document.getElementById('cfg-gold-count').value) || 18;
             GOLD_MINE_MIN = parseInt(document.getElementById('cfg-gold-min').value) || 500;
             GOLD_MINE_MAX = parseInt(document.getElementById('cfg-gold-max').value) || 1500;
-            let areaPct = parseInt(document.getElementById('cfg-gold-area').value) || 85;
-            GOLD_MINE_AREA = Math.floor(size * areaPct / 100);
             fullVisibility = document.getElementById('cfg-full-vis').checked;
             gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
             CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
@@ -18765,11 +19463,6 @@
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
             applyTimingConfig(menuTickRate, menuPipelineDelay);
 
-            RESEARCH_COST_EXP = Math.max(1, Number(document.getElementById('cfg-research-cost-exp').value) || 1.85);
-            RESEARCH_WORK_EXP = Math.max(1, Number(document.getElementById('cfg-research-work-exp').value) || 1.7);
-            RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(document.getElementById('cfg-research-work-base').value) || 110));
-            RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(document.getElementById('cfg-research-bonus-exp-units').value) || 2.0);
-            RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(document.getElementById('cfg-research-bonus-exp-other').value) || 1.25);
             MAX_THING_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-thing-level').value) || 20));
             MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-research-level').value) || 10));
             startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
@@ -19045,8 +19738,9 @@
                 let researchSpawner = spawnStartingBuilding(pid, pos, 'research', 1);
                 if (researchSpawner) teamResearchSpawners[pid] = researchSpawner;
 
-                spawnStartingBuilding(pid, pos, 'house', 4);
-                spawnStartingBuilding(pid, pos, 'house', 4);
+                spawnStartingBuilding(pid, pos, 'house', 6);
+                spawnStartingBuilding(pid, pos, 'house', 6);
+                // spawnStartingBuilding(pid, pos, 'house', 4);
             }
 
             recomputePlayerPopCaps();
