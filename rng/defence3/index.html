@@ -247,6 +247,7 @@
 
         #help-popup,
         #research-popup,
+        #starting-resources-popup,
         #statsmap-popup,
         #research-matrix-popup {
             position: fixed;
@@ -260,6 +261,7 @@
 
         #help-popup.hidden,
         #research-popup.hidden,
+        #starting-resources-popup.hidden,
         #statsmap-popup.hidden,
         #research-matrix-popup.hidden {
             display: none;
@@ -267,6 +269,7 @@
 
         #help-popup-card,
         #research-popup-card,
+        #starting-resources-popup-card,
         #statsmap-popup-card,
         #research-matrix-popup-card {
             width: min(560px, calc(100vw - 28px));
@@ -289,6 +292,104 @@
 
         #research-popup-card {
             width: min(680px, calc(100vw - 28px));
+        }
+
+        #starting-resources-popup-card {
+            width: min(680px, calc(100vw - 28px));
+        }
+
+        .startres-wrap {
+            display: grid;
+            grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+            gap: 10px;
+        }
+
+        .startres-thing-list {
+            border: 1px solid #2f2f2f;
+            border-radius: 6px;
+            background: #101010;
+            max-height: 62vh;
+            overflow: auto;
+            padding: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .startres-thing-btn {
+            width: 100%;
+            text-align: left;
+            border: 1px solid #3a3a3a;
+            background: #1a1a1a;
+            color: #d7e9ff;
+            border-radius: 4px;
+            padding: 6px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .startres-thing-btn.active {
+            border-color: #5ba4e6;
+            background: #1c2936;
+            color: #e6f3ff;
+        }
+
+        .startres-editor {
+            border: 1px solid #2f2f2f;
+            border-radius: 6px;
+            background: #101010;
+            padding: 8px;
+            max-height: 62vh;
+            overflow: auto;
+        }
+
+        .startres-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 4px 0;
+            border-bottom: 1px solid #1e1e1e;
+        }
+
+        .startres-row:last-child {
+            border-bottom: 0;
+        }
+
+        .startres-row input[type="number"] {
+            width: 84px;
+            background: #1d1d1d;
+            color: #fff;
+            border: 1px solid #3d3d3d;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-family: inherit;
+            font-size: 12px;
+        }
+
+        .startres-subtitle {
+            margin: 8px 0 6px;
+            color: #9ec6ff;
+            font-size: 12px;
+            letter-spacing: 0.2px;
+        }
+
+        .startres-controls {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+
+        @media (max-width: 900px) {
+            .startres-wrap {
+                grid-template-columns: 1fr;
+            }
+
+            .startres-thing-list,
+            .startres-editor {
+                max-height: none;
+            }
         }
 
         #statsmap-json,
@@ -679,7 +780,8 @@
         }
 
         #info-panel .info-title,
-        #research-popup-info-panel .info-title {
+        #research-popup-info-panel .info-title,
+        #starting-resources-content .info-title {
             color: #4af;
             font-size: 13px;
             font-weight: bold;
@@ -687,34 +789,39 @@
         }
 
         #info-panel .info-row,
-        #research-popup-info-panel .info-row {
+        #research-popup-info-panel .info-row,
+        #starting-resources-content .info-row {
             display: flex;
             padding: 1px 0;
         }
 
         #info-panel .info-label,
-        #research-popup-info-panel .info-label {
+        #research-popup-info-panel .info-label,
+        #starting-resources-content .info-label {
             color: #888;
             flex: 1;
             text-align: left;
         }
 
         #info-panel .info-base,
-        #research-popup-info-panel .info-base {
+        #research-popup-info-panel .info-base,
+        #starting-resources-content .info-base {
             color: #fd0;
             flex: 0 0 50px;
             text-align: center;
         }
 
         #info-panel .info-eff,
-        #research-popup-info-panel .info-eff {
+        #research-popup-info-panel .info-eff,
+        #starting-resources-content .info-eff {
             color: #4f4;
             flex: 0 0 50px;
             text-align: center;
         }
 
         #info-panel .info-value,
-        #research-popup-info-panel .info-value {
+        #research-popup-info-panel .info-value,
+        #starting-resources-content .info-value {
             color: #fff;
             flex: 0 0 100px;
             text-align: center;
@@ -1171,6 +1278,10 @@
                         <label>Max Research Level</label>
                         <input id="cfg-max-research-level" type="number" min="1" max="100" step="1" value="10" style="width:72px">
                     </div>
+                    <div class="lobby-setting-row compact">
+                        <label>Starting Resources</label>
+                        <button id="btn-open-starting-resources" type="button" style="font-size:11px;padding:3px 8px;">Open</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1178,6 +1289,9 @@
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
             <button onclick="hostOnlineGame()" id="btn-online" style="font-size:16px;padding:10px 24px">Play
                 Online</button>
+            <button id="btn-export-settings" type="button" style="font-size:14px;padding:10px 16px">Export Settings</button>
+            <button id="btn-import-settings" type="button" style="font-size:14px;padding:10px 16px">Import Settings</button>
+            <input id="input-import-settings" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0;pointer-events:none;">
         </div>
         <div id="lobby-waiting" style="display:none;text-align:left;margin-top:12px;border:1px solid #333;background:#0d0d0d;padding:10px;border-radius:6px;min-width:420px">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1205,9 +1319,9 @@
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px;">&#x26F6;
                 FS</button>
             <button id="btn-default-build"
-                style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Build: ON</button>
+                style="background:transparent; border:1px solid #6f6; color:#9f9; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">\uD83D\uDD28 New: ON</button>
             <button id="btn-default-auto-upgrade"
-                style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Auto Upgrade: ON</button>
+                style="background:transparent; border:1px solid #4af; color:#8cf; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Lvl+ New: ON</button>
             <button id="btn-help"
                 style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">&#9881;</button>
             <span style="display:none; align-items:center;">
@@ -1227,6 +1341,18 @@
                     style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
             </div>
             <div id="research-popup-content"></div>
+        </div>
+    </div>
+
+    <div id="starting-resources-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="starting-resources-title">
+        <div id="starting-resources-popup-card">
+            <div class="help-title-row">
+                <h3 id="starting-resources-title" style="color:#8dc6ff; font-size:18px; margin:0">Starting Resources</h3>
+                <button id="btn-starting-resources-close"
+                    style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+            </div>
+            <div class="help-mode">Set starting research levels and per-level spawn counts for each thing.</div>
+            <div id="starting-resources-content"></div>
         </div>
     </div>
 
@@ -1288,6 +1414,14 @@
                             <td>Select units and buildings / box select</td>
                         </tr>
                         <tr>
+                            <td><span class="kbd">Shift</span> + <span class="kbd">Left Click</span></td>
+                            <td>Add/remove clicked unit or building from current selection</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Ctrl</span> / <span class="kbd">Cmd</span> + <span class="kbd">Left Click</span></td>
+                            <td>Toggle selection for all visible units/buildings of the clicked type (select all of type)</td>
+                        </tr>
+                        <tr>
                             <td><span class="kbd">Right Click</span></td>
                             <td>Move / attack / assign workers / set rally (resets selected groups to this single point)</td>
                         </tr>
@@ -1310,6 +1444,18 @@
                         <tr>
                             <td><span class="kbd">F</span></td>
                             <td>Cycle level visibility (Everything -> Buildings -> Off)</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Mouse Wheel</span></td>
+                            <td>Zoom camera in/out around cursor position</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Minimap Left Click</span></td>
+                            <td>Center camera on clicked minimap location</td>
+                        </tr>
+                        <tr>
+                            <td><span class="kbd">Minimap Right Click</span></td>
+                            <td>Issue move/rally/attack-move commands from minimap (supports multi-point with <span class="kbd">Shift</span>/<span class="kbd">Ctrl</span>)</td>
                         </tr>
                         <tr>
                             <td><span class="kbd">*</span> / <span class="kbd">/</span> / <span class="kbd">E</span> / <span class="kbd">Q</span></td>
@@ -1420,6 +1566,10 @@
                 <div class="help-subtitle">Leveling & stacks</div>
                 <ul class="help-list">
                     <li>Most buildings/items scale with <strong>stacks</strong>. Displayed level is based on stacks (roughly $L=\lfloor\log_2(\text{stacks})\rfloor+1$).</li>
+                    <li>New manual stack adds are now <strong>queued</strong>: menu/info stack text is shown as <strong>stacked/manual</strong> (for example <code>8/12</code>).</li>
+                    <li>Queued stacks use the <strong>Stacking</strong> state and are built by builders; each completed stack costs base energy (level-1 energy) of that thing.</li>
+                    <li>A secondary stacking progress bar is shown directly above the energy bar while queued stacks remain.</li>
+                    <li>When both are possible, buildings prioritize <strong>level-up/upgrading before stacking</strong>.</li>
                     <li>You may see base vs effective values in the right panel; effective values include adjacency/group/area bonuses.</li>
                     <li>Units also show their own level (for example `L1`, `L2`) and subgroup toggles are level-aware.</li>
                 </ul>
@@ -2180,6 +2330,433 @@
             return wasOpen !== open;
         }
 
+        function makeDefaultStartingResourcesConfig() {
+            return {
+                researchLevels: {},
+                spawnCounts: {}
+            };
+        }
+
+        function cloneStartingResourcesConfig() {
+            return {
+                researchLevels: { ...(startingResourcesConfig.researchLevels || {}) },
+                spawnCounts: JSON.parse(JSON.stringify(startingResourcesConfig.spawnCounts || {}))
+            };
+        }
+
+        function parseStartingThingId(id) {
+            let text = String(id || '');
+            let sep = text.indexOf(':');
+            if (sep < 1) return null;
+            let kind = text.slice(0, sep);
+            let key = text.slice(sep + 1);
+            if ((kind !== 'unit' && kind !== 'building') || !key) return null;
+            return { kind, key };
+        }
+
+        function getStartingThingId(kind, key) {
+            return `${kind}:${key}`;
+        }
+
+        function normalizeStartingResourcesConfig(rawCfg) {
+            let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
+            let out = makeDefaultStartingResourcesConfig();
+
+            if (raw.researchLevels && typeof raw.researchLevels === 'object') {
+                for (let id in raw.researchLevels) {
+                    let parsed = parseStartingThingId(id);
+                    if (!parsed) continue;
+                    let thing = getResearchThing(parsed.kind, parsed.key);
+                    if (!thing) continue;
+                    let levelMap = raw.researchLevels[id];
+                    if (typeof levelMap === 'object' && levelMap !== null) {
+                        for (let statKey in levelMap) {
+                            if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) continue;
+                            let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(levelMap[statKey]) || 0)));
+                            if (!out.researchLevels[id]) out.researchLevels[id] = {};
+                            if (lvl > 0) out.researchLevels[id][statKey] = lvl;
+                        }
+                        if (out.researchLevels[id] && Object.keys(out.researchLevels[id]).length === 0) delete out.researchLevels[id];
+                    }
+                }
+            }
+
+            if (raw.spawnCounts && typeof raw.spawnCounts === 'object') {
+                for (let id in raw.spawnCounts) {
+                    let parsed = parseStartingThingId(id);
+                    if (!parsed) continue;
+                    let thing = getResearchThing(parsed.kind, parsed.key);
+                    if (!thing) continue;
+                    let countMap = raw.spawnCounts[id];
+                    if (typeof countMap === 'object' && countMap !== null) {
+                        for (let levelText in countMap) {
+                            let level = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 0)));
+                            let count = Math.max(0, Math.min(1000, Math.floor(Number(countMap[levelText]) || 0)));
+                            if (!out.spawnCounts[id]) out.spawnCounts[id] = {};
+                            if (count > 0) out.spawnCounts[id][level] = count;
+                        }
+                        if (out.spawnCounts[id] && Object.keys(out.spawnCounts[id]).length === 0) delete out.spawnCounts[id];
+                    }
+                }
+            }
+
+            return out;
+        }
+
+        function resetStartingResourcesConfig() {
+            startingResourcesConfig = normalizeStartingResourcesConfig(makeDefaultStartingResourcesConfig());
+        }
+
+        function ensureStartingResourcesSelectedThing() {
+            let parsed = parseStartingThingId(startingResourcesSelectedThingId);
+            if (parsed && getResearchThing(parsed.kind, parsed.key)) return;
+            let first = RESEARCH_THINGS[0];
+            if (!first) {
+                startingResourcesSelectedThingId = '';
+                return;
+            }
+            startingResourcesSelectedThingId = getStartingThingId(first.kind, first.key);
+        }
+
+        function setStartingResearchLevel(thingId, statKey, value) {
+            let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(value) || 0)));
+            if (!startingResourcesConfig.researchLevels[thingId]) startingResourcesConfig.researchLevels[thingId] = {};
+            if (lvl <= 0) {
+                delete startingResourcesConfig.researchLevels[thingId][statKey];
+                if (Object.keys(startingResourcesConfig.researchLevels[thingId]).length <= 0) {
+                    delete startingResourcesConfig.researchLevels[thingId];
+                }
+                return;
+            }
+            startingResourcesConfig.researchLevels[thingId][statKey] = lvl;
+        }
+
+        function setStartingSpawnCount(thingId, level, value) {
+            let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+            let count = Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)));
+            if (!startingResourcesConfig.spawnCounts[thingId]) startingResourcesConfig.spawnCounts[thingId] = {};
+            if (count <= 0) {
+                delete startingResourcesConfig.spawnCounts[thingId][lvl];
+                if (Object.keys(startingResourcesConfig.spawnCounts[thingId]).length <= 0) {
+                    delete startingResourcesConfig.spawnCounts[thingId];
+                }
+                return;
+            }
+            startingResourcesConfig.spawnCounts[thingId][lvl] = count;
+        }
+
+        function getStartingResourcesMaxPopulation() {
+            let el = document.getElementById('cfg-max-pop');
+            if (el) return Math.max(1, Math.floor(Number(el.value) || 200));
+            return Math.max(1, Math.floor(Number(CONFIG_MAX_POP) || 200));
+        }
+
+        function getStartingResourcesTotalSpawnCount() {
+            let total = 0;
+            let map = (startingResourcesConfig && startingResourcesConfig.spawnCounts) || {};
+            for (let thingId in map) {
+                let lvlMap = map[thingId] || {};
+                for (let lvl in lvlMap) total += Math.max(0, Math.floor(Number(lvlMap[lvl]) || 0));
+            }
+            return total;
+        }
+
+        function getStartingSpawnCount(thingId, level) {
+            let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+            let map = (startingResourcesConfig.spawnCounts && startingResourcesConfig.spawnCounts[thingId]) || {};
+            return Math.max(0, Math.floor(Number(map[lvl]) || 0));
+        }
+
+        function getStartingSpawnMaxForRow(thingId, level) {
+            let maxPop = getStartingResourcesMaxPopulation();
+            let current = getStartingSpawnCount(thingId, level);
+            let total = getStartingResourcesTotalSpawnCount();
+            return Math.max(0, maxPop - Math.max(0, total - current));
+        }
+
+        function adjustStartingResearchLevelDelta(thingId, statKey, delta) {
+            let parsed = parseStartingThingId(thingId);
+            if (!parsed) return;
+            if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) return;
+            let cur = 0;
+            if (startingResourcesConfig.researchLevels[thingId] && Number.isFinite(startingResourcesConfig.researchLevels[thingId][statKey])) {
+                cur = Math.floor(startingResourcesConfig.researchLevels[thingId][statKey]);
+            }
+            let next = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, cur + Math.floor(Number(delta) || 0)));
+            setStartingResearchLevel(thingId, statKey, next);
+        }
+
+        function adjustStartingSpawnCountDelta(thingId, level, delta) {
+            let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+            let cur = getStartingSpawnCount(thingId, lvl);
+            let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
+            let next = Math.max(0, Math.min(maxRow, cur + Math.floor(Number(delta) || 0)));
+            setStartingSpawnCount(thingId, lvl, next);
+        }
+
+        function renderStartingResourcesThingRowsForPanel() {
+            ensureStartingResourcesSelectedThing();
+            let selectedThing = RESEARCH_THINGS_BY_ID[startingResourcesSelectedThingId];
+            if (!selectedThing) return '<div style="font-size:11px;color:#777">No thing selected.</div>';
+
+            let owner = localPlayerId;
+            let thingId = getStartingThingId(selectedThing.kind, selectedThing.key);
+            let html = '';
+
+            html += `<div class="info-row" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">`;
+            for (let thing of RESEARCH_THINGS) {
+                let id = `${thing.kind}:${thing.key}`;
+                let isSelected = id === thingId;
+                let borderRadius = thing.kind === 'unit' ? '50%' : '4px';
+                html += `<button class="info-research-thing-btn info-startres-thing-btn" data-thing-id="${id}" title="${thing.label}" style="width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center">`;
+                html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}">`;
+                html += `</button>`;
+            }
+            html += `</div>`;
+
+            html += `<div style="margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212">`;
+            html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
+
+            for (let stat of (selectedThing.stats || [])) {
+                let curLevel = 0;
+                if (startingResourcesConfig.researchLevels[thingId] && Number.isFinite(startingResourcesConfig.researchLevels[thingId][stat.statKey])) {
+                    curLevel = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(startingResourcesConfig.researchLevels[thingId][stat.statKey]) || 0)));
+                }
+                let nextLevel = Math.min(MAX_RESEARCH_LEVEL, curLevel + 1);
+
+                let selectedThingLevel = getResearchPreviewThingLevel();
+                let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, curLevel, selectedThingLevel);
+                let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextLevel, selectedThingLevel);
+                if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
+
+                html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+                html += `<div style="display:flex;align-items:center;gap:8px;white-space:nowrap">`;
+                html += `<span style="color:#bbb;flex:1 1 0;min-width:0">${stat.label}</span><span class="info-research-level-preview-btn info-startres-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${curLevel}" data-to-level="${nextLevel}" style="color:#8fc;background:#000;cursor:pointer;flex:0 0 180px;text-align:center;display:inline-block;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
+                html += `<span style="color:#9cf;flex:1 1 0;text-align:right">R${curLevel}/${MAX_RESEARCH_LEVEL}</span>`;
+                html += `</div>`;
+                html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px">`;
+                html += `<span class="info-startres-stat-dec" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel > 0 ? 'pointer' : 'default'};color:${curLevel > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
+                html += `<span class="info-startres-stat-inc" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel < MAX_RESEARCH_LEVEL ? 'pointer' : 'default'};color:${curLevel < MAX_RESEARCH_LEVEL ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+
+            html += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #2c2c2c">`;
+            html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Starting Spawn Counts (Per Level)</div>`;
+            for (let lvl = 1; lvl <= MAX_THING_LEVEL; lvl++) {
+                let cur = getStartingSpawnCount(thingId, lvl);
+                let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
+                html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
+                html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
+                html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}/${maxRow}</span>`;
+                html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
+                html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
+                html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+
+            html += `</div>`;
+            return html;
+        }
+
+        function renderStartingResourcesPopupContent() {
+            let holder = document.getElementById('starting-resources-content');
+            if (!holder) return;
+            holder.innerHTML = `
+                <div id="starting-resources-panel" style="display:block">${renderStartingResourcesThingRowsForPanel()}</div>
+                <div class="info-row" style="justify-content:flex-end;gap:8px;margin-top:6px;border-top:1px solid #2b2b2b;padding-top:6px;">
+                    <button id="btn-startres-reset-selected" type="button" style="font-size:11px;padding:3px 8px;">Reset Selected Thing</button>
+                    <button id="btn-startres-reset-all" type="button" style="font-size:11px;padding:3px 8px;">Reset All</button>
+                </div>
+            `;
+
+            let resetSelected = document.getElementById('btn-startres-reset-selected');
+            if (resetSelected) {
+                bindInstantPress(resetSelected, () => {
+                    let selectedThingId = startingResourcesSelectedThingId;
+                    if (!selectedThingId) return;
+                    delete startingResourcesConfig.researchLevels[selectedThingId];
+                    delete startingResourcesConfig.spawnCounts[selectedThingId];
+                    renderStartingResourcesPopupContent();
+                });
+            }
+
+            let resetAll = document.getElementById('btn-startres-reset-all');
+            if (resetAll) {
+                bindInstantPress(resetAll, () => {
+                    if (!confirm('Reset all starting resources and research presets?')) return;
+                    resetStartingResourcesConfig();
+                    renderStartingResourcesPopupContent();
+                });
+            }
+
+            holder.querySelectorAll('.info-startres-thing-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let thingId = String(btn.dataset.thingId || '');
+                    if (!thingId) return;
+                    startingResourcesSelectedThingId = thingId;
+                    renderStartingResourcesPopupContent();
+                });
+            });
+
+            holder.querySelectorAll('.info-startres-level-preview-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let kind = btn.dataset.kind;
+                    let key = btn.dataset.key;
+                    let statKey = btn.dataset.statKey;
+                    let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+                    let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+                    openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
+                });
+            });
+
+            holder.querySelectorAll('.info-startres-stat-dec').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let thingId = String(btn.dataset.thingId || '');
+                    let statKey = String(btn.dataset.statKey || '');
+                    adjustStartingResearchLevelDelta(thingId, statKey, -1);
+                    renderStartingResourcesPopupContent();
+                });
+            });
+
+            holder.querySelectorAll('.info-startres-stat-inc').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let thingId = String(btn.dataset.thingId || '');
+                    let statKey = String(btn.dataset.statKey || '');
+                    adjustStartingResearchLevelDelta(thingId, statKey, 1);
+                    renderStartingResourcesPopupContent();
+                });
+            });
+
+            holder.querySelectorAll('.info-startres-spawn-dec').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let thingId = String(btn.dataset.thingId || '');
+                    let lvl = Number(btn.dataset.level || 1);
+                    adjustStartingSpawnCountDelta(thingId, lvl, -1);
+                    renderStartingResourcesPopupContent();
+                });
+            });
+
+            holder.querySelectorAll('.info-startres-spawn-inc').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let thingId = String(btn.dataset.thingId || '');
+                    let lvl = Number(btn.dataset.level || 1);
+                    adjustStartingSpawnCountDelta(thingId, lvl, 1);
+                    renderStartingResourcesPopupContent();
+                });
+            });
+        }
+
+        function setStartingResourcesPopupOpen(open) {
+            let popup = document.getElementById('starting-resources-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            if (open) renderStartingResourcesPopupContent();
+            return wasOpen !== open;
+        }
+
+        function createMainMenuSettingsSnapshot() {
+            let numberIds = [
+                'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-money',
+                'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-gold-area',
+                'cfg-research-cost-exp', 'cfg-research-work-exp', 'cfg-research-work-base',
+                'cfg-research-bonus-exp-units', 'cfg-research-bonus-exp-other', 'cfg-max-research-level'
+            ];
+            let selectIds = ['cfg-gamemode', 'cfg-map-type'];
+            let checkboxIds = ['cfg-full-vis'];
+
+            let out = {
+                version: 1,
+                createdAt: Date.now(),
+                lobby: {
+                    numbers: {},
+                    selects: {},
+                    checks: {}
+                },
+                startingResources: cloneStartingResourcesConfig()
+            };
+
+            for (let id of numberIds) {
+                let el = document.getElementById(id);
+                if (el) out.lobby.numbers[id] = Number(el.value);
+            }
+            for (let id of selectIds) {
+                let el = document.getElementById(id);
+                if (el) out.lobby.selects[id] = String(el.value);
+            }
+            for (let id of checkboxIds) {
+                let el = document.getElementById(id);
+                if (el) out.lobby.checks[id] = !!el.checked;
+            }
+
+            return out;
+        }
+
+        function applyMainMenuSettingsSnapshot(rawData) {
+            let data = (rawData && typeof rawData === 'object') ? rawData : {};
+            let lobby = (data.lobby && typeof data.lobby === 'object') ? data.lobby : {};
+            let numbers = (lobby.numbers && typeof lobby.numbers === 'object') ? lobby.numbers : {};
+            let selects = (lobby.selects && typeof lobby.selects === 'object') ? lobby.selects : {};
+            let checks = (lobby.checks && typeof lobby.checks === 'object') ? lobby.checks : {};
+
+            for (let id in numbers) {
+                let el = document.getElementById(id);
+                if (!el) continue;
+                if (el.type === 'number') el.value = String(numbers[id]);
+            }
+            for (let id in selects) {
+                let el = document.getElementById(id);
+                if (!el) continue;
+                el.value = String(selects[id]);
+            }
+            for (let id in checks) {
+                let el = document.getElementById(id);
+                if (!el) continue;
+                el.checked = !!checks[id];
+            }
+
+            let importedMaxThingLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-thing-level') || {}).value) || MAX_THING_LEVEL));
+            let importedMaxResearchLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-research-level') || {}).value) || MAX_RESEARCH_LEVEL));
+            MAX_THING_LEVEL = importedMaxThingLevel;
+            MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
+            startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+
+            let popup = document.getElementById('starting-resources-popup');
+            if (popup && !popup.classList.contains('hidden')) renderStartingResourcesPopupContent();
+        }
+
+        function downloadMainMenuSettings() {
+            let data = createMainMenuSettingsSnapshot();
+            let blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            let stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = url;
+            a.download = `defence3-settings-${stamp}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function importMainMenuSettingsFromFile(file) {
+            if (!file) return;
+            let reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    let parsed = JSON.parse(String(reader.result || '{}'));
+                    applyMainMenuSettingsSnapshot(parsed);
+                    alert('Settings imported.');
+                } catch {
+                    alert('Invalid settings JSON.');
+                }
+            };
+            reader.readAsText(file);
+        }
+
         function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
             researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
             setResearchStatMatrixPopupOpen(true);
@@ -2225,7 +2802,12 @@
         const TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
         let TICK_RATE = 20; // ticks per second (menu configurable)
-        let WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.1s between pickup/putdown
+        let WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.5s between pickup/putdown
+        let COLLECTOR_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between collector transfer actions
+        let SALVAGER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between salvager transfer actions
+        let BUILDER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between builder material transfers
+        let HEALER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between healer transfer actions
+        let RESEARCHER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 2.0); // ~2.0s between researcher transfer actions
         let TICK_MS = 1000 / TICK_RATE;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
@@ -3534,6 +4116,8 @@
     let researchThingLevelDropdown = null;
     let researchThingLevelDropdownOutsideHandler = null;
     let researchStatMatrixPopupPayload = null;
+    let startingResourcesConfig = makeDefaultStartingResourcesConfig();
+    let startingResourcesSelectedThingId = '';
     let shopStatMatrixDescriptorById = {};
     let nextShopStatMatrixDescriptorId = 1;
     let defaultAutoBuildEnabled = true;
@@ -3679,6 +4263,11 @@
 
             TICK_MS = 1000 / TICK_RATE;
             WORKER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 0.5));
+            COLLECTOR_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
+            SALVAGER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
+            BUILDER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
+            HEALER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
+            RESEARCHER_TRANSFER_COOLDOWN_TICKS = Math.max(1, Math.round(TICK_RATE * 2.0));
             LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN);
             LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
             LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
@@ -5167,6 +5756,7 @@
             if (!item) return;
             let targetMaxHp = Math.max(1, Math.floor(getUpgradeMaxHp(item, nextLevel) || (item.maxHp || 1)));
             item.isUpgrading = true;
+            item.isStacking = false;
             item.upgradeMaxHp = targetMaxHp;
             item.maxHp = targetMaxHp;
             if (!Number.isFinite(item.hp) || item.hp < 1) item.hp = 1;
@@ -5184,6 +5774,88 @@
         function getRequiredStacksForLevel(level) {
             let lvl = Math.max(1, clampThingLevel(Math.floor(Number(level) || 1)));
             return Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+        }
+
+        function getThingStackedStacks(item) {
+            if (!item) return 1;
+            return Math.max(1, Math.floor(Number(item.stacks) || 1));
+        }
+
+        function getThingManualStacks(item) {
+            if (!item) return 1;
+            let stacked = getThingStackedStacks(item);
+            let manual = Number.isFinite(item.manualStacks) ? Math.floor(item.manualStacks) : stacked;
+            return Math.max(stacked, Math.max(1, manual));
+        }
+
+        function getThingRemainingStacks(item) {
+            return Math.max(0, getThingManualStacks(item) - getThingStackedStacks(item));
+        }
+
+        function getThingStackingProgressRatio(item) {
+            let stacked = getThingStackedStacks(item);
+            let total = getThingManualStacks(item);
+            if (total <= 0) return 1;
+            let stackCost = getThingStackingEnergyCost(item);
+            let partial = 0;
+            if (stackCost > 0) {
+                let work = Math.max(0, Number(item && item.stackingWorkDone) || 0);
+                partial = Math.max(0, Math.min(1, work / stackCost));
+            }
+            let progressStacks = Math.min(total, stacked + partial);
+            return Math.max(0, Math.min(1, progressStacks / total));
+        }
+
+        function getThingStackingRemainingEnergy(item) {
+            if (!item) return 0;
+            let remainingStacks = getThingRemainingStacks(item);
+            if (remainingStacks <= 0) return 0;
+            let stackCost = getThingStackingEnergyCost(item);
+            let done = Math.max(0, Number(item.stackingWorkDone) || 0);
+            return Math.max(0, remainingStacks * stackCost - done);
+        }
+
+        function getThingStackingEnergyCost(item) {
+            if (!item) return 1;
+            let baseEnergy = getUpgradeMaxHp(item, 1);
+            if (!Number.isFinite(baseEnergy) || baseEnergy <= 0) baseEnergy = item.maxHp || 1;
+            return Math.max(1, Math.floor(baseEnergy));
+        }
+
+        function refreshThingProgressState(item) {
+            if (!item) return;
+
+            item.stacks = getThingStackedStacks(item);
+            item.manualStacks = getThingManualStacks(item);
+            if (!Number.isFinite(item.stackingWorkDone) || item.stackingWorkDone < 0) item.stackingWorkDone = 0;
+
+            let hasPendingStacks = getThingRemainingStacks(item) > 0;
+            if (item.underConstruction || item.isUpgrading) {
+                item.isStacking = false;
+                return;
+            }
+
+            let effLevel = getThingEffectiveLevel(item);
+            let potLevel = getThingPotentialLevel(item, effLevel);
+            if (potLevel > effLevel && isAutoUpgradeEnabled(item)) {
+                beginUpgradeProgress(item, effLevel + 1);
+                item.isStacking = false;
+                return;
+            }
+
+            item.isStacking = hasPendingStacks && isAutoStackEnabled(item);
+            if (!item.isStacking) item.stackingWorkDone = 0;
+        }
+
+        function addManualStackToThing(item, amount = 1) {
+            if (!item) return;
+            let addCount = Math.max(1, Math.floor(Number(amount) || 1));
+            item.stacks = getThingStackedStacks(item);
+            item.manualStacks = getThingManualStacks(item) + addCount;
+            item.level = stackCountToLevel(item.stacks);
+            refreshThingProgressState(item);
+            if (item.updateTextCache) item.updateTextCache();
+            else updateItemTextCache(item);
         }
 
         function getThingBaseLevel(item, fallback = 1) {
@@ -5434,6 +6106,7 @@
             if ((item.level || 0) < 1) item.level = 1;
             if ((item.effectiveLevel || 0) < 1) item.effectiveLevel = 1;
             if ((item.potentialEffectiveLevel || 0) < 1) item.potentialEffectiveLevel = 1;
+            refreshThingProgressState(item);
             if (item.updateTextCache) item.updateTextCache();
             else updateItemTextCache(item);
         }
@@ -5446,6 +6119,14 @@
             return item && item.buildEnabled !== false;
         }
 
+        function isAutoStackEnabled(item) {
+            return item && item.autoStackEnabled !== false;
+        }
+
+        function isQueueEnabled(item) {
+            return item && item.queueEnabled !== false;
+        }
+
         function isAutoResearchEnabled(item) {
             if (!item || item.type !== 'research') return true;
             return item.autoResearchEnabled !== false;
@@ -5454,14 +6135,14 @@
         function updateDefaultToggleButtons() {
             let btnBuild = document.getElementById('btn-default-build');
             if (btnBuild) {
-                btnBuild.textContent = `Build New Objects: ${defaultAutoBuildEnabled ? 'ON' : 'OFF'}`;
+                btnBuild.textContent = `\uD83D\uDD28 New: ${defaultAutoBuildEnabled ? 'ON' : 'OFF'}`;
                 btnBuild.style.borderColor = defaultAutoBuildEnabled ? '#6f6' : '#555';
                 btnBuild.style.color = defaultAutoBuildEnabled ? '#9f9' : '#888';
                 btnBuild.style.background = defaultAutoBuildEnabled ? 'rgba(40,90,40,0.25)' : 'transparent';
             }
             let btnAuto = document.getElementById('btn-default-auto-upgrade');
             if (btnAuto) {
-                btnAuto.textContent = `Upgrade New Objects: ${defaultAutoUpgradeEnabled ? 'ON' : 'OFF'}`;
+                btnAuto.textContent = `Lvl+ New: ${defaultAutoUpgradeEnabled ? 'ON' : 'OFF'}`;
                 btnAuto.style.borderColor = defaultAutoUpgradeEnabled ? '#4af' : '#555';
                 btnAuto.style.color = defaultAutoUpgradeEnabled ? '#8cf' : '#888';
                 btnAuto.style.background = defaultAutoUpgradeEnabled ? 'rgba(40,70,110,0.25)' : 'transparent';
@@ -5717,6 +6398,39 @@
             ctx.restore();
         }
 
+        const UNIT_STAR_PATH_CACHE = new Map();
+
+        function getUnitStarPath(radius) {
+            let r = Math.max(1, Number(radius) || 1);
+            let key = `${r}`;
+            let cached = UNIT_STAR_PATH_CACHE.get(key);
+            if (cached) return cached;
+
+            let p = new Path2D();
+            for (let i = 0; i < 5; i++) {
+                let a = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+                let px = Math.cos(a) * r;
+                let py = Math.sin(a) * r;
+                if (i === 0) p.moveTo(px, py);
+                else p.lineTo(px, py);
+            }
+            p.closePath();
+            UNIT_STAR_PATH_CACHE.set(key, p);
+            return p;
+        }
+
+        function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', lineWidth = 1) {
+            let path = getUnitStarPath(radius);
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.fillStyle = color;
+            ctx.fill(path);
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = lineWidth;
+            ctx.stroke(path);
+            ctx.restore();
+        }
+
         function updateItemTextCache(item) {
             let c = ensureLevelTextCanvas(item);
             let scale = item._textCanvasScale || 1;
@@ -5742,9 +6456,12 @@
                 this.gx = gx; this.gy = gy; this.type = type; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = startStacks;
+                this.manualStacks = startStacks;
                 this.effectiveStacks = startStacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 this.baseStats = BASE_CARD_TYPES[type];
                 this.currentStats = { ...this.baseStats };
 
@@ -5767,13 +6484,7 @@
             }
 
             upgrade() {
-                let nextLevel = stackCountToLevel(this.stacks + 1);
-                if (nextLevel > (this.level || 1) && !this.isUpgrading && isAutoUpgradeEnabled(this)) {
-                    beginUpgradeProgress(this, nextLevel);
-                }
-                this.stacks++;
-                this.level = stackCountToLevel(this.stacks);
-                this.updateTextCache();
+                addManualStackToThing(this, 1);
             }
 
             updateTextCache() {
@@ -7021,9 +7732,7 @@
                     ctx.moveTo(this.x, this.y + tr); ctx.lineTo(this.x - tr, this.y - tr); ctx.lineTo(this.x + tr, this.y - tr);
                     ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
                 } else if (this.vis === 'star') {
-                    ctx.fillStyle = this.color; ctx.beginPath();
-                    for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r); }
-                    ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+                    drawCachedUnitStar(ctx, this.x, this.y, this.r, this.color, strokeColor, lw);
                 } else if (this.vis === 'triangle_down') {
                     ctx.fillStyle = this.color; ctx.beginPath();
                     let tr = this.r;
@@ -7424,9 +8133,12 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'barrack'; this.unitType = unitType;
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 this.spawnTimer = 0;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown(unitType, this.level, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
                 this.spawnQueue = []; // queue of unit types to spawn
@@ -7437,6 +8149,7 @@
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 updateItemTextCache(this);
             }
 
@@ -7496,14 +8209,18 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'spawner';
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 let stats = calculateItemStats('spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', this.level, this.owner, 'spawner') * TICK_RATE);
@@ -7527,9 +8244,7 @@
                 ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
                 ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
                 ctx.fillStyle = '#432'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
-                ctx.fillStyle = '#aaa'; ctx.beginPath();
-                for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(this.x + Math.cos(a) * 8, this.y + Math.sin(a) * 8); }
-                ctx.closePath(); ctx.fill();
+                drawCachedUnitStar(ctx, this.x, this.y, 8, '#aaa', '#000', 1);
                 if (this.underConstruction) {
                     drawBuildingHpProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
                 } else {
@@ -7549,14 +8264,18 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'salvager';
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 let stats = calculateItemStats('salvager', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', this.level, this.owner, 'salvager') * TICK_RATE);
@@ -7602,15 +8321,19 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'builder_spawner';
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 let stats = calculateItemStats('builder_spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.underConstruction = true;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', this.level, this.owner, 'builder_spawner') * TICK_RATE);
@@ -7662,15 +8385,19 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'healer_spawner';
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 let stats = calculateItemStats('healer_spawner', this.level, this.owner);
                 this.hp = stats.maxHp; this.maxHp = stats.maxHp;
                 this.underConstruction = true;
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 this.spawnQueue = []; this.spawnTimer = 0;
                 this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', this.level, this.owner, 'healer_spawner') * TICK_RATE);
@@ -7720,9 +8447,12 @@
                 this.gx = gx; this.gy = gy; this.owner = owner;
                 this.x = gx * TILE + 16; this.y = gy * TILE + 16;
                 this.stacks = stacks; this.type = 'research';
+                this.manualStacks = stacks;
                 this.effectiveStacks = stacks;
                 this.level = stackCountToLevel(this.stacks);
                 this.effectiveLevel = this.level;
+                this.isStacking = false;
+                this.stackingWorkDone = 0;
                 this.spawnTimer = 0;
                 this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', this.level, this.owner, 'research') * TICK_RATE);
                 this.spawnQueue = [];
@@ -7734,6 +8464,7 @@
                 this.markedForSalvage = false;
                 this.autoUpgradeEnabled = true;
                 this.buildEnabled = true;
+                this.queueEnabled = true;
                 this.autoResearchEnabled = true;
                 this.researchTask = null;
                 this.isResearching = false;
@@ -7877,8 +8608,8 @@
                                 }
                                 if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
                                 let extract = Math.min(gatherPerTrip, u.workerTarget.gold);
-                                // u.workerTarget.gold -= extract;
-                                u.workerTarget.gold -= 1
+                                u.workerTarget.gold -= extract;
+                                // u.workerTarget.gold -= 1
                                 u.carryingValue = extract;
                                 if (u.workerTarget.gold <= 0) {
                                     let mine = u.workerTarget;
@@ -7888,7 +8619,8 @@
                                     dirtyGrid = true;
                                 }
                             }
-                            u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector');
+                            _collectorRememberGatherSite(u, u.workerTarget, u.workerTargetType);
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
@@ -7907,7 +8639,7 @@
                         if (u.carryingValue > 0 && isAtDropoff) {
                             if (u.workerTransferCooldown > 0) return;
                             players[owner].money += u.carryingValue;
-                            u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector');
                             if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
@@ -7933,10 +8665,12 @@
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
+                            if (u.workerTransferCooldown > 0) return;
                             let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
                             let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
                             u.carryingValue = refund * getUnitBaseLevel(u);
                             destroyBuilding(u.workerTarget);
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager');
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
                             u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
@@ -7945,8 +8679,10 @@
                 } else if (u.workerState === 'RETURNING') {
                     if (!u.path || u.pathIndex >= u.path.length) {
                         if (u.carryingValue > 0) {
+                            if (u.workerTransferCooldown > 0) return;
                             let closest = _findClosestSpawner(u, 'salvager');
                             players[owner].money += u.carryingValue;
+                            u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager');
                             if (owner === localPlayerId) playSound('salvage_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
@@ -7994,7 +8730,7 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _builderFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO_BUILD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         // Building finished (maybe by another builder), find next
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
@@ -8037,15 +8773,14 @@
                                 didWork = true;
                                 if (t.hp >= t.maxHp) {
                                     markConstructionComplete(t);
-                                    let targetLvl = stackCountToLevel(t.stacks || 1);
-                                    if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
-                                        beginUpgradeProgress(t, (t.level || 1) + 1);
-                                    }
+                                    refreshThingProgressState(t);
                                     if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                     recalculateAdjacency();
                                     _builderRememberWorkSite(u, t);
-                                    u.workerTarget = null;
-                                    _builderFindTarget(u, myGx, myGy);
+                                    if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
+                                        u.workerTarget = null;
+                                        _builderFindTarget(u, myGx, myGy);
+                                    }
                                 }
                             } else if (t.isUpgrading) {
                                 t.hp = Math.min(t.maxHp, t.hp + dps);
@@ -8054,15 +8789,36 @@
                                     if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                     t.effectiveLevel++;
 
-                                    if (getThingEffectiveLevel(t) < getThingPotentialLevel(t)) {
-                                        beginUpgradeProgress(t, t.effectiveLevel + 1);
-                                    } else {
-                                        t.isUpgrading = false;
-                                        t.upgradeMaxHp = 0;
-                                    }
+                                    t.isUpgrading = false;
+                                    t.upgradeMaxHp = 0;
+                                    refreshThingProgressState(t);
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                     recalculateAdjacency();
+                                    if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
+                                        _builderRememberWorkSite(u, t);
+                                        u.workerTarget = null;
+                                        _builderFindTarget(u, myGx, myGy);
+                                    }
+                                }
+                            } else if (t.isStacking) {
+                                let stackCost = getThingStackingEnergyCost(t);
+                                t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + dps;
+                                didWork = true;
+
+                                let stackedAny = false;
+                                while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
+                                    t.stackingWorkDone -= stackCost;
+                                    t.stacks = getThingStackedStacks(t) + 1;
+                                    t.level = stackCountToLevel(t.stacks);
+                                    stackedAny = true;
+                                }
+                                if (stackedAny) {
+                                    if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                    recalculateAdjacency();
+                                }
+                                refreshThingProgressState(t);
+                                if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                     _builderRememberWorkSite(u, t);
                                     u.workerTarget = null;
                                     _builderFindTarget(u, myGx, myGy);
@@ -8071,7 +8827,7 @@
 
                             if (didWork) {
                                 u.builderHasMaterial = false;
-                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                                u.workerTransferCooldown = getBuilderTransferCooldownTicks();
                             }
 
                             if (u.workerTarget) {
@@ -8091,7 +8847,7 @@
                         }
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -8106,7 +8862,7 @@
                             if (spawner && players[owner].money >= tripCost) {
                                 players[owner].money -= tripCost;
                                 u.builderHasMaterial = true;
-                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                                u.workerTransferCooldown = getBuilderTransferCooldownTicks();
                             }
                             u._builderSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_BUILD';
@@ -8131,7 +8887,7 @@
                     }
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
                     // Building in place without returning for gold (every 20 ticks add 1 HP)
-                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+                    if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
                         u.workerTarget = null;
                         _builderFindTarget(u, myGx, myGy);
@@ -8143,15 +8899,14 @@
                             t.hp = Math.min(t.maxHp, t.hp + 1);
                             if (t.hp >= t.maxHp) {
                                 markConstructionComplete(t);
-                                let targetLvl = stackCountToLevel(t.stacks || 1);
-                                if (targetLvl > (t.level || 1) && isAutoUpgradeEnabled(t)) {
-                                    beginUpgradeProgress(t, (t.level || 1) + 1);
-                                }
+                                refreshThingProgressState(t);
                                 if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
                                 recalculateAdjacency();
                                 _builderRememberWorkSite(u, t);
-                                u.workerTarget = null;
-                                _builderFindTarget(u, myGx, myGy);
+                                if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
+                                    u.workerTarget = null;
+                                    _builderFindTarget(u, myGx, myGy);
+                                }
                             }
                         } else if (t.isUpgrading) {
                             t.hp = Math.min(t.maxHp, t.hp + 1);
@@ -8159,15 +8914,34 @@
                                 if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                 t.effectiveLevel++;
 
-                                if (getThingEffectiveLevel(t) < getThingPotentialLevel(t)) {
-                                    beginUpgradeProgress(t, t.effectiveLevel + 1);
-                                } else {
-                                    t.isUpgrading = false;
-                                    t.upgradeMaxHp = 0;
-                                }
+                                t.isUpgrading = false;
+                                t.upgradeMaxHp = 0;
+                                refreshThingProgressState(t);
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
                                 recalculateAdjacency();
+                                if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
+                                    _builderRememberWorkSite(u, t);
+                                    u.workerTarget = null;
+                                    _builderFindTarget(u, myGx, myGy);
+                                }
+                            }
+                        } else if (t.isStacking) {
+                            let stackCost = getThingStackingEnergyCost(t);
+                            t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + 1;
+                            let stackedAny = false;
+                            while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
+                                t.stackingWorkDone -= stackCost;
+                                t.stacks = getThingStackedStacks(t) + 1;
+                                t.level = stackCountToLevel(t.stacks);
+                                stackedAny = true;
+                            }
+                            if (stackedAny) {
+                                if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                recalculateAdjacency();
+                            }
+                            refreshThingProgressState(t);
+                            if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                 _builderRememberWorkSite(u, t);
                                 u.workerTarget = null;
                                 _builderFindTarget(u, myGx, myGy);
@@ -8191,6 +8965,7 @@
                 } else if (u.workerState === 'MOVING_TO_HEAL') {
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
+                        if (targetIsQueue) _clearHealerQueueCommit(u);
                         u.workerTarget = null;
                         u.workerTargetType = null;
                         _healerFindTarget(u, myGx, myGy);
@@ -8240,7 +9015,7 @@
                             if (didWork) {
                                 u.healerHasMaterial = false;
                                 u._healerQueueTripCost = 0;
-                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
                             }
 
                             let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
@@ -8274,7 +9049,7 @@
                         let hps = u.healerHps || 5;
                         u.workerTarget.hp = Math.min(u.workerTarget.maxHp, u.workerTarget.hp + hps);
                         u.healerHasMaterial = false;
-                        u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
 
                         if (!_isHealerTargetUnit(u.workerTarget, owner)) {
                             u.workerTarget = null;
@@ -8296,6 +9071,7 @@
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
+                        if (targetIsQueue) _clearHealerQueueCommit(u);
                         u.workerTarget = null;
                         u.workerTargetType = null;
                         u._healerQueueTripCost = 0;
@@ -8312,7 +9088,7 @@
                                 players[owner].money -= tripCost;
                                 u.healerHasMaterial = true;
                                 u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
-                                u.workerTransferCooldown = WORKER_TRANSFER_COOLDOWN_TICKS;
+                                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer');
                             }
                             u._healerSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_HEAL';
@@ -8379,8 +9155,9 @@
                                 if (players[owner].money >= 1) {
                                     players[owner].money -= 1;
                                     u.researcherHasMaterial = true;
-                                    u._researcherMaterialReadyTick = gameTime + getWorkerTransferCooldownTicks();
-                                    u.workerTransferCooldown = getWorkerTransferCooldownTicks();
+                                    let researcherCooldown = getWorkerTypeTransferCooldownTicks('researcher');
+                                    u._researcherMaterialReadyTick = gameTime + researcherCooldown;
+                                    u.workerTransferCooldown = researcherCooldown;
                                 }
                                 return;
                             }
@@ -8418,7 +9195,7 @@
                         task.workDone = Math.min(task.workRequired, (task.workDone || 0) + researchWorkPerTrip);
                         u.researcherHasMaterial = false;
                         u._researcherMaterialReadyTick = 0;
-                        u.workerTransferCooldown = getWorkerTransferCooldownTicks();
+                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('researcher');
 
                         if (task.workDone >= task.workRequired) {
                             completeActiveResearchTaskForPlayer(target.owner, task);
@@ -8455,8 +9232,9 @@
                             if (spawner && players[owner].money >= 1) {
                                 players[owner].money -= 1;
                                 u.researcherHasMaterial = true;
-                                u._researcherMaterialReadyTick = gameTime + getWorkerTransferCooldownTicks();
-                                u.workerTransferCooldown = getWorkerTransferCooldownTicks();
+                                let researcherCooldown = getWorkerTypeTransferCooldownTicks('researcher');
+                                u._researcherMaterialReadyTick = gameTime + researcherCooldown;
+                                u.workerTransferCooldown = researcherCooldown;
                             }
                             u._researchSpawnerTarget = null;
                             u.workerState = 'MOVING_TO_RESEARCH';
@@ -8485,16 +9263,105 @@
             }
         }
 
-        // Collector: find nearest gold mine or dropped money
+        function _isCollectorTargetValid(target, targetType, owner) {
+            if (!target) return false;
+            if (targetType === 'mine') {
+                return Number.isFinite(target.gold) && target.gold > 0;
+            }
+            if (targetType === 'farm') {
+                return target.type === 'farm' && target.owner === owner && !target.underConstruction && target.hp > 0;
+            }
+            if (targetType === 'drop') {
+                return droppedItems.includes(target);
+            }
+            return false;
+        }
+
+        function _collectorRememberGatherSite(u, target = null, targetType = null) {
+            if (!u || !target) return;
+            if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
+                u._collectorLastGatherX = target.x;
+                u._collectorLastGatherY = target.y;
+            }
+            if (Number.isFinite(target.gx) && Number.isFinite(target.gy)) {
+                u._collectorLastGatherGx = target.gx;
+                u._collectorLastGatherGy = target.gy;
+            }
+            if (targetType) u._collectorLastGatherType = targetType;
+        }
+
+        function _collectorGetSearchOrigin(u) {
+            if (u && Number.isFinite(u._collectorLastGatherX) && Number.isFinite(u._collectorLastGatherY)) {
+                return { x: u._collectorLastGatherX, y: u._collectorLastGatherY };
+            }
+            return { x: u.x, y: u.y };
+        }
+
+        function _getCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+            if (preferredType === 'mine' || preferredType === null) {
+                let mine = goldMines.find(m => m.gx === gx && m.gy === gy && m.gold > 0);
+                if (mine) return { target: mine, type: 'mine' };
+            }
+            if (preferredType === 'farm' || preferredType === null) {
+                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                    let cell = grid[gy][gx];
+                    let item = cell && cell.item;
+                    if (item && item.type === 'farm' && item.owner === owner && !item.underConstruction && item.hp > 0) {
+                        return { target: item, type: 'farm' };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function _getCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) {
+            let best = null;
+            let bestDist = radius;
+            for (let m of goldMines) {
+                if (m.gold <= 0) continue;
+                let d = Math.hypot(m.x - worldX, m.y - worldY);
+                if (d <= bestDist) {
+                    bestDist = d;
+                    best = { target: m, type: 'mine' };
+                }
+            }
+            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+            let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
+            let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    let cell = grid[y][x];
+                    let item = cell && cell.item;
+                    if (!item || item.type !== 'farm' || item.owner !== owner || item.underConstruction || item.hp <= 0) continue;
+                    let d = Math.hypot(item.x - worldX, item.y - worldY);
+                    if (d <= bestDist) {
+                        bestDist = d;
+                        best = { target: item, type: 'farm' };
+                    }
+                }
+            }
+            return best;
+        }
+
+        // Collector: find nearest gold mine/farm/drop, preferring area around last gather source.
         function _collectorFindTarget(u, myGx, myGy) {
+            if (_isCollectorTargetValid(u._collectorPinnedTarget, u._collectorPinnedTargetType, u.owner)) {
+                _collectorAssignTarget(u, u._collectorPinnedTarget, u._collectorPinnedTargetType, myGx, myGy);
+                return;
+            }
+            u._collectorPinnedTarget = null;
+            u._collectorPinnedTargetType = null;
+
+            let origin = _collectorGetSearchOrigin(u);
             let bestDist = 99999, bestTarget = null, bestType = null;
             for (let drop of droppedItems) {
-                let d = Math.hypot(drop.x - u.x, drop.y - u.y);
+                let d = Math.hypot(drop.x - origin.x, drop.y - origin.y);
                 if (d < bestDist) { bestDist = d; bestTarget = drop; bestType = 'drop'; }
             }
             for (let mine of goldMines) {
                 if (mine.gold <= 0) continue;
-                let d = Math.hypot(mine.x - u.x, mine.y - u.y);
+                let d = Math.hypot(mine.x - origin.x, mine.y - origin.y);
                 if (d < bestDist) { bestDist = d; bestTarget = mine; bestType = 'mine'; }
             }
             for (let y = 0; y < GRID_H; y++) {
@@ -8504,7 +9371,7 @@
                     if (!item || item.type !== 'farm') continue;
                     if (item.owner !== u.owner) continue;
                     if (item.underConstruction || item.hp <= 0) continue;
-                    let d = Math.hypot(item.x - u.x, item.y - u.y);
+                    let d = Math.hypot(item.x - origin.x, item.y - origin.y);
                     if (d < bestDist) { bestDist = d; bestTarget = item; bestType = 'farm'; }
                 }
             }
@@ -8522,10 +9389,10 @@
         function _hasUnderConstructionOrUpgradingAt(nx, ny) {
             if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) return false;
             let cell = grid[ny][nx];
-            if (cell && cell.item && (cell.item.underConstruction || cell.item.isUpgrading || cell.item.isResearching)) return true;
-            for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading || t.isResearching)) return true; }
-            for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading || b.isResearching)) return true; }
-            for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading || s.isResearching)) return true; }
+            if (cell && cell.item && (cell.item.underConstruction || cell.item.isUpgrading || cell.item.isStacking || cell.item.isResearching)) return true;
+            for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading || t.isStacking || t.isResearching)) return true; }
+            for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading || b.isStacking || b.isResearching)) return true; }
+            for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading || s.isStacking || s.isResearching)) return true; }
             return false;
         }
 
@@ -8540,6 +9407,19 @@
         }
         function getWorkerTransferCooldownTicks() {
             return Math.max(1, Math.floor(WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+        }
+
+        function getBuilderTransferCooldownTicks() {
+            return Math.max(1, Math.floor(BUILDER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+        }
+
+        function getWorkerTypeTransferCooldownTicks(workerType) {
+            if (workerType === 'collector') return Math.max(1, Math.floor(COLLECTOR_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+            if (workerType === 'salvager') return Math.max(1, Math.floor(SALVAGER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+            if (workerType === 'builder') return getBuilderTransferCooldownTicks();
+            if (workerType === 'healer') return Math.max(1, Math.floor(HEALER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+            if (workerType === 'researcher') return Math.max(1, Math.floor(RESEARCHER_TRANSFER_COOLDOWN_TICKS || WORKER_TRANSFER_COOLDOWN_TICKS || 1));
+            return getWorkerTransferCooldownTicks();
         }
 
         function getWorkerIdleRetargetTicks() {
@@ -8599,7 +9479,8 @@
                 score += load * TILE * 1.5;
                 if (load > 3) score += (load - 3) * TILE * 8;
                 if (Number.isFinite(candidate.level)) score += candidate.level * TILE * 0.8;
-                if (candidate.isUpgrading) score += TILE * 0.4;
+                if (candidate.isUpgrading) score -= TILE * 0.4;
+                if (candidate.isStacking) score += TILE * 0.4;
             }
             if (u.workerTarget && u.workerTarget === candidate.target) score -= TILE * 0.75;
 
@@ -8649,7 +9530,7 @@
             if (!target) return false;
             if (target.owner !== owner) return false;
             if (target.markedForSalvage) return false;
-            if (!target.underConstruction && !target.isUpgrading) return false;
+            if (!target.underConstruction && !target.isUpgrading && !target.isStacking) return false;
             if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
             return true;
         }
@@ -8712,7 +9593,10 @@
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
-            if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
+            if (u.path) {
+                _collectorRememberGatherSite(u, target, targetType);
+                u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING;
+            }
             else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
 
@@ -8897,16 +9781,101 @@
             return Math.max(0, Math.min(healWork, remaining));
         }
 
-        function _findNearestQueuedSpawnerNeedingWork(u) {
+        function _healerRememberWorkSite(u, target = null) {
+            let t = target || (u ? u.workerTarget : null);
+            if (!u || !t) return;
+            if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                u._healerLastWorkX = t.x;
+                u._healerLastWorkY = t.y;
+            }
+            if (Number.isFinite(t.gx) && Number.isFinite(t.gy)) {
+                u._healerLastWorkGx = t.gx;
+                u._healerLastWorkGy = t.gy;
+            }
+        }
+
+        function _healerGetSearchOrigin(u) {
+            if (u && Number.isFinite(u._healerLastWorkX) && Number.isFinite(u._healerLastWorkY)) {
+                return { x: u._healerLastWorkX, y: u._healerLastWorkY };
+            }
+            return { x: u.x, y: u.y };
+        }
+
+        function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNeedsWork = true) {
+            let best = null;
+            let bestDist = radius;
+            let consider = (s) => {
+                if (!s || s.owner !== owner || s.hp <= 0 || s.underConstruction) return;
+                if (!isQueueEnabled(s)) return;
+                if (requireNeedsWork && !_isHealerQueueTarget(s, owner)) return;
+                let d = Math.hypot(s.x - worldX, s.y - worldY);
+                if (d <= bestDist) {
+                    bestDist = d;
+                    best = s;
+                }
+            };
+            for (let b of barracks) consider(b);
+            for (let s of collectorSpawners) consider(s);
+            return best;
+        }
+
+        function _clearHealerQueueCommit(u) {
+            if (!u) return;
+            u._healerQueueCommitTarget = null;
+            u._healerQueueCommitRequired = 0;
+            u._healerQueueCommitMaxPaid = 0;
+        }
+
+        function _setHealerQueueCommit(u, target) {
+            if (!u || !target || !Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) {
+                _clearHealerQueueCommit(u);
+                return;
+            }
+            let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
+            let fallbackType = getSpawnerFallbackUnitType(target);
+            let effLvl = getThingEffectiveLevel(target);
+            let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+            u._healerQueueCommitTarget = target;
+            u._healerQueueCommitRequired = Math.max(1, Math.floor(Number(front.energyRequired) || 1));
+            u._healerQueueCommitMaxPaid = Math.max(0, Math.floor(Number(front.energyPaid) || 0));
+        }
+
+        function _getHealerCommittedQueueTarget(u) {
+            if (!u || u.workerTargetType !== 'queue') return null;
+            let target = u.workerTarget;
+            if (!target || target !== u._healerQueueCommitTarget) return null;
+            if (!_isHealerQueueTarget(target, u.owner)) {
+                _clearHealerQueueCommit(u);
+                return null;
+            }
+
+            let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
+            let fallbackType = getSpawnerFallbackUnitType(target);
+            let effLvl = getThingEffectiveLevel(target);
+            let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+            let paid = Math.max(0, Math.floor(Number(front.energyPaid) || 0));
+            let required = Math.max(1, Math.floor(Number(u._healerQueueCommitRequired) || 1));
+            u._healerQueueCommitMaxPaid = Math.max(Math.floor(Number(u._healerQueueCommitMaxPaid) || 0), paid);
+
+            // Keep this target until one queued unit is fully funded.
+            if (u._healerQueueCommitMaxPaid >= required) {
+                _clearHealerQueueCommit(u);
+                return null;
+            }
+            return target;
+        }
+
+        function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
             let candidates = [];
             let consider = (s) => {
                 if (!_isHealerQueueTarget(s, u.owner)) return;
-                let d = Math.hypot(s.x - u.x, s.y - u.y);
+                let d = Math.hypot(s.x - originX, s.y - originY);
+                let worldDist = Math.hypot(s.x - u.x, s.y - u.y);
                 candidates.push({
                     target: s,
                     targetType: 'queue',
                     dist: d,
-                    worldDist: d,
+                    worldDist: worldDist,
                     level: _getTargetPriorityLevel(s),
                     isUpgrading: !!s.isUpgrading
                 });
@@ -8946,16 +9915,17 @@
             return _pickDistributedWorkerTarget(u, candidates);
         }
 
-        function _findNearestDamagedFriendlyUnit(u) {
+        function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
             let candidates = [];
             for (let target of units) {
                 if (!_isHealerTargetUnit(target, u.owner)) continue;
-                let d = Math.hypot(target.x - u.x, target.y - u.y);
+                let d = Math.hypot(target.x - originX, target.y - originY);
+                let worldDist = Math.hypot(target.x - u.x, target.y - u.y);
                 candidates.push({
                     target: target,
                     targetType: 'unit',
                     dist: d,
-                    worldDist: d,
+                    worldDist: worldDist,
                     level: _getTargetPriorityLevel(target),
                     isUpgrading: false
                 });
@@ -8964,10 +9934,17 @@
         }
 
         function _healerFindTarget(u, myGx, myGy) {
-            let queueTarget = _findNearestQueuedSpawnerNeedingWork(u);
+            let origin = _healerGetSearchOrigin(u);
+            let queueTarget = _getHealerCommittedQueueTarget(u);
+            if (!queueTarget && _isHealerQueueTarget(u._healerPinnedQueueTarget, u.owner)) {
+                queueTarget = u._healerPinnedQueueTarget;
+            }
+            if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
             if (queueTarget) {
                 u.workerTarget = queueTarget;
                 u.workerTargetType = 'queue';
+                _healerRememberWorkSite(u, queueTarget);
+                if (queueTarget !== u._healerQueueCommitTarget) _setHealerQueueCommit(u, queueTarget);
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -8993,11 +9970,16 @@
                 u.commandState = CMD_IDLE;
                 return;
             }
+            if (u._healerPinnedQueueTarget && !_isHealerQueueTarget(u._healerPinnedQueueTarget, u.owner)) {
+                u._healerPinnedQueueTarget = null;
+            }
 
-            let target = _findNearestDamagedFriendlyUnit(u);
+            let target = _findNearestDamagedFriendlyUnit(u, origin.x, origin.y);
             if (target) {
+                _clearHealerQueueCommit(u);
                 u.workerTarget = target;
                 u.workerTargetType = 'unit';
+                _healerRememberWorkSite(u, target);
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -9021,6 +10003,7 @@
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
             } else {
+                _clearHealerQueueCommit(u);
                 u.workerTargetType = null;
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
@@ -9032,7 +10015,7 @@
             let candidates = [];
             let check = (b) => {
                 if (b.markedForSalvage) return;
-                if ((!b.underConstruction && !b.isUpgrading) || b.owner !== owner) return;
+                if ((!b.underConstruction && !b.isUpgrading && !b.isStacking) || b.owner !== owner) return;
                 if (b.underConstruction && !isBuildEnabled(b)) return;
                 let d = Math.hypot(b.x - originX, b.y - originY);
                 let worldDist = Math.hypot(b.x - u.x, b.y - u.y);
@@ -9041,14 +10024,15 @@
                     dist: d,
                     worldDist: worldDist,
                     level: _getTargetPriorityLevel(b),
-                    isUpgrading: !!b.isUpgrading
+                    isUpgrading: !!b.isUpgrading,
+                    isStacking: !!b.isStacking
                 });
             };
             for (let t of towers) check(t);
             for (let b of barracks) check(b);
             for (let s of collectorSpawners) check(s);
             for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) {
-                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading)) check(c.item);
+                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading || c.item.isStacking)) check(c.item);
             }
             return _pickDistributedWorkerTarget(u, candidates);
         }
@@ -9212,6 +10196,8 @@
 
                     let groupSize = group.length;
                     group.forEach(obj => {
+                        obj.stacks = getThingStackedStacks(obj);
+                        obj.manualStacks = getThingManualStacks(obj);
                         let actualStacks = obj.stacks || 1;
                         let baseStacks = actualStacks;
 
@@ -9236,6 +10222,13 @@
                         // Trigger or resume upgrade if we can reach a higher level and auto-upgrade is enabled
                         if (obj.potentialEffectiveLevel > obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
                             beginUpgradeProgress(obj, obj.effectiveLevel + 1);
+                        }
+
+                        if (!obj.underConstruction && !obj.isUpgrading) {
+                            obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
+                            if (!obj.isStacking) obj.stackingWorkDone = 0;
+                        } else if (obj.isUpgrading) {
+                            obj.isStacking = false;
                         }
 
                         if (obj.updateStats) {
@@ -9367,9 +10360,11 @@
 
             let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
             let useDefaultBuild = defaultAutoBuildEnabled;
+            let silentPlace = false;
             if (defaults && typeof defaults === 'object') {
                 if (defaults.autoUpgradeEnabled !== undefined) useDefaultAutoUpgrade = !!defaults.autoUpgradeEnabled;
                 if (defaults.buildEnabled !== undefined) useDefaultBuild = !!defaults.buildEnabled;
+                if (defaults.silent !== undefined) silentPlace = !!defaults.silent;
             }
 
             if (itemKey.startsWith('cloud_')) {
@@ -9430,11 +10425,7 @@
                 let unitType = cardDef.unitType || 'norm';
                 let existing = barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let b = new Barrack(gx, gy, playerId, unitType);
@@ -9451,11 +10442,7 @@
             } else if (itemKey === 'spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let s = new CollectorSpawner(gx, gy, playerId);
@@ -9472,11 +10459,7 @@
             } else if (itemKey === 'salvager') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'salvager' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let s = new SalvagerSpawner(gx, gy, playerId);
@@ -9493,11 +10476,7 @@
             } else if (itemKey === 'builder_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'builder_spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let s = new BuilderSpawner(gx, gy, playerId);
@@ -9515,11 +10494,7 @@
             } else if (itemKey === 'healer_spawner') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'healer_spawner' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let s = new HealerSpawner(gx, gy, playerId);
@@ -9536,11 +10511,7 @@
             } else if (itemKey === 'research') {
                 let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'research' && s.owner === playerId);
                 if (existing) {
-                    let nextLevel = stackCountToLevel(existing.stacks + 1);
-                    if (nextLevel > existing.level && !existing.isUpgrading && isAutoUpgradeEnabled(existing)) {
-                        beginUpgradeProgress(existing, nextLevel);
-                    }
-                    existing.stacks++; existing.level = stackCountToLevel(existing.stacks); updateItemTextCache(existing);
+                    addManualStackToThing(existing, 1);
                 }
                 else {
                     let s = new ResearchSpawner(gx, gy, playerId);
@@ -9558,23 +10529,17 @@
                 // Floor item
                 let cell = grid[gy][gx];
                 if (cell.item && cell.item.type === itemKey && cell.owner === playerId) {
-                    let nextLevel = stackCountToLevel(cell.item.stacks + 1);
-                    let curLevel = stackCountToLevel(cell.item.stacks);
-                    if (nextLevel > curLevel && !cell.item.isUpgrading && isAutoUpgradeEnabled(cell.item)) {
-                        beginUpgradeProgress(cell.item, nextLevel);
-                    }
-                    cell.item.stacks = (cell.item.stacks || 1) + 1;
-                    updateItemTextCache(cell.item);
+                    addManualStackToThing(cell.item, 1);
                 } else {
                     let stats = calculateItemStats(itemKey, 1, playerId);
-                    let item = { type: itemKey, stacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
+                    let item = { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, hp: 1, maxHp: stats.maxHp, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
                     cell.item = item;
                     cell.owner = playerId;
                     updateItemTextCache(item);
                 }
                 recalculateAdjacency();
             }
-            if (playerId === localPlayerId) playSound('place', gx * TILE + 16, gy * TILE + 16);
+            if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
             return true;
         }
 
@@ -9668,7 +10633,17 @@
             let hp = Math.max(0, Math.min(entity.hp || 0, maxHp));
             let pct = hp / maxHp;
             let isProgress = !!(entity.underConstruction || entity.isUpgrading);
-            if (!isProgress && hp >= maxHp) return false;
+            let hasStackQueue = !!entity && getThingManualStacks(entity) > getThingStackedStacks(entity);
+            if (!isProgress && !hasStackQueue && hp >= maxHp) return false;
+            if (hasStackQueue) {
+                let stackPct = getThingStackingProgressRatio(entity);
+                let stackY = y - height;
+                ctx.fillStyle = '#11291c';
+                ctx.fillRect(centerX - width / 2, stackY, width, height);
+                ctx.fillStyle = '#2fd27f';
+                ctx.fillRect(centerX - width / 2, stackY, width * stackPct, height);
+            }
+
             ctx.fillStyle = isProgress ? '#333' : '#600';
             ctx.fillRect(centerX - width / 2, y, width, height);
             ctx.fillStyle = isProgress ? '#fa0' : '#0f0';
@@ -10915,6 +11890,7 @@
             let multiUnitCommandPoints = [];
             let multiBuilderAssignTargets = [];
             let multiCollectorAssignTargets = [];
+            let multiHealerAssignTargets = [];
 
             function isCtrlMultiCommand(evt) {
                 if (!evt) return false;
@@ -11197,7 +12173,11 @@
 
             function applyWorkerAssignTargets(workerUnits, targetType, targetGx, targetGy, appendToMultiTargets) {
                 if (!workerUnits || workerUnits.length === 0) return;
-                let multiTargets = targetType === 'build' ? multiBuilderAssignTargets : multiCollectorAssignTargets;
+                let multiTargets = targetType === 'build'
+                    ? multiBuilderAssignTargets
+                    : (targetType === 'mine' || targetType === 'farm')
+                        ? multiCollectorAssignTargets
+                        : multiHealerAssignTargets;
                 if (appendToMultiTargets && multiTargets.length > 0) {
                     multiTargets.push({ targetGx, targetGy });
                     if (multiTargets.length > 12) multiTargets.shift();
@@ -11374,6 +12354,7 @@
                         let ownBarrackHits = [];
                         for (let b of barracks) {
                             if (b.owner !== localPlayerId || b.hp <= 0 || b.underConstruction) continue;
+                            if (!isQueueEnabled(b)) continue;
                             if (!isTileVisible(b.gx, b.gy)) continue;
                             ownBarrackHits.push({ ref: b, x: b.x, y: b.y, hitRadius: 20 });
                         }
@@ -11408,19 +12389,27 @@
                         }
 
                         if (collectorUnits.length > 0) {
-                            // Check if right-clicking a gold mine
-                            let mine = null;
-                            for (let m of goldMines) {
-                                if (m.gold > 0 && Math.hypot(m.x - world.x, m.y - world.y) < 22) { mine = m; break; }
-                            }
-                            if (mine) {
-                                applyWorkerAssignTargets(collectorUnits, 'mine', mine.gx, mine.gy, isCtrlMulti);
+                            let gatherTarget = _getCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22);
+                            if (gatherTarget) {
+                                applyWorkerAssignTargets(collectorUnits, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
                                 updateInfoPanel();
                                 let nonWorkers = activeUnits.filter(u => !u.workerType);
                                 if (nonWorkers.length === 0) return;
                             }
                         } else if (!isCtrlMulti) {
                             multiCollectorAssignTargets = [];
+                        }
+
+                        if (healerUnits.length > 0) {
+                            let queueTarget = _getHealerQueueTargetNear(world.x, world.y, localPlayerId, 22, true);
+                            if (queueTarget) {
+                                applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
+                                updateInfoPanel();
+                                let nonWorkers = activeUnits.filter(u => !u.workerType);
+                                if (nonWorkers.length === 0) return;
+                            }
+                        } else if (!isCtrlMulti) {
+                            multiHealerAssignTargets = [];
                         }
 
                         // --- Normal combat unit targeting ---
@@ -11668,6 +12657,7 @@
                     }
                     if (setResearchStatMatrixPopupOpen(false)) return;
                     if (setResearchPopupOpen(false)) return;
+                    if (setStartingResourcesPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     stopBuildPlacementDrag();
                     selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
@@ -11867,12 +12857,18 @@
             const btnHelp = document.getElementById('btn-help');
             const btnHelpClose = document.getElementById('btn-help-close');
             const btnResearchClose = document.getElementById('btn-research-close');
+            const btnOpenStartingResources = document.getElementById('btn-open-starting-resources');
+            const btnStartingResourcesClose = document.getElementById('btn-starting-resources-close');
+            const btnExportSettings = document.getElementById('btn-export-settings');
+            const btnImportSettings = document.getElementById('btn-import-settings');
+            const inputImportSettings = document.getElementById('input-import-settings');
             const btnShowStatsMap = document.getElementById('btn-show-statsmap');
             const btnRefreshStatsMap = document.getElementById('btn-refresh-statsmap');
             const btnStatsMapClose = document.getElementById('btn-statsmap-close');
             const btnResearchMatrixClose = document.getElementById('btn-research-matrix-close');
             const helpPopup = document.getElementById('help-popup');
             const researchPopup = document.getElementById('research-popup');
+            const startingResourcesPopup = document.getElementById('starting-resources-popup');
             const statsMapPopup = document.getElementById('statsmap-popup');
             const researchMatrixPopup = document.getElementById('research-matrix-popup');
             const btnResign = document.getElementById('btn-resign');
@@ -11888,6 +12884,38 @@
             if (btnShowStatsMap) {
                 btnShowStatsMap.addEventListener('click', () => {
                     setStatsMapPopupOpen(true);
+                });
+            }
+            if (btnOpenStartingResources) {
+                btnOpenStartingResources.addEventListener('click', () => {
+                    setStartingResourcesPopupOpen(true);
+                });
+            }
+            if (btnStartingResourcesClose) {
+                btnStartingResourcesClose.addEventListener('click', () => {
+                    setStartingResourcesPopupOpen(false);
+                });
+            }
+            if (btnExportSettings) {
+                btnExportSettings.addEventListener('click', () => {
+                    downloadMainMenuSettings();
+                });
+            }
+            if (btnImportSettings && inputImportSettings) {
+                btnImportSettings.addEventListener('click', () => {
+                    inputImportSettings.value = '';
+                    let opened = false;
+                    if (typeof inputImportSettings.showPicker === 'function') {
+                        try {
+                            inputImportSettings.showPicker();
+                            opened = true;
+                        } catch {}
+                    }
+                    if (!opened) inputImportSettings.click();
+                });
+                inputImportSettings.addEventListener('change', () => {
+                    let file = inputImportSettings.files && inputImportSettings.files[0] ? inputImportSettings.files[0] : null;
+                    importMainMenuSettingsFromFile(file);
                 });
             }
             if (btnRefreshStatsMap) {
@@ -11968,6 +12996,11 @@
             if (researchPopup) {
                 researchPopup.addEventListener('mousedown', (e) => {
                     if (e.target === researchPopup) setResearchPopupOpen(false);
+                });
+            }
+            if (startingResourcesPopup) {
+                startingResourcesPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === startingResourcesPopup) setStartingResourcesPopupOpen(false);
                 });
             }
             if (statsMapPopup) {
@@ -12404,7 +13437,16 @@
                             u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
                             u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                             u.commandState = CMD_MOVING;
-                            if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
+                            if (u.workerState) {
+                                Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
+                                if (u.workerType === 'collector') {
+                                    u._collectorPinnedTarget = null;
+                                    u._collectorPinnedTargetType = null;
+                                } else if (u.workerType === 'healer') {
+                                    u._healerPinnedQueueTarget = null;
+                                    _clearHealerQueueCommit(u);
+                                }
+                            }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
@@ -12426,7 +13468,16 @@
                             u.targetUnit = null; u.targetBuilding = null; u.forcedAttackTarget = false;
                             u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                             u.commandState = CMD_ATTACK_MOVING;
-                            if (u.workerState) { Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null }); }
+                            if (u.workerState) {
+                                Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
+                                if (u.workerType === 'collector') {
+                                    u._collectorPinnedTarget = null;
+                                    u._collectorPinnedTargetType = null;
+                                } else if (u.workerType === 'healer') {
+                                    u._healerPinnedQueueTarget = null;
+                                    _clearHealerQueueCommit(u);
+                                }
+                            }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
@@ -12498,7 +13549,7 @@
                     }
                 } else if (a.action === 'queueUnit') {
                     let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
-                    if (b && b.hp > 0 && !b.underConstruction) {
+                    if (b && b.hp > 0 && !b.underConstruction && isQueueEnabled(b)) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (b.spawnQueue.length >= 20) break;
@@ -12508,7 +13559,7 @@
                     }
                 } else if (a.action === 'queueWorker') {
                     let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (s && s.hp > 0 && !s.underConstruction) {
+                    if (s && s.hp > 0 && !s.underConstruction && isQueueEnabled(s)) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
                             if (s.spawnQueue.length >= 10) break;
@@ -12528,7 +13579,7 @@
                 } else if (a.action === 'queueResearch') {
                     let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
                     let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
-                    if (r && r.hp > 0 && !r.underConstruction && stat) {
+                    if (r && r.hp > 0 && !r.underConstruction && stat && isQueueEnabled(r)) {
                         let p = ensurePlayerResearchQueueState(playerId);
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -12557,11 +13608,23 @@
                                 u.workerTarget = null; // clear old target
                                 _builderAssignTarget(u, target, myGx, myGy);
                             }
-                        } else if (u.workerType === 'collector' && a.targetType === 'mine') {
-                            let mine = goldMines.find(m => m.gx === a.targetGx && m.gy === a.targetGy && m.gold > 0);
-                            if (mine) {
+                        } else if (u.workerType === 'collector' && (a.targetType === 'mine' || a.targetType === 'farm')) {
+                            let gather = _getCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
+                            if (gather && _isCollectorTargetValid(gather.target, gather.type, playerId)) {
                                 u.workerTarget = null;
-                                _collectorAssignMine(u, mine, myGx, myGy);
+                                u._collectorPinnedTarget = gather.target;
+                                u._collectorPinnedTargetType = gather.type;
+                                _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
+                            }
+                        } else if (u.workerType === 'healer' && a.targetType === 'queue') {
+                            let qTarget = barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.owner === playerId)
+                                || collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.owner === playerId);
+                            if (_isHealerQueueTarget(qTarget, playerId)) {
+                                u.workerTarget = null;
+                                u.workerTargetType = null;
+                                u._healerPinnedQueueTarget = qTarget;
+                                _setHealerQueueCommit(u, qTarget);
+                                _healerFindTarget(u, myGx, myGy);
                             }
                         }
                     }
@@ -12718,9 +13781,17 @@
                         target.autoUpgradeEnabled = !!a.enabled;
                         if (!target.autoUpgradeEnabled) {
                             target.isUpgrading = false;
-                        } else if (!target.underConstruction && !target.isUpgrading && getThingPotentialLevel(target) > getThingEffectiveLevel(target)) {
-                            beginUpgradeProgress(target, getThingEffectiveLevel(target) + 1);
                         }
+                        refreshThingProgressState(target);
+                    }
+                } else if (a.action === 'setAutoStack') {
+                    let target = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId) ||
+                        barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
+                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId) ||
+                        (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
+                    if (target) {
+                        target.autoStackEnabled = !!a.enabled;
+                        refreshThingProgressState(target);
                     }
                 } else if (a.action === 'setBuildEnabled') {
                     let target = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId) ||
@@ -12729,6 +13800,12 @@
                         (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
                     if (target) {
                         target.buildEnabled = !!a.enabled;
+                    }
+                } else if (a.action === 'setQueueEnabled') {
+                    let target = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
+                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    if (target) {
+                        target.queueEnabled = !!a.enabled;
                     }
                 } else if (a.action === 'setAutoResearch') {
                     let target = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
@@ -13321,39 +14398,59 @@
 
         function salvageBtn(gx, gy, isMarked, isUnit, unitId) {
             if (isUnit) {
-                return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-unit-id="${unitId}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? 'Cancel Kill' : 'Kill Unit'}</span></div>`;
+                return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-unit-id="${unitId}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? '\u2620\u2715' : '\u2620'}</span></div>`;
             }
-            return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-gx="${gx}" data-gy="${gy}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? 'Cancel Salvage' : 'Salvage'}</span></div>`;
+            return `<div style="margin-top:3px;text-align:center"><span class="info-salvage-btn" data-gx="${gx}" data-gy="${gy}" style="cursor:pointer;background:${isMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${isMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${isMarked ? '#f44' : '#888'}">${isMarked ? '\u2620\u2715' : '\u2620'}</span></div>`;
         }
 
         function autoUpgradeBtn(gx, gy, enabled) {
-            return `<span class="info-auto-upgrade-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#8cf' : '#888'}">Auto Upgrade: ${enabled ? 'ON' : 'OFF'}</span>`;
+            return `<span class="info-auto-upgrade-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#8cf' : '#888'}">Lvl+ ${enabled ? 'ON' : 'OFF'}</span>`;
         }
 
         function autoResearchBtn(gx, gy, enabled) {
-            return `<span class="info-auto-research-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9fdaab' : '#888'}">Auto Research: ${enabled ? 'ON' : 'OFF'}</span>`;
+            return `<span class="info-auto-research-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9fdaab' : '#888'}">R ${enabled ? 'ON' : 'OFF'}</span>`;
+        }
+
+        function autoStackBtn(gx, gy, enabled) {
+            return `<span class="info-auto-stack-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#2c261c' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#d9aa60' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#ffd8a0' : '#888'}">\uD83E\uDDF1 ${enabled ? 'ON' : 'OFF'}</span>`;
         }
 
         function autoUpgradeGroupBtn(coordStr, allEnabled, anyEnabled) {
             let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
             let nextAutoEnabled = allEnabled ? '0' : '1';
-            return `<span class="info-auto-upgrade-group-btn" data-coords="${coordStr}" data-enabled="${nextAutoEnabled}" style="cursor:pointer;background:${allEnabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#8cf' : '#888'}">Auto Upgrade: ${label}</span>`;
+            return `<span class="info-auto-upgrade-group-btn" data-coords="${coordStr}" data-enabled="${nextAutoEnabled}" style="cursor:pointer;background:${allEnabled ? '#223' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#4af' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#8cf' : '#888'}">Lvl+ ${label}</span>`;
         }
 
         function autoResearchGroupBtn(coordStr, allEnabled, anyEnabled) {
             let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
             let nextEnabled = allEnabled ? '0' : '1';
-            return `<span class="info-auto-research-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9fdaab' : '#888'}">Auto Research: ${label}</span>`;
+            return `<span class="info-auto-research-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#243025' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6ccf7c' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9fdaab' : '#888'}">R ${label}</span>`;
+        }
+
+        function autoStackGroupBtn(coordStr, allEnabled, anyEnabled) {
+            let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
+            let nextEnabled = allEnabled ? '0' : '1';
+            return `<span class="info-auto-stack-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#2c261c' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#d9aa60' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#ffd8a0' : '#888'}">\uD83E\uDDF1 ${label}</span>`;
         }
 
         function buildToggleBtn(gx, gy, enabled) {
-            return `<span class="info-build-toggle-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9f9' : '#888'}">Build: ${enabled ? 'ON' : 'OFF'}</span>`;
+            return `<span class="info-build-toggle-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#9f9' : '#888'}">\uD83D\uDD28 ${enabled ? 'ON' : 'OFF'}</span>`;
         }
 
         function buildToggleGroupBtn(coordStr, allEnabled, anyEnabled) {
             let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
             let nextEnabled = allEnabled ? '0' : '1';
-            return `<span class="info-build-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9f9' : '#888'}">Build: ${label}</span>`;
+            return `<span class="info-build-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#232' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6f6' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#9f9' : '#888'}">\uD83D\uDD28 ${label}</span>`;
+        }
+
+        function queueToggleBtn(gx, gy, enabled) {
+            return `<span class="info-queue-toggle-btn" data-gx="${gx}" data-gy="${gy}" data-enabled="${enabled ? '0' : '1'}" style="cursor:pointer;background:${enabled ? '#222c34' : '#222'};padding:2px 8px;border:1px solid ${enabled ? '#6cb7ff' : '#555'};border-radius:3px;font-size:9px;color:${enabled ? '#a7d6ff' : '#888'}">Q ${enabled ? 'ON' : 'OFF'}</span>`;
+        }
+
+        function queueToggleGroupBtn(coordStr, allEnabled, anyEnabled) {
+            let label = allEnabled ? 'ON' : (anyEnabled ? 'MIXED' : 'OFF');
+            let nextEnabled = allEnabled ? '0' : '1';
+            return `<span class="info-queue-toggle-group-btn" data-coords="${coordStr}" data-enabled="${nextEnabled}" style="cursor:pointer;background:${allEnabled ? '#222c34' : '#222'};padding:2px 8px;border:1px solid ${allEnabled ? '#6cb7ff' : '#555'};border-radius:3px;font-size:9px;color:${allEnabled ? '#a7d6ff' : '#888'}">Q ${label}</span>`;
         }
 
         function disabledInfoPill(label) {
@@ -13558,7 +14655,7 @@
                 if (e.type && BASE_CARD_TYPES[e.type]) return 'floor_' + e.type;
                 return 'unknown_type';
             }
-            let state = e.underConstruction ? 'build' : (e.isUpgrading ? 'upg' : 'ready');
+            let state = e.underConstruction ? 'build' : (e.isUpgrading ? 'upg' : (e.isStacking ? 'stack' : 'ready'));
             let lvl = getDisplayLevel(e);
             let lvlPart = '_L' + lvl;
             if (e.type === 'barrack') return 'barrack_' + e.unitType + lvlPart + '_' + state;
@@ -13617,6 +14714,7 @@
             if (!e || e._isGoldMine) return null;
             if (e.underConstruction) return 'build';
             if (e.isUpgrading) return 'upg';
+            if (e.isStacking) return 'stack';
             if (e.effectiveLevel !== undefined) return `L${getThingEffectiveLevel(e)}`;
             if (e.level !== undefined || e.stacks !== undefined) return `L${getThingBaseLevel(e)}`;
             return null;
@@ -13634,20 +14732,29 @@
             return Math.max(currentMax, nextMax);
         }
 
-        function getStackProgressText(stacks, levelHint) {
-            let safeStacks = Math.max(1, Math.floor(Number(stacks) || 1));
-            let safeLevel = Number.isFinite(levelHint)
-                ? Math.max(1, clampThingLevel(levelHint))
-                : stackCountToLevel(safeStacks);
-            let nextReq = Math.max(safeStacks, getRequiredStacksForLevel(safeLevel + 1));
-            return `${formatBigNumber(safeStacks)}/${formatBigNumber(nextReq)}`;
+        function getEntityStatusText(e, includeResearch = false) {
+            if (!e) return '';
+            if (e.underConstruction) return '\uD83D\uDD28 Under Construction';
+            if (includeResearch && e.isResearching) return '\uD83E\uDDEA Researching';
+            if (e.isUpgrading) return '\u2B06\uFE0F Upgrading';
+            if (e.isStacking) {
+                let remainingEnergy = getThingStackingRemainingEnergy(e);
+                return `\uD83E\uDDF1 Stacking (${formatBigNumber(remainingEnergy, 1)})`;
+            }
+            return '\u2713 Ready';
         }
 
-        function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel) {
-            let baseText = getStackProgressText(baseStacks, baseLevel);
+        function getStackProgressText(stackedStacks, manualStacks) {
+            let stacked = Math.max(1, Math.floor(Number(stackedStacks) || 1));
+            let manual = Math.max(stacked, Math.floor(Number(manualStacks) || stacked));
+            return `${formatBigNumber(stacked)}/${formatBigNumber(manual)}`;
+        }
+
+        function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, manualStacks = baseStacks) {
+            let baseText = getStackProgressText(baseStacks, manualStacks);
             let hasEff = Number.isFinite(effStacks) && Number.isFinite(effLevel);
             if (!hasEff) return infoRow('Stacks', baseText);
-            let effText = getStackProgressText(effStacks, effLevel);
+            let effText = getStackProgressText(effStacks, manualStacks);
             return infoRow('Stacks', baseText, effText !== baseText ? effText : undefined);
         }
 
@@ -13662,9 +14769,9 @@
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
+            html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             // // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
@@ -13678,7 +14785,7 @@
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = !e.underConstruction;
+                let canQueue = !e.underConstruction && isQueueEnabled(e);
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="unit" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -13687,12 +14794,14 @@
                     : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let buildEnabled = isBuildEnabled(e);
-                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
+                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('Build: --');
+                let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
+                let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -13715,7 +14824,7 @@
             html += infoRow('Count', group.length);
             html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += infoRow('Unit Energy', Number.isFinite(uHp) ? Math.floor(uHp) : '?');
             html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
@@ -13731,12 +14840,13 @@
                 let hasUnderConstruction = group.some(b => b.underConstruction);
                 let allBuildEnabled = group.every(b => isBuildEnabled(b));
                 let anyBuildEnabled = group.some(b => isBuildEnabled(b));
-                let queueCoordStr = readyGroup.map(b => `${b.gx},${b.gy}`).join(';');
+                let queueReady = readyGroup.filter(b => isQueueEnabled(b));
+                let queueCoordStr = queueReady.map(b => `${b.gx},${b.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = readyGroup.length > 0;
+                let canQueue = queueReady.length > 0;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-group-btn" data-type="unit" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -13744,12 +14854,14 @@
                     ? `<span class="info-buy-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
                     : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(b => `${b.gx},${b.gy}`).join(';');
-                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
+                let stackBtn = autoStackGroupBtn(coordStr, group.every(b => isAutoStackEnabled(b)), group.some(b => isAutoStackEnabled(b)));
+                let queueBtn = queueToggleGroupBtn(coordStr, group.every(b => isQueueEnabled(b)), group.some(b => isQueueEnabled(b)));
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 20)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[bKey] || 'Trains units for combat.');
             return html;
@@ -13767,9 +14879,9 @@
             let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
             let effVis = Number(s.visionRange || 0);
             html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
+            html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
             if (e.type !== 'laser') {
                 html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
@@ -13818,7 +14930,8 @@
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
                 let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Defensive tower.');
             return html;
@@ -13840,7 +14953,7 @@
             html += infoRow('Count', group.length);
             html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
             if (e.type !== 'laser') {
                 html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
@@ -13893,7 +15006,8 @@
                 let coordStr = group.map(t => `${t.gx},${t.gy}`).join(';');
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                let stackBtn = autoStackGroupBtn(coordStr, group.every(t => isAutoStackEnabled(t)), group.some(t => isAutoStackEnabled(t)));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Defensive tower.');
             return html;
@@ -13909,9 +15023,9 @@
             let upg = getNextLevelUpgradeInfo(e);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready'));
+            html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
+            html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             // html += infoRow('Upgrade', `${upg.goldCost}g, HP ${upg.hpNow}->${upg.hpNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
@@ -13921,7 +15035,7 @@
                 let cost = e.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = !e.underConstruction;
+                let canQueue = !e.underConstruction && isQueueEnabled(e);
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -13930,12 +15044,14 @@
                     : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let buildEnabled = isBuildEnabled(e);
-                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span>`;
+                let salvBtn = `<span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span>`;
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
-                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('Build: --');
+                let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
+                let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, buildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction((e.spawnQueue || []).length, 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -13954,7 +15070,7 @@
             let visTiles = getEntityVisibilityRangeTiles(e);
             if (baseStats.maxHp > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp || baseStats.maxHp), getEntityHpDisplayMax(e)));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel);
+            html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
@@ -14002,7 +15118,8 @@
                 let autoEnabled = isAutoUpgradeEnabled(e);
                 let autoBtn = autoUpgradeBtn(fgx, fgy, autoEnabled);
                 let buildBtn = e.underConstruction ? buildToggleBtn(fgx, fgy, isBuildEnabled(e)) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${fgx}" data-gy="${fgy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                let stackBtn = autoStackBtn(fgx, fgy, isAutoStackEnabled(e));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${fgx}" data-gy="${fgy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Placed floor item.');
             return html;
@@ -14047,7 +15164,7 @@
 
             html += infoRow('Energy', formatInfoFraction(baseHpNow, baseMaxHp), formatInfoFraction(Math.floor(u.hp), u.maxHp));
             html += infoRow('Level', `L${lvl}`, effLvl !== lvl ? `L${effLvl}` : undefined);
-            html += infoRowStacks(stacks, lvl, effStacks, effLvl);
+            html += infoRowStacks(stacks, lvl, effStacks, effLvl, stacks);
             html += infoRow('Range', formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
             html += infoRow('Visibility', formatRangeStatTiles(baseVisionRange), Math.abs(baseVisionRange - effVisionRange) > 0.001 ? formatRangeStatTiles(effVisionRange) : undefined);
             if (u.workerType === 'builder') {
@@ -14092,7 +15209,7 @@
             if (statuses.length > 0) html += infoRow('Status', statuses.join(' '));
             if (u.owner === localPlayerId) {
                 html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
-                html += `<span class="info-salvage-btn" data-unit-id="${u.id}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill Unit</span>`;
+                html += `<span class="info-salvage-btn" data-unit-id="${u.id}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">\u2620</span>`;
                 html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
                 html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
                 html += `</div>`;
@@ -14226,7 +15343,7 @@
                 let ids = group.map(u => u.id).join(',');
                 let subgroupLevel = ignoreLevelSubgroups ? '' : getUnitBaseLevel(u0);
                 html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
-                html += `<span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">Kill All (${group.length})</span>`;
+                html += `<span class="info-kill-group-btn" data-ids="${ids}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#888">\u2620x${group.length}</span>`;
                 html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
                 html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 6px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
                 html += `</div>`;
@@ -14285,7 +15402,7 @@
             html += infoRow('Count', group.length);
             html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel);
+            html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
@@ -14296,12 +15413,13 @@
                 let hasUnderConstruction = group.some(s => s.underConstruction);
                 let allBuildEnabled = group.every(s => isBuildEnabled(s));
                 let anyBuildEnabled = group.some(s => isBuildEnabled(s));
-                let queueCoordStr = readyGroup.map(s => `${s.gx},${s.gy}`).join(';');
+                let queueReady = readyGroup.filter(s => isQueueEnabled(s));
+                let queueCoordStr = queueReady.map(s => `${s.gx},${s.gy}`).join(';');
                 let queueCostSource = readyGroup[0] || e;
                 let cost = queueCostSource.getUnitCost();
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = cost * purchaseCount;
-                let canQueue = readyGroup.length > 0;
+                let canQueue = queueReady.length > 0;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${queueCoordStr}" style="cursor:pointer;color:#f44;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -14309,12 +15427,14 @@
                     ? `<span class="info-buy-worker-group-btn" data-coords="${queueCoordStr}" style="cursor:pointer;color:#4f4;font-weight:bold;margin-left:4px;">[+]</span>`
                     : `<span style="color:#444;font-weight:bold;margin-left:4px;">[+]</span>`;
                 let coordStr = group.map(s => `${s.gx},${s.gy}`).join(';');
-                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
+                let stackBtn = autoStackGroupBtn(coordStr, group.every(s => isAutoStackEnabled(s)), group.some(s => isAutoStackEnabled(s)));
+                let queueBtn = queueToggleGroupBtn(coordStr, group.every(s => isQueueEnabled(s)), group.some(s => isQueueEnabled(s)));
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
                 html += `<div class="info-row" style="justify-content:space-between;align-items:center;"><span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span><span style="color:#fff;margin:0 6px;">${formatInfoFraction(totalQueue, Math.max(1, readyGroup.length) * 10)}</span><div style="display:flex;align-items:center;">${subBtn}${addBtn}</div></div>`;
                 html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Spawns worker units.');
             return html;
@@ -14693,9 +15813,9 @@
             let queueCap = getResearchQueueCapacityForPlayer(e.owner);
             let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Energy', formatInfoFraction(Math.floor(e.hp), getEntityHpDisplayMax(e)));
-            html += infoRow('Status', e.underConstruction ? '\uD83D\uDD28 Under Construction' : (e.isResearching ? '\uD83E\uDDEA Researching' : (e.isUpgrading ? '\u2B06\uFE0F Upgrading' : '\u2713 Ready')));
+            html += infoRow('Status', getEntityStatusText(e, true));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
@@ -14710,7 +15830,7 @@
                 let queueCount = researcherQueue.length;
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = Math.max(1, Math.floor(Number.isFinite(researcherEnergy) ? researcherEnergy : 1)) * purchaseCount;
-                let canQueue = !e.underConstruction;
+                let canQueue = !e.underConstruction && isQueueEnabled(e);
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-btn" data-type="worker" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -14741,8 +15861,10 @@
                 let autoBtn = autoUpgradeBtn(e.gx, e.gy, autoEnabled);
                 let autoResearchEnabled = isAutoResearchEnabled(e);
                 let autoResearchToggle = autoResearchBtn(e.gx, e.gy, autoResearchEnabled);
-                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : disabledInfoPill('Build: --');
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? 'Cancel Salvage' : 'Salvage'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearchToggle}${autoBtn}</div></div>`;
+                let buildBtn = e.underConstruction ? buildToggleBtn(e.gx, e.gy, isBuildEnabled(e)) : disabledInfoPill('\uD83D\uDD28 --');
+                let queueBtn = queueToggleBtn(e.gx, e.gy, isQueueEnabled(e));
+                let stackBtn = autoStackBtn(e.gx, e.gy, isAutoStackEnabled(e));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-btn" data-gx="${e.gx}" data-gy="${e.gy}" style="cursor:pointer;background:${e.markedForSalvage ? '#533' : '#222'};padding:2px 8px;border:1px solid ${e.markedForSalvage ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${e.markedForSalvage ? '#f44' : '#888'}">${e.markedForSalvage ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearchToggle}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
             return html;
@@ -14764,7 +15886,7 @@
             html += infoRow('Count', group.length);
             html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel);
+            html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             if (e.owner === localPlayerId) {
                 let rallyTokens = new Set(group.map(r => (r.rallyX !== null && r.rallyY !== null)
@@ -14787,12 +15909,13 @@
                     workerQueueCount += r.spawnQueue.length;
                 }
                 let readyGroup = group.filter(r => !r.underConstruction);
-                let workerCoordStr = readyGroup.map(r => `${r.gx},${r.gy}`).join(';');
+                let queueReady = readyGroup.filter(r => isQueueEnabled(r));
+                let workerCoordStr = queueReady.map(r => `${r.gx},${r.gy}`).join(';');
                 let queueCostSource = group.find(r => !r.underConstruction) || group[0];
                 let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
                 let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                 let totalCost = Math.max(1, Math.floor(cost || 1)) * purchaseCount;
-                let canQueue = readyGroup.length > 0;
+                let canQueue = queueReady.length > 0;
                 let subBtn = canQueue
                     ? `<span class="info-dequeue-group-btn" data-type="worker" data-coords="${workerCoordStr}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`
                     : `<span style="color:#444;font-weight:bold;">[-]</span>`;
@@ -14826,11 +15949,13 @@
                 let hasUnderConstruction = group.some(r => r.underConstruction);
                 let allBuildEnabled = group.every(r => isBuildEnabled(r));
                 let anyBuildEnabled = group.some(r => isBuildEnabled(r));
-                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span>`;
+                let salvBtn = `<span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span>`;
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let autoResearch = autoResearchGroupBtn(coordStr, allAutoResearchEnabled, anyAutoResearchEnabled);
-                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('Build: --');
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoResearch}${autoBtn}</div></div>`;
+                let stackBtn = autoStackGroupBtn(coordStr, group.every(r => isAutoStackEnabled(r)), group.some(r => isAutoStackEnabled(r)));
+                let queueBtn = queueToggleGroupBtn(coordStr, group.every(r => isQueueEnabled(r)), group.some(r => isQueueEnabled(r)));
+                let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : disabledInfoPill('\uD83D\uDD28 --');
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;">${salvBtn}</div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${queueBtn}${stackBtn}${autoResearch}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS.research || 'Runs queued research projects.');
             return html;
@@ -14953,7 +16078,7 @@
             html += infoRow('Count', group.length);
             if (baseStats.maxHp > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(totalHp), totalMaxHp));
             html += infoRowLevel('Level', e);
-            html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel);
+            html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
             html += infoRow('Visibility', formatRangeStatTiles(visTiles));
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
@@ -15005,7 +16130,8 @@
                 let coordStr = group.map(f => { let gx = f.gx !== undefined ? f.gx : f._gx, gy = f.gy !== undefined ? f.gy : f._gy; return `${gx},${gy}`; }).join(';');
                 let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
                 let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
-                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? 'Cancel Salvage All' : 'Salvage All'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${autoBtn}</div></div>`;
+                let stackBtn = autoStackGroupBtn(coordStr, group.every(f => isAutoStackEnabled(f)), group.some(f => isAutoStackEnabled(f)));
+                html += `<div class="info-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;"><span class="info-salvage-group-btn" data-coords="${coordStr}" style="cursor:pointer;background:${anyMarked ? '#533' : '#222'};padding:2px 8px;border:1px solid ${anyMarked ? '#f44' : '#555'};border-radius:3px;font-size:9px;color:${anyMarked ? '#f44' : '#888'}">${anyMarked ? '\u2620\u2715' : '\u2620'}</span></div><div style="display:flex;align-items:center;gap:4px;">${buildBtn}${stackBtn}${autoBtn}</div></div>`;
             }
             html += infoDesc(DESCRIPTIONS[e.type] || 'Placed floor item.');
             return html;
@@ -15544,6 +16670,42 @@
                     setTimeout(updateInfoPanel, 50);
                 });
             });
+            // Wire up auto-stack toggles (single)
+            panel.querySelectorAll('.info-auto-stack-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let enabled = btn.dataset.enabled === '1';
+                    queueAction({ action: 'setAutoStack', gx, gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up auto-stack toggles (groups)
+            panel.querySelectorAll('.info-auto-stack-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let enabled = btn.dataset.enabled === '1';
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+                    for (let c of coords) queueAction({ action: 'setAutoStack', gx: c.gx, gy: c.gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up queue toggles (single)
+            panel.querySelectorAll('.info-queue-toggle-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
+                    let enabled = btn.dataset.enabled === '1';
+                    queueAction({ action: 'setQueueEnabled', gx, gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
+            // Wire up queue toggles (groups)
+            panel.querySelectorAll('.info-queue-toggle-group-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let enabled = btn.dataset.enabled === '1';
+                    let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
+                    for (let c of coords) queueAction({ action: 'setQueueEnabled', gx: c.gx, gy: c.gy, enabled });
+                    setTimeout(updateInfoPanel, 50);
+                });
+            });
             // Wire up auto-research toggles (single)
             panel.querySelectorAll('.info-auto-research-btn').forEach(btn => {
                 bindInstantPress(btn, () => {
@@ -15965,6 +17127,7 @@
                 RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(data.cfg.researchBonusExpOther) || 1.25);
                 MAX_THING_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxThingLevel) || 20));
                 MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxResearchLevel) || 10));
+                startingResourcesConfig = normalizeStartingResourcesConfig(data.cfg.startingResources || makeDefaultStartingResourcesConfig());
             }
             initAudio();
             startGame();
@@ -16837,6 +18000,7 @@
                 researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
                 maxThingLevel: MAX_THING_LEVEL,
                 maxResearchLevel: MAX_RESEARCH_LEVEL,
+                startingResources: cloneStartingResourcesConfig(),
             };
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
@@ -16930,6 +18094,7 @@
             RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(document.getElementById('cfg-research-bonus-exp-other').value) || 1.25);
             MAX_THING_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-thing-level').value) || 20));
             MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(document.getElementById('cfg-max-research-level').value) || 10));
+            startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
         }
 
         function initLobbySettingsCarousel() {
@@ -17055,180 +18220,208 @@
             let spawns = pickPlayerSpawns(teams.length);
             generateGoldMines(spawns);
 
-            let teamSpawners = {};
+            let teamBuilderSpawners = {};
             let teamHealerSpawners = {};
+            let teamCollectorSpawners = {};
+            let teamResearchSpawners = {};
             let teamSpawnPos = {};
+
+            startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
+
+            let findStarterBuildSpot = (origin, maxRadius = 12) => {
+                for (let r = 1; r <= maxRadius; r++) {
+                    for (let dy = -r; dy <= r; dy++) {
+                        for (let dx = -r; dx <= r; dx++) {
+                            let fx = origin.gx + dx, fy = origin.gy + dy;
+                            if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
+                            if (Math.abs(dx) + Math.abs(dy) > r) continue;
+                            let cell = grid[fy][fx];
+                            if (!cell || cell.type === TYPE_WALL || cell.item) continue;
+                            let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
+                            if (blockedByMine) continue;
+                            return { gx: fx, gy: fy };
+                        }
+                    }
+                }
+                return null;
+            };
+
+            let applyWorkerDefaults = (u) => {
+                if (!u) return;
+                if (u.unitType === 'collector') {
+                    u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                } else if (u.unitType === 'salvager_unit') {
+                    u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
+                } else if (u.unitType === 'builder_unit') {
+                    u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null; u.builderHasMaterial = false;
+                } else if (u.unitType === 'healer_unit') {
+                    u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null; u.healerHasMaterial = false;
+                } else if (u.unitType === 'researcher_unit') {
+                    u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null; u.researcherHasMaterial = false;
+                }
+            };
+
+            let completeStarterBuilding = (item, itemKey, owner, level) => {
+                if (!item) return;
+                let lvl = Math.max(1, clampThingLevel(level || 1));
+                let stacks = getRequiredStacksForLevel(lvl);
+                item.stacks = stacks;
+                item.effectiveStacks = stacks;
+                item.level = lvl;
+                item.effectiveLevel = lvl;
+                item.potentialEffectiveLevel = lvl;
+                item.underConstruction = false;
+                item.isUpgrading = false;
+
+                if (item instanceof Tower) {
+                    item.updateStats();
+                } else {
+                    let calcType = itemKey;
+                    if (item.type === 'barrack') calcType = `barrack_${item.unitType}`;
+                    let stats = calculateItemStats(calcType, lvl, owner);
+                    if (Number.isFinite(stats.maxHp)) {
+                        item.maxHp = Math.max(1, Math.floor(stats.maxHp));
+                        item.hp = item.maxHp;
+                    }
+                    if (Number.isFinite(stats.damage)) item.damage = stats.damage;
+                    if (item.spawnCooldown !== undefined) {
+                        let fallbackType = getSpawnerFallbackUnitType(item);
+                        let buildingKey = (item.type === 'barrack') ? `barrack_${item.unitType}` : item.type;
+                        item.spawnCooldown = Math.round(getBarrackSpawnCooldown(fallbackType, lvl, owner, buildingKey) * TICK_RATE);
+                    }
+                }
+                updateItemTextCache(item);
+            };
+
+            let getPlacedBuildingEntityAt = (gx, gy, itemKey, owner) => {
+                if ((BASE_CARD_TYPES[itemKey] || {}).target === 'wall') {
+                    return towers.find(t => t.gx === gx && t.gy === gy && t.owner === owner && t.type === itemKey) || null;
+                }
+                if (itemKey.startsWith('barrack_')) {
+                    let unitType = (BASE_CARD_TYPES[itemKey] || {}).unitType || 'norm';
+                    return barracks.find(b => b.gx === gx && b.gy === gy && b.owner === owner && b.unitType === unitType) || null;
+                }
+                if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
+                    return collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.owner === owner && s.type === itemKey) || null;
+                }
+                return (grid[gy] && grid[gy][gx]) ? grid[gy][gx].item : null;
+            };
+
+            let spawnStartingBuilding = (pid, origin, itemKey, level) => {
+                let spot = findStarterBuildSpot(origin, 16);
+                if (!spot) return null;
+                let ok = placeBuilding(spot.gx, spot.gy, itemKey, pid, { autoUpgradeEnabled: true, buildEnabled: true, silent: true });
+                if (!ok) return null;
+                let placed = getPlacedBuildingEntityAt(spot.gx, spot.gy, itemKey, pid);
+                if (!placed) return null;
+                completeStarterBuilding(placed, itemKey, pid, level);
+                return placed;
+            };
+
+            let spawnStartingUnit = (pid, origin, unitType, level) => {
+                let sp = findNearestWalkable(origin.gx, origin.gy);
+                let u = new Unit(unitType, pid, sp.x * TILE + 16, sp.y * TILE + 16);
+                applyWorkerDefaults(u);
+                applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
+                units.push(u);
+                players[pid].popCount++;
+                return u;
+            };
+
+            for (let pid of teams) {
+                let researchByThing = startingResourcesConfig.researchLevels || {};
+                for (let thingId in researchByThing) {
+                    let parsed = parseStartingThingId(thingId);
+                    if (!parsed) continue;
+                    let levelMap = researchByThing[thingId];
+                    if (!levelMap || typeof levelMap !== 'object') continue;
+                    for (let statKey in levelMap) {
+                        if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) continue;
+                        let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(levelMap[statKey]) || 0)));
+                        if (lvl <= 0) continue;
+                        let id = makeResearchLevelId(parsed.kind, parsed.key, statKey);
+                        players[pid].researchLevels[id] = lvl;
+                        players[pid].researchMultipliers[id] = Math.pow(getResearchBonusExpForStat(parsed.kind, statKey), lvl);
+                    }
+                }
+            }
 
             for (let i = 0; i < teams.length; i++) {
                 let pid = teams[i];
                 let pos = spawns[i] || spawns[0];
                 teamSpawnPos[pid] = pos;
 
-                let findStarterBuildSpot = (origin, maxRadius = 10) => {
-                    for (let r = 1; r <= maxRadius; r++) {
-                        for (let dy = -r; dy <= r; dy++) {
-                            for (let dx = -r; dx <= r; dx++) {
-                                let fx = origin.gx + dx, fy = origin.gy + dy;
-                                if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
-                                if (Math.abs(dx) + Math.abs(dy) > r) continue;
-                                let cell = grid[fy][fx];
-                                if (!cell || cell.type === TYPE_WALL || cell.item) continue;
-                                let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
-                                if (blockedByMine) continue;
-                                return { gx: fx, gy: fy };
-                            }
-                        }
-                    }
-                    return null;
-                };
-
-                let s = new BuilderSpawner(pos.gx, pos.gy, pid);
-                s.underConstruction = false;
-                teamSpawners[pid] = s;
-                collectorSpawners.push(s);
-                grid[pos.gy][pos.gx].item = s;
+                let builderSpawner = new BuilderSpawner(pos.gx, pos.gy, pid);
+                completeStarterBuilding(builderSpawner, 'builder_spawner', pid, 1);
+                teamBuilderSpawners[pid] = builderSpawner;
+                collectorSpawners.push(builderSpawner);
+                grid[pos.gy][pos.gx].item = builderSpawner;
                 grid[pos.gy][pos.gx].owner = pid;
 
-                // Starter healer spawner near base (fully built)
-                let healerPos = findStarterBuildSpot(pos, 10);
-                if (healerPos) {
-                    let hs = new HealerSpawner(healerPos.gx, healerPos.gy, pid);
-                    hs.underConstruction = false;
-                    teamHealerSpawners[pid] = hs;
-                    collectorSpawners.push(hs);
-                    grid[healerPos.gy][healerPos.gx].item = hs;
-                    grid[healerPos.gy][healerPos.gx].owner = pid;
-                }
+                let healerSpawner = spawnStartingBuilding(pid, pos, 'healer_spawner', 1);
+                if (healerSpawner) teamHealerSpawners[pid] = healerSpawner;
 
-                // Starter farm near base (fully built)
-                let farmPos = findStarterBuildSpot(pos, 10);
-                if (farmPos) {
-                    let fs = calculateItemStats('farm', 1, pid);
-                    let farm = {
-                        type: 'farm',
-                        stacks: 1,
-                        level: 1,
-                        effectiveLevel: 1,
-                        potentialEffectiveLevel: 1,
-                        hp: fs.maxHp,
-                        maxHp: fs.maxHp,
-                        damage: 0,
-                        gx: farmPos.gx,
-                        gy: farmPos.gy,
-                        x: farmPos.gx * TILE + 16,
-                        y: farmPos.gy * TILE + 16,
-                        underConstruction: false,
-                        owner: pid,
-                        autoUpgradeEnabled: true,
-                        buildEnabled: true
-                    };
-                    grid[farmPos.gy][farmPos.gx].item = farm;
-                    grid[farmPos.gy][farmPos.gx].owner = pid;
-                    updateItemTextCache(farm);
-                }
+                let collectorSpawner = spawnStartingBuilding(pid, pos, 'spawner', 1);
+                if (collectorSpawner) teamCollectorSpawners[pid] = collectorSpawner;
 
-                // Starter house near base (fully built, L4)
-                let housePos = findStarterBuildSpot(pos, 10);
-                if (housePos) {
-                    let houseLevel = 4;
-                    let houseStacks = getRequiredStacksForLevel(houseLevel);
-                    let hs = calculateItemStats('house', houseLevel, pid);
-                    let house = {
-                        type: 'house',
-                        stacks: houseStacks,
-                        level: houseLevel,
-                        effectiveLevel: houseLevel,
-                        potentialEffectiveLevel: houseLevel,
-                        hp: hs.maxHp,
-                        maxHp: hs.maxHp,
-                        damage: 0,
-                        gx: housePos.gx,
-                        gy: housePos.gy,
-                        x: housePos.gx * TILE + 16,
-                        y: housePos.gy * TILE + 16,
-                        underConstruction: false,
-                        owner: pid,
-                        autoUpgradeEnabled: true,
-                        buildEnabled: true
-                    };
-                    grid[housePos.gy][housePos.gx].item = house;
-                    grid[housePos.gy][housePos.gx].owner = pid;
-                    updateItemTextCache(house);
-                }
+                let researchSpawner = spawnStartingBuilding(pid, pos, 'research', 1);
+                if (researchSpawner) teamResearchSpawners[pid] = researchSpawner;
 
-                // Additional starter house near base (fully built, L4)
-                let extraHousePos = findStarterBuildSpot(pos, 10);
-                if (extraHousePos) {
-                    let houseLevel = 4;
-                    let houseStacks = getRequiredStacksForLevel(houseLevel);
-                    let hs = calculateItemStats('house', houseLevel, pid);
-                    let house = {
-                        type: 'house',
-                        stacks: houseStacks,
-                        level: houseLevel,
-                        effectiveLevel: houseLevel,
-                        potentialEffectiveLevel: houseLevel,
-                        hp: hs.maxHp,
-                        maxHp: hs.maxHp,
-                        damage: 0,
-                        gx: extraHousePos.gx,
-                        gy: extraHousePos.gy,
-                        x: extraHousePos.gx * TILE + 16,
-                        y: extraHousePos.gy * TILE + 16,
-                        underConstruction: false,
-                        owner: pid,
-                        autoUpgradeEnabled: true,
-                        buildEnabled: true
-                    };
-                    grid[extraHousePos.gy][extraHousePos.gx].item = house;
-                    grid[extraHousePos.gy][extraHousePos.gx].owner = pid;
-                    updateItemTextCache(house);
-                }
+                spawnStartingBuilding(pid, pos, 'house', 4);
+                spawnStartingBuilding(pid, pos, 'house', 4);
             }
 
             recomputePlayerPopCaps();
 
-            // Spawn 3 builder units for each team
             for (let pid of teams) {
                 let pos = teamSpawnPos[pid];
-                let bgx = pos.gx, bgy = pos.gy;
-                let spawner = teamSpawners[pid];
+                let builderSpawner = teamBuilderSpawners[pid];
+                let healerSpawner = teamHealerSpawners[pid];
+                let collectorSpawner = teamCollectorSpawners[pid];
+                let researchSpawner = teamResearchSpawners[pid];
+
                 for (let i = 0; i < 3; i++) {
-                    let sp = findNearestWalkable(bgx, bgy);
-                    let u = new Unit('builder_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
-                    u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
-                    u.builderHasMaterial = false;
-                    applyUnitLevelScaling(u, getThingEffectiveLevel(spawner));
-                    u.builderDps = spawner.getBuilderDps();
-                    units.push(u); players[pid].popCount++;
+                    let u = spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingEffectiveLevel(builderSpawner) : 1);
+                    if (u && builderSpawner && builderSpawner.getBuilderDps) u.builderDps = builderSpawner.getBuilderDps();
                 }
+                for (let i = 0; i < 3; i++) {
+                    let u = spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
+                    if (u && healerSpawner && healerSpawner.getHealerHps) u.healerHps = healerSpawner.getHealerHps();
+                }
+
+                // Requested starter replacements: give each team one collector + one researcher.
+                spawnStartingUnit(pid, pos, 'collector', collectorSpawner ? getThingEffectiveLevel(collectorSpawner) : 1);
+                let starterResearcher = spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingEffectiveLevel(researchSpawner) : 1);
+                if (starterResearcher && researchSpawner && researchSpawner.getResearcherDps) starterResearcher.researcherDps = researchSpawner.getResearcherDps();
             }
 
-            // Spawn 3 healer units for each team
             for (let pid of teams) {
                 let pos = teamSpawnPos[pid];
-                let bgx = pos.gx, bgy = pos.gy;
-                let healerSpawner = teamHealerSpawners[pid];
-                for (let i = 0; i < 3; i++) {
-                    let sp = findNearestWalkable(bgx, bgy);
-                    let u = new Unit('healer_unit', pid, sp.x * TILE + 16, sp.y * TILE + 16);
-                    u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
-                    u.workerTargetType = null;
-                    u.healerHasMaterial = false;
-                    applyUnitLevelScaling(u, healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
-                    if (healerSpawner && healerSpawner.getHealerHps) u.healerHps = healerSpawner.getHealerHps();
-                    units.push(u); players[pid].popCount++;
+                let spawnByThing = startingResourcesConfig.spawnCounts || {};
+                for (let thingId in spawnByThing) {
+                    let parsed = parseStartingThingId(thingId);
+                    if (!parsed) continue;
+                    let levelMap = spawnByThing[thingId];
+                    if (!levelMap || typeof levelMap !== 'object') continue;
+                    for (let levelText in levelMap) {
+                        let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 1)));
+                        let count = Math.max(0, Math.min(1000, Math.floor(Number(levelMap[levelText]) || 0)));
+                        for (let i = 0; i < count; i++) {
+                            if (parsed.kind === 'building') {
+                                spawnStartingBuilding(pid, pos, parsed.key, lvl);
+                            } else {
+                                spawnStartingUnit(pid, pos, parsed.key, lvl);
+                            }
+                        }
+                    }
                 }
             }
 
             // Spawn kings for each team
             for (let pid of teams) {
                 let pos = teamSpawnPos[pid];
-                let bgx = pos.gx, bgy = pos.gy;
-                let sp = findNearestWalkable(bgx, bgy);
-                let king = new Unit('king', pid, sp.x * TILE + 16, sp.y * TILE + 16);
-                applyUnitLevelScaling(king, 1);
-                units.push(king); players[pid].popCount++;
+                let king = spawnStartingUnit(pid, pos, 'king', 1);
+                if (king) applyUnitLevelScaling(king, 1);
             }
 
             // Center camera on own base
