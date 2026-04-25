@@ -249,7 +249,8 @@
         #research-popup,
         #starting-resources-popup,
         #statsmap-popup,
-        #research-matrix-popup {
+        #research-matrix-popup,
+        #config-popup {
             position: fixed;
             inset: 0;
             z-index: 1200;
@@ -263,7 +264,8 @@
         #research-popup.hidden,
         #starting-resources-popup.hidden,
         #statsmap-popup.hidden,
-        #research-matrix-popup.hidden {
+        #research-matrix-popup.hidden,
+        #config-popup.hidden {
             display: none;
         }
 
@@ -271,7 +273,8 @@
         #research-popup-card,
         #starting-resources-popup-card,
         #statsmap-popup-card,
-        #research-matrix-popup-card {
+        #research-matrix-popup-card,
+        #config-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
             overflow: auto;
@@ -296,6 +299,10 @@
 
         #starting-resources-popup-card {
             width: min(680px, calc(100vw - 28px));
+        }
+
+        #config-popup-card {
+            width: min(980px, calc(100vw - 28px));
         }
 
         .startres-wrap {
@@ -393,7 +400,8 @@
         }
 
         #statsmap-json,
-        #research-matrix-json {
+        #research-matrix-json,
+        #config-editor-text {
             width: 100%;
             min-height: 420px;
             box-sizing: border-box;
@@ -407,6 +415,12 @@
 
         #statsmap-json {
             resize: vertical;
+        }
+
+        #config-editor-text {
+            min-height: min(62vh, 760px);
+            resize: vertical;
+            tab-size: 2;
         }
 
         #research-matrix-json {
@@ -1237,6 +1251,14 @@
                         <label for="cfg-full-vis">Full Map Visibility</label>
                         <input id="cfg-full-vis" type="checkbox" checked title="Disable Fog of War">
                     </div>
+                    <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
+                        <button id="btn-open-config" type="button" style="font-size:11px;padding:4px 8px">Config</button>
+                    </div>
+                    <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
+                        <button id="btn-export-settings" type="button" style="font-size:11px;padding:4px 8px">Export Settings</button>
+                        <button id="btn-import-settings" type="button" style="font-size:11px;padding:4px 8px">Import Settings</button>
+                        <input id="input-import-settings" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0;pointer-events:none;">
+                    </div>
                 </div>
 
                 <div class="lobby-column" data-lobby-column="2">
@@ -1289,9 +1311,6 @@
             <button onclick="startSoloGame()" style="font-size:16px;padding:10px 24px">Play Solo</button>
             <button onclick="hostOnlineGame()" id="btn-online" style="font-size:16px;padding:10px 24px">Play
                 Online</button>
-            <button id="btn-export-settings" type="button" style="font-size:14px;padding:10px 16px">Export Settings</button>
-            <button id="btn-import-settings" type="button" style="font-size:14px;padding:10px 16px">Import Settings</button>
-            <input id="input-import-settings" type="file" accept="application/json,.json" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;opacity:0;pointer-events:none;">
         </div>
         <div id="lobby-waiting" style="display:none;text-align:left;margin-top:12px;border:1px solid #333;background:#0d0d0d;padding:10px;border-radius:6px;min-width:420px">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1381,6 +1400,21 @@
             </div>
             <div class="help-mode">Preview helper only: research levels are shared and not tied to thing level.</div>
             <div id="research-matrix-json" role="region" aria-label="Research matrix table"></div>
+        </div>
+    </div>
+
+    <div id="config-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="config-title">
+        <div id="config-popup-card">
+            <div class="help-title-row">
+                <h3 id="config-title" style="color:#8dc6ff; font-size:18px; margin:0">Runtime Config Editor</h3>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <button id="btn-config-apply" style="background:#1b2a35; border:1px solid #4a89c7; color:#d8ecff; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Apply</button>
+                    <button id="btn-config-reset" style="background:#2c2620; border:1px solid #7a6650; color:#ffe0c7; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Reset To Defaults</button>
+                    <button id="btn-config-close" style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+                </div>
+            </div>
+            <div class="help-mode">Edit JS object literal. Host applied config is shared to all clients at match start.</div>
+            <textarea id="config-editor-text" spellcheck="false"></textarea>
         </div>
     </div>
 
@@ -2658,6 +2692,472 @@
             return wasOpen !== open;
         }
 
+        let defaultEditableRuntimeConfigSnapshot = null;
+        let uiBannerHideTimer = null;
+
+        function showUiBanner(message, kind = 'info', timeoutMs = 2400) {
+            let text = String(message || '').trim();
+            if (!text) return;
+
+            let el = document.getElementById('ui-banner');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'ui-banner';
+                el.setAttribute('role', 'status');
+                el.setAttribute('aria-live', 'polite');
+                el.style.position = 'fixed';
+                el.style.left = '50%';
+                el.style.bottom = '14px';
+                el.style.transform = 'translateX(-50%) translateY(12px)';
+                el.style.padding = '8px 12px';
+                el.style.borderRadius = '6px';
+                el.style.fontSize = '12px';
+                el.style.border = '1px solid #444';
+                el.style.background = '#141414';
+                el.style.color = '#ddd';
+                el.style.boxShadow = '0 6px 20px rgba(0,0,0,0.35)';
+                el.style.zIndex = '99999';
+                el.style.opacity = '0';
+                el.style.pointerEvents = 'none';
+                el.style.transition = 'opacity 140ms ease, transform 140ms ease';
+                document.body.appendChild(el);
+            }
+
+            if (kind === 'error') {
+                el.style.background = '#2a1010';
+                el.style.borderColor = '#8a3232';
+                el.style.color = '#ffd6d6';
+            } else if (kind === 'success') {
+                el.style.background = '#102514';
+                el.style.borderColor = '#2f7a3f';
+                el.style.color = '#d8ffe0';
+            } else {
+                el.style.background = '#141414';
+                el.style.borderColor = '#444';
+                el.style.color = '#ddd';
+            }
+
+            el.textContent = text;
+            el.style.opacity = '1';
+            el.style.transform = 'translateX(-50%) translateY(0)';
+
+            if (uiBannerHideTimer) clearTimeout(uiBannerHideTimer);
+            uiBannerHideTimer = setTimeout(() => {
+                let bannerEl = document.getElementById('ui-banner');
+                if (!bannerEl) return;
+                bannerEl.style.opacity = '0';
+                bannerEl.style.transform = 'translateX(-50%) translateY(12px)';
+            }, Math.max(800, Math.floor(Number(timeoutMs) || 2400)));
+        }
+
+        function cloneJsValue(value) {
+            if (Array.isArray(value)) return value.map(v => cloneJsValue(v));
+            if (typeof value === 'function') return value;
+            if (value && typeof value === 'object') {
+                let out = {};
+                for (let k in value) out[k] = cloneJsValue(value[k]);
+                return out;
+            }
+            return value;
+        }
+
+        function replaceObjectContents(target, source) {
+            if (!target || typeof target !== 'object') return;
+            if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+            for (let k of Object.keys(target)) delete target[k];
+            for (let k of Object.keys(source)) target[k] = cloneJsValue(source[k]);
+        }
+
+        function replaceArrayContents(target, source) {
+            if (!Array.isArray(target) || !Array.isArray(source)) return;
+            target.length = 0;
+            for (let item of source) target.push(cloneJsValue(item));
+        }
+
+        function stringifyJsLike(value, depth = 0) {
+            const pad = '  '.repeat(depth);
+            const nextPad = '  '.repeat(depth + 1);
+
+            if (typeof value === 'function') return value.toString();
+            if (value === null) return 'null';
+            if (Number.isNaN(value)) return 'NaN';
+            if (value === Infinity) return 'Infinity';
+            if (value === -Infinity) return '-Infinity';
+
+            let t = typeof value;
+            if (t === 'number' || t === 'boolean' || t === 'bigint') return String(value);
+            if (t === 'string') return JSON.stringify(value);
+            if (t === 'undefined') return 'undefined';
+
+            if (Array.isArray(value)) {
+                if (value.length <= 0) return '[]';
+                let parts = value.map(v => `${nextPad}${stringifyJsLike(v, depth + 1)}`);
+                return `[\n${parts.join(',\n')}\n${pad}]`;
+            }
+
+            if (value && t === 'object') {
+                let keys = Object.keys(value);
+                if (keys.length <= 0) return '{}';
+                let parts = keys.map(k => `${nextPad}${JSON.stringify(k)}: ${stringifyJsLike(value[k], depth + 1)}`);
+                return `{\n${parts.join(',\n')}\n${pad}}`;
+            }
+
+            return 'null';
+        }
+
+        function parseConfigEditorObject(text) {
+            let src = String(text || '').trim();
+            if (!src) throw new Error('Config editor is empty.');
+            let obj = (new Function('"use strict"; return (' + src + ');'))();
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+                throw new Error('Config must evaluate to an object literal.');
+            }
+            return obj;
+        }
+
+        function encodeFunctionsForTransport(value) {
+            if (typeof value === 'number' && !Number.isFinite(value)) {
+                if (Number.isNaN(value)) return { __specialNumber__: 'NaN' };
+                if (value === Infinity) return { __specialNumber__: 'Infinity' };
+                if (value === -Infinity) return { __specialNumber__: '-Infinity' };
+            }
+            if (typeof value === 'function') return { __fn__: value.toString() };
+            if (Array.isArray(value)) return value.map(v => encodeFunctionsForTransport(v));
+            if (value && typeof value === 'object') {
+                let out = {};
+                for (let k in value) out[k] = encodeFunctionsForTransport(value[k]);
+                return out;
+            }
+            return value;
+        }
+
+        function decodeFunctionsFromTransport(value) {
+            if (Array.isArray(value)) return value.map(v => decodeFunctionsFromTransport(v));
+            if (value && typeof value === 'object') {
+                if (Object.keys(value).length === 1 && typeof value.__specialNumber__ === 'string') {
+                    if (value.__specialNumber__ === 'NaN') return NaN;
+                    if (value.__specialNumber__ === 'Infinity') return Infinity;
+                    if (value.__specialNumber__ === '-Infinity') return -Infinity;
+                }
+                if (Object.keys(value).length === 1 && typeof value.__fn__ === 'string') {
+                    let fn = (new Function('"use strict"; return (' + value.__fn__ + ');'))();
+                    if (typeof fn !== 'function') throw new Error('Invalid function in transported config.');
+                    return fn;
+                }
+                let out = {};
+                for (let k in value) out[k] = decodeFunctionsFromTransport(value[k]);
+                return out;
+            }
+            return value;
+        }
+
+        function makeEditorCardTypesTable() {
+            let out = cloneJsValue(BASE_CARD_TYPES);
+            for (let key in out) {
+                let def = out[key];
+                if (!def || typeof def !== 'object') continue;
+                if (Number.isFinite(def.hp)) {
+                    def.energy = def.hp;
+                    delete def.hp;
+                }
+                if (Number.isFinite(def.towerHp)) {
+                    def.towerEnergy = def.towerHp;
+                    delete def.towerHp;
+                }
+                if (Number.isFinite(def.price)) {
+                    def.energyCost = def.price;
+                    delete def.price;
+                }
+            }
+            return out;
+        }
+
+        function makeRuntimeCardTypesTableFromEditor(rawTable) {
+            let out = cloneJsValue(rawTable || {});
+            for (let key in out) {
+                let def = out[key];
+                if (!def || typeof def !== 'object') continue;
+                if (Number.isFinite(def.energy)) def.hp = def.energy;
+                if (Number.isFinite(def.towerEnergy)) def.towerHp = def.towerEnergy;
+                if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
+                delete def.energy;
+                delete def.towerEnergy;
+                delete def.energyCost;
+            }
+            return out;
+        }
+
+        function makeEditorUnitStatsTable() {
+            let out = cloneJsValue(BASE_UNIT_STATS);
+            for (let key in out) {
+                let def = out[key];
+                if (!def || typeof def !== 'object') continue;
+                if (Number.isFinite(def.hp)) {
+                    def.energy = def.hp;
+                    delete def.hp;
+                }
+                if (Number.isFinite(def.price)) {
+                    def.energyCost = def.price;
+                    delete def.price;
+                }
+            }
+            return out;
+        }
+
+        function makeRuntimeUnitStatsTableFromEditor(rawTable) {
+            let out = cloneJsValue(rawTable || {});
+            for (let key in out) {
+                let def = out[key];
+                if (!def || typeof def !== 'object') continue;
+                if (Number.isFinite(def.energy)) def.hp = def.energy;
+                if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
+                delete def.energy;
+                delete def.energyCost;
+            }
+            return out;
+        }
+
+        function createEditableRuntimeConfigSnapshot() {
+            return {
+                version: 1,
+                config: {
+                    MINIMAP_SIZE,
+                    TILE,
+                    GRID_W,
+                    GRID_H,
+                    GOLD_MINE_COUNT,
+                    GOLD_MINE_MIN,
+                    GOLD_MINE_MAX,
+                    GOLD_MINE_AREA,
+                    STARTING_MONEY,
+                    MAP_TYPE,
+                    TYPE_FLOOR,
+                    TYPE_WALL,
+                    CONFIG_MAX_POP,
+                    TICK_RATE,
+                    LOCKSTEP_PIPELINE_MIN,
+                },
+                progression: {
+                    RESEARCH_COST_EXP,
+                    RESEARCH_WORK_EXP,
+                    RESEARCH_WORK_BASE,
+                    RESEARCH_BONUS_EXP_UNITS,
+                    RESEARCH_BONUS_EXP_OTHER,
+                    MAX_THING_LEVEL,
+                    MAX_RESEARCH_LEVEL,
+                    BUILDING_ENERGY_LEVEL_EXP: BUILDING_HP_LEVEL_EXP,
+                    BUILDING_LEVEL_MULT_EXP,
+                    BUILDING_DAMAGE_LEVEL_EXP,
+                    BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL,
+                    BUILDING_LINEAR_VISION_BONUS_PER_LEVEL,
+                    SAND_GUN_CD_LEVEL_EXP,
+                    RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP,
+                    RESEARCH_BUILDING_EFFICIENCY_CAP,
+                    UNIT_COLLECTOR_GATHER_LEVEL_EXP,
+                    UNIT_WORKER_SPECIALIST_BASE_RATE,
+                    UNIT_WORKER_SPECIALIST_LEVEL_EXP,
+                },
+                tables: {
+                    BASE_CARD_TYPES: makeEditorCardTypesTable(),
+                    BASE_CARD_DEFAULT_ENERGY: cloneJsValue(BASE_CARD_DEFAULT_HP),
+                    DESCRIPTIONS: cloneJsValue(DESCRIPTIONS),
+                    BUILD_CATEGORIES: cloneJsValue(BUILD_CATEGORIES),
+                    BARRACK_SPAWN_CONFIG: cloneJsValue(BARRACK_SPAWN_CONFIG),
+                    BASE_UNIT_STATS: makeEditorUnitStatsTable(),
+                    UNIT_LEVEL_SCALING: cloneJsValue(UNIT_LEVEL_SCALING),
+                    BUILDING_FORMULA_CONFIG: cloneJsValue(BUILDING_FORMULA_CONFIG),
+                    UNIT_FORMULA_CONFIG: cloneJsValue(UNIT_FORMULA_CONFIG),
+                    RESEARCH_FORMULA_CONFIG: cloneJsValue(RESEARCH_FORMULA_CONFIG),
+                    PRECOMPUTED_SOFT_CAP_MAP: cloneJsValue(PRECOMPUTED_SOFT_CAP_MAP),
+                    RESEARCH_STAT_LABELS: cloneJsValue(RESEARCH_STAT_LABELS),
+                    RESEARCHABLE_UNIT_STATS: cloneJsValue(RESEARCHABLE_UNIT_STATS),
+                    PRECOMPUTED_UNIT_STAT_KEYS: cloneJsValue(PRECOMPUTED_UNIT_STAT_KEYS),
+                    PRECOMPUTED_BUILDING_STAT_KEYS: cloneJsValue(PRECOMPUTED_BUILDING_STAT_KEYS),
+                    RESEARCH_DECREASE_STATS: cloneJsValue(RESEARCH_DECREASE_STATS),
+                }
+            };
+        }
+
+        function serializeEditableRuntimeConfigForTransport() {
+            return encodeFunctionsForTransport(createEditableRuntimeConfigSnapshot());
+        }
+
+        function ensureDefaultEditableRuntimeConfigSnapshot() {
+            if (defaultEditableRuntimeConfigSnapshot) return;
+            defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
+        }
+
+        function syncMainMenuFromRuntimeConfig() {
+            let setValue = (id, value) => {
+                let el = document.getElementById(id);
+                if (!el) return;
+                el.value = String(value);
+            };
+
+            setValue('cfg-mapsize', GRID_W);
+            setValue('cfg-gold-count', GOLD_MINE_COUNT);
+            setValue('cfg-gold-min', GOLD_MINE_MIN);
+            setValue('cfg-gold-max', GOLD_MINE_MAX);
+            setValue('cfg-gold-area', Math.floor((Number(GOLD_MINE_AREA) || 0) * 100 / Math.max(1, Number(GRID_W) || 1)));
+            setValue('cfg-max-pop', CONFIG_MAX_POP);
+            setValue('cfg-starting-money', STARTING_MONEY);
+            setValue('cfg-map-type', MAP_TYPE);
+            setValue('cfg-tick-rate', TICK_RATE);
+            setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
+            setValue('cfg-research-cost-exp', RESEARCH_COST_EXP);
+            setValue('cfg-research-work-exp', RESEARCH_WORK_EXP);
+            setValue('cfg-research-work-base', RESEARCH_WORK_BASE);
+            setValue('cfg-research-bonus-exp-units', RESEARCH_BONUS_EXP_UNITS);
+            setValue('cfg-research-bonus-exp-other', RESEARCH_BONUS_EXP_OTHER);
+            setValue('cfg-max-thing-level', MAX_THING_LEVEL);
+            setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
+        }
+
+        function applyEditableRuntimeConfigObject(rawConfig, options = null) {
+            let opts = options && typeof options === 'object' ? options : {};
+            let cfgObject = rawConfig;
+            if (opts.fromTransport) cfgObject = decodeFunctionsFromTransport(cfgObject);
+
+            if (!cfgObject || typeof cfgObject !== 'object' || Array.isArray(cfgObject)) {
+                throw new Error('Runtime config must be an object.');
+            }
+
+            let cfg = (cfgObject.config && typeof cfgObject.config === 'object') ? cfgObject.config : {};
+            let prog = (cfgObject.progression && typeof cfgObject.progression === 'object') ? cfgObject.progression : {};
+            let tables = (cfgObject.tables && typeof cfgObject.tables === 'object') ? cfgObject.tables : {};
+
+            if (Number.isFinite(Number(cfg.MINIMAP_SIZE))) MINIMAP_SIZE = Math.max(32, Math.floor(Number(cfg.MINIMAP_SIZE)));
+            if (Number.isFinite(Number(cfg.TILE))) TILE = Math.max(8, Math.floor(Number(cfg.TILE)));
+            if (Number.isFinite(Number(cfg.TYPE_FLOOR))) TYPE_FLOOR = Math.floor(Number(cfg.TYPE_FLOOR));
+            if (Number.isFinite(Number(cfg.TYPE_WALL))) TYPE_WALL = Math.floor(Number(cfg.TYPE_WALL));
+
+            let nextGridW = Number(cfg.GRID_W);
+            let nextGridH = Number(cfg.GRID_H);
+            if (Number.isFinite(nextGridW)) GRID_W = Math.max(8, Math.floor(nextGridW));
+            if (Number.isFinite(nextGridH)) GRID_H = Math.max(8, Math.floor(nextGridH));
+            else GRID_H = GRID_W;
+            WORLD_W = GRID_W * TILE;
+            WORLD_H = GRID_H * TILE;
+
+            if (Number.isFinite(Number(cfg.GOLD_MINE_COUNT))) GOLD_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_COUNT)));
+            if (Number.isFinite(Number(cfg.GOLD_MINE_MIN))) GOLD_MINE_MIN = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MIN)));
+            if (Number.isFinite(Number(cfg.GOLD_MINE_MAX))) GOLD_MINE_MAX = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MAX)));
+            if (Number.isFinite(Number(cfg.GOLD_MINE_AREA))) GOLD_MINE_AREA = Math.max(1, Math.floor(Number(cfg.GOLD_MINE_AREA)));
+            if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
+            if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
+            if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
+
+            let nextTickRate = Number(cfg.TICK_RATE);
+            let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
+            applyTimingConfig(nextTickRate, nextPipelineDelay);
+
+            if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
+            if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
+            if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
+            if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_UNITS))) RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_UNITS));
+            if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER))) RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER));
+            if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
+            if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
+            if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_HP_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.BUILDING_HP_LEVEL_EXP))) BUILDING_HP_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_HP_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.BUILDING_LEVEL_MULT_EXP))) BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(prog.BUILDING_LEVEL_MULT_EXP));
+            if (Number.isFinite(Number(prog.BUILDING_DAMAGE_LEVEL_EXP))) BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_DAMAGE_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL))) BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL)));
+            if (Number.isFinite(Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL))) BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL));
+            if (Number.isFinite(Number(prog.SAND_GUN_CD_LEVEL_EXP))) SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(prog.SAND_GUN_CD_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP))) RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP))) RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP));
+            if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
+            if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
+            if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
+
+            BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_HP_LEVEL_EXP;
+            BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
+            BUILDING_FORMULA_CONFIG.damageLevelExp = BUILDING_DAMAGE_LEVEL_EXP;
+            BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel = BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL;
+            BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel = BUILDING_LINEAR_VISION_BONUS_PER_LEVEL;
+            BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
+            BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
+            BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
+            UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
+            UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
+            UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
+
+            if (tables.BASE_CARD_TYPES) replaceObjectContents(BASE_CARD_TYPES, makeRuntimeCardTypesTableFromEditor(tables.BASE_CARD_TYPES));
+            if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_HP, tables.BASE_CARD_DEFAULT_ENERGY);
+            if (tables.BASE_CARD_DEFAULT_HP) replaceObjectContents(BASE_CARD_DEFAULT_HP, tables.BASE_CARD_DEFAULT_HP);
+            if (tables.DESCRIPTIONS) replaceObjectContents(DESCRIPTIONS, tables.DESCRIPTIONS);
+            if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
+            if (tables.BARRACK_SPAWN_CONFIG) replaceObjectContents(BARRACK_SPAWN_CONFIG, tables.BARRACK_SPAWN_CONFIG);
+            if (tables.BASE_UNIT_STATS) replaceObjectContents(BASE_UNIT_STATS, makeRuntimeUnitStatsTableFromEditor(tables.BASE_UNIT_STATS));
+            if (tables.UNIT_LEVEL_SCALING) replaceObjectContents(UNIT_LEVEL_SCALING, tables.UNIT_LEVEL_SCALING);
+            if (tables.BUILDING_FORMULA_CONFIG) replaceObjectContents(BUILDING_FORMULA_CONFIG, tables.BUILDING_FORMULA_CONFIG);
+            if (tables.UNIT_FORMULA_CONFIG) replaceObjectContents(UNIT_FORMULA_CONFIG, tables.UNIT_FORMULA_CONFIG);
+            if (tables.RESEARCH_FORMULA_CONFIG) replaceObjectContents(RESEARCH_FORMULA_CONFIG, tables.RESEARCH_FORMULA_CONFIG);
+            if (tables.PRECOMPUTED_SOFT_CAP_MAP) replaceObjectContents(PRECOMPUTED_SOFT_CAP_MAP, tables.PRECOMPUTED_SOFT_CAP_MAP);
+            if (tables.RESEARCH_STAT_LABELS) replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS);
+            if (tables.RESEARCHABLE_UNIT_STATS) replaceObjectContents(RESEARCHABLE_UNIT_STATS, tables.RESEARCHABLE_UNIT_STATS);
+            if (tables.RESEARCH_DECREASE_STATS) replaceObjectContents(RESEARCH_DECREASE_STATS, tables.RESEARCH_DECREASE_STATS);
+            if (tables.PRECOMPUTED_UNIT_STAT_KEYS) replaceArrayContents(PRECOMPUTED_UNIT_STAT_KEYS, tables.PRECOMPUTED_UNIT_STAT_KEYS);
+            if (tables.PRECOMPUTED_BUILDING_STAT_KEYS) replaceArrayContents(PRECOMPUTED_BUILDING_STAT_KEYS, tables.PRECOMPUTED_BUILDING_STAT_KEYS);
+
+            BUILDING_HP_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.energyLevelExp ?? BUILDING_FORMULA_CONFIG.hpLevelExp) || 1);
+            BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.levelMultExp) || 1);
+            BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.damageLevelExp) || 1);
+            BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel) || 0));
+            BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel) || 0);
+            SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
+            RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
+            RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
+            UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
+            UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
+            UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
+
+            normalizeBaseCardDefinitions();
+            PRECOMPUTED_STATS_READY = false;
+            if (!opts.deferPrecompute) rebuildPrecomputedStatsMap();
+            startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
+            syncMainMenuFromRuntimeConfig();
+        }
+
+        function makeConfigEditorTextFromCurrentConfig() {
+            return stringifyJsLike(createEditableRuntimeConfigSnapshot());
+        }
+
+        function setConfigPopupOpen(open) {
+            let popup = document.getElementById('config-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            if (open) {
+                ensureDefaultEditableRuntimeConfigSnapshot();
+                let ta = document.getElementById('config-editor-text');
+                if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
+            }
+            return wasOpen !== open;
+        }
+
+        function applyConfigEditorChanges() {
+            let ta = document.getElementById('config-editor-text');
+            if (!ta) return;
+            try {
+                let parsed = parseConfigEditorObject(ta.value);
+                applyEditableRuntimeConfigObject(parsed);
+                ta.value = makeConfigEditorTextFromCurrentConfig();
+                showUiBanner('Runtime config applied.', 'success');
+            } catch (err) {
+                showUiBanner(`Config parse/apply error: ${err && err.message ? err.message : 'Unknown error'}`, 'error', 3600);
+            }
+        }
+
+        function resetConfigEditorToDefaults() {
+            ensureDefaultEditableRuntimeConfigSnapshot();
+            if (!confirm('Reset runtime config to startup defaults?')) return;
+            applyEditableRuntimeConfigObject(cloneJsValue(defaultEditableRuntimeConfigSnapshot));
+            let ta = document.getElementById('config-editor-text');
+            if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
+        }
+
         function createMainMenuSettingsSnapshot() {
             let numberIds = [
                 'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-money',
@@ -2669,14 +3169,15 @@
             let checkboxIds = ['cfg-full-vis'];
 
             let out = {
-                version: 1,
+                version: 2,
                 createdAt: Date.now(),
                 lobby: {
                     numbers: {},
                     selects: {},
                     checks: {}
                 },
-                startingResources: cloneStartingResourcesConfig()
+                startingResources: cloneStartingResourcesConfig(),
+                editableConfig: serializeEditableRuntimeConfigForTransport()
             };
 
             for (let id of numberIds) {
@@ -2723,6 +3224,13 @@
             MAX_THING_LEVEL = importedMaxThingLevel;
             MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
             startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+            if (data.editableConfig && typeof data.editableConfig === 'object') {
+                try {
+                    applyEditableRuntimeConfigObject(data.editableConfig, { fromTransport: true });
+                } catch {
+                    // Keep imported non-advanced settings even if advanced config payload is invalid.
+                }
+            }
 
             let popup = document.getElementById('starting-resources-popup');
             if (popup && !popup.classList.contains('hidden')) renderStartingResourcesPopupContent();
@@ -2749,9 +3257,9 @@
                 try {
                     let parsed = JSON.parse(String(reader.result || '{}'));
                     applyMainMenuSettingsSnapshot(parsed);
-                    alert('Settings imported.');
+                    showUiBanner('Settings imported.', 'success');
                 } catch {
-                    alert('Invalid settings JSON.');
+                    showUiBanner('Invalid settings JSON.', 'error', 3600);
                 }
             };
             reader.readAsText(file);
@@ -2787,8 +3295,8 @@
         // ============================================================
         // CONFIG
         // ============================================================
-        const MINIMAP_SIZE = 160;
-        const TILE = 32;
+        let MINIMAP_SIZE = 160;
+        let TILE = 32;
         let GRID_W = 80, GRID_H = 80;
         let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
 
@@ -2799,7 +3307,7 @@
         let GOLD_MINE_AREA = 70;   // area within which mines spawn (centered)
         let STARTING_MONEY = 2000;
         let MAP_TYPE = 'random';
-        const TYPE_FLOOR = 0, TYPE_WALL = 1;
+        let TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
         let TICK_RATE = 20; // ticks per second (menu configurable)
         let WORKER_TRANSFER_COOLDOWN_TICKS = Math.round(TICK_RATE * 0.5); // ~0.5s between pickup/putdown
@@ -2889,7 +3397,86 @@
         };
 
         // Single place for building Energy scaling across all building/card types.
-        const BUILDING_HP_LEVEL_EXP = 2;
+        let BUILDING_HP_LEVEL_EXP = 2;
+        let BUILDING_LEVEL_MULT_EXP = 1.6;
+        let BUILDING_DAMAGE_LEVEL_EXP = 1.4;
+        let BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = 0.10;
+        let BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = 0.10;
+        let SAND_GUN_CD_LEVEL_EXP = 0.9;
+        let RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = 1.05;
+        let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
+        let UNIT_COLLECTOR_GATHER_LEVEL_EXP = 1;
+        let UNIT_WORKER_SPECIALIST_BASE_RATE = 5;
+        let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.22;
+
+        const BUILDING_FORMULA_CONFIG = {
+            levelMultExp: 1.6,
+            energyLevelExp: 2,
+            damageLevelExp: 1.4,
+            linearCdReductionPerLevel: 0.10,
+            linearVisionBonusPerLevel: 0.10,
+            sandGunCdLevelExp: 0.9,
+            researchEfficiencyLevelExp: 1.05,
+            researchEfficiencyCap: 3,
+            spawnCdFloor: 0.05,
+            spawnedUnitPriceLevelExp: 2,
+            farmBaseMultiplierFallback: 1,
+            farmLevelPolyCoeff: 1,
+            farmLevelPowerExp: 3,
+            sandFloorDamageBase: 0.05,
+            lavaFloorDamageBase: 1,
+            mineFloorDamageBase: 135,
+            poisonPuddleFloorDamageBase: 1,
+            icePatchFloorDamageBase: 1,
+            directTowerCdFloor: 0.25,
+            fireBurnDpsMin: 0.1,
+            fireBurnDpsFromDamageMul: 0.05,
+            fireBurnDurationLevelAdd: 0.5,
+            fireBurnDurationFallbackBase: 3,
+            fireBurnDurationFallbackLevelAdd: 0.5,
+            poisonDpsMin: 0.1,
+            poisonDpsFromDamageMul: 0.10,
+            poisonDurationLevelAdd: 2.5,
+            poisonDurationFallbackBase: 7.5,
+            poisonDurationFallbackLevelAdd: 2.5,
+            iceFreezeDpsMin: 0.2,
+            iceFreezeDpsFromDamageMul: 0.20,
+            iceFreezeDurationLevelAdd: 0.5,
+            iceFreezeDurationFallbackBase: 3,
+            iceFreezeDurationFallbackLevelAdd: 0.5,
+            elementsDotMin: 0.1,
+            elementsDotFromDamageMul: 0.20,
+            elementsDurationLevelAdd: 1,
+            elementsDurationFallbackBase: 5,
+            lavaBurnDpsMin: 0.1,
+            lavaBurnDurationFallback: 1.5,
+            poisonPuddleDpsMin: 0.1,
+            poisonPuddleDurationFallback: 1.5,
+            icePatchDpsMin: 0.2,
+            icePatchDurationFallback: 1.5,
+            waterWetDurationFallbackBase: 6,
+            waterWetDurationFallbackLevelAdd: 1,
+            waterPuddleWetDurationFallback: 3,
+            waterWetDurationLevelAdd: 1,
+            sandGunDurationFallback: 9,
+            sandDurationFallback: 0.5,
+            watchDurationLevelAdd: 1,
+            watchDurationFallbackBase: 4,
+        };
+
+        const UNIT_FORMULA_CONFIG = {
+            collectorGatherLevelExp: 1,
+            workerSpecialistBaseRate: 5,
+            workerSpecialistLevelExp: 1.22,
+            baseAttackCooldownFallback: 1.5,
+            baseSpeedFallback: 1,
+            baseVisionMin: 0.25,
+            baseVisionFallback: 4,
+        };
+
+        const RESEARCH_FORMULA_CONFIG = {
+            unitPriceBonusExp: 1.8,
+        };
 
         // Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
         // Keep towerHp mirrored for compatibility with existing checks/UI code paths.
@@ -2910,21 +3497,25 @@
             area_upgrader: 1,
         };
 
-        for (let cardKey in BASE_CARD_TYPES) {
-            let def = BASE_CARD_TYPES[cardKey];
-            if (!def || typeof def !== 'object') continue;
+        function normalizeBaseCardDefinitions() {
+            for (let cardKey in BASE_CARD_TYPES) {
+                let def = BASE_CARD_TYPES[cardKey];
+                if (!def || typeof def !== 'object') continue;
 
-            if (!Number.isFinite(def.hp)) {
-                if (Number.isFinite(def.towerHp)) def.hp = def.towerHp;
-                else if (Number.isFinite(BASE_CARD_DEFAULT_HP[cardKey])) def.hp = BASE_CARD_DEFAULT_HP[cardKey];
-                else if (cardKey.startsWith('barrack_')) def.hp = 100;
-                else def.hp = 100;
-            }
+                if (!Number.isFinite(def.hp)) {
+                    if (Number.isFinite(def.towerHp)) def.hp = def.towerHp;
+                    else if (Number.isFinite(BASE_CARD_DEFAULT_HP[cardKey])) def.hp = BASE_CARD_DEFAULT_HP[cardKey];
+                    else if (cardKey.startsWith('barrack_')) def.hp = 100;
+                    else def.hp = 100;
+                }
 
-            if (def.target === 'wall' && !Number.isFinite(def.towerHp)) {
-                def.towerHp = def.hp;
+                if (def.target === 'wall' && !Number.isFinite(def.towerHp)) {
+                    def.towerHp = def.hp;
+                }
             }
         }
+
+        normalizeBaseCardDefinitions();
 
         // Descriptions
         const DESCRIPTIONS = {
@@ -3195,7 +3786,7 @@
         }
 
         function getResearchBonusExpForStat(kind, statKey) {
-            if (statKey === 'unitPrice') return 1.8;
+            if (statKey === 'unitPrice') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitPriceBonusExp) || 1);
             return getResearchBonusExp(kind);
         }
 
@@ -3258,6 +3849,7 @@
             let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
             let lvl = Math.max(1, clampThingLevel(level));
             let cfg = UNIT_LEVEL_SCALING[unitType] || UNIT_LEVEL_SCALING._default;
+            let unitCfg = UNIT_FORMULA_CONFIG || {};
 
             let hpMult = Math.pow(cfg.hpExp || 1, lvl - 1);
             let dmgMult = Math.pow(cfg.dmgExp || 1, lvl - 1);
@@ -3268,24 +3860,28 @@
             let hp = Math.max(1, Math.floor((Number(s.hp) || 1) * hpMult));
             let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
 
-            let baseCd = Number(s.atkCd) || 1.5;
+            let baseCd = Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5);
             let atkCd = baseCd;
             atkCd = Math.max(cfg.minCd || 0.4, baseCd * cdMult);
 
-            let baseSpeed = Number(s.speed) || 1;
+            let baseSpeed = Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1);
             let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
             let speed = Math.min(speedCap, baseSpeed * speedMult);
 
-            let baseVision = Math.max(0.25, Number(s.visionRange) || 4);
+            let baseVisionMin = Math.max(0.01, Number(unitCfg.baseVisionMin) || 0.25);
+            let baseVision = Math.max(baseVisionMin, Number(s.visionRange) || Math.max(baseVisionMin, Number(unitCfg.baseVisionFallback) || 4));
             let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
             let visionRange = Math.min(visionCap, baseVision * visionMult);
 
             let attackRange = Math.max(0, Number(s.attackRange) || 0);
             let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
-            let gatherPerTrip = unitType === 'collector' ? Math.max(1, gatherBase * lvl) : 0;
-            let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
-            let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
-            let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(5 * Math.pow(1.22, lvl - 1))) : 0;
+            let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
+            let gatherPerTrip = unitType === 'collector' ? Math.max(1, gatherBase * Math.pow(lvl, gatherLvlExp)) : 0;
+            let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
+            let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
+            let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let healerHps = unitType === 'healer_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
+            let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(workerBaseRate * Math.pow(workerGrowthExp, lvl - 1))) : 0;
 
             return { hp, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerHps, researcherDps };
         }
@@ -3293,8 +3889,17 @@
         function computeBaseBuildingStatsAtLevel(type, level) {
             let key = type || 'farm';
             let lvl = Math.max(1, clampThingLevel(level));
-            let mult = Math.pow(1.6, lvl - 1);
-            let hpMult = Math.pow(BUILDING_HP_LEVEL_EXP, lvl - 1);
+            let bCfg = BUILDING_FORMULA_CONFIG || {};
+            let multExp = Math.max(1, Number(bCfg.levelMultExp) || 1);
+            let hpExp = Math.max(1, Number(bCfg.energyLevelExp ?? bCfg.hpLevelExp) || 1);
+            let damageExp = Math.max(1, Number(bCfg.damageLevelExp) || 1);
+            let linearCdReduction = Math.max(0, Math.min(0.95, Number(bCfg.linearCdReductionPerLevel) || 0));
+            let linearVisionBonus = Math.max(0, Number(bCfg.linearVisionBonusPerLevel) || 0);
+            let sandGunCdExp = Math.max(0.01, Number(bCfg.sandGunCdLevelExp) || 0.01);
+            let researchEfficiencyExp = Math.max(1, Number(bCfg.researchEfficiencyLevelExp) || 1);
+            let researchEfficiencyCap = Math.max(0, Number(bCfg.researchEfficiencyCap) || 0);
+            let mult = Math.pow(multExp, lvl - 1);
+            let hpMult = Math.pow(hpExp, lvl - 1);
             let out = {
                 maxHp: NaN,
                 damage: NaN,
@@ -3328,42 +3933,47 @@
                 let baseSpawnCd = Number(cfg.baseTime);
                 let reduction = Number.isFinite(cfg.reduction) ? cfg.reduction : 0.10;
                 if (Number.isFinite(baseSpawnCd) && baseSpawnCd > 0) {
-                    out.spawnCd = Math.max(0.05, baseSpawnCd * Math.pow(1 - reduction, lvl - 1));
+                    let spawnCdFloor = Math.max(0.001, Number(bCfg.spawnCdFloor) || 0.001);
+                    out.spawnCd = Math.max(spawnCdFloor, baseSpawnCd * Math.pow(1 - reduction, lvl - 1));
                 }
                 let baseUnitPrice = Number((BASE_UNIT_STATS[spawnUnitType] || {}).price);
                 if (Number.isFinite(baseUnitPrice) && baseUnitPrice > 0) {
-                    out.unitPrice = Math.max(1, baseUnitPrice * Math.pow(2, lvl - 1));
+                    let priceExp = Math.max(1, Number(bCfg.spawnedUnitPriceLevelExp) || 1);
+                    out.unitPrice = Math.max(1, baseUnitPrice * Math.pow(priceExp, lvl - 1));
                 }
             }
 
             if (key === 'farm') {
-                let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : 1;
-                out.multiplier = baseMultiplier + Math.floor(lvl * Math.log(lvl + 1) * lvl * lvl * lvl);
+                let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : (Number(bCfg.farmBaseMultiplierFallback) || 1);
+                let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
+                let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
+                out.multiplier = baseMultiplier + Math.floor(farmPolyCoeff * lvl * Math.log(lvl + 1) * Math.pow(lvl, farmPowExp));
             }
-            else if (key === 'sand') { out.damage = 0.05 * mult; }
-            else if (key === 'lava') { out.damage = mult; }
-            else if (key === 'mine') { out.damage = Math.floor(135 * mult); }
-            else if (key === 'poison_puddle') { out.damage = mult; }
-            else if (key === 'ice_patch') { out.damage = mult; }
+            else if (key === 'sand') { out.damage = (Number(bCfg.sandFloorDamageBase) || 0) * mult; }
+            else if (key === 'lava') { out.damage = (Number(bCfg.lavaFloorDamageBase) || 0) * mult; }
+            else if (key === 'mine') { out.damage = Math.floor((Number(bCfg.mineFloorDamageBase) || 0) * mult); }
+            else if (key === 'poison_puddle') { out.damage = (Number(bCfg.poisonPuddleFloorDamageBase) || 0) * mult; }
+            else if (key === 'ice_patch') { out.damage = (Number(bCfg.icePatchFloorDamageBase) || 0) * mult; }
 
-            if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(1.4, lvl - 1);
-            if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * Math.pow(1.4, lvl - 1);
+            if (Number.isFinite(def.damage)) out.damage = def.damage * Math.pow(damageExp, lvl - 1);
+            if (Number.isFinite(def.blastDamage)) out.blastDamage = def.blastDamage * Math.pow(damageExp, lvl - 1);
             if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
             if (Number.isFinite(def.cd)) out.cd = def.cd;
             if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
             if (key === 'research') {
                 let baseEfficiency = Number.isFinite(def.efficiency) ? def.efficiency : 1;
-                out.efficiency = Math.min(3, baseEfficiency * Math.pow(1.05, lvl - 1));
+                out.efficiency = Math.min(researchEfficiencyCap, baseEfficiency * Math.pow(researchEfficiencyExp, lvl - 1));
             }
 
             if (key === 'water' || key === 'smg' || key === 'pistol') {
-                if (Number.isFinite(def.cd)) out.cd = Math.max(0.25, def.cd * (1 - (lvl - 1) * 0.1));
-                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
+                let towerCdFloor = Math.max(0.001, Number(bCfg.directTowerCdFloor) || 0.001);
+                if (Number.isFinite(def.cd)) out.cd = Math.max(towerCdFloor, def.cd * (1 - (lvl - 1) * linearCdReduction));
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
             } else if (key === 'fire' || key === 'poison') {
-                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
             } else if (key === 'sand_gun') {
-                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * 0.1);
-                if (Number.isFinite(def.cd)) out.cd = def.cd * Math.pow(0.9, lvl);
+                if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
+                if (Number.isFinite(def.cd)) out.cd = def.cd * Math.pow(sandGunCdExp, lvl);
             }
             if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
                 out.visionRange = Math.min(out.visionRange, def.maxVisionRange);
@@ -3378,58 +3988,86 @@
                 let burnDpsParam = Number.isFinite(def.burnDps) ? def.burnDps : def.fireDps;
                 let burnDurationParam = Number.isFinite(def.burnDuration) ? def.burnDuration : def.fireDuration;
                 if (key === 'fire') {
+                    let fireBurnDpsMin = Math.max(0, Number(bCfg.fireBurnDpsMin) || 0);
+                    let fireBurnDmgMul = Math.max(0, Number(bCfg.fireBurnDpsFromDamageMul) || 0);
+                    let fireBurnDurLevelAdd = Number(bCfg.fireBurnDurationLevelAdd) || 0;
+                    let fireBurnDurFallbackBase = Number(bCfg.fireBurnDurationFallbackBase) || 0;
+                    let fireBurnDurFallbackLevelAdd = Number(bCfg.fireBurnDurationFallbackLevelAdd) || 0;
                     out.burnDps = Number.isFinite(burnDpsParam)
-                        ? Math.max(0.1, burnDpsParam * damageRatio)
-                        : Math.max(0.1, out.damage * 0.05);
+                        ? Math.max(fireBurnDpsMin, burnDpsParam * damageRatio)
+                        : Math.max(fireBurnDpsMin, out.damage * fireBurnDmgMul);
                     out.burnDuration = Number.isFinite(burnDurationParam)
-                        ? (burnDurationParam + (lvl - 1) * 0.5)
-                        : (3 + lvl * 0.5);
+                        ? (burnDurationParam + (lvl - 1) * fireBurnDurLevelAdd)
+                        : (fireBurnDurFallbackBase + lvl * fireBurnDurFallbackLevelAdd);
                 } else if (key === 'poison') {
+                    let poisonDpsMin = Math.max(0, Number(bCfg.poisonDpsMin) || 0);
+                    let poisonDmgMul = Math.max(0, Number(bCfg.poisonDpsFromDamageMul) || 0);
+                    let poisonDurLevelAdd = Number(bCfg.poisonDurationLevelAdd) || 0;
+                    let poisonDurFallbackBase = Number(bCfg.poisonDurationFallbackBase) || 0;
+                    let poisonDurFallbackLevelAdd = Number(bCfg.poisonDurationFallbackLevelAdd) || 0;
                     out.poisonDps = Number.isFinite(def.poisonDps)
-                        ? Math.max(0.1, def.poisonDps * damageRatio)
-                        : Math.max(0.1, out.damage * 0.10);
+                        ? Math.max(poisonDpsMin, def.poisonDps * damageRatio)
+                        : Math.max(poisonDpsMin, out.damage * poisonDmgMul);
                     out.poisonDuration = Number.isFinite(def.poisonDuration)
-                        ? (def.poisonDuration + (lvl - 1) * 2.5)
-                        : (7.5 + lvl * 2.5);
+                        ? (def.poisonDuration + (lvl - 1) * poisonDurLevelAdd)
+                        : (poisonDurFallbackBase + lvl * poisonDurFallbackLevelAdd);
                 } else if (key === 'ice') {
+                    let freezeDpsMin = Math.max(0, Number(bCfg.iceFreezeDpsMin) || 0);
+                    let freezeDmgMul = Math.max(0, Number(bCfg.iceFreezeDpsFromDamageMul) || 0);
+                    let freezeDurLevelAdd = Number(bCfg.iceFreezeDurationLevelAdd) || 0;
+                    let freezeDurFallbackBase = Number(bCfg.iceFreezeDurationFallbackBase) || 0;
+                    let freezeDurFallbackLevelAdd = Number(bCfg.iceFreezeDurationFallbackLevelAdd) || 0;
                     out.freezeDps = Number.isFinite(def.freezeDps)
-                        ? Math.max(0.2, def.freezeDps * damageRatio)
-                        : Math.max(0.2, out.damage * 0.20);
+                        ? Math.max(freezeDpsMin, def.freezeDps * damageRatio)
+                        : Math.max(freezeDpsMin, out.damage * freezeDmgMul);
                     out.freezeDuration = Number.isFinite(def.freezeDuration)
-                        ? (def.freezeDuration + (lvl - 1) * 0.5)
-                        : (3 + lvl * 0.5);
+                        ? (def.freezeDuration + (lvl - 1) * freezeDurLevelAdd)
+                        : (freezeDurFallbackBase + lvl * freezeDurFallbackLevelAdd);
                 } else if (key === 'elements') {
-                    let dot = Math.max(0.1, out.damage * 0.20);
-                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(0.1, burnDpsParam * damageRatio) : dot;
-                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(0.1, def.poisonDps * damageRatio) : dot;
-                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(0.1, def.freezeDps * damageRatio) : dot;
-                    out.burnDuration = Number.isFinite(burnDurationParam) ? (burnDurationParam + (lvl - 1)) : (5 + lvl);
-                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? (def.poisonDuration + (lvl - 1)) : (5 + lvl);
-                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? (def.freezeDuration + (lvl - 1)) : (5 + lvl);
+                    let elementsDotMin = Math.max(0, Number(bCfg.elementsDotMin) || 0);
+                    let elementsDotMul = Math.max(0, Number(bCfg.elementsDotFromDamageMul) || 0);
+                    let elementsDurLevelAdd = Number(bCfg.elementsDurationLevelAdd) || 0;
+                    let elementsDurFallbackBase = Number(bCfg.elementsDurationFallbackBase) || 0;
+                    let dot = Math.max(elementsDotMin, out.damage * elementsDotMul);
+                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(elementsDotMin, burnDpsParam * damageRatio) : dot;
+                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(elementsDotMin, def.poisonDps * damageRatio) : dot;
+                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(elementsDotMin, def.freezeDps * damageRatio) : dot;
+                    out.burnDuration = Number.isFinite(burnDurationParam) ? (burnDurationParam + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
+                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? (def.poisonDuration + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
+                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? (def.freezeDuration + (lvl - 1) * elementsDurLevelAdd) : (elementsDurFallbackBase + lvl * elementsDurLevelAdd);
                 } else if (key === 'lava') {
-                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(0.1, burnDpsParam * mult) : Math.max(0.1, out.damage);
-                    out.burnDuration = Number.isFinite(burnDurationParam) ? burnDurationParam : 1.5;
+                    let lavaBurnDpsMin = Math.max(0, Number(bCfg.lavaBurnDpsMin) || 0);
+                    out.burnDps = Number.isFinite(burnDpsParam) ? Math.max(lavaBurnDpsMin, burnDpsParam * mult) : Math.max(lavaBurnDpsMin, out.damage);
+                    out.burnDuration = Number.isFinite(burnDurationParam) ? burnDurationParam : (Number(bCfg.lavaBurnDurationFallback) || 0);
                 } else if (key === 'poison_puddle') {
-                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(0.1, def.poisonDps * mult) : Math.max(0.1, out.damage);
-                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? def.poisonDuration : 1.5;
+                    let puddlePoisonDpsMin = Math.max(0, Number(bCfg.poisonPuddleDpsMin) || 0);
+                    out.poisonDps = Number.isFinite(def.poisonDps) ? Math.max(puddlePoisonDpsMin, def.poisonDps * mult) : Math.max(puddlePoisonDpsMin, out.damage);
+                    out.poisonDuration = Number.isFinite(def.poisonDuration) ? def.poisonDuration : (Number(bCfg.poisonPuddleDurationFallback) || 0);
                 } else if (key === 'ice_patch') {
-                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(0.2, def.freezeDps * mult) : Math.max(0.2, out.damage);
-                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? def.freezeDuration : 1.5;
+                    let patchFreezeDpsMin = Math.max(0, Number(bCfg.icePatchDpsMin) || 0);
+                    out.freezeDps = Number.isFinite(def.freezeDps) ? Math.max(patchFreezeDpsMin, def.freezeDps * mult) : Math.max(patchFreezeDpsMin, out.damage);
+                    out.freezeDuration = Number.isFinite(def.freezeDuration) ? def.freezeDuration : (Number(bCfg.icePatchDurationFallback) || 0);
                 }
             }
 
             if (key === 'water' || key === 'water_puddle' || key === 'elements') {
-                let defaultWet = key === 'water' ? (6 + lvl) : 3;
+                let waterBase = Number(bCfg.waterWetDurationFallbackBase) || 0;
+                let waterLvlAdd = Number(bCfg.waterWetDurationFallbackLevelAdd) || 0;
+                let puddleDefaultWet = Number(bCfg.waterPuddleWetDurationFallback) || 0;
+                let wetDurationLevelAdd = Number(bCfg.waterWetDurationLevelAdd) || 0;
+                let defaultWet = key === 'water' ? (waterBase + lvl * waterLvlAdd) : puddleDefaultWet;
                 out.wetDuration = Number.isFinite(def.wetDuration)
-                    ? (key === 'water' ? (def.wetDuration + (lvl - 1)) : def.wetDuration)
+                    ? (key === 'water' ? (def.wetDuration + (lvl - 1) * wetDurationLevelAdd) : def.wetDuration)
                     : defaultWet;
             }
             if (key === 'sand_gun' || key === 'sand' || key === 'elements') {
-                let defaultSand = key === 'sand_gun' ? 9 : 0.5;
+                let defaultSand = key === 'sand_gun' ? (Number(bCfg.sandGunDurationFallback) || 0) : (Number(bCfg.sandDurationFallback) || 0);
                 out.sandDuration = Number.isFinite(def.sandDuration) ? def.sandDuration : defaultSand;
             }
             if (key === 'watch_tower') {
-                out.watchDuration = Number.isFinite(def.watchDuration) ? (def.watchDuration + (lvl - 1)) : (4 + lvl);
+                let watchDurLevelAdd = Number(bCfg.watchDurationLevelAdd) || 0;
+                let watchDurFallbackBase = Number(bCfg.watchDurationFallbackBase) || 0;
+                out.watchDuration = Number.isFinite(def.watchDuration) ? (def.watchDuration + (lvl - 1) * watchDurLevelAdd) : (watchDurFallbackBase + lvl * watchDurLevelAdd);
             }
 
             return out;
@@ -3547,7 +4185,7 @@
                 let statOrder = getUnitResearchStatKeys(key);
                 for (let statKey of statOrder) {
                     let baseValue = s[statKey];
-                    if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps') baseValue = 5;
+                    if (statKey === 'builderDps' || statKey === 'healerHps' || statKey === 'researcherDps') baseValue = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0;
                     if (!Number.isFinite(baseValue) || Math.abs(baseValue) < MIN_VISIBLE_RESEARCH_STAT) continue;
                     out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
                 }
@@ -12859,6 +13497,10 @@
             const btnResearchClose = document.getElementById('btn-research-close');
             const btnOpenStartingResources = document.getElementById('btn-open-starting-resources');
             const btnStartingResourcesClose = document.getElementById('btn-starting-resources-close');
+            const btnOpenConfig = document.getElementById('btn-open-config');
+            const btnConfigClose = document.getElementById('btn-config-close');
+            const btnConfigApply = document.getElementById('btn-config-apply');
+            const btnConfigReset = document.getElementById('btn-config-reset');
             const btnExportSettings = document.getElementById('btn-export-settings');
             const btnImportSettings = document.getElementById('btn-import-settings');
             const inputImportSettings = document.getElementById('input-import-settings');
@@ -12871,6 +13513,7 @@
             const startingResourcesPopup = document.getElementById('starting-resources-popup');
             const statsMapPopup = document.getElementById('statsmap-popup');
             const researchMatrixPopup = document.getElementById('research-matrix-popup');
+            const configPopup = document.getElementById('config-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
             const goBtnGraph = document.getElementById('go-btn-graph');
@@ -12889,6 +13532,26 @@
             if (btnOpenStartingResources) {
                 btnOpenStartingResources.addEventListener('click', () => {
                     setStartingResourcesPopupOpen(true);
+                });
+            }
+            if (btnOpenConfig) {
+                btnOpenConfig.addEventListener('click', () => {
+                    setConfigPopupOpen(true);
+                });
+            }
+            if (btnConfigApply) {
+                btnConfigApply.addEventListener('click', () => {
+                    applyConfigEditorChanges();
+                });
+            }
+            if (btnConfigReset) {
+                btnConfigReset.addEventListener('click', () => {
+                    resetConfigEditorToDefaults();
+                });
+            }
+            if (btnConfigClose) {
+                btnConfigClose.addEventListener('click', () => {
+                    setConfigPopupOpen(false);
                 });
             }
             if (btnStartingResourcesClose) {
@@ -13013,6 +13676,13 @@
                     if (e.target === researchMatrixPopup) setResearchStatMatrixPopupOpen(false);
                 });
             }
+            if (configPopup) {
+                configPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === configPopup) setConfigPopupOpen(false);
+                });
+            }
+
+            ensureDefaultEditableRuntimeConfigSnapshot();
 
             // Minimap toggle
             const btnMap = document.getElementById('btn-minimap');
@@ -17128,6 +17798,13 @@
                 MAX_THING_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxThingLevel) || 20));
                 MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(data.cfg.maxResearchLevel) || 10));
                 startingResourcesConfig = normalizeStartingResourcesConfig(data.cfg.startingResources || makeDefaultStartingResourcesConfig());
+                if (data.cfg.editableConfig && typeof data.cfg.editableConfig === 'object') {
+                    try {
+                        applyEditableRuntimeConfigObject(data.cfg.editableConfig, { fromTransport: true, deferPrecompute: true });
+                    } catch {
+                        // Fall back to standard cfg fields if advanced payload is malformed.
+                    }
+                }
             }
             initAudio();
             startGame();
@@ -18001,6 +18678,7 @@
                 maxThingLevel: MAX_THING_LEVEL,
                 maxResearchLevel: MAX_RESEARCH_LEVEL,
                 startingResources: cloneStartingResourcesConfig(),
+                editableConfig: serializeEditableRuntimeConfigForTransport(),
             };
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
