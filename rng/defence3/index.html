@@ -4743,6 +4743,10 @@
         // GLOBAL STATE
         // ============================================================
     let canvas, ctx, bgCanvas, bgCtx, minimapCanvas, minimapCtx;
+    let renderCanvas = null, renderCtx = null;
+    let webglRenderMode = false;
+    let gl = null, glFrameProgram = null, glFrameBuffer = null, glFrameTexture = null;
+    let glFramePosLoc = -1, glFrameUvLoc = -1, glFrameSamplerLoc = null;
         let dirtyGrid = true, dirtyAreas = true;
         let visibilityGrid = [];
     let visibilityVersion = 0;
@@ -21691,6 +21695,7 @@
             let dpr = window.devicePixelRatio || 1;
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             draw();
+            presentFrameToWebGL();
             updateHUD();
             updateControlGroupBar();
 
@@ -21755,13 +21760,135 @@
         }
 
         let _renderInitEventsBound = false;
+
+        function createWebGLShader(glCtx, type, source) {
+            let shader = glCtx.createShader(type);
+            if (!shader) return null;
+            glCtx.shaderSource(shader, source);
+            glCtx.compileShader(shader);
+            if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
+                glCtx.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function initWebGLFramePresenter(glCtx) {
+            let vertexSrc = `
+                attribute vec2 aPosition;
+                attribute vec2 aUv;
+                varying vec2 vUv;
+                void main() {
+                    vUv = aUv;
+                    gl_Position = vec4(aPosition, 0.0, 1.0);
+                }
+            `;
+            let fragmentSrc = `
+                precision mediump float;
+                varying vec2 vUv;
+                uniform sampler2D uFrame;
+                void main() {
+                    gl_FragColor = texture2D(uFrame, vUv);
+                }
+            `;
+
+            let vs = createWebGLShader(glCtx, glCtx.VERTEX_SHADER, vertexSrc);
+            let fs = createWebGLShader(glCtx, glCtx.FRAGMENT_SHADER, fragmentSrc);
+            if (!vs || !fs) return false;
+
+            let program = glCtx.createProgram();
+            if (!program) return false;
+            glCtx.attachShader(program, vs);
+            glCtx.attachShader(program, fs);
+            glCtx.linkProgram(program);
+            glCtx.deleteShader(vs);
+            glCtx.deleteShader(fs);
+            if (!glCtx.getProgramParameter(program, glCtx.LINK_STATUS)) {
+                glCtx.deleteProgram(program);
+                return false;
+            }
+
+            let buffer = glCtx.createBuffer();
+            if (!buffer) {
+                glCtx.deleteProgram(program);
+                return false;
+            }
+
+            let texture = glCtx.createTexture();
+            if (!texture) {
+                glCtx.deleteBuffer(buffer);
+                glCtx.deleteProgram(program);
+                return false;
+            }
+
+            glCtx.bindBuffer(glCtx.ARRAY_BUFFER, buffer);
+            glCtx.bufferData(glCtx.ARRAY_BUFFER, new Float32Array([
+                -1, -1, 0, 1,
+                 1, -1, 1, 1,
+                -1,  1, 0, 0,
+                 1,  1, 1, 0,
+            ]), glCtx.STATIC_DRAW);
+
+            glCtx.bindTexture(glCtx.TEXTURE_2D, texture);
+            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_MIN_FILTER, glCtx.NEAREST);
+            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_MAG_FILTER, glCtx.NEAREST);
+            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_S, glCtx.CLAMP_TO_EDGE);
+            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_T, glCtx.CLAMP_TO_EDGE);
+
+            glFrameProgram = program;
+            glFrameBuffer = buffer;
+            glFrameTexture = texture;
+            glFramePosLoc = glCtx.getAttribLocation(program, 'aPosition');
+            glFrameUvLoc = glCtx.getAttribLocation(program, 'aUv');
+            glFrameSamplerLoc = glCtx.getUniformLocation(program, 'uFrame');
+
+            return glFramePosLoc >= 0 && glFrameUvLoc >= 0 && !!glFrameSamplerLoc;
+        }
+
+        function presentFrameToWebGL() {
+            if (!webglRenderMode || !gl || !canvas || !renderCanvas || !glFrameProgram || !glFrameTexture || !glFrameBuffer) return;
+
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.useProgram(glFrameProgram);
+            gl.bindBuffer(gl.ARRAY_BUFFER, glFrameBuffer);
+            gl.enableVertexAttribArray(glFramePosLoc);
+            gl.vertexAttribPointer(glFramePosLoc, 2, gl.FLOAT, false, 16, 0);
+            gl.enableVertexAttribArray(glFrameUvLoc);
+            gl.vertexAttribPointer(glFrameUvLoc, 2, gl.FLOAT, false, 16, 8);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, glFrameTexture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, renderCanvas);
+            gl.uniform1i(glFrameSamplerLoc, 0);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
         function ensureRenderContextsInitialized() {
             canvas = canvas || document.getElementById('gameCanvas');
             let gameArea = document.getElementById('game-area');
             if (!canvas || !gameArea) return false;
 
             if (!ctx) {
-                ctx = canvas.getContext('2d');
+                if (!gl) {
+                    gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false })
+                        || canvas.getContext('experimental-webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+                }
+                if (gl && !glFrameProgram) {
+                    webglRenderMode = initWebGLFramePresenter(gl);
+                }
+
+                if (webglRenderMode) {
+                    if (!renderCanvas) renderCanvas = document.createElement('canvas');
+                    if (!renderCtx) renderCtx = renderCanvas.getContext('2d');
+                    ctx = renderCtx;
+                } else {
+                    ctx = canvas.getContext('2d');
+                }
+
                 if (!ctx) return false;
                 ctx.imageSmoothingEnabled = false;
             }
@@ -21806,6 +21933,13 @@
             canvas.height = viewH * dpr;
             canvas.style.width = viewW + 'px';
             canvas.style.height = viewH + 'px';
+
+            if (webglRenderMode && renderCanvas) {
+                renderCanvas.width = canvas.width;
+                renderCanvas.height = canvas.height;
+                if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+            }
+
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
