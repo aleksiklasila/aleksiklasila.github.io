@@ -2148,12 +2148,14 @@
             let infoPanel = holder.querySelector('#research-popup-info-panel');
             if (!infoPanel) {
                 holder.innerHTML = `
+                <div id="queue-multiplier-bar-popup" class="mult-toggle-bar" style="padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;"></div>
                 <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
                     <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
                 </div>
                 <div id="research-popup-info-panel"></div>
             `;
                 infoPanel = holder.querySelector('#research-popup-info-panel');
+                updatePurchaseMultiplierBars();
             }
 
             let popupIgnoreBtn = holder.querySelector('#btn-ignore-level-popup');
@@ -2865,17 +2867,9 @@
             for (let key in out) {
                 let def = out[key];
                 if (!def || typeof def !== 'object') continue;
-                if (Number.isFinite(def.energy)) {
-                    def.energy = def.energy;
-                    delete def.energy;
-                }
-                if (Number.isFinite(def.towerEnergy)) {
-                    def.towerEnergy = def.towerEnergy;
-                    delete def.towerEnergy;
-                }
-                if (Number.isFinite(def.price)) {
+                // Keep runtime fields intact; mirror price into energyCost for editor compatibility.
+                if (Number.isFinite(def.price) && !Number.isFinite(def.energyCost)) {
                     def.energyCost = def.price;
-                    delete def.price;
                 }
             }
             return out;
@@ -2886,12 +2880,8 @@
             for (let key in out) {
                 let def = out[key];
                 if (!def || typeof def !== 'object') continue;
-                if (Number.isFinite(def.energy)) def.energy = def.energy;
-                if (Number.isFinite(def.towerEnergy)) def.towerEnergy = def.towerEnergy;
+                // Accept editor alias while preserving runtime fields.
                 if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
-                delete def.energy;
-                delete def.towerEnergy;
-                delete def.energyCost;
             }
             return out;
         }
@@ -2901,13 +2891,9 @@
             for (let key in out) {
                 let def = out[key];
                 if (!def || typeof def !== 'object') continue;
-                if (Number.isFinite(def.energy)) {
-                    def.energy = def.energy;
-                    delete def.energy;
-                }
-                if (Number.isFinite(def.price)) {
+                // Keep runtime fields intact; mirror price into energyCost for editor compatibility.
+                if (Number.isFinite(def.price) && !Number.isFinite(def.energyCost)) {
                     def.energyCost = def.price;
-                    delete def.price;
                 }
             }
             return out;
@@ -2918,10 +2904,8 @@
             for (let key in out) {
                 let def = out[key];
                 if (!def || typeof def !== 'object') continue;
-                if (Number.isFinite(def.energy)) def.energy = def.energy;
+                // Accept editor alias while preserving runtime fields.
                 if (Number.isFinite(def.energyCost)) def.price = def.energyCost;
-                delete def.energy;
-                delete def.energyCost;
             }
             return out;
         }
@@ -3288,12 +3272,15 @@
 
         function mulberry32(seed) {
             let s = seed | 0;
-            return function () {
+            let fn = function () {
                 s = (s + 0x6D2B79F5) | 0;
                 let t = Math.imul(s ^ (s >>> 15), 1 | s);
                 t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
                 return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
             };
+            fn.getState = () => (s | 0);
+            fn.setState = (nextState) => { s = (Number(nextState) | 0); };
+            return fn;
         }
 
         // ============================================================
@@ -3321,6 +3308,9 @@
     let LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
+    let LOCKSTEP_HARD_RESYNC_MS = Math.max(3000, Math.floor(TICK_MS * 60));
+    let LOCKSTEP_STATE_CHECK_INTERVAL = 10;
+    let LOCKSTEP_DEBUG_HASH_DETAILS = true;
         let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
 
         function secondsToTicks(seconds) {
@@ -4688,9 +4678,10 @@
             let scaled = computeUnitLevelScaledStats(unit, lvl);
             if (!scaled) return;
 
-            let energyRatio = unit.maxEnergy > 0 ? (unit.energy / unit.maxEnergy) : 1;
+            let prevEnergyAbs = Number(unit.energy);
+            if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
             unit.maxEnergy = scaled.maxEnergy;
-            unit.energy = Math.max(1, Math.floor(unit.maxEnergy * energyRatio));
+            unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(prevEnergyAbs)));
             unit.attackDamage = scaled.attackDamage;
             unit.attackCooldown = scaled.attackCooldown;
             unit.speed = scaled.speed;
@@ -4727,9 +4718,10 @@
             let scaled = computeUnitLevelScaledStats(unit, lvl);
             if (!scaled) return;
 
-            let energyRatio = unit.maxEnergy > 0 ? (unit.energy / unit.maxEnergy) : 1;
+            let prevEnergyAbs = Number(unit.energy);
+            if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
             unit.maxEnergy = scaled.maxEnergy;
-            unit.energy = Math.max(1, Math.floor(unit.maxEnergy * energyRatio));
+            unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(prevEnergyAbs)));
             unit.attackDamage = scaled.attackDamage;
             unit.attackCooldown = scaled.attackCooldown;
             unit.speed = scaled.speed;
@@ -4912,9 +4904,11 @@
         let lockstepBundleAckByTick = {}; // host only: {tick: {peerId: true}}
         let lockstepLastPacketSentAtByTick = {}; // {tick: timestamp}
         let lockstepLastBundleSentAtByTick = {}; // host only: {tick: timestamp}
+        let lockstepLastFinalizeSentAtByTick = {}; // host only: {tick: timestamp} for proactive committed rebroadcasts
         let lockstepLastResendRequestAtByTick = {}; // host/guest: {tick: timestamp}
     let nextLocalActionSeq = 1;
     let waitingForRemoteSince = 0;
+    let lockstepLastHardResyncRequestAt = 0;
         let nextUnitId = 1;
         let visualRng = null; // separate RNG for particles/visual effects (not synced)
 
@@ -4943,6 +4937,11 @@
     let nextNetworkPingSeq = 1;
     let lastNetworkPingSweepAt = 0;
     let lockstepHistoryByTick = {};
+    let lockstepExpectedStateHashByTick = {};
+    let lockstepLocalStateHashByTick = {};
+    let lockstepExpectedStateDigestByTick = {};
+    let lockstepLocalStateDigestByTick = {};
+    let lockstepDesyncDetected = false;
     const LS_PLAYER_UID_KEY = 'defence3_player_uid';
     const LS_PLAYER_NAME_KEY = 'defence3_player_name';
     const LS_UI_SETTINGS_KEY = 'defence3_ui_settings_v1';
@@ -4985,6 +4984,8 @@
             LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
             LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
             LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
+            LOCKSTEP_HARD_RESYNC_MS = Math.max(3000, Math.floor(TICK_MS * 60));
+            LOCKSTEP_STATE_CHECK_INTERVAL = Math.max(1, Math.floor(TICK_RATE / 2));
 
             CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);
             MAP_ALERT_DURATION = Math.floor(TICK_RATE * 1.8);
@@ -6916,6 +6917,12 @@
                 updatePurchaseMultiplierBars();
                 updateInfoPanel();
             }, 'Queue');
+            renderMultiplierBar('queue-multiplier-bar-popup', queuePurchaseMultiplier, (val) => {
+                queuePurchaseMultiplier = val;
+                updatePurchaseMultiplierBars();
+                updateInfoPanel();
+                renderResearchPopupContent();
+            }, 'Queue');
         }
 
         function queueResizeForEachActiveUnitSubgroup(mode) {
@@ -7921,7 +7928,7 @@
                 forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
                     if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) return;
+                    if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     let d = Math.sqrt(d2);
                     if (d < closestD) { closestD = d; closest = u; }
                 });
@@ -8024,7 +8031,7 @@
                 forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
                     if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) return;
+                    if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     let d = Math.sqrt(d2);
                     if (d < closestD) { closestD = d; closest = u; }
                 });
@@ -8178,7 +8185,7 @@
                 if (this.targetUnit) {
                     if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
                     let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
-                    let targetVisible = isTileVisibleToPlayer(this.owner, tgx, tgy);
+                    let targetVisible = isGameplayTargetVisibleToPlayer(this.owner, tgx, tgy);
                     if (!targetVisible) {
                         if (this.forcedAttackTarget) {
                             let lockX = Number.isFinite(this._forcedTargetLastSeenX) ? this._forcedTargetLastSeenX : this.targetUnit.x;
@@ -8307,7 +8314,7 @@
                 forEachUnitInRange(this.x, this.y, this.attackRange, (u) => {
                     if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                    if (!isTileVisibleToPlayer(this.owner, ugx, ugy)) return;
+                    if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     if (this.attackTimer <= 0) {
                         this._performAttackOnUnit(u);
                         return true;
@@ -9331,6 +9338,7 @@
                     return;
                 }
                 if (!u.path || u.pathIndex >= u.path.length) {
+                    u._workerNextIdleRetargetTick = gameTime;
                     u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
                 }
                 return; // Suppress auto-AI while manually moving
@@ -9675,7 +9683,8 @@
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
-                    if (gameTime % 20 === 0) {
+                    if (gameTime % 20 === 0 && players[owner].energy >= 1) {
+                        players[owner].energy -= 1;
                         let t = u.workerTarget;
                         if (t.underConstruction) {
                             t.energy = Math.min(t.maxEnergy, t.energy + 1);
@@ -10184,6 +10193,7 @@
                 let best = null;
                 let bestScore = Infinity;
                 for (let c of pool) {
+                    if (!_canAssignWorkerTargetExclusive(u, c.target, c.type)) continue;
                     let score = c.spawnerDist + c.originDist * 0.22;
                     if (c.type === 'drop') score += TILE * 0.5;
                     if (u.workerTarget && u.workerTarget === c.target) score -= TILE * 0.75;
@@ -10310,6 +10320,12 @@
             return count;
         }
 
+        function _canAssignWorkerTargetExclusive(u, target, targetType = null) {
+            if (!u || !target || !u.workerType) return false;
+            if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
+            return _countWorkersTargetingTarget(target, u.owner, u.workerType, targetType, u) <= 0;
+        }
+
         function _scoreWorkerTaskCandidate(u, candidate, hasAlternatives) {
             let score = Number(candidate.dist) || 0;
             if (hasAlternatives) {
@@ -10337,7 +10353,23 @@
                 let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
                 return Number.isFinite(d) && d <= visibilityPx;
             });
+            let pickExclusivePool = (list) => list.filter(c => {
+                let targetType = (c && c.targetType !== undefined) ? c.targetType : null;
+                return _canAssignWorkerTargetExclusive(u, c.target, targetType);
+            });
+
             let pool = nearby.length > 0 ? nearby : candidates;
+            let exclusivePool = pickExclusivePool(pool);
+            if (exclusivePool.length > 0) {
+                pool = exclusivePool;
+            } else if (nearby.length > 0) {
+                // Nearby tasks are saturated by same-type workers; search globally.
+                let globalExclusivePool = pickExclusivePool(candidates);
+                if (globalExclusivePool.length > 0) pool = globalExclusivePool;
+                else return null;
+            } else {
+                return null;
+            }
             let hasAlternatives = pool.length > 1;
 
             let best = null;
@@ -10446,10 +10478,10 @@
         function _salvagerFindTarget(u, myGx, myGy) {
             let owner = u.owner;
             let bestDist = 99999, bestItem = null;
-            for (let t of towers) { if (t.owner === owner && t.markedForSalvage) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d < bestDist) { bestDist = d; bestItem = t; } } }
-            for (let b of barracks) { if (b.owner === owner && b.markedForSalvage) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d < bestDist) { bestDist = d; bestItem = b; } } }
-            for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d < bestDist) { bestDist = d; bestItem = s; } } }
-            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !collectorSpawners.includes(c.item)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
+            for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d < bestDist) { bestDist = d; bestItem = t; } } }
+            for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d < bestDist) { bestDist = d; bestItem = b; } } }
+            for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d < bestDist) { bestDist = d; bestItem = s; } } }
+            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !collectorSpawners.includes(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
             if (bestItem) {
                 u.workerTarget = bestItem;
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
@@ -10468,13 +10500,15 @@
 
             if (_isBuilderWorkTarget(u.workerTarget, u.owner)) {
                 let currentLoad = _countWorkersTargetingTarget(u.workerTarget, u.owner, 'builder', null, u);
-                if (currentLoad <= 3) target = u.workerTarget;
+                if (currentLoad <= 0) target = u.workerTarget;
             }
             if (!target && Number.isFinite(u._builderLastWorkGx) && Number.isFinite(u._builderLastWorkGy)) {
-                target = _getBuilderWorkTargetAt(u._builderLastWorkGx, u._builderLastWorkGy, u.owner);
+                let cand = _getBuilderWorkTargetAt(u._builderLastWorkGx, u._builderLastWorkGy, u.owner);
+                if (cand && _canAssignWorkerTargetExclusive(u, cand, null)) target = cand;
             }
             if (!target && Number.isFinite(u._builderLastWorkX) && Number.isFinite(u._builderLastWorkY)) {
-                target = _getBuilderWorkTargetNear(u._builderLastWorkX, u._builderLastWorkY, u.owner, Math.max(22, TILE * 1.5));
+                let cand = _getBuilderWorkTargetNear(u._builderLastWorkX, u._builderLastWorkY, u.owner, Math.max(22, TILE * 1.5));
+                if (cand && _canAssignWorkerTargetExclusive(u, cand, null)) target = cand;
             }
             if (!target) {
                 let origin = _builderGetSearchOrigin(u);
@@ -10490,6 +10524,12 @@
 
         function _builderAssignTarget(u, target, myGx, myGy) {
             if (!target || target.markedForSalvage) {
+                u.workerTarget = null;
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
+            if (!_canAssignWorkerTargetExclusive(u, target, null)) {
                 u.workerTarget = null;
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
@@ -10606,6 +10646,13 @@
             let effLvl = getThingEffectiveLevel(target);
             let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
             return front.energyPaid < front.energyRequired;
+        }
+
+        function _isHealerQueueAnchorTarget(target, owner) {
+            if (!target || target.owner !== owner) return false;
+            if (target.energy <= 0 || target.underConstruction) return false;
+            if (!isQueueEnabled(target)) return false;
+            return Array.isArray(target.spawnQueue);
         }
 
         function _getHealerQueueTripCost(u, target) {
@@ -10780,6 +10827,7 @@
                 queueTarget = u._healerPinnedQueueTarget;
             }
             if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
+            if (queueTarget && !_canAssignWorkerTargetExclusive(u, queueTarget, 'queue')) queueTarget = null;
             if (queueTarget) {
                 u.workerTarget = queueTarget;
                 u.workerTargetType = 'queue';
@@ -10810,11 +10858,12 @@
                 u.commandState = CMD_IDLE;
                 return;
             }
-            if (u._healerPinnedQueueTarget && !_isHealerQueueTarget(u._healerPinnedQueueTarget, u.owner)) {
+            if (u._healerPinnedQueueTarget && !_isHealerQueueAnchorTarget(u._healerPinnedQueueTarget, u.owner)) {
                 u._healerPinnedQueueTarget = null;
             }
 
             let target = _findNearestDamagedFriendlyUnit(u, origin.x, origin.y);
+            if (target && !_canAssignWorkerTargetExclusive(u, target, 'unit')) target = null;
             if (target) {
                 _clearHealerQueueCommit(u);
                 u.workerTarget = target;
@@ -12576,6 +12625,11 @@
             return !!(vis[gy] && vis[gy][gx] > 0);
         }
 
+        function isGameplayTargetVisibleToPlayer(playerId, gx, gy) {
+            if (isMultiplayer) return true;
+            return isTileVisibleToPlayer(playerId, gx, gy);
+        }
+
         function updateVisibility(playerId) {
             // Check fullVisibility toggle
             if (fullVisibility) return;
@@ -12775,6 +12829,22 @@
                 let byType = ['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type);
                 let byShape = Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
                 return !!(byType || byShape);
+            }
+
+            function findOwnRallyAnchorNear(worldX, worldY) {
+                let candidates = [];
+                for (let b of barracks) {
+                    if (b.owner !== localPlayerId || b.energy <= 0 || b.underConstruction) continue;
+                    if (!isTileVisible(b.gx, b.gy)) continue;
+                    candidates.push({ ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
+                }
+                for (let s of collectorSpawners) {
+                    if (s.owner !== localPlayerId || s.energy <= 0 || s.underConstruction) continue;
+                    if (!isTileVisible(s.gx, s.gy)) continue;
+                    candidates.push({ ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
+                }
+                let hit = pickNearestHitCandidate(candidates, worldX, worldY);
+                return hit ? hit.ref : null;
             }
 
             function getUnitClickShape(u) {
@@ -13245,8 +13315,9 @@
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
                     if (selSpawners.length > 0) {
-                        let rallyX = clickedEnemyUnit ? clickedEnemyUnit.x : world.x;
-                        let rallyY = clickedEnemyUnit ? clickedEnemyUnit.y : world.y;
+                        let rallyAnchor = clickedEnemyUnit ? null : findOwnRallyAnchorNear(world.x, world.y);
+                        let rallyX = clickedEnemyUnit ? clickedEnemyUnit.x : (rallyAnchor ? rallyAnchor.x : world.x);
+                        let rallyY = clickedEnemyUnit ? clickedEnemyUnit.y : (rallyAnchor ? rallyAnchor.y : world.y);
                         applyRallyTargets(selSpawners, rallyX, rallyY, isCtrlMulti, clickedEnemyUnit ? clickedEnemyUnit.id : null);
                         issuedStructureCommand = true;
                     } else if (!isCtrlMulti) {
@@ -13276,12 +13347,13 @@
                             issuedStructureCommand = true;
                         }
                     }
-                    if (issuedStructureCommand && getActiveUnits().length === 0) {
+                    let activeUnits = getActiveUnits();
+                    if (issuedStructureCommand && activeUnits.length === 0) {
                         updateInfoPanel();
                         return;
                     }
                     // Right-click own barrack to queue unit (only if no workers or combat units selected)
-                    if (selSpawners.length === 0) {
+                    if (selSpawners.length === 0 && activeUnits.length === 0) {
                         let ownBarrackHits = [];
                         for (let b of barracks) {
                             if (b.owner !== localPlayerId || b.energy <= 0 || b.underConstruction) continue;
@@ -13294,7 +13366,6 @@
                             return;
                         }
                     }
-                    let activeUnits = getActiveUnits();
                     if (activeUnits.length > 0) {
                         // --- Worker targeting logic ---
                         let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
@@ -13331,7 +13402,7 @@
                         }
 
                         if (healerUnits.length > 0) {
-                            let queueTarget = _getHealerQueueTargetNear(world.x, world.y, localPlayerId, 22, true);
+                            let queueTarget = _getHealerQueueTargetNear(world.x, world.y, localPlayerId, 22, false);
                             if (queueTarget) {
                                 applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
                                 updateInfoPanel();
@@ -14184,6 +14255,72 @@
             }
         }
 
+        function clearWorkerTaskMemoryForFreeRetarget(u) {
+            if (!u || !u.workerState) return;
+            if (u.workerType === 'collector') {
+                u._collectorPinnedTarget = null;
+                u._collectorPinnedTargetType = null;
+                u._collectorLastGatherX = null;
+                u._collectorLastGatherY = null;
+                u._collectorLastGatherGx = null;
+                u._collectorLastGatherGy = null;
+                u._collectorLastGatherType = null;
+                u._collectorNextSpawner = null;
+                u._collectorLastDropoffSpawner = null;
+                u._lastMineTarget = null;
+            } else if (u.workerType === 'builder') {
+                u._builderLastWorkX = null;
+                u._builderLastWorkY = null;
+                u._builderLastWorkGx = null;
+                u._builderLastWorkGy = null;
+                u._builderSpawnerTarget = null;
+            } else if (u.workerType === 'healer') {
+                u._healerPinnedQueueTarget = null;
+                _clearHealerQueueCommit(u);
+                u._healerLastWorkX = null;
+                u._healerLastWorkY = null;
+                u._healerLastWorkGx = null;
+                u._healerLastWorkGy = null;
+                u._healerSpawnerTarget = null;
+                u._healerQueueTripCost = 0;
+            } else if (u.workerType === 'researcher') {
+                u._researchSpawnerTarget = null;
+                u._researcherTripWork = 0;
+                u._researcherTripCost = 0;
+            }
+            u._workerNextIdleRetargetTick = gameTime;
+        }
+
+        function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
+            if (!u || u.dead || !u.workerState) return;
+            let gx = Math.max(0, Math.min(GRID_W - 1, Math.floor(targetGx)));
+            let gy = Math.max(0, Math.min(GRID_H - 1, Math.floor(targetGy)));
+            let targetX = gx * TILE + TILE / 2;
+            let targetY = gy * TILE + TILE / 2;
+
+            u.targetUnit = null;
+            u.targetBuilding = null;
+            u.forcedAttackTarget = false;
+            u._forcedTargetLastSeenX = null;
+            u._forcedTargetLastSeenY = null;
+            u.commandState = CMD_MOVING;
+            Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
+            clearWorkerTaskMemoryForFreeRetarget(u);
+
+            if (pathfindBudget < MAX_PATHS_PER_TICK) {
+                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                let dest = findNearestWalkable(gx, gy, ugx, ugy, u);
+                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                u._pendingPathTarget = null;
+                pathfindBudget++;
+            } else {
+                u._pendingPathTarget = { gx, gy, cmd: CMD_MOVING };
+                u.path = null;
+                u.pathIndex = 0;
+            }
+        }
+
         function getUnitStackCount(u) {
             if (!u) return 1;
             if (Number.isFinite(u.stackCount) && u.stackCount >= 1) return Math.floor(u.stackCount);
@@ -14291,7 +14428,9 @@
 
         function shuffleInPlaceDeterministic(arr) {
             for (let i = arr.length - 1; i > 0; i--) {
-                let r = (typeof rng === 'function') ? rng() : Math.random();
+                let r = (typeof rng === 'function')
+                    ? rng()
+                    : ((((i + 1) * 1103515245 + (gameTime + 1) * 12345) >>> 0) / 4294967296);
                 let j = Math.floor(r * (i + 1));
                 [arr[i], arr[j]] = [arr[j], arr[i]];
             }
@@ -14401,13 +14540,7 @@
                             u.commandState = CMD_MOVING;
                             if (u.workerState) {
                                 Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
-                                if (u.workerType === 'collector') {
-                                    u._collectorPinnedTarget = null;
-                                    u._collectorPinnedTargetType = null;
-                                } else if (u.workerType === 'healer') {
-                                    u._healerPinnedQueueTarget = null;
-                                    _clearHealerQueueCommit(u);
-                                }
+                                clearWorkerTaskMemoryForFreeRetarget(u);
                             }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -14432,13 +14565,7 @@
                             u.commandState = CMD_ATTACK_MOVING;
                             if (u.workerState) {
                                 Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
-                                if (u.workerType === 'collector') {
-                                    u._collectorPinnedTarget = null;
-                                    u._collectorPinnedTargetType = null;
-                                } else if (u.workerType === 'healer') {
-                                    u._healerPinnedQueueTarget = null;
-                                    _clearHealerQueueCommit(u);
-                                }
+                                clearWorkerTaskMemoryForFreeRetarget(u);
                             }
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -14564,6 +14691,10 @@
                             // Generic lookup: includes both under-construction and upgrading targets.
                             let target = _getBuilderWorkTargetAt(a.targetGx, a.targetGy, playerId, true);
                             if (target) {
+                                if (!_canAssignWorkerTargetExclusive(u, target, null)) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
                                 // Manual assignment should always allow builders to work this target,
                                 // even if auto-build for new objects is currently disabled.
                                 target.buildEnabled = true;
@@ -14573,6 +14704,10 @@
                         } else if (u.workerType === 'collector' && (a.targetType === 'mine' || a.targetType === 'farm')) {
                             let gather = _getCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
                             if (gather && _isCollectorTargetValid(gather.target, gather.type, playerId)) {
+                                if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
                                 u.workerTarget = null;
                                 u._collectorPinnedTarget = gather.target;
                                 u._collectorPinnedTargetType = gather.type;
@@ -14581,11 +14716,16 @@
                         } else if (u.workerType === 'healer' && a.targetType === 'queue') {
                             let qTarget = barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.owner === playerId)
                                 || collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.owner === playerId);
-                            if (_isHealerQueueTarget(qTarget, playerId)) {
+                            if (_isHealerQueueAnchorTarget(qTarget, playerId)) {
+                                if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
                                 u.workerTarget = null;
                                 u.workerTargetType = null;
                                 u._healerPinnedQueueTarget = qTarget;
-                                _setHealerQueueCommit(u, qTarget);
+                                if (_isHealerQueueTarget(qTarget, playerId)) _setHealerQueueCommit(u, qTarget);
+                                else _clearHealerQueueCommit(u);
                                 _healerFindTarget(u, myGx, myGy);
                             }
                         }
@@ -14955,6 +15095,65 @@
             html += row('research', 'Research', 'research');
             html += row('builder', 'Builder', 'builder');
             html += row('healer', 'Healer', 'healer');
+            html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+            return html;
+        }
+
+        function buildInfoPanelIdleWorkersHtml(owner) {
+            if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
+
+            let idleCounts = {
+                total: 0,
+                collector: 0,
+                salvager: 0,
+                researcher: 0,
+                builder: 0,
+                healer: 0
+            };
+
+            let totalCounts = {
+                total: 0,
+                collector: 0,
+                salvager: 0,
+                researcher: 0,
+                builder: 0,
+                healer: 0
+            };
+
+            for (let u of units) {
+                if (!u || u.dead || u.owner !== owner || !u.workerType) continue;
+
+                totalCounts.total++;
+                if (u.workerType === 'collector') totalCounts.collector++;
+                else if (u.workerType === 'salvager') totalCounts.salvager++;
+                else if (u.workerType === 'researcher') totalCounts.researcher++;
+                else if (u.workerType === 'builder') totalCounts.builder++;
+                else if (u.workerType === 'healer') totalCounts.healer++;
+
+                let isIdleLike = (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING);
+                if (!isIdleLike) continue;
+                idleCounts.total++;
+                if (u.workerType === 'collector') idleCounts.collector++;
+                else if (u.workerType === 'salvager') idleCounts.salvager++;
+                else if (u.workerType === 'researcher') idleCounts.researcher++;
+                else if (u.workerType === 'builder') idleCounts.builder++;
+                else if (u.workerType === 'healer') idleCounts.healer++;
+            }
+
+            let row = (label, idleValue, totalValue) => {
+                return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+                    + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
+                    + `<span class="info-value" style="color:#ddd">${idleValue} / ${totalValue}</span>`
+                    + `</div>`;
+            };
+
+            let html = `<div class="info-title" style="margin-bottom:2px">Idle Workers</div>`;
+            html += row('Total', idleCounts.total, totalCounts.total);
+            html += row('Collector', idleCounts.collector, totalCounts.collector);
+            html += row('Salvager', idleCounts.salvager, totalCounts.salvager);
+            html += row('Researcher', idleCounts.researcher, totalCounts.researcher);
+            html += row('Builder', idleCounts.builder, totalCounts.builder);
+            html += row('Healer', idleCounts.healer, totalCounts.healer);
             html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
             return html;
         }
@@ -17282,14 +17481,14 @@
                 let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayFromLevel, selectedThingLevel);
                 let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
                 let baseValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, 0, selectedThingLevel);
-                console.log("pre: ", globalQueuedDepth, currentLevel, projectedLevel, displayToLevel, `R${displayToLevel}`)
+                // console.log("pre: ", globalQueuedDepth, currentLevel, projectedLevel, displayToLevel, `R${displayToLevel}`)
                 if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
                 // if (!atMax && displayToLevel <= displayFromLevel) {
                 //     displayToLevel = Math.min(MAX_RESEARCH_LEVEL, displayFromLevel + 1);
                 //     let nextPreview = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, displayToLevel, selectedThingLevel);
                 //     if (Number.isFinite(nextPreview)) projectedValue = nextPreview;
                 // }
-                console.log("post: ", globalQueuedDepth, currentLevel, projectedLevel, displayToLevel, `R${displayToLevel}`)
+                // console.log("post: ", globalQueuedDepth, currentLevel, projectedLevel, displayToLevel, `R${displayToLevel}`)
                 let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(projectedValue))
                     ? (projectedValue / baseValue)
                     : NaN;
@@ -18646,8 +18845,413 @@
             return map;
         }
 
+        function cloneSnapshotValue(value) {
+            let seen = new WeakSet();
+            return JSON.parse(JSON.stringify(value, (key, v) => {
+                if (typeof v === 'function') return undefined;
+                if (!v || typeof v !== 'object') return v;
+                if (seen.has(v)) return undefined;
+                seen.add(v);
+                return v;
+            }));
+        }
+
+        function snapshotEntity(obj, omitKeys = []) {
+            if (!obj || typeof obj !== 'object') return null;
+            let omit = new Set(omitKeys);
+            let out = {};
+            for (let k of Object.keys(obj)) {
+                if (omit.has(k)) continue;
+                out[k] = obj[k];
+            }
+            return cloneSnapshotValue(out);
+        }
+
+        function makeSnapshotEntityRef(target) {
+            if (!target || typeof target !== 'object') return null;
+            if (target instanceof Unit) {
+                return { kind: 'unit', id: Math.floor(Number(target.id) || 0) };
+            }
+            if (target instanceof Tower) {
+                return {
+                    kind: 'tower',
+                    owner: Math.floor(Number(target.owner) || 0),
+                    gx: Math.floor(Number(target.gx) || 0),
+                    gy: Math.floor(Number(target.gy) || 0),
+                    type: String(target.type || '')
+                };
+            }
+            if (target instanceof Barrack) {
+                return {
+                    kind: 'barrack',
+                    owner: Math.floor(Number(target.owner) || 0),
+                    gx: Math.floor(Number(target.gx) || 0),
+                    gy: Math.floor(Number(target.gy) || 0),
+                    unitType: String(target.unitType || '')
+                };
+            }
+            if (target instanceof CollectorSpawner) {
+                return {
+                    kind: 'spawner',
+                    owner: Math.floor(Number(target.owner) || 0),
+                    gx: Math.floor(Number(target.gx) || 0),
+                    gy: Math.floor(Number(target.gy) || 0),
+                    type: String(target.type || '')
+                };
+            }
+            if (Number.isFinite(target.gx) && Number.isFinite(target.gy) && Number.isFinite(target.gold)) {
+                return {
+                    kind: 'mine',
+                    gx: Math.floor(Number(target.gx) || 0),
+                    gy: Math.floor(Number(target.gy) || 0)
+                };
+            }
+            if (Number.isFinite(target.gx) && Number.isFinite(target.gy) && target.type) {
+                return {
+                    kind: 'gridItem',
+                    owner: Math.floor(Number(target.owner) || 0),
+                    gx: Math.floor(Number(target.gx) || 0),
+                    gy: Math.floor(Number(target.gy) || 0),
+                    type: String(target.type || '')
+                };
+            }
+            return null;
+        }
+
+        function resolveSnapshotEntityRef(ref, context) {
+            if (!ref || typeof ref !== 'object' || !context) return null;
+            let kind = String(ref.kind || '');
+            if (kind === 'unit') {
+                return context.unitsById.get(Math.floor(Number(ref.id) || 0)) || null;
+            }
+            if (kind === 'tower') {
+                return context.towers.find(t =>
+                    Math.floor(Number(t.owner) || 0) === Math.floor(Number(ref.owner) || 0) &&
+                    Math.floor(Number(t.gx) || 0) === Math.floor(Number(ref.gx) || 0) &&
+                    Math.floor(Number(t.gy) || 0) === Math.floor(Number(ref.gy) || 0) &&
+                    String(t.type || '') === String(ref.type || '')
+                ) || null;
+            }
+            if (kind === 'barrack') {
+                return context.barracks.find(b =>
+                    Math.floor(Number(b.owner) || 0) === Math.floor(Number(ref.owner) || 0) &&
+                    Math.floor(Number(b.gx) || 0) === Math.floor(Number(ref.gx) || 0) &&
+                    Math.floor(Number(b.gy) || 0) === Math.floor(Number(ref.gy) || 0) &&
+                    String(b.unitType || '') === String(ref.unitType || '')
+                ) || null;
+            }
+            if (kind === 'spawner') {
+                return context.spawners.find(s =>
+                    Math.floor(Number(s.owner) || 0) === Math.floor(Number(ref.owner) || 0) &&
+                    Math.floor(Number(s.gx) || 0) === Math.floor(Number(ref.gx) || 0) &&
+                    Math.floor(Number(s.gy) || 0) === Math.floor(Number(ref.gy) || 0) &&
+                    String(s.type || '') === String(ref.type || '')
+                ) || null;
+            }
+            if (kind === 'mine') {
+                return context.goldMines.find(m =>
+                    Math.floor(Number(m.gx) || 0) === Math.floor(Number(ref.gx) || 0) &&
+                    Math.floor(Number(m.gy) || 0) === Math.floor(Number(ref.gy) || 0)
+                ) || null;
+            }
+            if (kind === 'gridItem') {
+                let gx = Math.floor(Number(ref.gx) || 0);
+                let gy = Math.floor(Number(ref.gy) || 0);
+                if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
+                let cell = grid[gy] && grid[gy][gx];
+                let item = cell ? cell.item : null;
+                if (!item) return null;
+                if (Math.floor(Number(cell.owner) || 0) !== Math.floor(Number(ref.owner) || 0)) return null;
+                if (String(item.type || '') !== String(ref.type || '')) return null;
+                return item;
+            }
+            return null;
+        }
+
+        function buildHostAuthoritativeStateSnapshot() {
+            let floorItems = [];
+            for (let gy = 0; gy < GRID_H; gy++) {
+                for (let gx = 0; gx < GRID_W; gx++) {
+                    let cell = grid[gy][gx];
+                    if (!cell || !cell.item) continue;
+                    if (cell.item instanceof Tower || cell.item instanceof Barrack || cell.item instanceof CollectorSpawner) continue;
+                    let item = snapshotEntity(cell.item, ['lockedBy', 'textCtx', 'textCanvas', '_textCanvasScale']);
+                    if (!item) continue;
+                    floorItems.push({ gx, gy, owner: Math.floor(Number(cell.owner) || 0), item });
+                }
+            }
+
+            return {
+                currentTick,
+                gameTime,
+                nextUnitId,
+                gameOver: !!gameOver,
+                localDefeated: !!localDefeated,
+                spectateMode: String(spectateMode || 'none'),
+                editableConfig: serializeEditableRuntimeConfigForTransport(),
+                players: cloneSnapshotValue(players),
+                towers: towers.map(t => snapshotEntity(t, ['connectedLasers', 'preferredTarget', 'textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
+                barracks: barracks.map(b => snapshotEntity(b, ['textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
+                spawners: collectorSpawners.map(s => snapshotEntity(s, ['textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
+                units: units.map(u => {
+                    let snap = snapshotEntity(u, [
+                    'targetUnit', 'targetBuilding', 'attackTarget', 'workerTarget',
+                    '_collectorPinnedTarget', '_collectorNextSpawner', '_collectorLastDropoffSpawner', '_lastMineTarget',
+                    '_healerPinnedQueueTarget', '_healerQueueCommitTarget', '_builderSpawnerTarget', '_healerSpawnerTarget', '_researchSpawnerTarget',
+                    '_spatialKey'
+                    ]);
+                    if (!snap) return null;
+                    snap._snapshotRefs = {
+                        targetUnit: makeSnapshotEntityRef(u.targetUnit),
+                        targetBuilding: makeSnapshotEntityRef(u.targetBuilding),
+                        attackTarget: makeSnapshotEntityRef(u.attackTarget),
+                        workerTarget: makeSnapshotEntityRef(u.workerTarget),
+                        _collectorPinnedTarget: makeSnapshotEntityRef(u._collectorPinnedTarget),
+                        _collectorNextSpawner: makeSnapshotEntityRef(u._collectorNextSpawner),
+                        _collectorLastDropoffSpawner: makeSnapshotEntityRef(u._collectorLastDropoffSpawner),
+                        _lastMineTarget: makeSnapshotEntityRef(u._lastMineTarget),
+                        _healerPinnedQueueTarget: makeSnapshotEntityRef(u._healerPinnedQueueTarget),
+                        _healerQueueCommitTarget: makeSnapshotEntityRef(u._healerQueueCommitTarget),
+                        _builderSpawnerTarget: makeSnapshotEntityRef(u._builderSpawnerTarget),
+                        _healerSpawnerTarget: makeSnapshotEntityRef(u._healerSpawnerTarget),
+                        _researchSpawnerTarget: makeSnapshotEntityRef(u._researchSpawnerTarget)
+                    };
+                    return snap;
+                }).filter(Boolean),
+                goldMines: cloneSnapshotValue(goldMines),
+                droppedItems: cloneSnapshotValue(droppedItems),
+                floorItems,
+                areas: cloneSnapshotValue(areas),
+                resignedTeams: Array.from(resignedTeams || []).map(v => Math.floor(Number(v) || 0)).sort((a, b) => a - b),
+                rngState: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
+                visualRngState: (visualRng && typeof visualRng.getState === 'function') ? visualRng.getState() : null
+            };
+        }
+
+        function applyAuthoritativeStateSnapshot(snapshot) {
+            if (!snapshot || typeof snapshot !== 'object') return false;
+
+            if (snapshot.editableConfig && typeof snapshot.editableConfig === 'object') {
+                try {
+                    applyEditableRuntimeConfigObject(snapshot.editableConfig, { fromTransport: true });
+                } catch {}
+            }
+
+            waitingForRemoteSince = 0;
+            lockstepLastHardResyncRequestAt = 0;
+            lockstepDesyncDetected = false;
+            lockstepExpectedStateHashByTick = {};
+            lockstepLocalStateHashByTick = {};
+            lockstepExpectedStateDigestByTick = {};
+            lockstepLocalStateDigestByTick = {};
+
+            towers = [];
+            barracks = [];
+            collectorSpawners = [];
+            units = [];
+            projectiles = [];
+            particles = [];
+            droppedItems = [];
+
+            for (let gy = 0; gy < GRID_H; gy++) {
+                for (let gx = 0; gx < GRID_W; gx++) {
+                    if (!grid[gy] || !grid[gy][gx]) continue;
+                    grid[gy][gx].item = null;
+                    grid[gy][gx].owner = -1;
+                    grid[gy][gx].droppedItem = null;
+                }
+            }
+
+            players = Array.isArray(snapshot.players) ? cloneSnapshotValue(snapshot.players) : players;
+            currentTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || 0));
+            gameTime = Math.max(0, Math.floor(Number(snapshot.gameTime) || currentTick));
+            let snapshotNextUnitId = Math.max(1, Math.floor(Number(snapshot.nextUnitId) || 1));
+            nextUnitId = snapshotNextUnitId;
+            gameOver = !!snapshot.gameOver;
+            localDefeated = !!snapshot.localDefeated;
+            spectateMode = String(snapshot.spectateMode || spectateMode || 'none');
+
+            let towerSnapshots = Array.isArray(snapshot.towers) ? snapshot.towers : [];
+            for (let ts of towerSnapshots) {
+                if (!ts || !Number.isFinite(ts.gx) || !Number.isFinite(ts.gy)) continue;
+                let t = new Tower(Math.floor(ts.gx), Math.floor(ts.gy), String(ts.type || 'pistol'), Math.floor(Number(ts.owner) || 0), Math.max(1, Math.floor(Number(ts.stacks) || 1)));
+                Object.assign(t, cloneSnapshotValue(ts));
+                t.baseStats = BASE_CARD_TYPES[t.type] || BASE_CARD_TYPES.pistol;
+                t.currentStats = { ...t.baseStats };
+                t.connectedLasers = [];
+                t.textCtx = ensureLevelTextCanvas(t);
+                t.updateStats();
+                towers.push(t);
+                let tgx = Math.floor(Number(t.gx));
+                let tgy = Math.floor(Number(t.gy));
+                if (tgx >= 0 && tgx < GRID_W && tgy >= 0 && tgy < GRID_H && grid[tgy] && grid[tgy][tgx]) {
+                    grid[tgy][tgx].item = t;
+                    grid[tgy][tgx].owner = Math.floor(Number(t.owner) || 0);
+                }
+            }
+
+            let barrackSnapshots = Array.isArray(snapshot.barracks) ? snapshot.barracks : [];
+            for (let bs of barrackSnapshots) {
+                if (!bs || !Number.isFinite(bs.gx) || !Number.isFinite(bs.gy)) continue;
+                let b = new Barrack(Math.floor(bs.gx), Math.floor(bs.gy), Math.floor(Number(bs.owner) || 0), String(bs.unitType || 'norm'), Math.max(1, Math.floor(Number(bs.stacks) || 1)));
+                Object.assign(b, cloneSnapshotValue(bs));
+                updateItemTextCache(b);
+                barracks.push(b);
+                let bgx = Math.floor(Number(b.gx));
+                let bgy = Math.floor(Number(b.gy));
+                if (bgx >= 0 && bgx < GRID_W && bgy >= 0 && bgy < GRID_H && grid[bgy] && grid[bgy][bgx]) {
+                    grid[bgy][bgx].item = b;
+                    grid[bgy][bgx].owner = Math.floor(Number(b.owner) || 0);
+                }
+            }
+
+            let createSpawnerByType = (type, gx, gy, owner, stacks) => {
+                if (type === 'salvager') return new SalvagerSpawner(gx, gy, owner, stacks);
+                if (type === 'builder_spawner') return new BuilderSpawner(gx, gy, owner, stacks);
+                if (type === 'healer_spawner') return new HealerSpawner(gx, gy, owner, stacks);
+                if (type === 'research') return new ResearchSpawner(gx, gy, owner, stacks);
+                return new CollectorSpawner(gx, gy, owner, stacks);
+            };
+
+            let spawnerSnapshots = Array.isArray(snapshot.spawners) ? snapshot.spawners : [];
+            for (let ss of spawnerSnapshots) {
+                if (!ss || !Number.isFinite(ss.gx) || !Number.isFinite(ss.gy)) continue;
+                let type = String(ss.type || 'spawner');
+                let s = createSpawnerByType(type, Math.floor(ss.gx), Math.floor(ss.gy), Math.floor(Number(ss.owner) || 0), Math.max(1, Math.floor(Number(ss.stacks) || 1)));
+                Object.assign(s, cloneSnapshotValue(ss));
+                updateItemTextCache(s);
+                collectorSpawners.push(s);
+                let sgx = Math.floor(Number(s.gx));
+                let sgy = Math.floor(Number(s.gy));
+                if (sgx >= 0 && sgx < GRID_W && sgy >= 0 && sgy < GRID_H && grid[sgy] && grid[sgy][sgx]) {
+                    grid[sgy][sgx].item = s;
+                    grid[sgy][sgx].owner = Math.floor(Number(s.owner) || 0);
+                }
+            }
+
+            let unitSnapshots = Array.isArray(snapshot.units) ? snapshot.units : [];
+            for (let us of unitSnapshots) {
+                if (!us || !Number.isFinite(us.x) || !Number.isFinite(us.y)) continue;
+                let u = new Unit(String(us.unitType || 'norm'), Math.floor(Number(us.owner) || 0), Number(us.x), Number(us.y));
+                Object.assign(u, cloneSnapshotValue(us));
+                u.targetUnit = null;
+                u.targetBuilding = null;
+                u.attackTarget = null;
+                u.workerTarget = null;
+                u._collectorPinnedTarget = null;
+                u._collectorNextSpawner = null;
+                u._collectorLastDropoffSpawner = null;
+                u._lastMineTarget = null;
+                u._healerPinnedQueueTarget = null;
+                u._builderSpawnerTarget = null;
+                u._healerSpawnerTarget = null;
+                u._researchSpawnerTarget = null;
+                u._spatialKey = undefined;
+                units.push(u);
+            }
+
+            let snapshotResolveContext = {
+                unitsById: new Map(units.map(u => [Math.floor(Number(u.id) || 0), u])),
+                towers,
+                barracks,
+                spawners: collectorSpawners,
+                goldMines
+            };
+            for (let u of units) {
+                let refs = u && u._snapshotRefs && typeof u._snapshotRefs === 'object' ? u._snapshotRefs : null;
+                if (!refs) continue;
+                u.targetUnit = resolveSnapshotEntityRef(refs.targetUnit, snapshotResolveContext);
+                u.targetBuilding = resolveSnapshotEntityRef(refs.targetBuilding, snapshotResolveContext);
+                u.attackTarget = resolveSnapshotEntityRef(refs.attackTarget, snapshotResolveContext);
+                u.workerTarget = resolveSnapshotEntityRef(refs.workerTarget, snapshotResolveContext);
+                u._collectorPinnedTarget = resolveSnapshotEntityRef(refs._collectorPinnedTarget, snapshotResolveContext);
+                u._collectorNextSpawner = resolveSnapshotEntityRef(refs._collectorNextSpawner, snapshotResolveContext);
+                u._collectorLastDropoffSpawner = resolveSnapshotEntityRef(refs._collectorLastDropoffSpawner, snapshotResolveContext);
+                u._lastMineTarget = resolveSnapshotEntityRef(refs._lastMineTarget, snapshotResolveContext);
+                u._healerPinnedQueueTarget = resolveSnapshotEntityRef(refs._healerPinnedQueueTarget, snapshotResolveContext);
+                u._healerQueueCommitTarget = resolveSnapshotEntityRef(refs._healerQueueCommitTarget, snapshotResolveContext);
+                u._builderSpawnerTarget = resolveSnapshotEntityRef(refs._builderSpawnerTarget, snapshotResolveContext);
+                u._healerSpawnerTarget = resolveSnapshotEntityRef(refs._healerSpawnerTarget, snapshotResolveContext);
+                u._researchSpawnerTarget = resolveSnapshotEntityRef(refs._researchSpawnerTarget, snapshotResolveContext);
+                delete u._snapshotRefs;
+            }
+
+            nextUnitId = Math.max(snapshotNextUnitId, units.reduce((m, u) => Math.max(m, Math.floor(Number(u.id) || 0) + 1), 1));
+
+            goldMines = Array.isArray(snapshot.goldMines) ? cloneSnapshotValue(snapshot.goldMines) : goldMines;
+            droppedItems = Array.isArray(snapshot.droppedItems) ? cloneSnapshotValue(snapshot.droppedItems) : [];
+            for (let d of droppedItems) {
+                if (!d) continue;
+                let gx = Math.floor(Number(d.gx));
+                let gy = Math.floor(Number(d.gy));
+                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                    if (grid[gy] && grid[gy][gx]) grid[gy][gx].droppedItem = d;
+                }
+            }
+
+            let floorItems = Array.isArray(snapshot.floorItems) ? snapshot.floorItems : [];
+            for (let f of floorItems) {
+                if (!f) continue;
+                let gx = Math.floor(Number(f.gx));
+                let gy = Math.floor(Number(f.gy));
+                if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) continue;
+                if (!grid[gy] || !grid[gy][gx]) continue;
+                if (grid[gy][gx].item) continue;
+                grid[gy][gx].item = cloneSnapshotValue(f.item || null);
+                grid[gy][gx].owner = Math.floor(Number(f.owner) || 0);
+            }
+
+            areas = Array.isArray(snapshot.areas) ? cloneSnapshotValue(snapshot.areas) : areas;
+            resignedTeams = new Set(Array.isArray(snapshot.resignedTeams) ? snapshot.resignedTeams.map(v => Math.floor(Number(v) || 0)) : []);
+            recomputePlayerPopCaps();
+
+            if (rng && typeof rng.setState === 'function' && snapshot.rngState !== null && snapshot.rngState !== undefined) {
+                rng.setState(snapshot.rngState);
+            }
+            if (visualRng && typeof visualRng.setState === 'function' && snapshot.visualRngState !== null && snapshot.visualRngState !== undefined) {
+                visualRng.setState(snapshot.visualRngState);
+            }
+
+            initSpatialHash();
+            for (let u of units) updateUnitSpatial(u);
+            recalculateLaserConnections();
+            updateVisibility(localPlayerId);
+            dirtyGrid = true;
+            dirtyAreas = true;
+            invalidateStaticLayerCache();
+            pathfindBudget = 0;
+
+            lockstepLocalPacketByTick = {};
+            lockstepHostPacketsByTick = {};
+            lockstepBundleByTick = {};
+            lockstepPendingBundleByTick = {};
+            lockstepPendingBundleAckByTick = {};
+            lockstepPendingCommitByTick = {};
+            lockstepCommittedByTick = {};
+            lockstepBundleAckByTick = {};
+            lockstepLastPacketSentAtByTick = {};
+            lockstepLastBundleSentAtByTick = {};
+            lockstepLastFinalizeSentAtByTick = {};
+            lockstepLastResendRequestAtByTick = {};
+            lockstepHistoryByTick = {};
+
+            let st = document.getElementById('lobby-status');
+            if (st && !isHost) {
+                st.textContent = 'Resynced from host snapshot.';
+                st.style.color = '#9f9';
+            }
+            return true;
+        }
+
         function applyIncomingMatchSyncPayload(data, role = 'playing') {
             gameSeed = data.seed;
+            waitingForRemoteSince = 0;
+            lockstepLastHardResyncRequestAt = 0;
+            lockstepDesyncDetected = false;
+            lockstepExpectedStateHashByTick = {};
+            lockstepLocalStateHashByTick = {};
+            lockstepExpectedStateDigestByTick = {};
+            lockstepLocalStateDigestByTick = {};
             removedFromMatchPeerIds = new Set();
             guestReconnectAttempt = 0;
             if (guestReconnectTimer) {
@@ -18698,7 +19302,7 @@
                 startingResourcesConfig = normalizeStartingResourcesConfig(data.cfg.startingResources || makeDefaultStartingResourcesConfig());
                 if (data.cfg.editableConfig && typeof data.cfg.editableConfig === 'object') {
                     try {
-                        applyEditableRuntimeConfigObject(data.cfg.editableConfig, { fromTransport: true, deferPrecompute: true });
+                        applyEditableRuntimeConfigObject(data.cfg.editableConfig, { fromTransport: true });
                     } catch {
                         // Fall back to standard cfg fields if advanced payload is malformed.
                     }
@@ -18707,26 +19311,56 @@
             initAudio();
             startGame();
 
+            if (data && data.stateSnapshot && typeof data.stateSnapshot === 'object') {
+                applyAuthoritativeStateSnapshot(data.stateSnapshot);
+                return;
+            }
+
             if (role === 'spectating') {
                 enterSpectateMode('postgame');
                 fullVisibility = true;
             }
 
             let history = Array.isArray(data.history) ? data.history : [];
+            let historyByTick = {};
             for (let hb of history) {
                 let tick = Math.floor(Number(hb && hb.tick));
                 if (!Number.isFinite(tick) || tick < 0) continue;
-                lockstepBundleByTick[tick] = {
+                let bundle = {
                     tick,
                     packets: Array.isArray(hb.packets) ? hb.packets : [],
                     combinedChecksum: String(hb.combinedChecksum || '')
                 };
-                lockstepCommittedByTick[tick] = true;
+                if (!validateTickBundle(bundle)) continue;
+                historyByTick[tick] = bundle;
             }
+
             let targetTick = Math.max(0, Math.floor(Number(data.currentTick) || 0));
-            let guard = Math.max(0, targetTick + 20);
-            while (currentTick < targetTick && guard-- > 0) {
+            let replayedToTick = currentTick;
+            while (currentTick < targetTick) {
+                let replayBundle = historyByTick[currentTick];
+                if (!replayBundle) break;
+                lockstepBundleByTick[currentTick] = replayBundle;
+                lockstepCommittedByTick[currentTick] = true;
                 runOneTick();
+                replayedToTick = currentTick;
+            }
+
+            if (currentTick < targetTick) {
+                let missingTick = currentTick;
+                let now = performance.now();
+                waitingForRemoteSince = now;
+                logLockstepWarning('Match sync history gap detected; waiting for host resend', {
+                    missingTick,
+                    targetTick,
+                    replayedToTick
+                });
+
+                if (connections[0]) {
+                    connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: missingTick });
+                    connections[0].send({ type: 'REQUEST_MATCH_SYNC', tick: missingTick, reason: 'history gap' });
+                    lockstepLastResendRequestAtByTick[missingTick] = now;
+                }
             }
         }
 
@@ -18896,7 +19530,7 @@
         function buildInfoPanelPlayerStatusHtml() {
             if (!gameStarted) return '';
 
-            let baseHtml = buildInfoPanelEnergyDeltaHtml(localPlayerId);
+            let baseHtml = buildInfoPanelEnergyDeltaHtml(localPlayerId) + buildInfoPanelIdleWorkersHtml(localPlayerId);
             if (!isMultiplayer || !Array.isArray(lobbyPlayers) || lobbyPlayers.length === 0) return baseHtml;
 
             let setup = computeTeamSetupFromLobby();
@@ -19222,6 +19856,9 @@
                     conn.send({ type: 'START_SPECTATE', ...buildHostMatchSyncPayload() });
                     broadcastLobbyState();
                     renderOnlineLobby();
+                } else if (data.type === 'REQUEST_MATCH_SYNC' && isHost) {
+                    if (!gameStarted || gameOver) return;
+                    conn.send({ type: 'MATCH_STATE_SNAPSHOT', snapshot: buildHostAuthoritativeStateSnapshot() });
                 } else if (data.type === 'START_SPECTATE' && !isHost) {
                     pendingJoinAsSpectator = false;
                     applyIncomingMatchSyncPayload(data, 'spectating');
@@ -19237,6 +19874,9 @@
                         st.textContent = data.reason || 'Spectate unavailable right now.';
                         st.style.color = '#fa4';
                     }
+                } else if (data.type === 'MATCH_STATE_SNAPSHOT' && !isHost) {
+                    pendingJoinAsSpectator = false;
+                    applyAuthoritativeStateSnapshot(data.snapshot);
                 } else if (data.type === 'MATCH_ROLE_UPDATE' && isHost) {
                     let role = normalizeMatchRole(data.role, '');
                     if (gameStarted && role && conn && conn.peer) {
@@ -19260,6 +19900,16 @@
                     handleIncomingTickResendRequest(conn, data);
                 } else if (data.type === 'TICK_COMMIT') {
                     handleIncomingTickCommit(conn, data);
+                } else if (data.type === 'TICK_STATE_HASH') {
+                    handleIncomingTickStateHash(conn, data);
+                } else if (data.type === 'TICK_STATE_HASH_MISMATCH_REPORT' && isHost) {
+                    logLockstepWarning('Guest reported state-hash mismatch details', {
+                        peerId: conn && conn.peer ? conn.peer : null,
+                        tick: Math.floor(Number(data && data.tick) || 0),
+                        expectedHash: String((data && data.expectedHash) || ''),
+                        localHash: String((data && data.localHash) || ''),
+                        details: data && data.details ? data.details : null
+                    });
                 } else if (data.type === 'RETURN_TO_LOBBY') {
                     if (Array.isArray(data.lobbyPlayers)) {
                         lobbyPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
@@ -19441,9 +20091,11 @@
             lockstepBundleAckByTick = {};
             lockstepLastPacketSentAtByTick = {};
             lockstepLastBundleSentAtByTick = {};
+            lockstepLastFinalizeSentAtByTick = {};
             lockstepLastResendRequestAtByTick = {};
             nextLocalActionSeq = 1;
             waitingForRemoteSince = 0;
+            lockstepLastHardResyncRequestAt = 0;
             peerPresenceById = {};
             remoteRoleByPeerId = {};
             remotePresenceByPeerId = {};
@@ -19455,6 +20107,11 @@
             remoteMatchRunning = false;
             pendingJoinAsSpectator = false;
             lockstepHistoryByTick = {};
+            lockstepExpectedStateHashByTick = {};
+            lockstepLocalStateHashByTick = {};
+            lockstepExpectedStateDigestByTick = {};
+            lockstepLocalStateDigestByTick = {};
+            lockstepDesyncDetected = false;
             currentTick = 0;
             gameTime = 0;
             nextUnitId = 1;
@@ -19599,14 +20256,16 @@
             localPlayerId = resolveLocalPlayerTeamId(setup);
             isMultiplayer = true;
 
+            initAudio();
+            startGame();
+
+            let startSnapshot = buildHostAuthoritativeStateSnapshot();
             connections.forEach(c => c.send({
                 type: 'START_GAME', seed: gameSeed,
                 lobbyPlayers: matchStartLobbyPlayers,
-                cfg: matchStartConfig
+                cfg: matchStartConfig,
+                stateSnapshot: startSnapshot
             }));
-
-            initAudio();
-            startGame();
         }
 
         function joinGame(hostId, opts = null) {
@@ -20033,7 +20692,14 @@
                 lockstepBundleAckByTick = {};
                 lockstepLastPacketSentAtByTick = {};
                 lockstepLastBundleSentAtByTick = {};
+                lockstepLastFinalizeSentAtByTick = {};
                 lockstepLastResendRequestAtByTick = {};
+                lockstepLastHardResyncRequestAt = 0;
+                lockstepExpectedStateHashByTick = {};
+                lockstepLocalStateHashByTick = {};
+                lockstepExpectedStateDigestByTick = {};
+                lockstepLocalStateDigestByTick = {};
+                lockstepDesyncDetected = false;
             }
 
             // Start unified game loop
@@ -20360,14 +21026,27 @@
             if (!isHost) return false;
             let t = Math.floor(Number(tick));
             if (!Number.isFinite(t) || t < 0) return false;
+            if (lockstepCommittedByTick[t]) return true;
             let bundle = lockstepBundleByTick[t];
             if (!bundle) return false;
-            let participants = getActiveMatchPeerIds();
-            let ackMap = lockstepBundleAckByTick[t] || {};
-            if (!participants.every(pid => !!ackMap[pid])) return false;
             lockstepCommittedByTick[t] = true;
             connections.forEach(c => c.send({ type: 'TICK_COMMIT', tick: t, combinedChecksum: bundle.combinedChecksum }));
             return true;
+        }
+
+        function sendHostFinalize(tick, force = false) {
+            if (!isHost || connections.length === 0) return;
+            let t = Math.floor(Number(tick));
+            if (!Number.isFinite(t) || t < 0) return;
+            let resend = getHostResendBundleForTick(t);
+            if (!resend || !resend.bundle || !resend.committed) return;
+            let now = performance.now();
+            if (!force && lockstepLastFinalizeSentAtByTick[t] && (now - lockstepLastFinalizeSentAtByTick[t]) < LOCKSTEP_BUNDLE_RESEND_MS) return;
+            connections.forEach(c => {
+                c.send({ type: 'TICK_BUNDLE', bundle: resend.bundle });
+                c.send({ type: 'TICK_COMMIT', tick: t, combinedChecksum: resend.bundle.combinedChecksum });
+            });
+            lockstepLastFinalizeSentAtByTick[t] = now;
         }
 
         function handleIncomingTickBundle(conn, data) {
@@ -20405,6 +21084,246 @@
             let t = Math.floor(Number(data && data.tick));
             if (!Number.isFinite(t) || t < 0) return;
             lockstepPendingCommitByTick[t] = String(data.combinedChecksum || '');
+        }
+
+        function quantizeLockstepNumber(v) {
+            let n = Number(v);
+            if (!Number.isFinite(n)) return 0;
+            return Math.round(n * 1000) / 1000;
+        }
+
+        function computeLockstepStateDigest(tick) {
+            let t = Math.floor(Number(tick));
+            let computePopCapFromGrid = (pid) => {
+                let owner = Math.floor(Number(pid) || 0);
+                let cfgCap = Math.max(1, Math.floor(CONFIG_MAX_POP || 200));
+                let housePop = 0;
+                for (let gy = 0; gy < GRID_H; gy++) {
+                    for (let gx = 0; gx < GRID_W; gx++) {
+                        let cell = grid[gy] && grid[gy][gx];
+                        let item = cell ? cell.item : null;
+                        if (!item || item.type !== 'house' || Math.floor(Number(cell.owner) || 0) !== owner) continue;
+                        if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
+                        let lvl = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
+                        housePop += getHousePopCapContribution(owner, lvl);
+                    }
+                }
+                return Math.min(cfgCap, housePop);
+            };
+
+            let digest = {
+                tick: Number.isFinite(t) ? t : currentTick,
+                gameTime,
+                players: players.map((p, idx) => ({
+                    idx,
+                    money: quantizeLockstepNumber(p && p.money),
+                    popCount: Math.floor(Number((p && p.popCount) || 0)),
+                    popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0))
+                })),
+                units: units
+                    .filter(u => u && !u.dead)
+                    .map(u => ({
+                        id: Math.floor(Number(u.id) || 0),
+                        owner: Math.floor(Number(u.owner) || 0),
+                        type: String(u.unitType || ''),
+                        x: quantizeLockstepNumber(u.x),
+                        y: quantizeLockstepNumber(u.y),
+                        energy: quantizeLockstepNumber(u.energy),
+                        cmd: Math.floor(Number(u.commandState) || 0),
+                        workerState: String(u.workerState || ''),
+                        workerType: String(u.workerType || ''),
+                        stack: Math.floor(Number(u.stackCount || 1))
+                    }))
+                    .sort((a, b) => a.id - b.id),
+                towers: towers
+                    .filter(tw => !!tw)
+                    .map(tw => ({
+                        gx: Math.floor(Number(tw.gx) || 0),
+                        gy: Math.floor(Number(tw.gy) || 0),
+                        owner: Math.floor(Number(tw.owner) || 0),
+                        type: String(tw.type || ''),
+                        level: Math.floor(Number(tw.level) || 1),
+                        energy: quantizeLockstepNumber(tw.energy),
+                        underConstruction: !!tw.underConstruction,
+                        isUpgrading: !!tw.isUpgrading
+                    }))
+                    .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
+                barracks: barracks
+                    .filter(b => !!b)
+                    .map(b => ({
+                        gx: Math.floor(Number(b.gx) || 0),
+                        gy: Math.floor(Number(b.gy) || 0),
+                        owner: Math.floor(Number(b.owner) || 0),
+                        unitType: String(b.unitType || ''),
+                        level: Math.floor(Number(b.level) || 1),
+                        energy: quantizeLockstepNumber(b.energy),
+                        queueLen: Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0,
+                        underConstruction: !!b.underConstruction,
+                        isUpgrading: !!b.isUpgrading
+                    }))
+                    .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
+                spawners: collectorSpawners
+                    .filter(s => !!s)
+                    .map(s => ({
+                        gx: Math.floor(Number(s.gx) || 0),
+                        gy: Math.floor(Number(s.gy) || 0),
+                        owner: Math.floor(Number(s.owner) || 0),
+                        type: String(s.type || ''),
+                        level: Math.floor(Number(s.level) || 1),
+                        energy: quantizeLockstepNumber(s.energy),
+                        queueLen: Array.isArray(s.spawnQueue) ? s.spawnQueue.length : 0,
+                        underConstruction: !!s.underConstruction,
+                        isUpgrading: !!s.isUpgrading
+                    }))
+                    .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
+                floorItems: [],
+                mines: goldMines
+                    .map(m => ({
+                        gx: Math.floor(Number(m.gx) || 0),
+                        gy: Math.floor(Number(m.gy) || 0),
+                        gold: Math.floor(Number(m.gold) || 0)
+                    }))
+                    .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx))
+            };
+
+            for (let gy = 0; gy < GRID_H; gy++) {
+                for (let gx = 0; gx < GRID_W; gx++) {
+                    let cell = grid[gy][gx];
+                    if (!cell || !cell.item) continue;
+                    digest.floorItems.push({
+                        gx,
+                        gy,
+                        owner: Math.floor(Number(cell.owner) || 0),
+                        type: String(cell.item.type || ''),
+                        level: Math.floor(Number(cell.item.level) || 1),
+                        energy: quantizeLockstepNumber(cell.item.energy),
+                        underConstruction: !!cell.item.underConstruction,
+                        isUpgrading: !!cell.item.isUpgrading
+                    });
+                }
+            }
+
+            return digest;
+        }
+
+        function summarizeLockstepDigestMismatch(expectedDigest, localDigest) {
+            if (!expectedDigest || !localDigest) return null;
+            let summary = {
+                expectedTick: Math.floor(Number(expectedDigest.tick) || 0),
+                localTick: Math.floor(Number(localDigest.tick) || 0),
+                expectedGameTime: Math.floor(Number(expectedDigest.gameTime) || 0),
+                localGameTime: Math.floor(Number(localDigest.gameTime) || 0),
+                counts: {},
+                firstDiff: {}
+            };
+
+            let keys = ['players', 'units', 'towers', 'barracks', 'spawners', 'floorItems', 'mines'];
+            for (let key of keys) {
+                let expArr = Array.isArray(expectedDigest[key]) ? expectedDigest[key] : [];
+                let locArr = Array.isArray(localDigest[key]) ? localDigest[key] : [];
+                summary.counts[key] = { expected: expArr.length, local: locArr.length };
+                let n = Math.min(expArr.length, locArr.length);
+                for (let i = 0; i < n; i++) {
+                    let es = stableSerializeForLockstep(expArr[i]);
+                    let ls = stableSerializeForLockstep(locArr[i]);
+                    if (es !== ls) {
+                        summary.firstDiff[key] = { index: i, expected: expArr[i], local: locArr[i] };
+                        break;
+                    }
+                }
+                if (!summary.firstDiff[key] && expArr.length !== locArr.length) {
+                    summary.firstDiff[key] = {
+                        index: n,
+                        expected: expArr[n] || null,
+                        local: locArr[n] || null
+                    };
+                }
+            }
+
+            return summary;
+        }
+
+        function computeLockstepStateHash(tick) {
+            let digest = computeLockstepStateDigest(tick);
+            return hashStringLockstep(stableSerializeForLockstep(digest));
+        }
+
+        function maybeCompareLockstepStateHash(tick) {
+            if (isHost || lockstepDesyncDetected) return;
+            let t = Math.floor(Number(tick));
+            if (!Number.isFinite(t) || t < 0) return;
+            let expected = String(lockstepExpectedStateHashByTick[t] || '');
+            let local = String(lockstepLocalStateHashByTick[t] || '');
+            if (!expected || !local) return;
+
+            let expectedDigest = lockstepExpectedStateDigestByTick[t] || null;
+            let localDigest = lockstepLocalStateDigestByTick[t] || null;
+
+            delete lockstepExpectedStateHashByTick[t];
+            delete lockstepLocalStateHashByTick[t];
+            delete lockstepExpectedStateDigestByTick[t];
+            delete lockstepLocalStateDigestByTick[t];
+
+            if (expected === local) return;
+
+            let mismatchSummary = summarizeLockstepDigestMismatch(expectedDigest, localDigest);
+
+            lockstepDesyncDetected = true;
+            waitingForRemoteSince = performance.now();
+            logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
+                tick: t,
+                expected,
+                local,
+                details: mismatchSummary
+            });
+
+            if (connections[0] && mismatchSummary) {
+                connections[0].send({
+                    type: 'TICK_STATE_HASH_MISMATCH_REPORT',
+                    tick: t,
+                    expectedHash: expected,
+                    localHash: local,
+                    details: mismatchSummary
+                });
+            }
+
+            if (connections[0]) {
+                connections[0].send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: 'state hash mismatch' });
+            }
+        }
+
+        function handleIncomingTickStateHash(conn, data) {
+            if (isHost) return;
+            let t = Math.floor(Number(data && data.tick));
+            if (!Number.isFinite(t) || t < 0) return;
+            lockstepExpectedStateHashByTick[t] = String(data.stateHash || '');
+            if (data && data.stateDigest && typeof data.stateDigest === 'object') {
+                lockstepExpectedStateDigestByTick[t] = data.stateDigest;
+            }
+            maybeCompareLockstepStateHash(t);
+        }
+
+        function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
+            if (isHost || !isMultiplayer || !gameStarted) return;
+            let conn = connections[0];
+            if (!conn) return;
+            let t = Math.floor(Number(tick));
+            if (!Number.isFinite(t) || t < 0) return;
+
+            let startedAt = Number(waitingForRemoteSince) || 0;
+            if (!startedAt) return;
+            if ((now - startedAt) < LOCKSTEP_HARD_RESYNC_MS) return;
+
+            let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, 2500);
+            if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) return;
+
+            lockstepLastHardResyncRequestAt = now;
+            logLockstepWarning('Lockstep stalled; requesting full match sync', {
+                tick: t,
+                waitMs: Math.round(now - startedAt),
+                reason
+            });
+            conn.send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: String(reason || 'tick timeout') });
         }
 
         function processDeferredGuestLockstepWindow(now, tick) {
@@ -20473,6 +21392,36 @@
             }
         }
 
+        function getHostResendBundleForTick(tick) {
+            let t = Math.floor(Number(tick));
+            if (!Number.isFinite(t) || t < 0) return null;
+
+            let liveBundle = lockstepBundleByTick[t];
+            if (liveBundle && validateTickBundle(liveBundle)) {
+                return {
+                    bundle: liveBundle,
+                    committed: !!lockstepCommittedByTick[t]
+                };
+            }
+
+            let historyBundle = lockstepHistoryByTick[t];
+            if (!historyBundle || !Array.isArray(historyBundle.packets)) return null;
+
+            let resendBundle = {
+                tick: t,
+                packets: historyBundle.packets,
+                combinedChecksum: String(historyBundle.combinedChecksum || '')
+            };
+            if (!validateTickBundle(resendBundle)) {
+                logLockstepWarning('Unable to resend historical bundle due validation failure', { tick: t });
+                return null;
+            }
+            return {
+                bundle: resendBundle,
+                committed: true
+            };
+        }
+
         function handleIncomingTickResendRequest(conn, data) {
             let t = Math.floor(Number(data && data.tick));
             if (!Number.isFinite(t) || t < 0) return;
@@ -20489,11 +21438,21 @@
                     return;
                 }
 
-                let bundle = lockstepBundleByTick[t] || maybeBuildHostBundle(t);
-                if (bundle) {
-                    conn.send({ type: 'TICK_BUNDLE', bundle });
-                    if (lockstepCommittedByTick[t]) {
-                        conn.send({ type: 'TICK_COMMIT', tick: t, combinedChecksum: bundle.combinedChecksum });
+                let resend = getHostResendBundleForTick(t);
+                if (!resend) {
+                    let liveBundle = maybeBuildHostBundle(t);
+                    if (liveBundle) {
+                        resend = {
+                            bundle: liveBundle,
+                            committed: !!lockstepCommittedByTick[t]
+                        };
+                    }
+                }
+
+                if (resend && resend.bundle) {
+                    conn.send({ type: 'TICK_BUNDLE', bundle: resend.bundle });
+                    if (resend.committed) {
+                        conn.send({ type: 'TICK_COMMIT', tick: t, combinedChecksum: resend.bundle.combinedChecksum });
                     }
                 }
                 return;
@@ -20509,6 +21468,11 @@
             if (!isMultiplayer) return;
             let t = Math.floor(Number(tick));
             if (!Number.isFinite(t) || t < 0) return;
+
+            if (!isHost && lockstepDesyncDetected) {
+                maybeRequestHardLockstepResync(now, t, 'state hash mismatch');
+                return;
+            }
 
             sendLocalTickPacketWindow(t);
 
@@ -20547,6 +21511,11 @@
                     sendHostBundle(pt);
                     maybeCommitHostTick(pt);
                 }
+
+                let recentStart = Math.max(0, t - Math.max(2, LOCKSTEP_PIPELINE_TICKS));
+                for (let rt = recentStart; rt < t; rt++) {
+                    sendHostFinalize(rt);
+                }
                 return;
             }
 
@@ -20555,15 +21524,23 @@
             if (!lockstepCommittedByTick[t]) {
                 let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
                 if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
-                    logLockstepWarning('Tick not committed in time; requesting resend', { tick: t });
+                    logLockstepWarning('Tick not committed in time; requesting resend', {
+                        tick: t,
+                        hasBundle: !!lockstepBundleByTick[t],
+                        hasPendingBundle: !!lockstepPendingBundleByTick[t],
+                        hasPendingCommit: !!lockstepPendingCommitByTick[t],
+                        bundleAckQueued: !!lockstepPendingBundleAckByTick[t]
+                    });
                     connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: t });
                     lockstepLastResendRequestAtByTick[t] = now;
                 }
+                maybeRequestHardLockstepResync(now, t, 'tick not committed in time');
             }
         }
 
         function isStrictTickReady(tick) {
             if (!isMultiplayer) return true;
+            if (!isHost && lockstepDesyncDetected) return false;
             let t = Math.floor(Number(tick));
             if (!Number.isFinite(t) || t < 0) return false;
             return !!lockstepCommittedByTick[t] && !!lockstepBundleByTick[t];
@@ -20572,6 +21549,7 @@
         function runOneTick() {
             // Reset pathfinding budget before processing actions
             pathfindBudget = 0;
+            let processedTick = currentTick;
 
             if (isHost && isMultiplayer) {
                 let b = lockstepBundleByTick[currentTick];
@@ -20613,6 +21591,7 @@
             delete lockstepBundleAckByTick[currentTick];
             delete lockstepLastPacketSentAtByTick[currentTick];
             delete lockstepLastBundleSentAtByTick[currentTick];
+            delete lockstepLastFinalizeSentAtByTick[currentTick];
             delete lockstepLastResendRequestAtByTick[currentTick];
 
             gameTick();
@@ -20622,6 +21601,42 @@
             let researchPopup = document.getElementById('research-popup');
             if (researchPopup && !researchPopup.classList.contains('hidden') && !researchQueueDragInProgress) {
                 renderResearchPopupContent();
+            }
+
+            if (isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0) {
+                let stateDigest = computeLockstepStateDigest(processedTick);
+                let stateHash = hashStringLockstep(stableSerializeForLockstep(stateDigest));
+                if (isHost) {
+                    connections.forEach(c => {
+                        if (c) {
+                            let msg = { type: 'TICK_STATE_HASH', tick: processedTick, stateHash };
+                            if (LOCKSTEP_DEBUG_HASH_DETAILS) msg.stateDigest = stateDigest;
+                            c.send(msg);
+                        }
+                    });
+                } else {
+                    lockstepLocalStateHashByTick[processedTick] = stateHash;
+                    if (LOCKSTEP_DEBUG_HASH_DETAILS) lockstepLocalStateDigestByTick[processedTick] = stateDigest;
+                    maybeCompareLockstepStateHash(processedTick);
+                }
+            }
+
+            if (isMultiplayer && !isHost) {
+                let pruneBefore = processedTick - Math.max(200, LOCKSTEP_STATE_CHECK_INTERVAL * 20);
+                for (let key of Object.keys(lockstepExpectedStateHashByTick)) {
+                    let t = Math.floor(Number(key));
+                    if (Number.isFinite(t) && t < pruneBefore) {
+                        delete lockstepExpectedStateHashByTick[key];
+                        delete lockstepExpectedStateDigestByTick[key];
+                    }
+                }
+                for (let key of Object.keys(lockstepLocalStateHashByTick)) {
+                    let t = Math.floor(Number(key));
+                    if (Number.isFinite(t) && t < pruneBefore) {
+                        delete lockstepLocalStateHashByTick[key];
+                        delete lockstepLocalStateDigestByTick[key];
+                    }
+                }
             }
 
             _tpsTickCount++;
