@@ -4754,6 +4754,8 @@
         let dirtyGrid = true, dirtyAreas = true;
         let visibilityGrid = [];
     let visibilityVersion = 0;
+        let _combinedBgDirtyFull = true;
+        let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
         let visibilityGridByPlayerCache = new Map();
         let visibilityCacheTick = -1;
         let fullVisibility = false;
@@ -4805,7 +4807,13 @@
         }
 
         function isSpawnerEntity(ref) {
-            return !!ref && ((ref instanceof CollectorSpawner) || (ref instanceof SalvagerSpawner) || (ref instanceof BuilderSpawner) || (ref instanceof HealerSpawner));
+            return !!ref && (
+                (ref instanceof CollectorSpawner) ||
+                (ref instanceof SalvagerSpawner) ||
+                (ref instanceof BuilderSpawner) ||
+                (ref instanceof HealerSpawner) ||
+                (ref instanceof ResearchSpawner)
+            );
         }
 
         function getTowerAtTile(gx, gy) {
@@ -4850,7 +4858,8 @@
 
         const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
         let players = Array.from({ length: 8 }, () => ({ energy: 2000, popCount: 0 }));
-    let playerPopCaps = Array.from({ length: 8 }, () => 200);
+        let playerPopCaps = Array.from({ length: 8 }, () => 200);
+        let _popCapScratchByOwner = new Int32Array(0);
         let localPlayerId = 0;
         let activeTeamIds = [0, 1];
         let teamColorById = {};
@@ -5181,32 +5190,13 @@
             }
         }
 
-        function scanLocalOwnedDamageAlerts() {
-            let watch = [];
-            for (let u of units) if (!u.dead && u.owner === localPlayerId && u.energy > 0) watch.push(u);
-            for (let t of towers) if (t.owner === localPlayerId && t.energy > 0) watch.push(t);
-            for (let b of barracks) if (b.owner === localPlayerId && b.energy > 0) watch.push(b);
-            for (let s of collectorSpawners) if (s.owner === localPlayerId && s.energy > 0) watch.push(s);
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    let item = grid[y][x].item;
-                    if (!item || grid[y][x].owner !== localPlayerId || item.energy <= 0) continue;
-                    if (item._gx === undefined) item._gx = x;
-                    if (item._gy === undefined) item._gy = y;
-                    watch.push(item);
-                }
-            }
-
-            for (let obj of watch) {
-                if (typeof obj.energy !== 'number') continue;
-                let prevEnergy = obj._alertprevEnergy;
-                if (prevEnergy === undefined) {
-                    obj._alertprevEnergy = obj.energy;
-                    continue;
-                }
-                if (obj.energy < prevEnergy - 0.35) pushDamageAlert(obj, prevEnergy - obj.energy);
-                obj._alertprevEnergy = obj.energy;
-            }
+        function pushHostileDamageAlert(target, dmg, sourceOwner) {
+            if (!target || !Number.isFinite(dmg) || dmg <= 0.35) return;
+            if (!Number.isFinite(sourceOwner) || sourceOwner < 0) return;
+            if (!Number.isFinite(localPlayerId)) return;
+            if (sourceOwner === localPlayerId) return;
+            if (!Number.isFinite(target.owner) || target.owner !== localPlayerId) return;
+            pushDamageAlert(target, dmg);
         }
 
         function drawMinimapAlerts(ctx, scale) {
@@ -5823,6 +5813,96 @@
             return null;
         }
 
+        // ---- A* scratch buffers: reused across calls via epoch trick, avoids per-call alloc ----
+        let _astarCap = 0;
+        let _astarEpoch = 0;
+        let _astarVisitedGen = null;  // Int32Array: [key] === epoch → visited this call
+        let _astarGScoreGen  = null;  // Int32Array: [key] === epoch → gScore valid this call
+        let _astarGScoreVal  = null;  // Int32Array: best g-score per tile
+        let _astarFrom       = null;  // Int32Array: parent key (for path reconstruction)
+        let _astarHeapF      = null;  // Int32Array: heap f-values (packed int heap)
+        let _astarHeapK      = null;  // Int32Array: heap node keys
+
+        function _ensureAstarBuffers(size) {
+            if (size > _astarCap) {
+                _astarCap = size + 2048;
+                _astarVisitedGen = new Int32Array(_astarCap);
+                _astarGScoreGen  = new Int32Array(_astarCap);
+                _astarGScoreVal  = new Int32Array(_astarCap);
+                _astarFrom       = new Int32Array(_astarCap);
+                _astarHeapF      = new Int32Array(_astarCap * 4);
+                _astarHeapK      = new Int32Array(_astarCap * 4);
+            }
+        }
+
+        // Static 4-directional offsets: avoids per-iteration array allocation in hot path
+        const _ASTAR_DIRS = new Int8Array([0, 1, 0, -1, 1, 0, -1, 0]);
+
+        // Cloud tower tile cache — keyed by (gy*GRID_W+gx), invalidated by pathTopologyVersion
+        let _cloudTileCache    = null;
+        let _cloudTileCacheVer = -1;
+
+        function _rebuildCloudTileCache() {
+            let m = new Map();
+            for (let t of towers) {
+                if (t.baseStats && t.baseStats.isCloud) {
+                    m.set(t.gy * GRID_W + t.gx, t);
+                }
+            }
+            _cloudTileCache    = m;
+            _cloudTileCacheVer = pathTopologyVersion;
+        }
+
+        // Fast O(1) cloud-tower lookup with live energy/construction check
+        function _getCloudTowerFast(gx, gy, owner) {
+            if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+            let t = _cloudTileCache.get(gy * GRID_W + gx);
+            if (!t) return null;
+            if (!(t.energy > 0 && !t.underConstruction)) return null;
+            if (owner !== null && t.owner !== owner) return null;
+            return t;
+        }
+
+        // Typed-array min-heap (no object allocation per push)
+        // _astarHeapF / _astarHeapK must be ensured before use; _astarHeapSz tracks current size.
+        let _astarHeapSz = 0;
+
+        function _heapPush(f, k) {
+            let i = _astarHeapSz++;
+            _astarHeapF[i] = f; _astarHeapK[i] = k;
+            let hF = _astarHeapF, hK = _astarHeapK;
+            while (i > 0) {
+                let p = (i - 1) >> 1;
+                if (hF[p] > hF[i]) {
+                    let tf = hF[i]; hF[i] = hF[p]; hF[p] = tf;
+                    let tk = hK[i]; hK[i] = hK[p]; hK[p] = tk;
+                    i = p;
+                } else break;
+            }
+        }
+
+        // Returns popped f in _astarPopF, key in _astarPopK
+        let _astarPopF = 0, _astarPopK = 0;
+        function _heapPop() {
+            _astarPopF = _astarHeapF[0]; _astarPopK = _astarHeapK[0];
+            let n = --_astarHeapSz;
+            if (n > 0) {
+                let hF = _astarHeapF, hK = _astarHeapK;
+                hF[0] = hF[n]; hK[0] = hK[n];
+                let i = 0;
+                while (true) {
+                    let l = (i << 1) + 1, r = l + 1, s = i;
+                    if (l < n && hF[l] < hF[s]) s = l;
+                    if (r < n && hF[r] < hF[s]) s = r;
+                    if (s !== i) {
+                        let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
+                        let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
+                        i = s;
+                    } else break;
+                }
+            }
+        }
+
         class MinHeap {
             constructor() { this.data = []; }
             push(item) { this.data.push(item); this._bubbleUp(this.data.length - 1); }
@@ -5864,11 +5944,7 @@
         }
 
         function getCloudTowerAt(gx, gy, owner = null) {
-            let t = getTowerAtTile(gx, gy);
-            if (!(t && t.energy > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud)) t = null;
-            if (!t) return null;
-            if (owner !== null && t.owner !== owner) return null;
-            return t;
+            return _getCloudTowerFast(gx, gy, owner);
         }
 
         function getPairedCloudTower(cloud, owner = null) {
@@ -5925,18 +6001,11 @@
             // Cloud portals should be usable for all unit pathing modes whenever owner context is known.
             let usePortalEdges = (pathOwner !== null);
             let movementProfile = _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint);
-            let estimateCost = (x, y) => {
-                // Cloud teleport edges can invalidate Manhattan as an admissible heuristic.
-                // Use Dijkstra scoring in portal mode so shortest paths via clouds are chosen reliably.
-                if (usePortalEdges) return 0;
-                return Math.abs(ex - x) + Math.abs(ey - y);
-            };
-            
-            // Cache grid reference for faster access
+
             let gridData = grid;
             let gridW = GRID_W;
             let gridH = GRID_H;
-            
+
             if (movementProfile) {
                 let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                 let cached = sharedPathCache.get(cacheKey);
@@ -5945,13 +6014,17 @@
                 }
                 if (cached) sharedPathCache.delete(cacheKey);
             }
+
+            // Resolve cloud tile cache once per call (O(1) per lookup in hot path)
+            if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+
             if (!ignoreWalls && sx >= 0 && sx < gridW && sy >= 0 && sy < gridH) {
-                if (gridData[ey] && gridData[ey][ex] && !(ignoreWalls || gridData[ey][ex].type !== TYPE_WALL || (pathOwner !== null && getCloudTowerAt(ex, ey, pathOwner)) || (canWalk && canWalk(ex, ey)))) {
+                if (gridData[ey] && gridData[ey][ex] && !(ignoreWalls || gridData[ey][ex].type !== TYPE_WALL || (usePortalEdges && _getCloudTowerFast(ex, ey, pathOwner)) || (canWalk && canWalk(ex, ey)))) {
                     // Find nearest walkable neighbor of target
                     let best = null, bestD = 9999;
-                    for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                        let nx = ex + dx, ny = ey + dy;
-                        if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH && (ignoreWalls || gridData[ny][nx].type !== TYPE_WALL || (pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) || (canWalk && canWalk(nx, ny)))) {
+                    for (let di = 0; di < 8; di += 2) {
+                        let nx = ex + _ASTAR_DIRS[di], ny = ey + _ASTAR_DIRS[di + 1];
+                        if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH && (ignoreWalls || gridData[ny][nx].type !== TYPE_WALL || (usePortalEdges && _getCloudTowerFast(nx, ny, pathOwner)) || (canWalk && canWalk(nx, ny)))) {
                             let d = Math.abs(nx - sx) + Math.abs(ny - sy);
                             if (d < bestD) { bestD = d; best = { x: nx, y: ny }; }
                         }
@@ -5961,28 +6034,47 @@
                 }
             }
 
-            let open = new MinHeap();
-            let gScore = new Map();
-            let cameFrom = new Map();
+            let bufSize = gridW * gridH;
+            _ensureAstarBuffers(bufSize);
+
+            // Bump epoch; on overflow reset arrays
+            if (++_astarEpoch > 2000000000) {
+                _astarEpoch = 1;
+                _astarVisitedGen.fill(0);
+                _astarGScoreGen.fill(0);
+            }
+            let epoch = _astarEpoch;
+            let visitedGen = _astarVisitedGen;
+            let gScoreGen  = _astarGScoreGen;
+            let gScoreVal  = _astarGScoreVal;
+            let astarFrom  = _astarFrom;
+
             let startKey = sy * gridW + sx;
-            let endKey = ey * gridW + ex;
-            gScore.set(startKey, 0);
-            open.push({ x: sx, y: sy, f: estimateCost(sx, sy), g: 0 });
-            let visited = new Set();
+            let endKey   = ey * gridW + ex;
 
-            while (open.length > 0) {
-                let cur = open.pop();
-                let curKey = cur.y * gridW + cur.x;
-                if (visited.has(curKey)) continue;
-                visited.add(curKey);
+            // Init start node
+            gScoreGen[startKey] = epoch;
+            gScoreVal[startKey] = 0;
+            astarFrom[startKey] = startKey; // sentinel for path reconstruction
 
-                if (cur.x === ex && cur.y === ey) {
-                    // Reconstruct
+            _astarHeapSz = 0;
+            let startH = usePortalEdges ? 0 : (Math.abs(ex - sx) + Math.abs(ey - sy));
+            _heapPush(startH, startKey);
+
+            while (_astarHeapSz > 0) {
+                _heapPop();
+                let curKey = _astarPopK;
+                if (visitedGen[curKey] === epoch) continue;
+                visitedGen[curKey] = epoch;
+
+                if (curKey === endKey) {
+                    // Reconstruct path (follow astarFrom back to startKey)
                     let path = [];
                     let k = endKey;
-                    while (k !== undefined) {
-                        path.push({ x: k % gridW, y: Math.floor(k / gridW) });
-                        k = cameFrom.get(k);
+                    while (true) {
+                        path.push({ x: k % gridW, y: (k / gridW) | 0 });
+                        if (k === startKey) break;
+                        k = astarFrom[k];
                     }
                     path.reverse();
                     if (movementProfile) {
@@ -5993,41 +6085,49 @@
                     return path;
                 }
 
-                let neighbors = [];
-                // Inline isWalkable checks to avoid function call overhead
-                let cx = cur.x, cy = cur.y;
-                for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                    let nx = cx + dx, ny = cy + dy;
+                let cx = curKey % gridW, cy = (curKey / gridW) | 0;
+                let cg = gScoreVal[curKey];
+
+                // Expand 4 cardinal neighbors inline (no array allocation)
+                for (let di = 0; di < 8; di += 2) {
+                    let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
                     if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
-                    // Fast path: check wall first (cheapest)
                     if (!ignoreWalls && gridData[ny][nx].type === TYPE_WALL) {
-                        // Check cloud towers and custom walkability
-                        if (!(pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
+                        if (!(usePortalEdges && _getCloudTowerFast(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
                     }
-                    neighbors.push({ x: nx, y: ny, cost: 1 });
+                    let nKey = ny * gridW + nx;
+                    if (visitedGen[nKey] === epoch) continue;
+                    let ng = cg + 1;
+                    if (gScoreGen[nKey] !== epoch || ng < gScoreVal[nKey]) {
+                        gScoreGen[nKey] = epoch;
+                        gScoreVal[nKey] = ng;
+                        astarFrom[nKey] = curKey;
+                        let h = usePortalEdges ? 0 : (Math.abs(ex - nx) + Math.abs(ey - ny));
+                        _heapPush(ng + h, nKey);
+                    }
                 }
 
+                // Cloud portal teleport edges
                 if (usePortalEdges) {
-                    let cloud = getCloudTowerAt(cx, cy, pathOwner);
+                    let cloud = _getCloudTowerFast(cx, cy, pathOwner);
                     if (cloud) {
                         let partner = getPairedCloudTower(cloud, pathOwner);
-                        if (partner) neighbors.push({ x: partner.gx, y: partner.gy, cost: 1 });
-                    }
-                }
-
-                for (let n of neighbors) {
-                    let nKey = n.y * gridW + n.x;
-                    if (visited.has(nKey)) continue;
-                    let ng = cur.g + n.cost;
-                    let prev = gScore.get(nKey);
-                    if (prev === undefined || ng < prev) {
-                        gScore.set(nKey, ng);
-                        cameFrom.set(nKey, curKey);
-                        let h = estimateCost(n.x, n.y);
-                        open.push({ x: n.x, y: n.y, f: ng + h, g: ng });
+                        if (partner) {
+                            let nKey = partner.gy * gridW + partner.gx;
+                            if (visitedGen[nKey] !== epoch) {
+                                let ng = cg + 1;
+                                if (gScoreGen[nKey] !== epoch || ng < gScoreVal[nKey]) {
+                                    gScoreGen[nKey] = epoch;
+                                    gScoreVal[nKey] = ng;
+                                    astarFrom[nKey] = curKey;
+                                    _heapPush(ng, nKey); // h=0 in portal/Dijkstra mode
+                                }
+                            }
+                        }
                     }
                 }
             }
+
             if (movementProfile) {
                 let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                 sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
@@ -6106,6 +6206,7 @@
 
         function generateAreas() {
             areas = [];
+            _areaById = [];
             let visited = Array.from({ length: GRID_H }, () => new Array(GRID_W).fill(false));
             let areaId = 0;
 
@@ -6117,11 +6218,16 @@
                     let queue = [{ x, y }];
                     visited[y][x] = true;
                     let cellType = grid[y][x].type;
+                    let minAreaGx = x, minAreaGy = y, maxAreaGx = x, maxAreaGy = y;
 
                     while (queue.length > 0 && cells.length < targetSize) {
                         let cur = queue.shift();
                         cells.push({ x: cur.x, y: cur.y });
                         grid[cur.y][cur.x].areaId = areaId;
+                        if (cur.x < minAreaGx) minAreaGx = cur.x;
+                        if (cur.y < minAreaGy) minAreaGy = cur.y;
+                        if (cur.x > maxAreaGx) maxAreaGx = cur.x;
+                        if (cur.y > maxAreaGy) maxAreaGy = cur.y;
 
                         let dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
                         for (let i = dirs.length - 1; i > 0; i--) {
@@ -6138,10 +6244,26 @@
                     }
                     // Un-visit cells left in queue so they can form their own areas
                     for (let rem of queue) visited[rem.y][rem.x] = false;
-                    areas.push({ id: areaId, type: cellType, cells, active: false, multiplierLevel: 0 });
+                    let area = {
+                        id: areaId,
+                        type: cellType,
+                        cells,
+                        active: false,
+                        multiplierLevel: 0,
+                        minGx: minAreaGx,
+                        minGy: minAreaGy,
+                        maxGx: maxAreaGx,
+                        maxGy: maxAreaGy
+                    };
+                    areas.push(area);
+                    _areaById[areaId] = area;
                     areaId++;
                 }
             }
+
+            _areaColorCache = null;
+            _areaOutlinePathCache = null;
+            _markCombinedBgFullDirty();
         }
 
         function generateGoldMines() {
@@ -6722,19 +6844,29 @@
 
         function recomputePlayerPopCaps() {
             let cfgCap = getConfiguredMaxPop();
-            for (let pid = 0; pid < players.length; pid++) {
-                let housePop = 0;
-                for (let y = 0; y < GRID_H; y++) {
-                    for (let x = 0; x < GRID_W; x++) {
-                        let cell = grid[y] && grid[y][x];
-                        let item = cell ? cell.item : null;
-                        if (!item || item.type !== 'house' || cell.owner !== pid) continue;
-                        if (item.energy <= 0 || item.underConstruction) continue;
-                        let level = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
-                        housePop += getHousePopCapContribution(pid, level);
-                    }
+            if (_popCapScratchByOwner.length !== players.length) _popCapScratchByOwner = new Int32Array(players.length);
+            else _popCapScratchByOwner.fill(0);
+            let popByOwner = _popCapScratchByOwner;
+
+            // Single grid pass: avoid O(players * grid) work.
+            for (let y = 0; y < GRID_H; y++) {
+                let row = grid[y];
+                if (!row) continue;
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = row[x];
+                    if (!cell) continue;
+                    let item = cell.item;
+                    if (!item || item.type !== 'house') continue;
+                    let owner = cell.owner;
+                    if (owner < 0 || owner >= players.length) continue;
+                    if (item.energy <= 0 || item.underConstruction) continue;
+                    let level = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
+                    popByOwner[owner] += getHousePopCapContribution(owner, level);
                 }
-                playerPopCaps[pid] = Math.min(cfgCap, housePop);
+            }
+
+            for (let pid = 0; pid < players.length; pid++) {
+                playerPopCaps[pid] = Math.min(cfgCap, popByOwner[pid] || 0);
             }
         }
 
@@ -7400,7 +7532,9 @@
                                     if (gameTime % 40 === 0) playSound('laser_tick', (this.x + other.x) / 2, (this.y + other.y) / 2);
                                     if (u.laserResistant) { if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#888", 1); }
                                     else {
+                                        let prevEnergy = u.energy;
                                         u.energy -= dmg / 60;
+                                        pushHostileDamageAlert(u, prevEnergy - u.energy, this.owner);
                                         if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#f00", 1);
                                         if (u.energy <= 0 && !u.dead) { u.dead = true; }
                                     }
@@ -7415,7 +7549,9 @@
                                     else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
                                     if (hit) {
                                         hitAny = true;
+                                        let prevEnergy = b.energy;
                                         b.energy -= dmg / 60;
+                                        pushHostileDamageAlert(b, prevEnergy - b.energy, this.owner);
                                         if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
                                         if (b.energy <= 0) destroyBuilding(b);
                                     }
@@ -7623,6 +7759,7 @@
             }
             hit(t) {
                 if (t.turretImmune) { createExplosion(t.x, t.y, "#888", 3); return; }
+                let targetEnergyBefore = t.energy;
                 let baseDmg = this.dmg;
                 let splashDmg = Number.isFinite(this.blastDamage) ? this.blastDamage : baseDmg;
                 let splashRadiusPx = Math.max(0, (Number.isFinite(this.blastRadius) ? this.blastRadius : (64 / TILE)) * TILE);
@@ -7663,10 +7800,14 @@
                     createExplosion(this.x, this.y, "#fff", 4);
                 }
 
+                pushHostileDamageAlert(t, targetEnergyBefore - t.energy, this.sourceOwner);
+
                 if (hasBlast) {
                     forEachUnitInRange(this.x, this.y, splashRadiusPx, (e) => {
                         if (e === t || e.owner === this.sourceOwner || e.turretImmune || e.dead) return;
+                        let prevEnergy = e.energy;
                         e.energy -= splashDmg;
+                        pushHostileDamageAlert(e, prevEnergy - e.energy, this.sourceOwner);
                         if (this.type === 'fire') applyStatusEffect(e, 'fire', this.level || 1, splashDmg * 0.05, this.sourceOwner, this.type);
                         if (e.energy <= 0 && !e.dead) e.dead = true;
                     });
@@ -7674,6 +7815,7 @@
                 if (t.energy <= 0 && !t.dead) { t.dead = true; createExplosion(t.x, t.y, "#e44", 6); }
             }
             hitBuilding(b) {
+                let buildingEnergyBefore = b.energy;
                 // Apply damage to a building (tower, barrack, spawner)
                 let actualDmg = this.dmg;
                 if (this.type === 'fire' || this.type === 'ice' || this.type === 'poison' || this.type === 'water' || this.type === 'sand_gun' || this.type === 'elements') {
@@ -7708,6 +7850,8 @@
                 } else {
                     b.energy -= actualDmg;
                 }
+
+                pushHostileDamageAlert(b, buildingEnergyBefore - b.energy, this.sourceOwner);
 
                 createExplosion(this.x, this.y, "#f84", 4);
                 if (b.energy <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }
@@ -7923,7 +8067,9 @@
 
                             forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
                                 if (!u || u.dead || u.owner === item.owner) return;
+                                let prevEnergy = u.energy;
                                 u.energy -= blastDamage;
+                                pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
                                 if (u.energy <= 0 && !u.dead) u.dead = true;
                             });
 
@@ -8205,7 +8351,9 @@
             }
 
             _performAttackOnUnit(target) {
+                let targetEnergyBefore = target.energy;
                 target.energy -= this.attackDamage;
+                pushHostileDamageAlert(target, targetEnergyBefore - target.energy, this.owner);
                 this.attackTimer = this.attackCooldown;
                 this.attackTarget = target;
                 this.attackFlash = 8;
@@ -8242,6 +8390,7 @@
             }
 
             _performAttackOnBuilding(tb) {
+                let buildingEnergyBefore = tb.energy;
                 this.attackTimer = this.attackCooldown;
                 this.attackTarget = tb;
                 this.attackFlash = 8;
@@ -8278,6 +8427,7 @@
                     createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f88', 2);
                     tb.energy -= this.attackDamage;
                 }
+                pushHostileDamageAlert(tb, buildingEnergyBefore - tb.energy, this.owner);
                 if (tb.energy <= 0) { destroyBuilding(tb); return true; }
                 return false;
             }
@@ -11193,7 +11343,7 @@
                     let areaMult = 1;
                     touchedAreas.forEach(aId => {
                         if (aId === -1) return;
-                        let area = areas.find(a => a.id === aId);
+                        let area = getAreaById(aId);
                         if (!area) return;
                         let filled = true;
                         for (let cp of area.cells) {
@@ -11392,7 +11542,7 @@
             if (itemKey === 'area_upgrader') {
                 let aId = grid[gy][gx].areaId;
                 if (aId === -1) return false;
-                let area = areas.find(a => a.id === aId);
+                let area = getAreaById(aId);
                 if (!area) return false;
                 // Check if ALL cells in area are occupied by any building/item (any owner)
                 let allFilled = area.cells.every(cp => {
@@ -11411,7 +11561,7 @@
                 if (!allFilled) return false;
                 if ((area.multiplierLevel || 0) >= 5) return false;
                 area.multiplierLevel = (area.multiplierLevel || 0) + 1;
-                dirtyAreas = true;
+                _markCombinedBgAreaDirty(aId, 1);
                 recalculateAdjacency();
                 return true;
             }
@@ -11438,7 +11588,7 @@
                     placedNewStructure = true;
                     placedNewWallStructure = true;
                 }
-                dirtyGrid = true;
+                _markCombinedBgTileDirty(gx, gy);
             } else if (itemKey.startsWith('barrack_')) {
                 let unitType = cardDef.unitType || 'norm';
                 let existing = getBarrackAtTile(gx, gy);
@@ -11585,7 +11735,7 @@
                 clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].type = TYPE_FLOOR;
                 grid[building.gy][building.gx].owner = -1;
-                dirtyGrid = true;
+                _markCombinedBgTileDirty(building.gx, building.gy);
                 recalculateAdjacency();
                 recalculateLaserConnections();
             } else if (building instanceof Barrack || (building.type === 'barrack')) {
@@ -11950,7 +12100,9 @@
         // RENDER
         // ============================================================
         // Pre-compute area color lookup (rebuilt when dirtyAreas)
-        let _areaColorCache = null; // Map: areaId -> color string
+        let _areaById = [];
+        let _areaColorCache = null; // Array: [areaId] -> color string
+        let _areaOutlinePathCache = null; // Array: [areaId] -> Path2D
         let _combinedBgCanvas = null; // Full world background (grid + area outlines)
         let _combinedBgCtx = null;
         let _staticLayerCache = {
@@ -11973,6 +12125,112 @@
             _staticLayerCache.valid = false;
         }
 
+        function getAreaById(areaId) {
+            if (!Number.isFinite(areaId) || areaId < 0 || areaId >= _areaById.length) return null;
+            return _areaById[areaId] || null;
+        }
+
+        function _markCombinedBgFullDirty() {
+            _combinedBgDirtyFull = true;
+            _combinedBgDirtyBounds = null;
+            dirtyGrid = true;
+            dirtyAreas = true;
+        }
+
+        function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false) {
+            minGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(minGx)));
+            minGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(minGy)));
+            maxGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(maxGx)));
+            maxGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(maxGy)));
+            if (maxGx < minGx || maxGy < minGy) return;
+
+            if (!_combinedBgDirtyFull) {
+                if (_combinedBgDirtyBounds) {
+                    _combinedBgDirtyBounds.minGx = Math.min(_combinedBgDirtyBounds.minGx, minGx);
+                    _combinedBgDirtyBounds.minGy = Math.min(_combinedBgDirtyBounds.minGy, minGy);
+                    _combinedBgDirtyBounds.maxGx = Math.max(_combinedBgDirtyBounds.maxGx, maxGx);
+                    _combinedBgDirtyBounds.maxGy = Math.max(_combinedBgDirtyBounds.maxGy, maxGy);
+                } else {
+                    _combinedBgDirtyBounds = { minGx, minGy, maxGx, maxGy };
+                }
+            }
+
+            dirtyGrid = true;
+            if (markAreas) dirtyAreas = true;
+        }
+
+        function _markCombinedBgTileDirty(gx, gy, pad = 0) {
+            _markCombinedBgRectDirty(gx - pad, gy - pad, gx + pad, gy + pad, false);
+        }
+
+        function _markCombinedBgAreaDirty(areaId, pad = 1) {
+            let area = getAreaById(areaId);
+            if (!area || !area.cells || area.cells.length <= 0) return;
+
+            _markCombinedBgRectDirty(area.minGx - pad, area.minGy - pad, area.maxGx + pad, area.maxGy + pad, true);
+        }
+
+        function _areaIntersectsTileRect(area, minGx, minGy, maxGx, maxGy) {
+            if (!area) return false;
+            return area.maxGx >= minGx && area.minGx <= maxGx && area.maxGy >= minGy && area.minGy <= maxGy;
+        }
+
+        function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawAreaOutlines) {
+            let startX = minGx * TILE;
+            let startY = minGy * TILE;
+            let width = (maxGx - minGx + 1) * TILE;
+            let height = (maxGy - minGy + 1) * TILE;
+
+            c.clearRect(startX, startY, width, height);
+
+            c.fillStyle = C_FLOOR;
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
+                }
+            }
+
+            c.fillStyle = '#222';
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+                }
+            }
+
+            c.fillStyle = C_WALL;
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+
+            c.strokeStyle = '#444';
+            c.lineWidth = 1;
+            c.beginPath();
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+            c.stroke();
+
+            if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache) {
+                c.save();
+                c.beginPath();
+                c.rect(startX, startY, width, height);
+                c.clip();
+                c.lineWidth = 2;
+                for (let area of areas) {
+                    if (!_areaIntersectsTileRect(area, minGx, minGy, maxGx, maxGy)) continue;
+                    let path = _areaOutlinePathCache[area.id];
+                    if (!path) continue;
+                    c.strokeStyle = _areaColorCache[area.id];
+                    c.stroke(path);
+                }
+                c.restore();
+            }
+        }
+
         function ensureCombinedBgCanvas() {
             if (!_combinedBgCanvas || _combinedBgCanvas.width !== WORLD_W || _combinedBgCanvas.height !== WORLD_H) {
                 _combinedBgCanvas = document.createElement('canvas');
@@ -11980,8 +12238,9 @@
                 _combinedBgCanvas.height = WORLD_H;
                 _combinedBgCtx = _combinedBgCanvas.getContext('2d');
                 _combinedBgCtx.imageSmoothingEnabled = false;
-                dirtyGrid = true;
-                dirtyAreas = true;
+                _areaColorCache = null;
+                _areaOutlinePathCache = null;
+                _markCombinedBgFullDirty();
                 invalidateStaticLayerCache();
             }
         }
@@ -11989,70 +12248,30 @@
         function rebuildCombinedBackgroundCache() {
             ensureCombinedBgCanvas();
             if (dirtyAreas || !_areaColorCache) rebuildAreaColorCache();
+            if (!_areaOutlinePathCache) rebuildAreaOutlinePathCache();
             let c = _combinedBgCtx;
-            c.clearRect(0, 0, WORLD_W, WORLD_H);
 
-            // Grid base (no visibility filtering in cache)
-            c.fillStyle = C_FLOOR;
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
-                }
+            if (!_combinedBgDirtyFull && !_combinedBgDirtyBounds && (dirtyGrid || dirtyAreas)) {
+                _combinedBgDirtyFull = true;
             }
 
-            c.fillStyle = '#222';
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
-                }
-            }
-
-            c.fillStyle = C_WALL;
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
-                }
-            }
-
-            c.strokeStyle = '#444'; c.lineWidth = 1;
-            c.beginPath();
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
-                }
-            }
-            c.stroke();
-
-            // Area outlines (no visibility filtering in cache)
-            let batches = new Map();
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    let aid = grid[y][x].areaId;
-                    if (aid === -1) continue;
-                    let color = _areaColorCache.get(aid);
-                    if (!color) continue;
-                    let px = x * TILE, py = y * TILE;
-                    if (!batches.has(color)) batches.set(color, []);
-                    let edges = batches.get(color);
-                    if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) edges.push(px + TILE - 1, py, px + TILE - 1, py + TILE);
-                    if (x === 0 || grid[y][x - 1].areaId !== aid) edges.push(px + 1, py, px + 1, py + TILE);
-                    if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) edges.push(px, py + TILE - 1, px + TILE, py + TILE - 1);
-                    if (y === 0 || grid[y - 1][x].areaId !== aid) edges.push(px, py + 1, px + TILE, py + 1);
-                }
-            }
-            c.lineWidth = 2;
-            for (let [color, edges] of batches) {
-                c.strokeStyle = color;
-                c.beginPath();
-                for (let i = 0; i < edges.length; i += 4) {
-                    c.moveTo(edges[i], edges[i + 1]);
-                    c.lineTo(edges[i + 2], edges[i + 3]);
-                }
-                c.stroke();
+            if (_combinedBgDirtyFull) {
+                _drawCombinedBackgroundRegion(c, 0, 0, GRID_W - 1, GRID_H - 1, true);
+            } else if (_combinedBgDirtyBounds) {
+                _drawCombinedBackgroundRegion(
+                    c,
+                    _combinedBgDirtyBounds.minGx,
+                    _combinedBgDirtyBounds.minGy,
+                    _combinedBgDirtyBounds.maxGx,
+                    _combinedBgDirtyBounds.maxGy,
+                    dirtyAreas
+                );
             }
 
             dirtyGrid = false;
             dirtyAreas = false;
+            _combinedBgDirtyFull = false;
+            _combinedBgDirtyBounds = null;
         }
 
         function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
@@ -12122,7 +12341,7 @@
         }
 
         function rebuildAreaColorCache() {
-            _areaColorCache = new Map();
+            _areaColorCache = new Array(areas.length);
             for (let a of areas) {
                 let color;
                 if (a.active) {
@@ -12130,8 +12349,29 @@
                     let cs = ['rgba(0,255,0,0.6)', 'rgba(0,255,0,0.8)', 'rgba(70,170,255,0.8)', 'rgba(200,0,255,0.8)', 'rgba(255,150,0,0.8)', 'rgba(255,220,0,0.9)'];
                     color = cs[lvl] || cs[cs.length - 1];
                 } else { color = 'rgba(128,128,128,0.1)'; }
-                _areaColorCache.set(a.id, color);
+                _areaColorCache[a.id] = color;
             }
+        }
+
+        function rebuildAreaOutlinePathCache() {
+            let paths = new Array(areas.length);
+
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    let aid = grid[y][x].areaId;
+                    if (aid === -1) continue;
+                    let p = paths[aid];
+                    if (!p) p = paths[aid] = new Path2D();
+
+                    let px = x * TILE, py = y * TILE;
+                    if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) { p.moveTo(px + TILE - 1, py); p.lineTo(px + TILE - 1, py + TILE); }
+                    if (x === 0 || grid[y][x - 1].areaId !== aid) { p.moveTo(px + 1, py); p.lineTo(px + 1, py + TILE); }
+                    if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) { p.moveTo(px, py + TILE - 1); p.lineTo(px + TILE, py + TILE - 1); }
+                    if (y === 0 || grid[y - 1][x].areaId !== aid) { p.moveTo(px, py + 1); p.lineTo(px + TILE, py + 1); }
+                }
+            }
+
+            _areaOutlinePathCache = paths;
         }
 
         // Draw grid tiles directly to main ctx for visible area only (batched)
@@ -12173,35 +12413,23 @@
 
         // Draw area outlines directly to main ctx for visible area only (batched by color)
         function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
-            if (dirtyAreas) { rebuildAreaColorCache(); dirtyAreas = false; }
-            if (!_areaColorCache) return;
-            // Batch edges by color to minimize state changes
-            let batches = new Map();
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
-                    if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
-                    let aid = grid[y][x].areaId; if (aid === -1) continue;
-                    let color = _areaColorCache.get(aid);
-                    if (!color) continue;
-                    let px = x * TILE, py = y * TILE;
-                    if (!batches.has(color)) batches.set(color, []);
-                    let edges = batches.get(color);
-                    if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) edges.push(px + TILE - 1, py, px + TILE - 1, py + TILE);
-                    if (x === 0 || grid[y][x - 1].areaId !== aid) edges.push(px + 1, py, px + 1, py + TILE);
-                    if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) edges.push(px, py + TILE - 1, px + TILE, py + TILE - 1);
-                    if (y === 0 || grid[y - 1][x].areaId !== aid) edges.push(px, py + 1, px + TILE, py + 1);
-                }
-            }
+            if (dirtyAreas || !_areaColorCache) rebuildAreaColorCache();
+            if (!_areaOutlinePathCache) rebuildAreaOutlinePathCache();
+            if (!_areaColorCache || !_areaOutlinePathCache) return;
+
             ctx.lineWidth = 2;
-            for (let [color, edges] of batches) {
-                ctx.strokeStyle = color;
-                ctx.beginPath();
-                for (let i = 0; i < edges.length; i += 4) {
-                    ctx.moveTo(edges[i], edges[i + 1]);
-                    ctx.lineTo(edges[i + 2], edges[i + 3]);
-                }
-                ctx.stroke();
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(minGx * TILE, minGy * TILE, (maxGx - minGx + 1) * TILE, (maxGy - minGy + 1) * TILE);
+            ctx.clip();
+            for (let area of areas) {
+                if (!_areaIntersectsTileRect(area, minGx, minGy, maxGx, maxGy)) continue;
+                let path = _areaOutlinePathCache[area.id];
+                if (!path) continue;
+                ctx.strokeStyle = _areaColorCache[area.id];
+                ctx.stroke(path);
             }
+            ctx.restore();
         }
 
         function draw() {
@@ -12564,7 +12792,7 @@
                     let previewLevel = getBuildPreviewLevelFromMultiplier();
                     if (selectedBuildItem === 'area_upgrader') {
                         let aId = grid[gy][gx].areaId;
-                        let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
+                        let area = getAreaById(aId);
                         // Highlight entire hovered area to show boundaries and fill status
                         if (area) {
                             let filledCount = 0;
@@ -12919,8 +13147,6 @@
             for (let t of towers) { if (t.type === 'laser' && t.laserState === 1 && !t.underConstruction) { anyLaserActive = true; break; } }
             if (anyLaserActive) startLaserSound();
             else stopLaserSound();
-
-            scanLocalOwnedDamageAlerts();
 
             updateVisibility(localPlayerId);
         }
@@ -13373,7 +13599,7 @@
                 let _cd = BASE_CARD_TYPES[selectedBuildItem];
                 if (selectedBuildItem === 'area_upgrader') {
                     let aId = grid[gy][gx].areaId;
-                    let area = aId !== -1 ? areas.find(a => a.id === aId) : null;
+                    let area = getAreaById(aId);
                     if (!area) return false;
                     let filledCount = 0;
                     for (let cp of area.cells) {
@@ -16376,7 +16602,7 @@
             if (gx !== undefined && gy !== undefined && gy >= 0 && gy < GRID_H && gx >= 0 && gx < GRID_W) {
                 let aId = grid[gy][gx].areaId;
                 if (aId !== -1) {
-                    let area = areas.find(a => a.id === aId);
+                    let area = getAreaById(aId);
                     if (area) { areaSize = area.cells.length; areaLevel = area.multiplierLevel || 0; }
                 }
             }
@@ -19421,7 +19647,6 @@
 
             let st = document.getElementById('lobby-status');
             if (st && !isHost) {
-                st.textContent = 'Resynced from host snapshot.';
                 st.style.color = '#9f9';
             }
             return true;
