@@ -1214,6 +1214,10 @@
                         <label for="cfg-pipeline-delay">Lockstep Pipeline Delay (ticks)</label>
                         <input id="cfg-pipeline-delay" type="number" min="0" max="12" value="2" style="width:72px" title="Minimum lockstep pipeline delay in ticks">
                     </div>
+                    <div class="lobby-setting-row">
+                        <label for="cfg-unit-eff-stats-ticks">Unit Stats Update Delay (ticks) </label>
+                        <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
+                    </div>
                     <div class="lobby-col-footer">Host controls these settings for everyone in online matches.</div>
                 </div>
 
@@ -2508,6 +2512,8 @@
             let total = 0;
             let map = (startingResourcesConfig && startingResourcesConfig.spawnCounts) || {};
             for (let thingId in map) {
+                let parsed = parseStartingThingId(thingId);
+                if (!parsed || parsed.kind !== 'unit') continue;
                 let lvlMap = map[thingId] || {};
                 for (let lvl in lvlMap) total += Math.max(0, Math.floor(Number(lvlMap[lvl]) || 0));
             }
@@ -2521,6 +2527,8 @@
         }
 
         function getStartingSpawnMaxForRow(thingId, level) {
+            let parsed = parseStartingThingId(thingId);
+            if (!parsed || parsed.kind !== 'unit') return 1000;
             let maxPop = getStartingResourcesMaxPopulation();
             let current = getStartingSpawnCount(thingId, level);
             let total = getStartingResourcesTotalSpawnCount();
@@ -2937,6 +2945,7 @@
                     CONFIG_MAX_POP,
                     TICK_RATE,
                     LOCKSTEP_PIPELINE_MIN,
+                    UNIT_EFFECTIVE_STATS_RECALC_TICKS,
                 },
                 progression: {
                     RESEARCH_COST_EXP,
@@ -3005,6 +3014,7 @@
             setValue('cfg-map-type', MAP_TYPE);
             setValue('cfg-tick-rate', TICK_RATE);
             setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
+            setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
             setValue('cfg-max-thing-level', MAX_THING_LEVEL);
             setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
         }
@@ -3046,6 +3056,9 @@
             let nextTickRate = Number(cfg.TICK_RATE);
             let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
             applyTimingConfig(nextTickRate, nextPipelineDelay);
+            if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
+                UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+            }
 
             if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
             if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
@@ -3155,11 +3168,71 @@
             if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
         }
 
+        function createEditableRuntimeConfigSnapshotFromMainMenu() {
+            let snapshot = createEditableRuntimeConfigSnapshot();
+            let cfg = snapshot.config;
+            let getNumber = (id, fallback) => {
+                let el = document.getElementById(id);
+                if (!el) return fallback;
+                let value = Number(el.value);
+                return Number.isFinite(value) ? value : fallback;
+            };
+            let getString = (id, fallback) => {
+                let el = document.getElementById(id);
+                if (!el) return fallback;
+                let value = String(el.value || '').trim();
+                return value || fallback;
+            };
+
+            cfg.GRID_W = Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W)));
+            cfg.GRID_H = cfg.GRID_W;
+            cfg.GOLD_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-gold-count', cfg.GOLD_MINE_COUNT)));
+            cfg.GOLD_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-gold-min', cfg.GOLD_MINE_MIN)));
+            cfg.GOLD_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-gold-max', cfg.GOLD_MINE_MAX)));
+            cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
+            cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
+            cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
+            cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
+            cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
+            cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+
+            snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
+            snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
+
+            return snapshot;
+        }
+
+        function applyMainMenuControlsToRuntimeState() {
+            let snapshot = createEditableRuntimeConfigSnapshotFromMainMenu();
+            let cfg = snapshot.config;
+            let prog = snapshot.progression;
+
+            GRID_W = cfg.GRID_W;
+            GRID_H = cfg.GRID_H;
+            WORLD_W = GRID_W * TILE;
+            WORLD_H = GRID_H * TILE;
+            GOLD_MINE_COUNT = cfg.GOLD_MINE_COUNT;
+            GOLD_MINE_MIN = cfg.GOLD_MINE_MIN;
+            GOLD_MINE_MAX = cfg.GOLD_MINE_MAX;
+            STARTING_MONEY = cfg.STARTING_MONEY;
+            MAP_TYPE = cfg.MAP_TYPE;
+            CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
+            MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
+            MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
+            UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
+            applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
+
+            let gameModeEl = document.getElementById('cfg-gamemode');
+            if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
+            let fullVisEl = document.getElementById('cfg-full-vis');
+            if (fullVisEl) fullVisibility = !!fullVisEl.checked;
+        }
+
         function createMainMenuSettingsSnapshot() {
             let numberIds = [
                 'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy',
                 'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max',
-                'cfg-max-research-level'
+                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks'
             ];
             let selectIds = ['cfg-gamemode', 'cfg-map-type'];
             let checkboxIds = ['cfg-full-vis'];
@@ -3173,7 +3246,7 @@
                     checks: {}
                 },
                 startingResources: cloneStartingResourcesConfig(),
-                editableConfig: serializeEditableRuntimeConfigForTransport()
+                editableConfig: encodeFunctionsForTransport(createEditableRuntimeConfigSnapshotFromMainMenu())
             };
 
             for (let id of numberIds) {
@@ -3220,12 +3293,22 @@
             MAX_THING_LEVEL = importedMaxThingLevel;
             MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
             startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+            applyMainMenuControlsToRuntimeState();
+            let appliedAdvancedConfig = false;
             if (data.editableConfig && typeof data.editableConfig === 'object') {
                 try {
                     applyEditableRuntimeConfigObject(data.editableConfig, { fromTransport: true });
+                    appliedAdvancedConfig = true;
                 } catch {
                     // Keep imported non-advanced settings even if advanced config payload is invalid.
                 }
+            }
+            if (appliedAdvancedConfig) {
+                syncMainMenuFromRuntimeConfig();
+                let gameModeEl = document.getElementById('cfg-gamemode');
+                if (gameModeEl) gameModeEl.value = gameMode;
+                let fullVisEl = document.getElementById('cfg-full-vis');
+                if (fullVisEl) fullVisEl.checked = fullVisibility;
             }
 
             let popup = document.getElementById('starting-resources-popup');
@@ -3310,6 +3393,7 @@
     let CONFIG_MAX_POP = 200;
         let TICK_RATE = 20; // ticks per second (menu configurable)
         let TICK_MS = 1000 / TICK_RATE;
+        let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
     let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
@@ -5746,10 +5830,30 @@
             let includeDead = !!(opts && opts.includeDead);
             let exact = !(opts && opts.exact === false);
             let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
+            let chunkCols = CHUNKS_W;
+            let chunks = spatialUnits;
+
+            // Fast path for the common case used by combat/vision scans.
+            if (!includeDead && exact && !predicate) {
+                for (let cy = minCy; cy <= maxCy; cy++) {
+                    let rowBase = cy * chunkCols;
+                    for (let cx = minCx; cx <= maxCx; cx++) {
+                        for (let u of chunks[rowBase + cx]) {
+                            if (u.dead) continue;
+                            let dx = u.x - wx, dy = u.y - wy;
+                            let d2 = dx * dx + dy * dy;
+                            if (d2 > radiusSq) continue;
+                            if (visitor(u, d2, dx, dy) === true) return true;
+                        }
+                    }
+                }
+                return false;
+            }
 
             for (let cy = minCy; cy <= maxCy; cy++) {
+                let rowBase = cy * chunkCols;
                 for (let cx = minCx; cx <= maxCx; cx++) {
-                    for (let u of spatialUnits[cy * CHUNKS_W + cx]) {
+                    for (let u of chunks[rowBase + cx]) {
                         if (!includeDead && u.dead) continue;
                         let dx = u.x - wx, dy = u.y - wy;
                         let d2 = dx * dx + dy * dy;
@@ -9037,17 +9141,17 @@
             let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
 
             if (spawner.type === 'spawner') {
-                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
             } else if (spawner.type === 'salvager') {
-                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
+                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
             } else if (spawner.type === 'builder_spawner') {
-                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null;
+                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.builderHasMaterial = false;
             } else if (spawner.type === 'healer_spawner') {
-                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null;
+                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.healerHasMaterial = false;
             } else if (spawner.type === 'research') {
-                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null;
+                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.researcherHasMaterial = false;
             }
 
@@ -9606,13 +9710,13 @@
                 } else if (u.workerState === 'MOVING_TO') {
                     if (!u.workerTarget) { u.workerState = 'RETURNING'; _workerReturnPath(u); return; }
                     if (u.workerTargetType === 'drop' && !droppedItems.includes(u.workerTarget)) {
-                        u.workerTarget = null; _collectorFindTarget(u, myGx, myGy); return;
+                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (u.workerTargetType === 'mine' && u.workerTarget.gold <= 0) {
-                        u.workerTarget = null; _collectorFindTarget(u, myGx, myGy); return;
+                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (u.workerTargetType === 'farm' && (!u.workerTarget || u.workerTarget.type !== 'farm' || u.workerTarget.owner !== owner || u.workerTarget.underConstruction || u.workerTarget.energy <= 0)) {
-                        u.workerTarget = null; _collectorFindTarget(u, myGx, myGy); return;
+                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
@@ -9660,9 +9764,9 @@
                             _collectorRememberGatherSite(u, u.workerTarget, u.workerTargetType);
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
-                            u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
-                            u.workerTarget = null; _collectorFindTarget(u, myGx, myGy);
+                            _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy);
                         }
                     }
                 } else if (u.workerState === 'RETURNING') {
@@ -9702,7 +9806,7 @@
                     _salvagerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
                     if (!u.workerTarget || !u.workerTarget.markedForSalvage) {
-                        u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u); return;
+                        _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
@@ -9713,9 +9817,9 @@
                             u.carryingValue = refund * getUnitBaseLevel(u);
                             destroyBuilding(u.workerTarget);
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
-                            u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
-                            u.workerTarget = null; u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
                         }
                     }
                 } else if (u.workerState === 'RETURNING') {
@@ -9763,7 +9867,7 @@
                             u.path = null;
                             u.pathIndex = 0;
                             u._builderSpawnerTarget = null;
-                            u.workerTarget = null;
+                            _clearWorkerTarget(u);
                         }
                         _builderFindTarget(u, myGx, myGy);
                     }
@@ -9776,7 +9880,7 @@
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         // Building finished (maybe by another builder), find next
                         _builderRememberWorkSite(u);
-                        u.workerTarget = null;
+                        _clearWorkerTarget(u);
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
@@ -9822,7 +9926,7 @@
                                     recalculateAdjacency();
                                     _builderRememberWorkSite(u, t);
                                     if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                                        u.workerTarget = null;
+                                        _clearWorkerTarget(u);
                                         _builderFindTarget(u, myGx, myGy);
                                     }
                                 }
@@ -9841,7 +9945,7 @@
                                     recalculateAdjacency();
                                     if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                         _builderRememberWorkSite(u, t);
-                                        u.workerTarget = null;
+                                        _clearWorkerTarget(u);
                                         _builderFindTarget(u, myGx, myGy);
                                     }
                                 }
@@ -9864,7 +9968,7 @@
                                 refreshThingProgressState(t);
                                 if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                     _builderRememberWorkSite(u, t);
-                                    u.workerTarget = null;
+                                    _clearWorkerTarget(u);
                                     _builderFindTarget(u, myGx, myGy);
                                 }
                             }
@@ -9893,7 +9997,7 @@
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
-                        u.workerTarget = null;
+                        _clearWorkerTarget(u);
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
@@ -9934,7 +10038,7 @@
                     // Building in place without returning for gold (every 20 ticks add 1 ENERGY)
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
-                        u.workerTarget = null;
+                        _clearWorkerTarget(u);
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
@@ -9950,7 +10054,7 @@
                                 recalculateAdjacency();
                                 _builderRememberWorkSite(u, t);
                                 if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                                    u.workerTarget = null;
+                                    _clearWorkerTarget(u);
                                     _builderFindTarget(u, myGx, myGy);
                                 }
                             }
@@ -9968,7 +10072,7 @@
                                 recalculateAdjacency();
                                 if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                     _builderRememberWorkSite(u, t);
-                                    u.workerTarget = null;
+                                    _clearWorkerTarget(u);
                                     _builderFindTarget(u, myGx, myGy);
                                 }
                             }
@@ -9989,7 +10093,7 @@
                             refreshThingProgressState(t);
                             if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                 _builderRememberWorkSite(u, t);
-                                u.workerTarget = null;
+                                _clearWorkerTarget(u);
                                 _builderFindTarget(u, myGx, myGy);
                             }
                         }
@@ -10012,8 +10116,7 @@
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         if (targetIsQueue) _clearHealerQueueCommit(u);
-                        u.workerTarget = null;
-                        u.workerTargetType = null;
+                        _clearWorkerTarget(u);
                         _healerFindTarget(u, myGx, myGy);
                         return;
                     }
@@ -10070,8 +10173,7 @@
                             }
 
                             if (!_isHealerQueueTarget(sp, owner)) {
-                                u.workerTarget = null;
-                                u.workerTargetType = null;
+                                _clearWorkerTarget(u);
                                 _healerFindTarget(u, myGx, myGy);
                                 return;
                             }
@@ -10099,7 +10201,7 @@
                         u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
 
                         if (!_isHealerTargetUnit(u.workerTarget, owner)) {
-                            u.workerTarget = null;
+                            _clearWorkerTarget(u);
                             _healerFindTarget(u, myGx, myGy);
                             return;
                         }
@@ -10119,8 +10221,7 @@
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         if (targetIsQueue) _clearHealerQueueCommit(u);
-                        u.workerTarget = null;
-                        u.workerTargetType = null;
+                        _clearWorkerTarget(u);
                         u._healerQueueTripCost = 0;
                         _healerFindTarget(u, myGx, myGy);
                         return;
@@ -10166,8 +10267,7 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     let target = _findNearestResearchBuildingNeedingWork(u);
                     if (target) {
-                        u.workerTarget = target;
-                        u.workerTargetType = 'research';
+                        _setWorkerTarget(u, target, 'research');
                         u.workerState = 'MOVING_TO_RESEARCH';
                         let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                         u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, null, u.owner);
@@ -10178,8 +10278,7 @@
                     }
                 } else if (u.workerState === 'MOVING_TO_RESEARCH') {
                     if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
-                        u.workerTarget = null;
-                        u.workerTargetType = null;
+                        _clearWorkerTarget(u);
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                         return;
@@ -10224,8 +10323,7 @@
                         u.workerState = 'RESEARCHING';
                         let task = target.researchTask;
                         if (!task) {
-                            u.workerTarget = null;
-                            u.workerTargetType = null;
+                            _clearWorkerTarget(u);
                             u.workerState = 'IDLE';
                             u.commandState = CMD_IDLE;
                             return;
@@ -10251,8 +10349,7 @@
                         }
 
                         if (!_isResearcherTargetBuilding(target, owner)) {
-                            u.workerTarget = null;
-                            u.workerTargetType = null;
+                            _clearWorkerTarget(u);
                             u.workerState = 'IDLE';
                             u.commandState = CMD_IDLE;
                             return;
@@ -10264,8 +10361,7 @@
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
-                        u.workerTarget = null;
-                        u.workerTargetType = null;
+                        _clearWorkerTarget(u);
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                         return;
@@ -10422,6 +10518,7 @@
             }
 
             let candidates = [];
+            let bestOriginDist = Infinity;
             let pushCandidate = (target, type) => {
                 if (!target) return;
                 let originDist = Math.hypot(target.x - origin.x, target.y - origin.y);
@@ -10429,6 +10526,7 @@
                     ? Math.hypot(target.x - anchorSpawner.x, target.y - anchorSpawner.y)
                     : Math.hypot(target.x - u.x, target.y - u.y);
                 candidates.push({ target, type, originDist, spawnerDist });
+                if (originDist < bestOriginDist) bestOriginDist = originDist;
             };
 
             // Check tileEntity arrays first (indexed, fast)
@@ -10460,24 +10558,29 @@
             }
 
             if (candidates.length > 0) {
-                candidates.sort((a, b) => a.originDist - b.originDist);
-                let nearRadius = Math.max(TILE * 4, candidates[0].originDist + TILE * 3);
-                let neighborhood = candidates.filter(c => c.originDist <= nearRadius);
-                let pool = neighborhood.length > 0 ? neighborhood : candidates;
+                let nearRadius = Math.max(TILE * 4, bestOriginDist + TILE * 3);
 
                 let best = null;
                 let bestScore = Infinity;
-                for (let c of pool) {
+                let fallbackBest = null;
+                let fallbackScore = Infinity;
+                for (let c of candidates) {
                     if (!_canAssignWorkerTargetExclusive(u, c.target, c.type)) continue;
                     let score = c.spawnerDist + c.originDist * 0.22;
                     if (c.type === 'drop') score += TILE * 0.5;
                     if (u.workerTarget && u.workerTarget === c.target) score -= TILE * 0.75;
-                    if (score < bestScore) {
+
+                    if (score < fallbackScore) {
+                        fallbackScore = score;
+                        fallbackBest = c;
+                    }
+                    if (c.originDist <= nearRadius && score < bestScore) {
                         bestScore = score;
                         best = c;
                     }
                 }
 
+                if (!best) best = fallbackBest;
                 if (best) {
                     _collectorAssignTarget(u, best.target, best.type, myGx, myGy);
                     return;
@@ -10494,14 +10597,68 @@
             return hasActiveGoldMineAt(nx, ny);
         }
 
+        let _activeBuilderWorkCacheTick = -1;
+        let _activeBuilderWorkTargetsByOwner = new Map();
+        let _activeBuilderPathTiles = new Set();
+
+        function _isAnyConstructionPathTarget(item) {
+            return !!(item && (item.underConstruction || item.isUpgrading || item.isStacking || item.isResearching));
+        }
+
+        function _builderWorkTileKey(gx, gy) {
+            return gy * GRID_W + gx;
+        }
+
+        function _trackActiveBuilderWorkTarget(item) {
+            if (!item || !Number.isFinite(item.owner)) return;
+            if (!_isBuilderWorkTarget(item, item.owner)) return;
+            let ownerList = _activeBuilderWorkTargetsByOwner.get(item.owner);
+            if (!ownerList) {
+                ownerList = [];
+                _activeBuilderWorkTargetsByOwner.set(item.owner, ownerList);
+            }
+            ownerList.push(item);
+        }
+
+        function _trackActiveBuilderPathTile(item) {
+            if (!item || !Number.isFinite(item.gx) || !Number.isFinite(item.gy)) return;
+            _activeBuilderPathTiles.add(_builderWorkTileKey(item.gx, item.gy));
+        }
+
+        function _rebuildActiveBuilderWorkCache() {
+            _activeBuilderWorkTargetsByOwner = new Map();
+            _activeBuilderPathTiles = new Set();
+            let seen = new Set();
+
+            let consider = (item) => {
+                if (!item || seen.has(item)) return;
+                seen.add(item);
+                if (_isAnyConstructionPathTarget(item)) _trackActiveBuilderPathTile(item);
+                _trackActiveBuilderWorkTarget(item);
+            };
+
+            for (let t of towers) consider(t);
+            for (let b of barracks) consider(b);
+            for (let s of collectorSpawners) consider(s);
+            for (let y = 0; y < GRID_H; y++) {
+                let row = grid[y];
+                for (let x = 0; x < GRID_W; x++) {
+                    let cell = row[x];
+                    if (cell && cell.item) consider(cell.item);
+                }
+            }
+
+            _activeBuilderWorkCacheTick = gameTime;
+        }
+
+        function _ensureActiveBuilderWorkCacheCurrent() {
+            if (_activeBuilderWorkCacheTick !== gameTime) _rebuildActiveBuilderWorkCache();
+        }
+
         function _hasUnderConstructionOrUpgradingAt(nx, ny) {
             if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) return false;
-            let cell = grid[ny][nx];
-            if (cell && cell.item && (cell.item.underConstruction || cell.item.isUpgrading || cell.item.isStacking || cell.item.isResearching)) return true;
-            for (let t of towers) { if (t.gx === nx && t.gy === ny && (t.underConstruction || t.isUpgrading || t.isStacking || t.isResearching)) return true; }
-            for (let b of barracks) { if (b.gx === nx && b.gy === ny && (b.underConstruction || b.isUpgrading || b.isStacking || b.isResearching)) return true; }
-            for (let s of collectorSpawners) { if (s.gx === nx && s.gy === ny && (s.underConstruction || s.isUpgrading || s.isStacking || s.isResearching)) return true; }
-            return false;
+            _ensureActiveBuilderWorkCacheCurrent();
+            return _activeBuilderPathTiles.has(_builderWorkTileKey(nx, ny));
         }
 
         function _builderCanWalk(owner) {
@@ -10581,16 +10738,87 @@
             return 1;
         }
 
-        function _countWorkersTargetingTarget(target, owner, workerType, targetType = null, excludeUnit = null) {
-            if (!target) return 0;
-            let count = 0;
+        // Per-tick cache for worker target load lookups to avoid repeated O(units) scans.
+        let _workerTargetLoadCacheTick = -1;
+        let _workerTargetLoadCacheDirty = true;
+        let _workerTargetLoadCacheUnitCount = -1;
+        let _workerTargetLoadCache = new Map();
+
+        function _invalidateWorkerTargetLoadCache() {
+            _workerTargetLoadCacheDirty = true;
+        }
+
+        function _workerTargetLoadKey(owner, workerType, targetType = null) {
+            let t = targetType === null ? '*' : String(targetType);
+            return `${owner}|${workerType}|${t}`;
+        }
+
+        function _workerTargetLoadAdd(target, owner, workerType, targetType) {
+            if (!target) return;
+            let perTarget = _workerTargetLoadCache.get(target);
+            if (!perTarget) {
+                perTarget = new Map();
+                _workerTargetLoadCache.set(target, perTarget);
+            }
+            let kAny = _workerTargetLoadKey(owner, workerType, null);
+            perTarget.set(kAny, (perTarget.get(kAny) || 0) + 1);
+            if (targetType !== null) {
+                let kTyped = _workerTargetLoadKey(owner, workerType, targetType);
+                perTarget.set(kTyped, (perTarget.get(kTyped) || 0) + 1);
+            }
+        }
+
+        function _rebuildWorkerTargetLoadCache() {
+            _workerTargetLoadCache = new Map();
             for (let wu of units) {
                 if (!wu || wu.dead) continue;
-                if (excludeUnit && wu === excludeUnit) continue;
-                if (wu.owner !== owner || wu.workerType !== workerType) continue;
+                if (!wu.workerType || !wu.workerTarget) continue;
                 if (wu.workerState === 'IDLE' || wu.workerState === 'MANUAL_MOVE') continue;
-                if (targetType !== null && wu.workerTargetType !== targetType) continue;
-                if (wu.workerTarget === target) count++;
+                _workerTargetLoadAdd(wu.workerTarget, wu.owner, wu.workerType, wu.workerTargetType !== undefined ? wu.workerTargetType : null);
+            }
+            _workerTargetLoadCacheTick = gameTime;
+            _workerTargetLoadCacheDirty = false;
+            _workerTargetLoadCacheUnitCount = units.length;
+        }
+
+        function _getWorkerTargetLoadCached(target, owner, workerType, targetType = null) {
+            if (!target) return 0;
+            if (_workerTargetLoadCacheDirty || _workerTargetLoadCacheTick !== gameTime || _workerTargetLoadCacheUnitCount !== units.length) {
+                _rebuildWorkerTargetLoadCache();
+            }
+            let perTarget = _workerTargetLoadCache.get(target);
+            if (!perTarget) return 0;
+            return perTarget.get(_workerTargetLoadKey(owner, workerType, targetType)) || 0;
+        }
+
+        function _setWorkerTarget(unit, target, targetType = null) {
+            if (!unit) return;
+            let nextType = (targetType === undefined) ? null : targetType;
+            if (unit.workerTarget === target && unit.workerTargetType === nextType) return;
+            unit.workerTarget = target;
+            unit.workerTargetType = nextType;
+            _invalidateWorkerTargetLoadCache();
+        }
+
+        function _clearWorkerTarget(unit) {
+            if (!unit) return;
+            if (unit.workerTarget === null && unit.workerTargetType === null) return;
+            unit.workerTarget = null;
+            unit.workerTargetType = null;
+            _invalidateWorkerTargetLoadCache();
+        }
+
+        function _countWorkersTargetingTarget(target, owner, workerType, targetType = null, excludeUnit = null) {
+            if (!target) return 0;
+            let count = _getWorkerTargetLoadCached(target, owner, workerType, targetType);
+            if (excludeUnit && !excludeUnit.dead) {
+                let excludeMatches = excludeUnit.owner === owner
+                    && excludeUnit.workerType === workerType
+                    && excludeUnit.workerState !== 'IDLE'
+                    && excludeUnit.workerState !== 'MANUAL_MOVE'
+                    && excludeUnit.workerTarget === target
+                    && (targetType === null || excludeUnit.workerTargetType === targetType);
+                if (excludeMatches) count = Math.max(0, count - 1);
             }
             return count;
         }
@@ -10624,27 +10852,21 @@
             if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
 
             let visibilityPx = _getWorkerVisionRangePx(u);
-            let nearby = candidates.filter(c => {
-                let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
-                return Number.isFinite(d) && d <= visibilityPx;
-            });
-            let pickExclusivePool = (list) => list.filter(c => {
-                let targetType = (c && c.targetType !== undefined) ? c.targetType : null;
-                return _canAssignWorkerTargetExclusive(u, c.target, targetType);
-            });
+            let nearbyExclusive = [];
+            let globalExclusive = [];
 
-            let pool = nearby.length > 0 ? nearby : candidates;
-            let exclusivePool = pickExclusivePool(pool);
-            if (exclusivePool.length > 0) {
-                pool = exclusivePool;
-            } else if (nearby.length > 0) {
-                // Nearby tasks are saturated by same-type workers; search globally.
-                let globalExclusivePool = pickExclusivePool(candidates);
-                if (globalExclusivePool.length > 0) pool = globalExclusivePool;
-                else return null;
-            } else {
-                return null;
+            for (let c of candidates) {
+                if (!c || !c.target) continue;
+                let targetType = (c.targetType !== undefined) ? c.targetType : null;
+                if (!_canAssignWorkerTargetExclusive(u, c.target, targetType)) continue;
+
+                globalExclusive.push(c);
+                let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
+                if (Number.isFinite(d) && d <= visibilityPx) nearbyExclusive.push(c);
             }
+
+            let pool = nearbyExclusive.length > 0 ? nearbyExclusive : globalExclusive;
+            if (pool.length <= 0) return null;
             let hasAlternatives = pool.length > 1;
 
             let best = null;
@@ -10728,7 +10950,7 @@
         }
 
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
-            u.workerTarget = target; u.workerTargetType = targetType;
+            _setWorkerTarget(u, target, targetType);
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
@@ -10736,7 +10958,7 @@
                 _collectorRememberGatherSite(u, target, targetType);
                 u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
-            else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
+            else { _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
 
         function _collectorAssignMine(u, mine, myGx, myGy) {
@@ -10747,17 +10969,18 @@
         function _salvagerFindTarget(u, myGx, myGy) {
             let owner = u.owner;
             let bestDist = 99999, bestItem = null;
+            let spawnerSet = new Set(collectorSpawners);
             for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d < bestDist) { bestDist = d; bestItem = t; } } }
             for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d < bestDist) { bestDist = d; bestItem = b; } } }
             for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d < bestDist) { bestDist = d; bestItem = s; } } }
-            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !collectorSpawners.includes(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
+            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !spawnerSet.has(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
             if (bestItem) {
-                u.workerTarget = bestItem;
+                _setWorkerTarget(u, bestItem, null);
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
                 let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                 u.path = findPathAStar(startGx, startGy, bestItem.gx, bestItem.gy, false, canWalk, u.owner);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
-                else { u.workerTarget = null; u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
+                else { _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
                 u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
             }
@@ -10793,18 +11016,18 @@
 
         function _builderAssignTarget(u, target, myGx, myGy) {
             if (!target || target.markedForSalvage) {
-                u.workerTarget = null;
+                _clearWorkerTarget(u);
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
                 return;
             }
             if (!_canAssignWorkerTargetExclusive(u, target, null)) {
-                u.workerTarget = null;
+                _clearWorkerTarget(u);
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
                 return;
             }
-            u.workerTarget = target;
+            _setWorkerTarget(u, target, null);
             _builderRememberWorkSite(u, target);
             let canWalk = _builderCanWalk(u.owner);
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -11072,6 +11295,27 @@
         }
 
         function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
+            let nearCandidates = [];
+            let visibilityPx = _getWorkerVisionRangePx(u);
+            forEachUnitInRange(originX, originY, visibilityPx, (target) => {
+                if (!_isHealerTargetUnit(target, u.owner)) return;
+                let d = Math.hypot(target.x - originX, target.y - originY);
+                let worldDist = Math.hypot(target.x - u.x, target.y - u.y);
+                nearCandidates.push({
+                    target: target,
+                    targetType: 'unit',
+                    dist: d,
+                    worldDist: worldDist,
+                    level: _getTargetPriorityLevel(target),
+                    isUpgrading: false
+                });
+            }, { includeDead: false });
+
+            if (nearCandidates.length > 0) {
+                let nearPick = _pickDistributedWorkerTarget(u, nearCandidates);
+                if (nearPick) return nearPick;
+            }
+
             let candidates = [];
             for (let target of units) {
                 if (!_isHealerTargetUnit(target, u.owner)) continue;
@@ -11098,8 +11342,7 @@
             if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
             if (queueTarget && !_canAssignWorkerTargetExclusive(u, queueTarget, 'queue')) queueTarget = null;
             if (queueTarget) {
-                u.workerTarget = queueTarget;
-                u.workerTargetType = 'queue';
+                _setWorkerTarget(u, queueTarget, 'queue');
                 _healerRememberWorkSite(u, queueTarget);
                 if (queueTarget !== u._healerQueueCommitTarget) _setHealerQueueCommit(u, queueTarget);
                 if (u.healerHasMaterial) {
@@ -11135,8 +11378,7 @@
             if (target && !_canAssignWorkerTargetExclusive(u, target, 'unit')) target = null;
             if (target) {
                 _clearHealerQueueCommit(u);
-                u.workerTarget = target;
-                u.workerTargetType = 'unit';
+                _setWorkerTarget(u, target, 'unit');
                 _healerRememberWorkSite(u, target);
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
@@ -11162,19 +11404,20 @@
                 u.commandState = CMD_IDLE;
             } else {
                 _clearHealerQueueCommit(u);
-                u.workerTargetType = null;
+                _clearWorkerTarget(u);
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
             }
         }
 
         function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
-            let owner = u.owner;
+            _ensureActiveBuilderWorkCacheCurrent();
+            let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
+            let ownedTargets = _activeBuilderWorkTargetsByOwner.get(owner);
+            if (!ownedTargets || ownedTargets.length <= 0) return null;
             let candidates = [];
-            let check = (b) => {
-                if (b.markedForSalvage) return;
-                if ((!b.underConstruction && !b.isUpgrading && !b.isStacking) || b.owner !== owner) return;
-                if (b.underConstruction && !isBuildEnabled(b)) return;
+            for (let b of ownedTargets) {
+                if (!_isBuilderWorkTarget(b, owner)) continue;
                 let d = Math.hypot(b.x - originX, b.y - originY);
                 let worldDist = Math.hypot(b.x - u.x, b.y - u.y);
                 candidates.push({
@@ -11185,12 +11428,6 @@
                     isUpgrading: !!b.isUpgrading,
                     isStacking: !!b.isStacking
                 });
-            };
-            for (let t of towers) check(t);
-            for (let b of barracks) check(b);
-            for (let s of collectorSpawners) check(s);
-            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) {
-                let c = grid[fy][fx]; if (c.item && (c.item.underConstruction || c.item.isUpgrading || c.item.isStacking)) check(c.item);
             }
             return _pickDistributedWorkerTarget(u, candidates);
         }
@@ -11417,11 +11654,42 @@
             areas.forEach(a => { if (!a.active && a.multiplierLevel > 0) { a.multiplierLevel = 0; dirtyAreas = true; } });
         }
 
-        function recalculateUnitEffectiveStats() {
-            let aliveUnits = units.filter(u => u && !u.dead);
-            if (aliveUnits.length === 0) return;
+        function getUnitEffectiveStatsRecalcTicks() {
+            return Math.max(1, Math.min(240, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1)));
+        }
 
-            for (let u of aliveUnits) {
+        function recalculateUnitEffectiveStats() {
+            let intervalTicks = getUnitEffectiveStatsRecalcTicks();
+            let dueUnits = [];
+
+            for (let u of units) {
+                if (!u || u.dead) continue;
+
+                if (!Number.isFinite(u._effectiveStatsRecalcCounter)) {
+                    let seed = ((u.id * 1103515245 + (u.owner + 1) * 12345) >>> 0);
+                    u._effectiveStatsRecalcCounter = intervalTicks > 1 ? (seed % intervalTicks) : 0;
+                } else if (u._effectiveStatsRecalcCounter > intervalTicks) {
+                    u._effectiveStatsRecalcCounter = intervalTicks;
+                }
+
+                let needsImmediate = !Number.isFinite(u.baseLevel)
+                    || !Number.isFinite(u.baseLevelVisionRange)
+                    || !Number.isFinite(u.baseLevelmaxEnergy)
+                    || !Number.isFinite(u.effectiveLevel)
+                    || !Number.isFinite(u.effectiveStacks);
+
+                if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
+                    dueUnits.push(u);
+                    u._effectiveStatsRecalcCounter = intervalTicks;
+                } else {
+                    u._effectiveStatsRecalcCounter--;
+                }
+            }
+
+            if (dueUnits.length <= 0) return;
+
+            let dueInfo = [];
+            for (let u of dueUnits) {
                 let baseStacks = getUnitStackCount(u);
                 let baseLevel = stackCountToLevel(baseStacks);
                 let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
@@ -11443,9 +11711,11 @@
 
                 u.effectiveStacks = baseStacks;
                 u.effectiveLevel = baseLevel;
+                dueInfo.push({ u, baseStacks });
             }
 
-            for (let u of aliveUnits) {
+            for (let info of dueInfo) {
+                let u = info.u;
                 let radiusPx = Math.max(0.5, Number(u.baseLevelVisionRange) || Number(u.visionRange) || 0.5) * TILE;
                 let similarCount = 0;
                 forEachUnitInRange(u.x, u.y, radiusPx, (other) => {
@@ -11454,13 +11724,13 @@
                 });
 
                 if (similarCount < 1) similarCount = 1;
-                let effStacks = Math.max(1, Math.floor(similarCount * getUnitStackCount(u)));
+                let effStacks = Math.max(1, Math.floor(similarCount * info.baseStacks));
                 u.effectiveStacks = effStacks;
                 u.effectiveLevel = stackCountToLevel(effStacks);
             }
 
-            for (let u of aliveUnits) {
-                applyUnitEffectiveScaling(u, getUnitEffectiveLevel(u));
+            for (let info of dueInfo) {
+                applyUnitEffectiveScaling(info.u, getUnitEffectiveLevel(info.u));
             }
         }
 
@@ -14750,6 +15020,7 @@
                 u.dead = true;
                 u.energy = 0;
             }
+            _clearWorkerTarget(u);
             removeUnitSpatial(u);
             selectedUnits = selectedUnits.filter(su => su !== u);
             let idx = units.indexOf(u);
@@ -14760,17 +15031,17 @@
         function configureWorkerUnitFromType(u) {
             if (!u) return;
             if (u.unitType === 'collector') {
-                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
             } else if (u.unitType === 'salvager_unit') {
-                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
             } else if (u.unitType === 'builder_unit') {
-                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.builderHasMaterial = false;
             } else if (u.unitType === 'healer_unit') {
-                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.healerHasMaterial = false;
             } else if (u.unitType === 'researcher_unit') {
-                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; _clearWorkerTarget(u);
                 u.researcherHasMaterial = false;
             }
         }
@@ -15074,7 +15345,7 @@
                                 // Manual assignment should always allow builders to work this target,
                                 // even if auto-build for new objects is currently disabled.
                                 target.buildEnabled = true;
-                                u.workerTarget = null; // clear old target
+                                _clearWorkerTarget(u); // clear old target
                                 _builderAssignTarget(u, target, myGx, myGy);
                             }
                         } else if (u.workerType === 'collector' && (a.targetType === 'mine' || a.targetType === 'farm')) {
@@ -15084,7 +15355,7 @@
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
                                 }
-                                u.workerTarget = null;
+                                _clearWorkerTarget(u);
                                 u._collectorPinnedTarget = gather.target;
                                 u._collectorPinnedTargetType = gather.type;
                                 _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
@@ -15097,8 +15368,7 @@
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
                                 }
-                                u.workerTarget = null;
-                                u.workerTargetType = null;
+                                _clearWorkerTarget(u);
                                 u._healerPinnedQueueTarget = qTarget;
                                 if (_isHealerQueueTarget(qTarget, playerId)) _setHealerQueueCommit(u, qTarget);
                                 else _clearHealerQueueCommit(u);
@@ -19540,7 +19810,9 @@
                 u.targetUnit = null;
                 u.targetBuilding = null;
                 u.attackTarget = null;
-                u.workerTarget = null;
+                let snapshotWorkerTargetType = u.workerTargetType;
+                _clearWorkerTarget(u);
+                u.workerTargetType = snapshotWorkerTargetType;
                 u._collectorPinnedTarget = null;
                 u._collectorNextSpawner = null;
                 u._collectorLastDropoffSpawner = null;
@@ -19566,7 +19838,7 @@
                 u.targetUnit = resolveSnapshotEntityRef(refs.targetUnit, snapshotResolveContext);
                 u.targetBuilding = resolveSnapshotEntityRef(refs.targetBuilding, snapshotResolveContext);
                 u.attackTarget = resolveSnapshotEntityRef(refs.attackTarget, snapshotResolveContext);
-                u.workerTarget = resolveSnapshotEntityRef(refs.workerTarget, snapshotResolveContext);
+                _setWorkerTarget(u, resolveSnapshotEntityRef(refs.workerTarget, snapshotResolveContext), refs.workerTargetType !== undefined ? refs.workerTargetType : (u.workerTargetType !== undefined ? u.workerTargetType : null));
                 u._collectorPinnedTarget = resolveSnapshotEntityRef(refs._collectorPinnedTarget, snapshotResolveContext);
                 u._collectorNextSpawner = resolveSnapshotEntityRef(refs._collectorNextSpawner, snapshotResolveContext);
                 u._collectorLastDropoffSpawner = resolveSnapshotEntityRef(refs._collectorLastDropoffSpawner, snapshotResolveContext);
@@ -19698,6 +19970,7 @@
                 CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
                 STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
                 MAP_TYPE = data.cfg.mapType || 'random';
+                UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(data.cfg.unitEffectiveStatsRecalcTicks) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
                 applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
 
                 RESEARCH_COST_EXP = Math.max(1, Number(data.cfg.researchCostExp) || 1.85);
@@ -20530,6 +20803,9 @@
             pathTopologyVersion = 1;
             sharedPathCache.clear();
             sharedSpawnerRouteCache.clear();
+            _invalidateWorkerTargetLoadCache();
+            _workerTargetLoadCacheTick = -1;
+            _workerTargetLoadCacheUnitCount = -1;
             resetEnergyDeltaTracking();
 
             initSpatialHash();
@@ -20649,6 +20925,7 @@
                 mapType: MAP_TYPE,
                 tickRate: TICK_RATE,
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+                unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
                 researchCostExp: RESEARCH_COST_EXP,
                 researchWorkExp: RESEARCH_WORK_EXP,
                 researchWorkBase: RESEARCH_WORK_BASE,
@@ -20740,6 +21017,7 @@
             CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
             STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-energy').value) || 2000));
             MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
+            UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));
 
             let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
@@ -20878,6 +21156,7 @@
             let teamCollectorSpawners = {};
             let teamResearchSpawners = {};
             let teamSpawnPos = {};
+            let teamStarterSpawnState = {};
 
             startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
 
@@ -20902,15 +21181,15 @@
             let applyWorkerDefaults = (u) => {
                 if (!u) return;
                 if (u.unitType === 'collector') {
-                    u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null;
+                    u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
                 } else if (u.unitType === 'salvager_unit') {
-                    u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; u.workerTarget = null;
+                    u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
                 } else if (u.unitType === 'builder_unit') {
-                    u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; u.workerTarget = null; u.builderHasMaterial = false;
+                    u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; _clearWorkerTarget(u); u.builderHasMaterial = false;
                 } else if (u.unitType === 'healer_unit') {
-                    u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; u.workerTarget = null; u.workerTargetType = null; u.healerHasMaterial = false;
+                    u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; _clearWorkerTarget(u); u.healerHasMaterial = false;
                 } else if (u.unitType === 'researcher_unit') {
-                    u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; u.workerTarget = null; u.researcherHasMaterial = false;
+                    u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; _clearWorkerTarget(u); u.researcherHasMaterial = false;
                 }
             };
 
@@ -20974,11 +21253,78 @@
                 return placed;
             };
 
+            let buildStarterUnitSpawnTilesBfs = (origin, maxRadius = 24) => {
+                let out = [];
+                let q = [];
+                let seen = new Set();
+                let startGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.gx)));
+                let startGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.gy)));
+                q.push({ gx: startGx, gy: startGy });
+                seen.add(startGy * GRID_W + startGx);
+
+                while (q.length > 0) {
+                    let cur = q.shift();
+                    let gx = cur.gx, gy = cur.gy;
+                    let md = Math.abs(gx - startGx) + Math.abs(gy - startGy);
+                    if (md > maxRadius) continue;
+
+                    let cell = (grid[gy] && grid[gy][gx]) ? grid[gy][gx] : null;
+                    let isFloorTile = !!cell && cell.type !== TYPE_WALL;
+                    let isFreeTile = isFloorTile && !cell.item && !getGoldMineAt(gx, gy);
+                    if (isFreeTile) out.push({ gx, gy });
+
+                    if (!isFloorTile) continue;
+                    let n0 = gx + 1, n1 = gx - 1, n2 = gy + 1, n3 = gy - 1;
+                    if (n0 < GRID_W) {
+                        let k = gy * GRID_W + n0;
+                        if (!seen.has(k)) { seen.add(k); q.push({ gx: n0, gy }); }
+                    }
+                    if (n1 >= 0) {
+                        let k = gy * GRID_W + n1;
+                        if (!seen.has(k)) { seen.add(k); q.push({ gx: n1, gy }); }
+                    }
+                    if (n2 < GRID_H) {
+                        let k = n2 * GRID_W + gx;
+                        if (!seen.has(k)) { seen.add(k); q.push({ gx, gy: n2 }); }
+                    }
+                    if (n3 >= 0) {
+                        let k = n3 * GRID_W + gx;
+                        if (!seen.has(k)) { seen.add(k); q.push({ gx, gy: n3 }); }
+                    }
+                }
+
+                if (out.length <= 0) {
+                    let fallback = findNearestWalkable(startGx, startGy, startGx, startGy);
+                    out.push({ gx: fallback.x, gy: fallback.y });
+                }
+                return out;
+            };
+
+            let getNextStarterUnitSpawnTile = (pid, origin) => {
+                let state = teamStarterSpawnState[pid];
+                if (!state) {
+                    state = {
+                        tiles: buildStarterUnitSpawnTilesBfs(origin),
+                        cursor: 0
+                    };
+                    teamStarterSpawnState[pid] = state;
+                }
+                if (!state.tiles || state.tiles.length <= 0) {
+                    let fallback = findNearestWalkable(origin.gx, origin.gy, origin.gx, origin.gy);
+                    return { gx: fallback.x, gy: fallback.y };
+                }
+                let idx = state.cursor % state.tiles.length;
+                let tile = state.tiles[idx];
+                state.cursor = (idx + 1) % state.tiles.length;
+                return tile;
+            };
+
             let spawnStartingUnit = (pid, origin, unitType, level) => {
-                let sp = findNearestWalkable(origin.gx, origin.gy);
-                let u = new Unit(unitType, pid, sp.x * TILE + 16, sp.y * TILE + 16);
+                let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
+                let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16, spawnTile.gy * TILE + 16);
                 applyWorkerDefaults(u);
                 applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
+                u.energy = u.maxEnergy;
                 units.push(u);
                 players[pid].popCount++;
                 return u;
