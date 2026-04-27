@@ -1806,6 +1806,7 @@
                 let t = towers[i];
                 if (t.owner !== pid) continue;
                 towers.splice(i, 1);
+                clearTileEntity(t.gx, t.gy, t);
                 if (grid[t.gy] && grid[t.gy][t.gx]) {
                     grid[t.gy][t.gx].type = TYPE_FLOOR;
                     grid[t.gy][t.gx].owner = -1;
@@ -1815,6 +1816,7 @@
                 let b = barracks[i];
                 if (b.owner !== pid) continue;
                 barracks.splice(i, 1);
+                clearTileEntity(b.gx, b.gy, b);
                 if (grid[b.gy] && grid[b.gy][b.gx]) {
                     grid[b.gy][b.gx].item = null;
                     grid[b.gy][b.gx].owner = -1;
@@ -1824,6 +1826,7 @@
                 let s = collectorSpawners[i];
                 if (s.owner !== pid) continue;
                 collectorSpawners.splice(i, 1);
+                clearTileEntity(s.gx, s.gy, s);
                 if (grid[s.gy] && grid[s.gy][s.gx]) {
                     grid[s.gy][s.gx].item = null;
                     grid[s.gy][s.gx].owner = -1;
@@ -1833,6 +1836,7 @@
                 for (let x = 0; x < GRID_W; x++) {
                     let cell = grid[y][x];
                     if (cell.item && cell.owner === pid) {
+                        clearTileEntity(x, y, cell.item);
                         cell.item = null;
                         cell.owner = -1;
                     }
@@ -1908,18 +1912,20 @@
                 return units.find(u => u.id === spec.id && !u.dead && u.owner !== tower.owner) || null;
             }
             if (spec.type === 'tower') {
-                return towers.find(t => t.gx === spec.gx && t.gy === spec.gy && t.energy > 0 && t.owner !== tower.owner) || null;
+                let t = getTowerAtTile(spec.gx, spec.gy);
+                return (t && t.energy > 0 && t.owner !== tower.owner) ? t : null;
             }
             if (spec.type === 'barrack') {
-                return barracks.find(b => b.gx === spec.gx && b.gy === spec.gy && b.energy > 0 && b.owner !== tower.owner) || null;
+                let b = getBarrackAtTile(spec.gx, spec.gy);
+                return (b && b.energy > 0 && b.owner !== tower.owner) ? b : null;
             }
             if (spec.type === 'spawner') {
-                return collectorSpawners.find(s => s.gx === spec.gx && s.gy === spec.gy && s.energy > 0 && s.owner !== tower.owner) || null;
+                let s = getSpawnerAtTile(spec.gx, spec.gy);
+                return (s && s.energy > 0 && s.owner !== tower.owner) ? s : null;
             }
             if (spec.type === 'item') {
-                if (grid[spec.gy] && grid[spec.gy][spec.gx] && grid[spec.gy][spec.gx].item && grid[spec.gy][spec.gx].item.energy > 0 && grid[spec.gy][spec.gx].owner !== tower.owner) {
-                    return grid[spec.gy][spec.gx].item;
-                }
+                let item = getFloorItemAtTile(spec.gx, spec.gy);
+                if (item && item.energy > 0 && item.owner !== tower.owner) return item;
             }
             return null;
         }
@@ -1957,21 +1963,23 @@
                 return u ? { x: u.x, y: u.y, locked: true } : null;
             }
             if (spec.type === 'tower') {
-                let t = towers.find(x => x.gx === spec.gx && x.gy === spec.gy && x.energy > 0);
+                let t = getTowerAtTile(spec.gx, spec.gy);
+                if (!(t && t.energy > 0)) t = null;
                 return t ? { x: t.x, y: t.y, locked: true } : { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16, locked: false };
             }
             if (spec.type === 'barrack') {
-                let b = barracks.find(x => x.gx === spec.gx && x.gy === spec.gy && x.energy > 0);
+                let b = getBarrackAtTile(spec.gx, spec.gy);
+                if (!(b && b.energy > 0)) b = null;
                 return b ? { x: b.x, y: b.y, locked: true } : { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16, locked: false };
             }
             if (spec.type === 'spawner') {
-                let s = collectorSpawners.find(x => x.gx === spec.gx && x.gy === spec.gy && x.energy > 0);
+                let s = getSpawnerAtTile(spec.gx, spec.gy);
+                if (!(s && s.energy > 0)) s = null;
                 return s ? { x: s.x, y: s.y, locked: true } : { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16, locked: false };
             }
             if (spec.type === 'item') {
-                let item = (grid[spec.gy] && grid[spec.gy][spec.gx] && grid[spec.gy][spec.gx].item && grid[spec.gy][spec.gx].item.energy > 0)
-                    ? grid[spec.gy][spec.gx].item
-                    : null;
+                let item = getFloorItemAtTile(spec.gx, spec.gy);
+                if (!(item && item.energy > 0)) item = null;
                 return item ? { x: item.x, y: item.y, locked: true } : { x: spec.gx * TILE + 16, y: spec.gy * TILE + 16, locked: false };
             }
             return null;
@@ -4743,10 +4751,6 @@
         // GLOBAL STATE
         // ============================================================
     let canvas, ctx, bgCanvas, bgCtx, minimapCanvas, minimapCtx;
-    let renderCanvas = null, renderCtx = null;
-    let webglRenderMode = false;
-    let gl = null, glFrameProgram = null, glFrameBuffer = null, glFrameTexture = null;
-    let glFramePosLoc = -1, glFrameUvLoc = -1, glFrameSamplerLoc = null;
         let dirtyGrid = true, dirtyAreas = true;
         let visibilityGrid = [];
     let visibilityVersion = 0;
@@ -4757,6 +4761,80 @@
         let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
         let areas = [];
         let goldMines = []; // {gx, gy, gold, maxGold}
+
+        const TILE_ENTITY_NONE = '';
+        const TILE_ENTITY_GOLDMINE = 'goldmine';
+        let tileEntityType = []; // 2D lookup [y][x] -> string type
+        let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
+
+        function initTileEntityLookup() {
+            tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
+            tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
+        }
+
+        function setTileEntity(gx, gy, type, ref) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
+            if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
+            tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
+            tileEntityRef[gy][gx] = ref || null;
+        }
+
+        function clearTileEntity(gx, gy, expectedRef = null) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
+            if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
+            if (expectedRef && tileEntityRef[gy][gx] !== expectedRef) return;
+            tileEntityType[gy][gx] = TILE_ENTITY_NONE;
+            tileEntityRef[gy][gx] = null;
+        }
+
+        function getTileEntityType(gx, gy) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return TILE_ENTITY_NONE;
+            if (!tileEntityType[gy]) return TILE_ENTITY_NONE;
+            return tileEntityType[gy][gx] || TILE_ENTITY_NONE;
+        }
+
+        function getTileEntityRef(gx, gy) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
+            if (!tileEntityRef[gy]) return null;
+            return tileEntityRef[gy][gx] || null;
+        }
+
+        function getGoldMineAt(gx, gy) {
+            if (getTileEntityType(gx, gy) !== TILE_ENTITY_GOLDMINE) return null;
+            return getTileEntityRef(gx, gy);
+        }
+
+        function isSpawnerEntity(ref) {
+            return !!ref && ((ref instanceof CollectorSpawner) || (ref instanceof SalvagerSpawner) || (ref instanceof BuilderSpawner) || (ref instanceof HealerSpawner));
+        }
+
+        function getTowerAtTile(gx, gy) {
+            let ref = getTileEntityRef(gx, gy);
+            return (ref instanceof Tower) ? ref : null;
+        }
+
+        function getBarrackAtTile(gx, gy) {
+            let ref = getTileEntityRef(gx, gy);
+            return (ref instanceof Barrack) ? ref : null;
+        }
+
+        function getSpawnerAtTile(gx, gy) {
+            let ref = getTileEntityRef(gx, gy);
+            return isSpawnerEntity(ref) ? ref : null;
+        }
+
+        function getFloorItemAtTile(gx, gy) {
+            if (getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE) return null;
+            let ref = getTileEntityRef(gx, gy);
+            if (!ref) return null;
+            if ((ref instanceof Tower) || (ref instanceof Barrack) || isSpawnerEntity(ref)) return null;
+            return ref;
+        }
+
+        function hasActiveGoldMineAt(gx, gy) {
+            let mine = getGoldMineAt(gx, gy);
+            return !!(mine && Number.isFinite(mine.gold) && mine.gold > 0);
+        }
 
         let rng = null; // shared PRNG
         let gameSeed = 0;
@@ -5750,32 +5828,44 @@
             push(item) { this.data.push(item); this._bubbleUp(this.data.length - 1); }
             pop() {
                 let top = this.data[0];
-                let last = this.data.pop();
-                if (this.data.length > 0) { this.data[0] = last; this._sinkDown(0); }
+                let len = this.data.length - 1;
+                if (len > 0) { 
+                    let last = this.data[len];
+                    this.data[0] = last; 
+                    this._sinkDown(0, len, last.f);
+                }
+                this.data.pop();
                 return top;
             }
             get length() { return this.data.length; }
             _bubbleUp(i) {
+                let item = this.data[i];
+                let f = item.f;
                 while (i > 0) {
                     let p = (i - 1) >> 1;
-                    if (this.data[i].f < this.data[p].f) { [this.data[i], this.data[p]] = [this.data[p], this.data[i]]; i = p; }
+                    let pf = this.data[p].f;
+                    if (f < pf) { this.data[i] = this.data[p]; i = p; }
                     else break;
                 }
+                this.data[i] = item;
             }
-            _sinkDown(i) {
-                let n = this.data.length;
+            _sinkDown(i, n, itemF) {
+                let data = this.data;
                 while (true) {
-                    let l = 2 * i + 1, r = 2 * i + 2, smallest = i;
-                    if (l < n && this.data[l].f < this.data[smallest].f) smallest = l;
-                    if (r < n && this.data[r].f < this.data[smallest].f) smallest = r;
-                    if (smallest !== i) { [this.data[i], this.data[smallest]] = [this.data[smallest], this.data[i]]; i = smallest; }
+                    let l = (i << 1) + 1, r = l + 1, smallest = i;
+                    let smallestF = itemF;
+                    if (l < n && data[l].f < smallestF) { smallest = l; smallestF = data[l].f; }
+                    if (r < n && data[r].f < smallestF) smallest = r;
+                    if (smallest !== i) { data[i] = data[smallest]; i = smallest; }
                     else break;
                 }
+                data[i] = data[n];
             }
         }
 
         function getCloudTowerAt(gx, gy, owner = null) {
-            let t = towers.find(t => t.gx === gx && t.gy === gy && t.energy > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud);
+            let t = getTowerAtTile(gx, gy);
+            if (!(t && t.energy > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud)) t = null;
             if (!t) return null;
             if (owner !== null && t.owner !== owner) return null;
             return t;
@@ -5807,7 +5897,7 @@
 
             // Collectors can stand on active gold mines.
             if (unit.workerType === 'collector') {
-                if (goldMines.some(m => m.gx === gx && m.gy === gy && m.gold > 0)) return true;
+                if (hasActiveGoldMineAt(gx, gy)) return true;
             }
 
             // Builders can stand on active build/upgrade targets.
@@ -5818,11 +5908,7 @@
             // Salvagers can stand on owned marked-for-salvage targets.
             if (unit.workerType === 'salvager') {
                 let isOwnedMarkedTarget = (obj) => !!obj && obj.owner === unit.owner && !!obj.markedForSalvage && (!(obj.energy !== undefined) || obj.energy > 0);
-                if (isOwnedMarkedTarget(towers.find(t => t.gx === gx && t.gy === gy))) return true;
-                if (isOwnedMarkedTarget(barracks.find(b => b.gx === gx && b.gy === gy))) return true;
-                if (isOwnedMarkedTarget(collectorSpawners.find(s => s.gx === gx && s.gy === gy))) return true;
-                let cell = grid[gy][gx];
-                if (cell && isOwnedMarkedTarget(cell.item)) return true;
+                if (isOwnedMarkedTarget(getTileEntityRef(gx, gy))) return true;
             }
 
             return false;
@@ -5845,13 +5931,12 @@
                 if (usePortalEdges) return 0;
                 return Math.abs(ex - x) + Math.abs(ey - y);
             };
-            let isWalkable = (nx, ny) => {
-                if (ignoreWalls) return true;
-                if (grid[ny][nx].type !== TYPE_WALL) return true;
-                if (pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) return true;
-                if (canWalk && canWalk(nx, ny)) return true;
-                return false;
-            };
+            
+            // Cache grid reference for faster access
+            let gridData = grid;
+            let gridW = GRID_W;
+            let gridH = GRID_H;
+            
             if (movementProfile) {
                 let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                 let cached = sharedPathCache.get(cacheKey);
@@ -5860,13 +5945,13 @@
                 }
                 if (cached) sharedPathCache.delete(cacheKey);
             }
-            if (!ignoreWalls && sx >= 0 && sx < GRID_W && sy >= 0 && sy < GRID_H) {
-                if (grid[ey] && grid[ey][ex] && !isWalkable(ex, ey)) {
+            if (!ignoreWalls && sx >= 0 && sx < gridW && sy >= 0 && sy < gridH) {
+                if (gridData[ey] && gridData[ey][ex] && !(ignoreWalls || gridData[ey][ex].type !== TYPE_WALL || (pathOwner !== null && getCloudTowerAt(ex, ey, pathOwner)) || (canWalk && canWalk(ex, ey)))) {
                     // Find nearest walkable neighbor of target
                     let best = null, bestD = 9999;
                     for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
                         let nx = ex + dx, ny = ey + dy;
-                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H && isWalkable(nx, ny)) {
+                        if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH && (ignoreWalls || gridData[ny][nx].type !== TYPE_WALL || (pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) || (canWalk && canWalk(nx, ny)))) {
                             let d = Math.abs(nx - sx) + Math.abs(ny - sy);
                             if (d < bestD) { bestD = d; best = { x: nx, y: ny }; }
                         }
@@ -5879,15 +5964,15 @@
             let open = new MinHeap();
             let gScore = new Map();
             let cameFrom = new Map();
-            let startKey = sy * GRID_W + sx;
-            let endKey = ey * GRID_W + ex;
+            let startKey = sy * gridW + sx;
+            let endKey = ey * gridW + ex;
             gScore.set(startKey, 0);
             open.push({ x: sx, y: sy, f: estimateCost(sx, sy), g: 0 });
             let visited = new Set();
 
             while (open.length > 0) {
                 let cur = open.pop();
-                let curKey = cur.y * GRID_W + cur.x;
+                let curKey = cur.y * gridW + cur.x;
                 if (visited.has(curKey)) continue;
                 visited.add(curKey);
 
@@ -5896,7 +5981,7 @@
                     let path = [];
                     let k = endKey;
                     while (k !== undefined) {
-                        path.push({ x: k % GRID_W, y: Math.floor(k / GRID_W) });
+                        path.push({ x: k % gridW, y: Math.floor(k / gridW) });
                         k = cameFrom.get(k);
                     }
                     path.reverse();
@@ -5909,15 +5994,21 @@
                 }
 
                 let neighbors = [];
+                // Inline isWalkable checks to avoid function call overhead
+                let cx = cur.x, cy = cur.y;
                 for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                    let nx = cur.x + dx, ny = cur.y + dy;
-                    if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-                    if (!isWalkable(nx, ny)) continue;
+                    let nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+                    // Fast path: check wall first (cheapest)
+                    if (!ignoreWalls && gridData[ny][nx].type === TYPE_WALL) {
+                        // Check cloud towers and custom walkability
+                        if (!(pathOwner !== null && getCloudTowerAt(nx, ny, pathOwner)) && !(canWalk && canWalk(nx, ny))) continue;
+                    }
                     neighbors.push({ x: nx, y: ny, cost: 1 });
                 }
 
                 if (usePortalEdges) {
-                    let cloud = getCloudTowerAt(cur.x, cur.y, pathOwner);
+                    let cloud = getCloudTowerAt(cx, cy, pathOwner);
                     if (cloud) {
                         let partner = getPairedCloudTower(cloud, pathOwner);
                         if (partner) neighbors.push({ x: partner.gx, y: partner.gy, cost: 1 });
@@ -5925,7 +6016,7 @@
                 }
 
                 for (let n of neighbors) {
-                    let nKey = n.y * GRID_W + n.x;
+                    let nKey = n.y * gridW + n.x;
                     if (visited.has(nKey)) continue;
                     let ng = cur.g + n.cost;
                     let prev = gScore.get(nKey);
@@ -6055,6 +6146,10 @@
 
         function generateGoldMines() {
             let spawnTiles = arguments.length > 0 && arguments[0] ? arguments[0] : [];
+            for (let m of goldMines) {
+                if (!m) continue;
+                clearTileEntity(Math.floor(Number(m.gx)), Math.floor(Number(m.gy)), m);
+            }
             goldMines = [];
             let totalMines = Math.max(0, Math.floor(GOLD_MINE_COUNT || 0));
             let margin = 1;
@@ -6081,7 +6176,9 @@
                 if (MAP_TYPE !== 'arena' && nearAnySpawn(gx, gy)) return false;
                 placed.add(`${gx},${gy}`);
                 let gold = GOLD_MINE_MIN + Math.floor(rng() * goldRange);
-                goldMines.push({ gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
+                let mine = { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 };
+                goldMines.push(mine);
+                setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, mine);
                 grid[gy][gx].type = TYPE_WALL;
                 return true;
             };
@@ -7832,6 +7929,7 @@
 
                             createExplosion(this.x, this.y, "#f80", 15);
                             playSound('mine_explode', this.x, this.y);
+                            clearTileEntity(cell.item.gx, cell.item.gy, cell.item);
                             cell.item = null;
                             if (this.energy <= 0) this.dead = true;
                             return;
@@ -8647,12 +8745,15 @@
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
                     ctx.fillStyle = '#ddd';
-                    ctx.strokeStyle = '#000';
-                    ctx.lineWidth = 1.5;
+                    // Use shadow instead of strokeText (faster)
+                    ctx.shadowColor = '#000';
+                    ctx.shadowBlur = 1;
+                    ctx.shadowOffsetX = 0;
+                    ctx.shadowOffsetY = 0;
                     let txt = getUnitLevelLabelText(this);
                     let ty = this.y - this.r - 7;
-                    ctx.strokeText(txt, this.x, ty);
                     ctx.fillText(txt, this.x, ty);
+                    ctx.shadowColor = 'transparent';
                     ctx.restore();
                 }
 
@@ -10097,7 +10198,8 @@
         function _getCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
             if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
             if (preferredType === 'mine' || preferredType === null) {
-                let mine = goldMines.find(m => m.gx === gx && m.gy === gy && m.gold > 0);
+                let mine = getGoldMineAt(gx, gy);
+                if (mine && mine.gold <= 0) mine = null;
                 if (mine) return { target: mine, type: 'mine' };
             }
             if (preferredType === 'farm' || preferredType === null) {
@@ -10115,15 +10217,24 @@
         function _getCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) {
             let best = null;
             let bestDist = radius;
-            for (let m of goldMines) {
-                if (m.gold <= 0) continue;
-                let d = Math.hypot(m.x - worldX, m.y - worldY);
-                if (d <= bestDist) {
-                    bestDist = d;
-                    best = { target: m, type: 'mine' };
+
+            // Mine lookup is tile-indexed, so check only nearby tiles instead of scanning all mines.
+            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+            let mineTileRadius = Math.max(1, Math.ceil(radius / TILE));
+            let mineMinGx = Math.max(0, gx - mineTileRadius), mineMaxGx = Math.min(GRID_W - 1, gx + mineTileRadius);
+            let mineMinGy = Math.max(0, gy - mineTileRadius), mineMaxGy = Math.min(GRID_H - 1, gy + mineTileRadius);
+            for (let y = mineMinGy; y <= mineMaxGy; y++) {
+                for (let x = mineMinGx; x <= mineMaxGx; x++) {
+                    let m = getGoldMineAt(x, y);
+                    if (!m || m.gold <= 0) continue;
+                    let d = Math.hypot(m.x - worldX, m.y - worldY);
+                    if (d <= bestDist) {
+                        bestDist = d;
+                        best = { target: m, type: 'mine' };
+                    }
                 }
             }
-            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+
             let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
             let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
             for (let y = minGy; y <= maxGy; y++) {
@@ -10170,6 +10281,7 @@
                 candidates.push({ target, type, originDist, spawnerDist });
             };
 
+            // Check tileEntity arrays first (indexed, fast)
             for (let drop of droppedItems) {
                 pushCandidate(drop, 'drop');
             }
@@ -10177,8 +10289,17 @@
                 if (mine.gold <= 0) continue;
                 pushCandidate(mine, 'mine');
             }
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
+
+            // Spiral search for farms from collector position (bounded, not full grid)
+            let originGx = Math.floor(origin.x / TILE);
+            let originGy = Math.floor(origin.y / TILE);
+            let searchRadius = Math.min(Math.max(GRID_W, GRID_H), Math.max(6, Math.floor(Math.min(GRID_W, GRID_H) * 0.4)));
+            let minGx = Math.max(0, originGx - searchRadius);
+            let maxGx = Math.min(GRID_W - 1, originGx + searchRadius);
+            let minGy = Math.max(0, originGy - searchRadius);
+            let maxGy = Math.min(GRID_H - 1, originGy + searchRadius);
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
                     let cell = grid[y][x];
                     let item = cell && cell.item;
                     if (!item || item.type !== 'farm') continue;
@@ -10220,7 +10341,7 @@
         }
 
         function _collectorCanWalk(nx, ny) {
-            return goldMines.some(m => m.gx === nx && m.gy === ny && m.gold > 0);
+            return hasActiveGoldMineAt(nx, ny);
         }
 
         function _hasUnderConstructionOrUpgradingAt(nx, ny) {
@@ -10431,14 +10552,8 @@
 
         function _getBuilderWorkTargetAt(gx, gy, owner, allowDisabledBuild = false) {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
-            let target = towers.find(t => t.gx === gx && t.gy === gy && _isBuilderWorkTarget(t, owner, allowDisabledBuild));
-            if (target) return target;
-            target = barracks.find(b => b.gx === gx && b.gy === gy && _isBuilderWorkTarget(b, owner, allowDisabledBuild));
-            if (target) return target;
-            target = collectorSpawners.find(s => s.gx === gx && s.gy === gy && _isBuilderWorkTarget(s, owner, allowDisabledBuild));
-            if (target) return target;
-            let cell = grid[gy][gx];
-            if (cell && cell.item && _isBuilderWorkTarget(cell.item, owner, allowDisabledBuild)) return cell.item;
+            let target = getTileEntityRef(gx, gy);
+            if (target && _isBuilderWorkTarget(target, owner, allowDisabledBuild)) return target;
             return null;
         }
 
@@ -11000,14 +11115,14 @@
                 for (let x = 0; x < GRID_W; x++) {
                     let cell = grid[y][x], type = null, isTower = false, ownerCheck = -1;
                     if (cell.type === TYPE_WALL) {
-                        let t = towers.find(t => t.gx === x && t.gy === y);
+                        let t = getTowerAtTile(x, y);
                         if (t && isOperationalEntity(t)) { type = t.type; isTower = true; ownerCheck = t.owner; }
                     } else if (cell.item && isOperationalEntity(cell.item)) { type = cell.item.type; ownerCheck = cell.owner; }
                     if (!type || visited.has(gid(x, y))) continue;
 
                     let group = [], queue = [{ x, y }], rootObj = null;
                     visited.add(gid(x, y));
-                    if (isTower) { let t = towers.find(t => t.gx === x && t.gy === y); if (t && isOperationalEntity(t)) { group.push(t); rootObj = t; } }
+                    if (isTower) { let t = getTowerAtTile(x, y); if (t && isOperationalEntity(t)) { group.push(t); rootObj = t; } }
                     else if (isOperationalEntity(cell.item)) { group.push(cell.item); rootObj = cell.item; }
                     if (!rootObj) continue;
                     let touchedAreas = new Set([cell.areaId]);
@@ -11020,7 +11135,7 @@
                         let tc = grid[ty][tx], tObj = null, tType = null;
                         if (isTower) {
                             if (tc.type !== TYPE_WALL) return;
-                            let tt = towers.find(t => t.gx === tx && t.gy === ty);
+                            let tt = getTowerAtTile(tx, ty);
                             if (!tt || tt.owner !== ownerCheck || !isOperationalEntity(tt)) return;
                             tObj = tt; tType = tt.type;
                         } else {
@@ -11044,7 +11159,7 @@
                             if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
                             let key = gid(nx, ny), nc = grid[ny][nx], nType = null, nObj = null;
                             if (isTower) {
-                                if (nc.type === TYPE_WALL) { let nt = towers.find(t => t.gx === nx && t.gy === ny); if (nt && nt.owner === ownerCheck && isOperationalEntity(nt)) { nType = nt.type; nObj = nt; } }
+                                if (nc.type === TYPE_WALL) { let nt = getTowerAtTile(nx, ny); if (nt && nt.owner === ownerCheck && isOperationalEntity(nt)) { nType = nt.type; nObj = nt; } }
                             } else { if (nc.item && nc.owner === ownerCheck && isOperationalEntity(nc.item)) { nType = nc.item.type; nObj = nc.item; } }
 
                             if (nObj && rootObj) {
@@ -11058,7 +11173,7 @@
                             // Cloud bridge: if this frontier touches a cloud endpoint, link matching groups across both endpoints.
                             let cloud = null;
                             if (nc.type === TYPE_WALL) {
-                                let nt = towers.find(t => t.gx === nx && t.gy === ny);
+                                let nt = getTowerAtTile(nx, ny);
                                 if (nt && nt.owner === ownerCheck && isOperationalEntity(nt) && nt.baseStats && nt.baseStats.isCloud) cloud = nt;
                             }
                             if (cloud) {
@@ -11083,7 +11198,7 @@
                         let filled = true;
                         for (let cp of area.cells) {
                             let c = grid[cp.y][cp.x], occ = false;
-                            if (isTower) { if (c.type === TYPE_WALL) { let t = towers.find(t => t.gx === cp.x && t.gy === cp.y); if (t && isOperationalEntity(t) && t.type === type && t.owner === ownerCheck) occ = true; } }
+                            if (isTower) { if (c.type === TYPE_WALL) { let t = getTowerAtTile(cp.x, cp.y); if (t && isOperationalEntity(t) && t.type === type && t.owner === ownerCheck) occ = true; } }
                             else { if (c.item && isOperationalEntity(c.item) && c.item.type === type && c.owner === ownerCheck) { if (type !== 'barrack' || c.item.unitType === rootObj.unitType) occ = true; } }
                             if (!occ) { filled = false; break; }
                         }
@@ -11207,7 +11322,7 @@
             if (grid[gy][gx].type === TYPE_WALL) return false;
             if (grid[gy][gx].item) return false;
             // Don't allow building on gold mines
-            for (let m of goldMines) { if (m.gx === gx && m.gy === gy) return false; }
+            if (getGoldMineAt(gx, gy)) return false;
             // Check within 5 tiles of any fully-built owned building
             /*
             // distance thing disabled for now.
@@ -11229,14 +11344,17 @@
             let cardDef = BASE_CARD_TYPES[itemKey];
             if (!cardDef) return false;
             if (cardDef.target === 'wall') {
-                return !!towers.find(t => t.gx === gx && t.gy === gy && t.type === itemKey && t.owner === playerId);
+                let t = getTowerAtTile(gx, gy);
+                return !!(t && t.type === itemKey && t.owner === playerId);
             }
             if (itemKey.startsWith('barrack_')) {
                 let unitType = cardDef.unitType || 'norm';
-                return !!barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
+                let b = getBarrackAtTile(gx, gy);
+                return !!(b && b.unitType === unitType && b.owner === playerId);
             }
             if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
-                return !!collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === itemKey && s.owner === playerId);
+                let s = getSpawnerAtTile(gx, gy);
+                return !!(s && s.type === itemKey && s.owner === playerId);
             }
             // Floor items
             let cell = grid[gy][gx];
@@ -11280,13 +11398,13 @@
                 let allFilled = area.cells.every(cp => {
                     let c = grid[cp.y][cp.x];
                     if (c.type === TYPE_WALL) {
-                        let t = towers.find(t => t.gx === cp.x && t.gy === cp.y);
+                        let t = getTowerAtTile(cp.x, cp.y);
                         if (t && !t.underConstruction && getDisplayLevel(t) > 0) return true;
                     }
                     if (c.item && !c.item.underConstruction && getDisplayLevel(c.item) > 0) return true;
-                    let b = barracks.find(b => b.gx === cp.x && b.gy === cp.y);
+                    let b = getBarrackAtTile(cp.x, cp.y);
                     if (b && !b.underConstruction && getDisplayLevel(b) > 0) return true;
-                    let s = collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y);
+                    let s = getSpawnerAtTile(cp.x, cp.y);
                     if (s && !s.underConstruction && getDisplayLevel(s) > 0) return true;
                     return false;
                 });
@@ -11303,7 +11421,8 @@
 
             if (cardDef.target === 'wall') {
                 // Tower - check if same type exists for stacking
-                let existing = towers.find(t => t.gx === gx && t.gy === gy && t.type === itemKey && t.owner === playerId);
+                let existing = getTowerAtTile(gx, gy);
+                if (!(existing && existing.type === itemKey && existing.owner === playerId)) existing = null;
                 if (existing) { existing.upgrade(); }
                 else {
                     grid[gy][gx].type = TYPE_WALL;
@@ -11315,13 +11434,15 @@
                     t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
                     t.updateTextCache();
                     towers.push(t);
+                    setTileEntity(gx, gy, itemKey, t);
                     placedNewStructure = true;
                     placedNewWallStructure = true;
                 }
                 dirtyGrid = true;
             } else if (itemKey.startsWith('barrack_')) {
                 let unitType = cardDef.unitType || 'norm';
-                let existing = barracks.find(b => b.gx === gx && b.gy === gy && b.unitType === unitType && b.owner === playerId);
+                let existing = getBarrackAtTile(gx, gy);
+                if (!(existing && existing.unitType === unitType && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11335,10 +11456,12 @@
                     barracks.push(b);
                     grid[gy][gx].item = b;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, b);
                     placedNewStructure = true;
                 }
             } else if (itemKey === 'spawner') {
-                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'spawner' && s.owner === playerId);
+                let existing = getSpawnerAtTile(gx, gy);
+                if (!(existing && existing.type === 'spawner' && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11352,10 +11475,12 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, s);
                     placedNewStructure = true;
                 }
             } else if (itemKey === 'salvager') {
-                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'salvager' && s.owner === playerId);
+                let existing = getSpawnerAtTile(gx, gy);
+                if (!(existing && existing.type === 'salvager' && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11369,10 +11494,12 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, s);
                     placedNewStructure = true;
                 }
             } else if (itemKey === 'builder_spawner') {
-                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'builder_spawner' && s.owner === playerId);
+                let existing = getSpawnerAtTile(gx, gy);
+                if (!(existing && existing.type === 'builder_spawner' && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11387,10 +11514,12 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, s);
                     placedNewStructure = true;
                 }
             } else if (itemKey === 'healer_spawner') {
-                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'healer_spawner' && s.owner === playerId);
+                let existing = getSpawnerAtTile(gx, gy);
+                if (!(existing && existing.type === 'healer_spawner' && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11404,10 +11533,12 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, s);
                     placedNewStructure = true;
                 }
             } else if (itemKey === 'research') {
-                let existing = collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.type === 'research' && s.owner === playerId);
+                let existing = getSpawnerAtTile(gx, gy);
+                if (!(existing && existing.type === 'research' && existing.owner === playerId)) existing = null;
                 if (existing) {
                     addManualStackToThing(existing, 1);
                 }
@@ -11421,6 +11552,7 @@
                     collectorSpawners.push(s);
                     grid[gy][gx].item = s;
                     grid[gy][gx].owner = playerId;
+                    setTileEntity(gx, gy, itemKey, s);
                     placedNewStructure = true;
                 }
             } else {
@@ -11433,6 +11565,7 @@
                     let item = { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
                     cell.item = item;
                     cell.owner = playerId;
+                    setTileEntity(gx, gy, itemKey, item);
                     updateItemTextCache(item);
                     placedNewStructure = true;
                 }
@@ -11449,6 +11582,7 @@
             if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower')) {
                 let idx = towers.indexOf(building);
                 if (idx !== -1) towers.splice(idx, 1);
+                clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].type = TYPE_FLOOR;
                 grid[building.gy][building.gx].owner = -1;
                 dirtyGrid = true;
@@ -11457,16 +11591,19 @@
             } else if (building instanceof Barrack || (building.type === 'barrack')) {
                 let idx = barracks.indexOf(building);
                 if (idx !== -1) barracks.splice(idx, 1);
+                clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].item = null;
                 grid[building.gy][building.gx].owner = -1;
                 recalculateAdjacency();
             } else if (building instanceof CollectorSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
                 let idx = collectorSpawners.indexOf(building);
                 if (idx !== -1) collectorSpawners.splice(idx, 1);
+                clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].item = null;
                 grid[building.gy][building.gx].owner = -1;
             } else if (building.type) {
                 // Floor item
+                clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].item = null;
                 grid[building.gy][building.gx].owner = -1;
             }
@@ -12127,14 +12264,21 @@
                 ctx.font = "bold 8px Arial";
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
+                ctx.lineWidth = 2;
+                // Use shadow filter instead of strokeText (faster)
+                ctx.shadowColor = 'rgba(0,0,0,0.9)';
+                ctx.shadowBlur = 2;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+                
                 for (let m of visibleGoldMines) {
                     let label = formatBigNumber(Math.max(0, m.gold || 0), 0);
-                    ctx.lineWidth = 2;
-                    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-                    ctx.strokeText(label, m.gx * TILE + 16, m.gy * TILE + 16);
                     ctx.fillStyle = (m.gold > 0) ? '#fffbe8' : '#bbb';
                     ctx.fillText(label, m.gx * TILE + 16, m.gy * TILE + 16);
                 }
+                
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
             }
 
             // Floor items
@@ -12427,10 +12571,10 @@
                             for (let cp of area.cells) {
                                 let c = grid[cp.y][cp.x];
                                 let occupied = false;
-                                if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) occupied = true;
+                                if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) occupied = true;
                                 else if (c.item) occupied = true;
-                                else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) occupied = true;
-                                else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) occupied = true;
+                                else if (getBarrackAtTile(cp.x, cp.y)) occupied = true;
+                                else if (getSpawnerAtTile(cp.x, cp.y)) occupied = true;
                                 ctx.fillStyle = occupied ? 'rgba(0,255,0,0.2)' : 'rgba(255,100,0,0.2)';
                                 ctx.fillRect(cp.x * TILE + 3, cp.y * TILE + 3, TILE - 6, TILE - 6);
                                 if (occupied) filledCount++;
@@ -12658,6 +12802,7 @@
                     let item = cell.item;
                     if (!item) continue;
                     if (tickStatusEffects(item)) {
+                        clearTileEntity(item.gx, item.gy, item);
                         cell.item = null;
                         cell.owner = -1;
                         floorChanged = true;
@@ -13233,10 +13378,10 @@
                     let filledCount = 0;
                     for (let cp of area.cells) {
                         let c = grid[cp.y][cp.x];
-                        if (c.type === TYPE_WALL && towers.find(t => t.gx === cp.x && t.gy === cp.y)) filledCount++;
+                        if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) filledCount++;
                         else if (c.item) filledCount++;
-                        else if (barracks.find(b => b.gx === cp.x && b.gy === cp.y)) filledCount++;
-                        else if (collectorSpawners.find(s => s.gx === cp.x && s.gy === cp.y)) filledCount++;
+                        else if (getBarrackAtTile(cp.x, cp.y)) filledCount++;
+                        else if (getSpawnerAtTile(cp.x, cp.y)) filledCount++;
                     }
                     return filledCount === area.cells.length && (area.multiplierLevel || 0) < 5;
                 }
@@ -14610,10 +14755,8 @@
                         processActions([{ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }], playerId);
                     }
                 } else if (a.action === 'attackBuilding') {
-                    let tb = towers.find(t => t.gx === a.targetGx && t.gy === a.targetGy && t.energy > 0) ||
-                        barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.energy > 0) ||
-                        collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.energy > 0) ||
-                        (grid[a.targetGy] && grid[a.targetGy][a.targetGx] && grid[a.targetGy][a.targetGx].item && grid[a.targetGy][a.targetGx].item.energy > 0 ? grid[a.targetGy][a.targetGx].item : null);
+                    let tb = getTileEntityRef(a.targetGx, a.targetGy);
+                    if (!(tb && tb.energy > 0)) tb = null;
                     if (tb) {
                         for (let u of units) {
                             if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
@@ -14641,7 +14784,8 @@
                         if (a.unitIds.includes(u.id) && u.owner === playerId) { u.commandState = CMD_HOLDING; u.path = null; u.targetUnit = null; u.targetBuilding = null; u._pendingPathTarget = null; u.forcedAttackTarget = false; u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null; }
                     }
                 } else if (a.action === 'queueUnit') {
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
+                    let b = getBarrackAtTile(a.gx, a.gy);
+                    if (!(b && b.owner === playerId)) b = null;
                     if (b && b.energy > 0 && !b.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -14651,7 +14795,8 @@
                         }
                     }
                 } else if (a.action === 'queueWorker') {
-                    let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    let s = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(s && s.owner === playerId)) s = null;
                     if (s && s.energy > 0 && !s.underConstruction) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -14670,7 +14815,8 @@
                         }
                     }
                 } else if (a.action === 'queueResearch') {
-                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    let r = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(r && r.owner === playerId && r.type === 'research')) r = null;
                     let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
                     if (r && r.energy > 0 && !r.underConstruction && stat) {
                         let p = ensurePlayerResearchQueueState(playerId);
@@ -14718,8 +14864,8 @@
                                 _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
                             }
                         } else if (u.workerType === 'healer' && a.targetType === 'queue') {
-                            let qTarget = barracks.find(b => b.gx === a.targetGx && b.gy === a.targetGy && b.owner === playerId)
-                                || collectorSpawners.find(s => s.gx === a.targetGx && s.gy === a.targetGy && s.owner === playerId);
+                            let qTarget = getTileEntityRef(a.targetGx, a.targetGy);
+                            if (!(qTarget && qTarget.owner === playerId && ((qTarget instanceof Barrack) || isSpawnerEntity(qTarget)))) qTarget = null;
                             if (_isHealerQueueAnchorTarget(qTarget, playerId)) {
                                 if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
@@ -14735,8 +14881,8 @@
                         }
                     }
                 } else if (a.action === 'setRally') {
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
-                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    let b = getTileEntityRef(a.gx, a.gy);
+                    if (!(b && b.owner === playerId && ((b instanceof Barrack) || isSpawnerEntity(b)))) b = null;
                     if (b) {
                         b.rallyX = a.targetX;
                         b.rallyY = a.targetY;
@@ -14757,7 +14903,8 @@
                         checkWinCondition();
                     }
                 } else if (a.action === 'dequeueUnit') {
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
+                    let b = getBarrackAtTile(a.gx, a.gy);
+                    if (!(b && b.owner === playerId)) b = null;
                     if (b) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -14766,7 +14913,8 @@
                         }
                     }
                 } else if (a.action === 'dequeueWorker') {
-                    let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    let s = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(s && s.owner === playerId)) s = null;
                     if (s) {
                         let count = Math.max(1, Math.floor(a.count || 1));
                         for (let i = 0; i < count; i++) {
@@ -14775,7 +14923,8 @@
                         }
                     }
                 } else if (a.action === 'dequeueResearch') {
-                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    let r = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(r && r.owner === playerId && r.type === 'research')) r = null;
                     if (r) {
                         let p = ensurePlayerResearchQueueState(playerId);
                         let count = Math.max(1, Math.floor(a.count || 1));
@@ -14807,7 +14956,8 @@
                         }
                     }
                 } else if (a.action === 'reorderResearch') {
-                    let r = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    let r = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(r && r.owner === playerId && r.type === 'research')) r = null;
                     if (r) {
                         let p = ensurePlayerResearchQueueState(playerId);
                         let len = p.researchQueue.length;
@@ -14870,19 +15020,13 @@
                     }
                 } else if (a.action === 'markSalvage') {
                     // Toggle salvage mark on a building at gx,gy
-                    let t = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId);
-                    if (t) { t.markedForSalvage = !t.markedForSalvage; }
-                    let b = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId);
-                    if (b) { b.markedForSalvage = !b.markedForSalvage; }
-                    let s = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
-                    if (s) { s.markedForSalvage = !s.markedForSalvage; }
-                    let cell = grid[a.gy][a.gx];
-                    if (cell.item && cell.owner === playerId && !t && !b && !s) { cell.item.markedForSalvage = !cell.item.markedForSalvage; }
+                    let target = getTileEntityRef(a.gx, a.gy);
+                    if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
+                        target.markedForSalvage = !target.markedForSalvage;
+                    }
                 } else if (a.action === 'setAutoUpgrade') {
-                    let target = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId) ||
-                        barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
-                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId) ||
-                        (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
+                    let target = getTileEntityRef(a.gx, a.gy);
+                    if (!(target && target.owner === playerId)) target = null;
                     if (target) {
                         target.autoUpgradeEnabled = !!a.enabled;
                         if (!target.autoUpgradeEnabled) {
@@ -14891,30 +15035,27 @@
                         refreshThingProgressState(target);
                     }
                 } else if (a.action === 'setAutoStack') {
-                    let target = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId) ||
-                        barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
-                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId) ||
-                        (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
+                    let target = getTileEntityRef(a.gx, a.gy);
+                    if (!(target && target.owner === playerId)) target = null;
                     if (target) {
                         target.autoStackEnabled = !!a.enabled;
                         refreshThingProgressState(target);
                     }
                 } else if (a.action === 'setBuildEnabled') {
-                    let target = towers.find(t => t.gx === a.gx && t.gy === a.gy && t.owner === playerId) ||
-                        barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
-                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId) ||
-                        (grid[a.gy] && grid[a.gy][a.gx] && grid[a.gy][a.gx].item && grid[a.gy][a.gx].owner === playerId ? grid[a.gy][a.gx].item : null);
+                    let target = getTileEntityRef(a.gx, a.gy);
+                    if (!(target && target.owner === playerId)) target = null;
                     if (target) {
                         target.buildEnabled = !!a.enabled;
                     }
                 } else if (a.action === 'setQueueEnabled') {
-                    let target = barracks.find(b => b.gx === a.gx && b.gy === a.gy && b.owner === playerId) ||
-                        collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId);
+                    let target = getTileEntityRef(a.gx, a.gy);
+                    if (!(target && target.owner === playerId && ((target instanceof Barrack) || isSpawnerEntity(target)))) target = null;
                     if (target) {
                         target.queueEnabled = !!a.enabled;
                     }
                 } else if (a.action === 'setAutoResearch') {
-                    let target = collectorSpawners.find(s => s.gx === a.gx && s.gy === a.gy && s.owner === playerId && s.type === 'research');
+                    let target = getSpawnerAtTile(a.gx, a.gy);
+                    if (!(target && target.owner === playerId && target.type === 'research')) target = null;
                     if (target) {
                         target.autoResearchEnabled = !!a.enabled;
                         if (target.autoResearchEnabled) {
@@ -14939,7 +15080,8 @@
                 } else if (a.action === 'towerTarget') {
                     // Set preferredTarget on own towers
                     for (let tc of (a.towerCoords || [])) {
-                        let t = towers.find(t => t.gx === tc.gx && t.gy === tc.gy && t.owner === playerId);
+                        let t = getTowerAtTile(tc.gx, tc.gy);
+                        if (!(t && t.owner === playerId)) t = null;
                         if (!t) continue;
                         if (!a.target) { t.preferredTarget = null; t.preferredTargetSpec = null; continue; }
                         if (a.target.type === 'unit') {
@@ -14947,18 +15089,20 @@
                             t.preferredTarget = tu || null;
                             t.preferredTargetSpec = tu ? { type: 'unit', id: tu.id } : null;
                         } else if (a.target.type === 'tower') {
-                            t.preferredTarget = towers.find(tb => tb.gx === a.target.gx && tb.gy === a.target.gy && tb.energy > 0 && tb.owner !== playerId) || null;
+                            let tb = getTowerAtTile(a.target.gx, a.target.gy);
+                            t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId) ? tb : null;
                             t.preferredTargetSpec = t.preferredTarget ? { type: 'tower', gx: a.target.gx, gy: a.target.gy } : null;
                         } else if (a.target.type === 'barrack') {
-                            t.preferredTarget = barracks.find(b => b.gx === a.target.gx && b.gy === a.target.gy && b.energy > 0 && b.owner !== playerId) || null;
+                            let b = getBarrackAtTile(a.target.gx, a.target.gy);
+                            t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId) ? b : null;
                             t.preferredTargetSpec = t.preferredTarget ? { type: 'barrack', gx: a.target.gx, gy: a.target.gy } : null;
                         } else if (a.target.type === 'spawner') {
-                            t.preferredTarget = collectorSpawners.find(s => s.gx === a.target.gx && s.gy === a.target.gy && s.energy > 0 && s.owner !== playerId) || null;
+                            let s = getSpawnerAtTile(a.target.gx, a.target.gy);
+                            t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId) ? s : null;
                             t.preferredTargetSpec = t.preferredTarget ? { type: 'spawner', gx: a.target.gx, gy: a.target.gy } : null;
                         } else if (a.target.type === 'item') {
-                            t.preferredTarget = (grid[a.target.gy] && grid[a.target.gy][a.target.gx] && grid[a.target.gy][a.target.gx].item && grid[a.target.gy][a.target.gx].item.energy > 0 && grid[a.target.gy][a.target.gx].owner !== playerId)
-                                ? grid[a.target.gy][a.target.gx].item
-                                : null;
+                            let item = getFloorItemAtTile(a.target.gx, a.target.gy);
+                            t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId) ? item : null;
                             t.preferredTargetSpec = t.preferredTarget ? { type: 'item', gx: a.target.gx, gy: a.target.gy } : null;
                         } else {
                             t.preferredTarget = null;
@@ -17730,7 +17874,10 @@
                 if (btn.classList.contains('info-research-buy-group-btn')) {
                     let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
                     let coords = parseCoords(btn.dataset.coords);
-                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research'));
+                    let anchor = coords.find(c => {
+                        let v = getSpawnerAtTile(c.gx, c.gy);
+                        return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
+                    });
                     if (!anchor) return;
                     queueAndRefresh({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
                     return;
@@ -17746,7 +17893,10 @@
                 if (btn.classList.contains('info-research-dequeue-group-btn')) {
                     let kind = btn.dataset.kind, key = btn.dataset.key, statKey = btn.dataset.statKey;
                     let coords = parseCoords(btn.dataset.coords);
-                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research'));
+                    let anchor = coords.find(c => {
+                        let v = getSpawnerAtTile(c.gx, c.gy);
+                        return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
+                    });
                     if (!anchor) return;
                     queueAndRefresh({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: queuePurchaseMultiplier });
                     return;
@@ -18077,7 +18227,8 @@
                     let coords = parseCoords(btn.dataset.coords);
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     let options = coords.map(c => {
-                        let b = barracks.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction);
+                        let b = getBarrackAtTile(c.gx, c.gy);
+                        if (!(b && b.owner === localPlayerId && b.energy > 0 && !b.underConstruction)) b = null;
                         return b ? { gx: b.gx, gy: b.gy, len: b.spawnQueue.length } : null;
                     }).filter(Boolean);
                     for (let i = 0; i < purchaseCount; i++) {
@@ -18110,7 +18261,8 @@
                     let coords = parseCoords(btn.dataset.coords);
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     let options = coords.map(c => {
-                        let s = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction);
+                        let s = getSpawnerAtTile(c.gx, c.gy);
+                        if (!(s && s.owner === localPlayerId && s.energy > 0 && !s.underConstruction)) s = null;
                         return s ? { gx: s.gx, gy: s.gy, len: (s.spawnQueue || []).length } : null;
                     }).filter(Boolean);
                     for (let i = 0; i < purchaseCount; i++) {
@@ -18145,7 +18297,10 @@
                         let [x, y] = c.split(',');
                         return { gx: parseInt(x), gy: parseInt(y) };
                     }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research'));
+                    let anchor = coords.find(c => {
+                        let v = getSpawnerAtTile(c.gx, c.gy);
+                        return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
+                    });
                     if (!anchor) return;
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     queueAction({ action: 'queueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
@@ -18171,7 +18326,10 @@
                         let [x, y] = c.split(',');
                         return { gx: parseInt(x), gy: parseInt(y) };
                     }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
-                    let anchor = coords.find(c => collectorSpawners.some(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research'));
+                    let anchor = coords.find(c => {
+                        let v = getSpawnerAtTile(c.gx, c.gy);
+                        return !!(v && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction && v.type === 'research');
+                    });
                     if (!anchor) return;
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     queueAction({ action: 'dequeueResearch', gx: anchor.gx, gy: anchor.gy, kind, key, statKey, count: purchaseCount });
@@ -18344,10 +18502,12 @@
                     let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
                     let options = coords.map(c => {
                         if (isWorker) {
-                            let s = collectorSpawners.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction);
+                            let s = getSpawnerAtTile(c.gx, c.gy);
+                            if (!(s && s.owner === localPlayerId && s.energy > 0 && !s.underConstruction)) s = null;
                             return s ? { gx: s.gx, gy: s.gy, len: (s.spawnQueue || []).length } : null;
                         }
-                        let b = barracks.find(v => v.gx === c.gx && v.gy === c.gy && v.owner === localPlayerId && v.energy > 0 && !v.underConstruction);
+                        let b = getBarrackAtTile(c.gx, c.gy);
+                        if (!(b && b.owner === localPlayerId && b.energy > 0 && !b.underConstruction)) b = null;
                         return b ? { gx: b.gx, gy: b.gy, len: b.spawnQueue.length } : null;
                     }).filter(Boolean);
                     for (let i = 0; i < purchaseCount; i++) {
@@ -18953,10 +19113,19 @@
                 ) || null;
             }
             if (kind === 'mine') {
-                return context.goldMines.find(m =>
-                    Math.floor(Number(m.gx) || 0) === Math.floor(Number(ref.gx) || 0) &&
-                    Math.floor(Number(m.gy) || 0) === Math.floor(Number(ref.gy) || 0)
-                ) || null;
+                let gx = Math.floor(Number(ref.gx) || 0);
+                let gy = Math.floor(Number(ref.gy) || 0);
+                if (!context.goldMinesByTile) {
+                    let byTile = new Map();
+                    for (let mine of (context.goldMines || [])) {
+                        if (!mine) continue;
+                        let mx = Math.floor(Number(mine.gx) || 0);
+                        let my = Math.floor(Number(mine.gy) || 0);
+                        byTile.set(mx + ',' + my, mine);
+                    }
+                    context.goldMinesByTile = byTile;
+                }
+                return context.goldMinesByTile.get(gx + ',' + gy) || null;
             }
             if (kind === 'gridItem') {
                 let gx = Math.floor(Number(ref.gx) || 0);
@@ -19065,6 +19234,7 @@
                     grid[gy][gx].droppedItem = null;
                 }
             }
+            initTileEntityLookup();
 
             players = Array.isArray(snapshot.players) ? cloneSnapshotValue(snapshot.players) : players;
             currentTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || 0));
@@ -19091,6 +19261,7 @@
                 if (tgx >= 0 && tgx < GRID_W && tgy >= 0 && tgy < GRID_H && grid[tgy] && grid[tgy][tgx]) {
                     grid[tgy][tgx].item = t;
                     grid[tgy][tgx].owner = Math.floor(Number(t.owner) || 0);
+                    setTileEntity(tgx, tgy, String(t.type || 'tower'), t);
                 }
             }
 
@@ -19106,6 +19277,7 @@
                 if (bgx >= 0 && bgx < GRID_W && bgy >= 0 && bgy < GRID_H && grid[bgy] && grid[bgy][bgx]) {
                     grid[bgy][bgx].item = b;
                     grid[bgy][bgx].owner = Math.floor(Number(b.owner) || 0);
+                    setTileEntity(bgx, bgy, 'barrack_' + String(b.unitType || 'norm'), b);
                 }
             }
 
@@ -19130,6 +19302,7 @@
                 if (sgx >= 0 && sgx < GRID_W && sgy >= 0 && sgy < GRID_H && grid[sgy] && grid[sgy][sgx]) {
                     grid[sgy][sgx].item = s;
                     grid[sgy][sgx].owner = Math.floor(Number(s.owner) || 0);
+                    setTileEntity(sgx, sgy, String(s.type || 'spawner'), s);
                 }
             }
 
@@ -19183,6 +19356,12 @@
             nextUnitId = Math.max(snapshotNextUnitId, units.reduce((m, u) => Math.max(m, Math.floor(Number(u.id) || 0) + 1), 1));
 
             goldMines = Array.isArray(snapshot.goldMines) ? cloneSnapshotValue(snapshot.goldMines) : goldMines;
+            for (let m of goldMines) {
+                if (!m) continue;
+                let gx = Math.floor(Number(m.gx));
+                let gy = Math.floor(Number(m.gy));
+                setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m);
+            }
             droppedItems = Array.isArray(snapshot.droppedItems) ? cloneSnapshotValue(snapshot.droppedItems) : [];
             for (let d of droppedItems) {
                 if (!d) continue;
@@ -19203,6 +19382,7 @@
                 if (grid[gy][gx].item) continue;
                 grid[gy][gx].item = cloneSnapshotValue(f.item || null);
                 grid[gy][gx].owner = Math.floor(Number(f.owner) || 0);
+                if (grid[gy][gx].item) setTileEntity(gx, gy, String(grid[gy][gx].item.type || 'floor_item'), grid[gy][gx].item);
             }
 
             areas = Array.isArray(snapshot.areas) ? cloneSnapshotValue(snapshot.areas) : areas;
@@ -20069,6 +20249,7 @@
             collectors = [];
             droppedItems = [];
             goldMines = [];
+            initTileEntityLookup();
             areas = [];
             grid = [];
             visibilityGrid = [];
@@ -20484,7 +20665,7 @@
                             if (Math.abs(dx) + Math.abs(dy) > r) continue;
                             let cell = grid[fy][fx];
                             if (!cell || cell.type === TYPE_WALL || cell.item) continue;
-                            let blockedByMine = goldMines.some(m => m.gx === fx && m.gy === fy);
+                            let blockedByMine = !!getGoldMineAt(fx, fy);
                             if (blockedByMine) continue;
                             return { gx: fx, gy: fy };
                         }
@@ -20542,14 +20723,17 @@
 
             let getPlacedBuildingEntityAt = (gx, gy, itemKey, owner) => {
                 if ((BASE_CARD_TYPES[itemKey] || {}).target === 'wall') {
-                    return towers.find(t => t.gx === gx && t.gy === gy && t.owner === owner && t.type === itemKey) || null;
+                    let t = getTowerAtTile(gx, gy);
+                    return (t && t.owner === owner && t.type === itemKey) ? t : null;
                 }
                 if (itemKey.startsWith('barrack_')) {
                     let unitType = (BASE_CARD_TYPES[itemKey] || {}).unitType || 'norm';
-                    return barracks.find(b => b.gx === gx && b.gy === gy && b.owner === owner && b.unitType === unitType) || null;
+                    let b = getBarrackAtTile(gx, gy);
+                    return (b && b.owner === owner && b.unitType === unitType) ? b : null;
                 }
                 if (itemKey === 'spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
-                    return collectorSpawners.find(s => s.gx === gx && s.gy === gy && s.owner === owner && s.type === itemKey) || null;
+                    let s = getSpawnerAtTile(gx, gy);
+                    return (s && s.owner === owner && s.type === itemKey) ? s : null;
                 }
                 return (grid[gy] && grid[gy][gx]) ? grid[gy][gx].item : null;
             };
@@ -20604,6 +20788,7 @@
                 collectorSpawners.push(builderSpawner);
                 grid[pos.gy][pos.gx].item = builderSpawner;
                 grid[pos.gy][pos.gx].owner = pid;
+                setTileEntity(pos.gx, pos.gy, 'builder_spawner', builderSpawner);
 
                 let healerSpawner = spawnStartingBuilding(pid, pos, 'healer_spawner', 1);
                 if (healerSpawner) teamHealerSpawners[pid] = healerSpawner;
@@ -21695,7 +21880,6 @@
             let dpr = window.devicePixelRatio || 1;
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             draw();
-            presentFrameToWebGL();
             updateHUD();
             updateControlGroupBar();
 
@@ -21761,133 +21945,13 @@
 
         let _renderInitEventsBound = false;
 
-        function createWebGLShader(glCtx, type, source) {
-            let shader = glCtx.createShader(type);
-            if (!shader) return null;
-            glCtx.shaderSource(shader, source);
-            glCtx.compileShader(shader);
-            if (!glCtx.getShaderParameter(shader, glCtx.COMPILE_STATUS)) {
-                glCtx.deleteShader(shader);
-                return null;
-            }
-            return shader;
-        }
-
-        function initWebGLFramePresenter(glCtx) {
-            let vertexSrc = `
-                attribute vec2 aPosition;
-                attribute vec2 aUv;
-                varying vec2 vUv;
-                void main() {
-                    vUv = aUv;
-                    gl_Position = vec4(aPosition, 0.0, 1.0);
-                }
-            `;
-            let fragmentSrc = `
-                precision mediump float;
-                varying vec2 vUv;
-                uniform sampler2D uFrame;
-                void main() {
-                    gl_FragColor = texture2D(uFrame, vUv);
-                }
-            `;
-
-            let vs = createWebGLShader(glCtx, glCtx.VERTEX_SHADER, vertexSrc);
-            let fs = createWebGLShader(glCtx, glCtx.FRAGMENT_SHADER, fragmentSrc);
-            if (!vs || !fs) return false;
-
-            let program = glCtx.createProgram();
-            if (!program) return false;
-            glCtx.attachShader(program, vs);
-            glCtx.attachShader(program, fs);
-            glCtx.linkProgram(program);
-            glCtx.deleteShader(vs);
-            glCtx.deleteShader(fs);
-            if (!glCtx.getProgramParameter(program, glCtx.LINK_STATUS)) {
-                glCtx.deleteProgram(program);
-                return false;
-            }
-
-            let buffer = glCtx.createBuffer();
-            if (!buffer) {
-                glCtx.deleteProgram(program);
-                return false;
-            }
-
-            let texture = glCtx.createTexture();
-            if (!texture) {
-                glCtx.deleteBuffer(buffer);
-                glCtx.deleteProgram(program);
-                return false;
-            }
-
-            glCtx.bindBuffer(glCtx.ARRAY_BUFFER, buffer);
-            glCtx.bufferData(glCtx.ARRAY_BUFFER, new Float32Array([
-                -1, -1, 0, 1,
-                 1, -1, 1, 1,
-                -1,  1, 0, 0,
-                 1,  1, 1, 0,
-            ]), glCtx.STATIC_DRAW);
-
-            glCtx.bindTexture(glCtx.TEXTURE_2D, texture);
-            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_MIN_FILTER, glCtx.NEAREST);
-            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_MAG_FILTER, glCtx.NEAREST);
-            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_S, glCtx.CLAMP_TO_EDGE);
-            glCtx.texParameteri(glCtx.TEXTURE_2D, glCtx.TEXTURE_WRAP_T, glCtx.CLAMP_TO_EDGE);
-
-            glFrameProgram = program;
-            glFrameBuffer = buffer;
-            glFrameTexture = texture;
-            glFramePosLoc = glCtx.getAttribLocation(program, 'aPosition');
-            glFrameUvLoc = glCtx.getAttribLocation(program, 'aUv');
-            glFrameSamplerLoc = glCtx.getUniformLocation(program, 'uFrame');
-
-            return glFramePosLoc >= 0 && glFrameUvLoc >= 0 && !!glFrameSamplerLoc;
-        }
-
-        function presentFrameToWebGL() {
-            if (!webglRenderMode || !gl || !canvas || !renderCanvas || !glFrameProgram || !glFrameTexture || !glFrameBuffer) return;
-
-            gl.viewport(0, 0, canvas.width, canvas.height);
-            gl.clearColor(0, 0, 0, 0);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-
-            gl.useProgram(glFrameProgram);
-            gl.bindBuffer(gl.ARRAY_BUFFER, glFrameBuffer);
-            gl.enableVertexAttribArray(glFramePosLoc);
-            gl.vertexAttribPointer(glFramePosLoc, 2, gl.FLOAT, false, 16, 0);
-            gl.enableVertexAttribArray(glFrameUvLoc);
-            gl.vertexAttribPointer(glFrameUvLoc, 2, gl.FLOAT, false, 16, 8);
-
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, glFrameTexture);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, renderCanvas);
-            gl.uniform1i(glFrameSamplerLoc, 0);
-
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        }
-
         function ensureRenderContextsInitialized() {
             canvas = canvas || document.getElementById('gameCanvas');
             let gameArea = document.getElementById('game-area');
             if (!canvas || !gameArea) return false;
 
             if (!ctx) {
-                if (!gl) {
-                    gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false })
-                        || canvas.getContext('experimental-webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
-                }
-                if (gl && !glFrameProgram) {
-                    webglRenderMode = initWebGLFramePresenter(gl);
-                }
-
-                if (webglRenderMode) {
-                    if (!renderCanvas) renderCanvas = document.createElement('canvas');
-                    if (!renderCtx) renderCtx = renderCanvas.getContext('2d');
-                    ctx = renderCtx;
-                } else {
-                    ctx = canvas.getContext('2d');
-                }
+                ctx = canvas.getContext('2d');
 
                 if (!ctx) return false;
                 ctx.imageSmoothingEnabled = false;
@@ -21933,12 +21997,6 @@
             canvas.height = viewH * dpr;
             canvas.style.width = viewW + 'px';
             canvas.style.height = viewH + 'px';
-
-            if (webglRenderMode && renderCanvas) {
-                renderCanvas.width = canvas.width;
-                renderCanvas.height = canvas.height;
-                if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
-            }
 
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
