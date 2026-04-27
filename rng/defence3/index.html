@@ -235,14 +235,24 @@
 
         .hud-energy {
             color: #fd0;
+            display: inline-block;
+            min-width: 90px;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
         .hud-pop {
             color: #4f4;
+            display: inline-block;
+            min-width: 148px;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
         .hud-time {
             color: #aaa;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
         #help-popup,
@@ -1705,14 +1715,8 @@
         </div>
         <div id="go-graph-wrap" style="display:none;width:min(900px,92vw);background:#111;border:1px solid #333;border-radius:8px;padding:10px;">
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px;">
-                <button class="go-graph-metric" data-metric="energy"
-                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Energy</button>
-                <button class="go-graph-metric" data-metric="pop"
-                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Population</button>
                 <button class="go-graph-metric" data-metric="units"
                     style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Units</button>
-                <button class="go-graph-metric" data-metric="structures"
-                    style="background:#202020;border:1px solid #555;color:#ddd;cursor:pointer;padding:3px 8px;border-radius:4px;">Structures</button>
             </div>
             <div id="go-graph-plot"
                 style="width:100%;max-width:860px;height:320px;display:block;margin:0 auto;border:1px solid #2d2d2d;background:#0d0d0d;"></div>
@@ -2036,7 +2040,8 @@
         }
 
         function renderGameGraph(metric = graphMetric) {
-            graphMetric = metric;
+            graphMetric = 'units';
+            metric = 'units';
             let plotEl = document.getElementById('go-graph-plot');
             if (!plotEl || typeof Plotly === 'undefined') return;
             let samples = gameStatsHistory;
@@ -2076,7 +2081,7 @@
                     zerolinecolor: '#333'
                 },
                 yaxis: {
-                    title: metric.toUpperCase(),
+                    title: 'UNITS',
                     rangemode: 'tozero',
                     gridcolor: '#2a2a2a',
                     zerolinecolor: '#333'
@@ -4957,7 +4962,7 @@
     let resignedTeams = new Set();
 
     let gameStatsHistory = [];
-    let graphMetric = 'energy';
+    let graphMetric = 'units';
 
         // Camera
         let camera = { x: 0, y: 0, zoom: 1 };
@@ -5870,22 +5875,307 @@
         // A* PATHFINDING
         // ============================================================
         let pathfindBudget = 0; // per tick
-        const MAX_PATHS_PER_TICK = 30;
+        let MAX_PATHS_PER_TICK = 30;
+        const MIN_PATHS_PER_TICK = 12;
+        const MAX_PATHS_PER_TICK_HARD = 64;
         let pendingPathResolveCursor = 0;
         let pathTopologyVersion = 1;
         const PATH_CACHE_TTL_TICKS = 24;
         const PATH_CACHE_MAX_ENTRIES = 3000;
+        const PATH_CACHE_TRIM_CHUNK = 96;
         const SPAWNER_ROUTE_CACHE_TTL_TICKS = 10;
         const SPAWNER_ROUTE_CACHE_MAX_ENTRIES = 800;
+        const SPAWNER_RALLY_TEMPLATE_TTL_TICKS = 20;
+        const SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES = 1000;
         const WORKER_HEAVY_AI_STRIDE = 3;
         let sharedPathCache = new Map();
         let sharedSpawnerRouteCache = new Map();
+        let sharedSpawnerRallyTemplateCache = new Map();
+
+        const PATH_SOURCE_UNSPECIFIED = 'unspecified';
+        let _activePathfindSource = PATH_SOURCE_UNSPECIFIED;
+        let _pathfindPerfTick = null;
+        let _pathfindPerfHistory = [];
+        const PATHFIND_PERF_HISTORY_MAX = 480;
+
+        function _newPathfindPerfTick() {
+            return {
+                tick: gameTime,
+                maxPathsPerTick: MAX_PATHS_PER_TICK,
+                totalCalls: 0,
+                cacheHits: 0,
+                totalMs: 0,
+                backlog: 0,
+                bySource: {
+                    player_commands: 0,
+                    spawner_rally: 0,
+                    worker_ai: 0,
+                    scout_ai: 0,
+                    deferred_resolver: 0,
+                    ai_combat: 0,
+                    unspecified: 0
+                }
+            };
+        }
+
+        function _resetPathfindPerfTick() {
+            _pathfindPerfTick = _newPathfindPerfTick();
+        }
+
+        function _recordPathfindCall(source, elapsedMs, cacheHit) {
+            if (!_pathfindPerfTick) _resetPathfindPerfTick();
+            let src = (source && _pathfindPerfTick.bySource[source] !== undefined) ? source : PATH_SOURCE_UNSPECIFIED;
+            _pathfindPerfTick.totalCalls++;
+            _pathfindPerfTick.bySource[src]++;
+            if (cacheHit) _pathfindPerfTick.cacheHits++;
+            _pathfindPerfTick.totalMs += Math.max(0, Number(elapsedMs) || 0);
+        }
+
+        function _finalizePathfindPerfTick(backlogCount) {
+            if (!_pathfindPerfTick) return;
+            _pathfindPerfTick.backlog = Math.max(0, Math.floor(Number(backlogCount) || 0));
+            _pathfindPerfTick.maxPathsPerTick = MAX_PATHS_PER_TICK;
+            _pathfindPerfHistory.push(_pathfindPerfTick);
+            if (_pathfindPerfHistory.length > PATHFIND_PERF_HISTORY_MAX) {
+                _pathfindPerfHistory.splice(0, _pathfindPerfHistory.length - PATHFIND_PERF_HISTORY_MAX);
+            }
+        }
+
+        function _withPathfindSource(source, fn) {
+            let prev = _activePathfindSource;
+            _activePathfindSource = source || PATH_SOURCE_UNSPECIFIED;
+            try {
+                return fn();
+            } finally {
+                _activePathfindSource = prev;
+            }
+        }
+
+        function _countPendingPathBacklog() {
+            let c = 0;
+            for (let u of units) {
+                if (u && !u.dead && u._pendingPathTarget) c++;
+            }
+            return c;
+        }
+
+        function _pendingPathPriority(src) {
+            if (src === 'player_commands') return 0;
+            if (src === 'ai_combat') return 1;
+            if (src === 'worker_ai') return 2;
+            if (src === 'scout_ai') return 3;
+            return 4;
+        }
+
+        function _updateAdaptivePathBudget() {
+            let fps = Number(_fpsDisplay);
+            let tickLoad = Number(_tickAccumulator) / Math.max(1, Number(TICK_MS));
+            if (!Number.isFinite(fps)) fps = 60;
+            if (!Number.isFinite(tickLoad)) tickLoad = 0;
+
+            let fpsScale = 1;
+            if (fps < 44) fpsScale = 0.72;
+            else if (fps < 52) fpsScale = 0.9;
+            else if (fps > 72) fpsScale = 1.2;
+
+            let loadScale = 1;
+            if (tickLoad > 1.4) loadScale = 0.7;
+            else if (tickLoad > 1.05) loadScale = 0.82;
+            else if (tickLoad < 0.55) loadScale = 1.1;
+
+            let nextCap = Math.round(30 * fpsScale * loadScale);
+            MAX_PATHS_PER_TICK = Math.max(MIN_PATHS_PER_TICK, Math.min(MAX_PATHS_PER_TICK_HARD, nextCap));
+        }
+
+        function getPathfindingPerfSnapshot() {
+            return {
+                latest: _pathfindPerfHistory.length > 0 ? _pathfindPerfHistory[_pathfindPerfHistory.length - 1] : null,
+                history: _pathfindPerfHistory.slice()
+            };
+        }
+
+        function _isPathValidForScenario(path, sx, sy, ex, ey, ignoreWalls, canWalk, owner, usePortalEdges) {
+            if (!Array.isArray(path) || path.length <= 0) return false;
+            if (path[0].x !== sx || path[0].y !== sy) return false;
+            let last = path[path.length - 1];
+            if (last.x !== ex || last.y !== ey) return false;
+            for (let i = 1; i < path.length; i++) {
+                let p = path[i - 1], n = path[i];
+                let dx = Math.abs(n.x - p.x), dy = Math.abs(n.y - p.y);
+                let adjacent = (dx + dy) === 1;
+                if (!adjacent) {
+                    if (!usePortalEdges || !isCloudPortalLink(p.x, p.y, n.x, n.y, owner)) return false;
+                }
+                if (n.x < 0 || n.x >= GRID_W || n.y < 0 || n.y >= GRID_H) return false;
+                if (!ignoreWalls && grid[n.y][n.x].type === TYPE_WALL) {
+                    if (!(usePortalEdges && !!_getCloudTowerFast(n.x, n.y, owner)) && !(canWalk && canWalk(n.x, n.y))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        function _findPathBfsReference(sx, sy, ex, ey, ignoreWalls, canWalk, owner, usePortalEdges) {
+            if (sx === ex && sy === ey) return [{ x: sx, y: sy }];
+            let w = GRID_W, h = GRID_H;
+            let size = w * h;
+            let q = new Int32Array(size);
+            let from = new Int32Array(size);
+            from.fill(-1);
+            let head = 0, tail = 0;
+            let start = sy * w + sx;
+            let end = ey * w + ex;
+            q[tail++] = start;
+            from[start] = start;
+
+            while (head < tail) {
+                let k = q[head++];
+                if (k === end) break;
+                let cx = k % w, cy = (k / w) | 0;
+
+                for (let di = 0; di < 8; di += 2) {
+                    let nx = cx + _ASTAR_DIRS[di], ny = cy + _ASTAR_DIRS[di + 1];
+                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                    if (!ignoreWalls && grid[ny][nx].type === TYPE_WALL) {
+                        if (!(usePortalEdges && !!_getCloudTowerFast(nx, ny, owner)) && !(canWalk && canWalk(nx, ny))) continue;
+                    }
+                    let nk = ny * w + nx;
+                    if (from[nk] !== -1) continue;
+                    from[nk] = k;
+                    q[tail++] = nk;
+                }
+
+                if (usePortalEdges) {
+                    let cloud = _getCloudTowerFast(cx, cy, owner);
+                    if (cloud) {
+                        let partner = getPairedCloudTower(cloud, owner);
+                        if (partner) {
+                            let pk = partner.gy * w + partner.gx;
+                            if (from[pk] === -1) {
+                                from[pk] = k;
+                                q[tail++] = pk;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (from[end] === -1) return null;
+            let out = [];
+            let cur = end;
+            while (true) {
+                out.push({ x: cur % w, y: (cur / w) | 0 });
+                if (cur === start) break;
+                cur = from[cur];
+            }
+            out.reverse();
+            return out;
+        }
+
+        function runPathfindingCorrectnessHarness() {
+            let scenarios = [];
+            let midSx = Math.floor(GRID_W * 0.15), midSy = Math.floor(GRID_H * 0.15);
+            let midEx = Math.floor(GRID_W * 0.85), midEy = Math.floor(GRID_H * 0.85);
+            scenarios.push({
+                name: 'open_map',
+                sx: Math.max(0, Math.min(GRID_W - 1, midSx)),
+                sy: Math.max(0, Math.min(GRID_H - 1, midSy)),
+                ex: Math.max(0, Math.min(GRID_W - 1, midEx)),
+                ey: Math.max(0, Math.min(GRID_H - 1, midEy)),
+                ignoreWalls: true,
+                canWalk: null,
+                owner: localPlayerId
+            });
+
+            let wallA = null, wallB = null;
+            for (let y = 1; y < GRID_H - 1 && (!wallA || !wallB); y++) {
+                for (let x = 1; x < GRID_W - 1 && (!wallA || !wallB); x++) {
+                    if (grid[y][x].type !== TYPE_WALL) continue;
+                    if (!wallA) wallA = { x: Math.max(0, x - 1), y };
+                    else wallB = { x: Math.min(GRID_W - 1, x + 1), y };
+                }
+            }
+            if (wallA && wallB) {
+                scenarios.push({
+                    name: 'dense_walls',
+                    sx: wallA.x,
+                    sy: wallA.y,
+                    ex: wallB.x,
+                    ey: wallB.y,
+                    ignoreWalls: false,
+                    canWalk: null,
+                    owner: localPlayerId
+                });
+            }
+
+            let cloud = towers.find(t => t && t.baseStats && t.baseStats.isCloud && t.energy > 0 && !t.underConstruction);
+            if (cloud) {
+                let pair = getPairedCloudTower(cloud, cloud.owner);
+                if (pair) {
+                    scenarios.push({
+                        name: 'cloud_portal',
+                        sx: cloud.gx,
+                        sy: cloud.gy,
+                        ex: pair.gx,
+                        ey: pair.gy,
+                        ignoreWalls: false,
+                        canWalk: null,
+                        owner: cloud.owner
+                    });
+                }
+            }
+
+            let mine = goldMines.find(m => m && m.gold > 0);
+            if (mine) {
+                scenarios.push({
+                    name: 'worker_can_walk',
+                    sx: Math.max(0, mine.gx - 1),
+                    sy: mine.gy,
+                    ex: mine.gx,
+                    ey: mine.gy,
+                    ignoreWalls: false,
+                    canWalk: _collectorCanWalk,
+                    owner: localPlayerId
+                });
+            }
+
+            let results = [];
+            for (let s of scenarios) {
+                let usePortalEdges = (s.owner !== null && s.owner !== undefined);
+                let astar = findPathAStarTagged('unspecified', s.sx, s.sy, s.ex, s.ey, s.ignoreWalls, s.canWalk, s.owner);
+                let bfs = _findPathBfsReference(s.sx, s.sy, s.ex, s.ey, s.ignoreWalls, s.canWalk, s.owner, usePortalEdges);
+                let astarValid = astar ? _isPathValidForScenario(astar, s.sx, s.sy, s.ex, s.ey, s.ignoreWalls, s.canWalk, s.owner, usePortalEdges) : false;
+                let bfsValid = bfs ? _isPathValidForScenario(bfs, s.sx, s.sy, s.ex, s.ey, s.ignoreWalls, s.canWalk, s.owner, usePortalEdges) : false;
+                results.push({
+                    name: s.name,
+                    astarFound: !!astar,
+                    bfsFound: !!bfs,
+                    astarValid,
+                    bfsValid,
+                    parity: (!!astar === !!bfs),
+                    astarLen: astar ? astar.length : 0,
+                    bfsLen: bfs ? bfs.length : 0
+                });
+            }
+
+            return {
+                tick: gameTime,
+                topologyVersion: pathTopologyVersion,
+                scenarios: results,
+                allPassed: results.every(r => r.astarValid && r.bfsValid && r.parity)
+            };
+        }
+
+        window.getPathfindingPerfSnapshot = getPathfindingPerfSnapshot;
+        window.runPathfindingCorrectnessHarness = runPathfindingCorrectnessHarness;
 
         function _bumpPathTopologyVersion() {
             pathTopologyVersion++;
             if (pathTopologyVersion > 1000000000) pathTopologyVersion = 1;
             if (sharedPathCache.size > 0) sharedPathCache.clear();
             if (sharedSpawnerRouteCache.size > 0) sharedSpawnerRouteCache.clear();
+            if (sharedSpawnerRallyTemplateCache.size > 0) sharedSpawnerRallyTemplateCache.clear();
         }
 
         function _isPathCacheExpired(entry, ttlTicks) {
@@ -5900,7 +6190,8 @@
 
         function _trimPathCacheIfNeeded(cacheMap, maxEntries) {
             if (cacheMap.size <= maxEntries) return;
-            let removeCount = cacheMap.size - maxEntries;
+            if (cacheMap.size <= (maxEntries + PATH_CACHE_TRIM_CHUNK)) return;
+            let removeCount = Math.max(PATH_CACHE_TRIM_CHUNK, cacheMap.size - maxEntries);
             for (let k of cacheMap.keys()) {
                 cacheMap.delete(k);
                 removeCount--;
@@ -5945,15 +6236,32 @@
         // Cloud tower tile cache — keyed by (gy*GRID_W+gx), invalidated by pathTopologyVersion
         let _cloudTileCache    = null;
         let _cloudTileCacheVer = -1;
+        let _cloudPairIndexCache = null;
+
+        function _makeCloudPairKey(pairId, owner) {
+            return String(pairId) + '|' + String(owner);
+        }
 
         function _rebuildCloudTileCache() {
             let m = new Map();
+            let pairIndex = new Map();
             for (let t of towers) {
                 if (t.baseStats && t.baseStats.isCloud) {
                     m.set(t.gy * GRID_W + t.gx, t);
+                    let pairId = t.baseStats.pairId;
+                    if (pairId !== undefined && pairId !== null) {
+                        let key = _makeCloudPairKey(pairId, t.owner);
+                        let list = pairIndex.get(key);
+                        if (!list) {
+                            list = [];
+                            pairIndex.set(key, list);
+                        }
+                        list.push(t);
+                    }
                 }
             }
             _cloudTileCache    = m;
+            _cloudPairIndexCache = pairIndex;
             _cloudTileCacheVer = pathTopologyVersion;
         }
 
@@ -6056,7 +6364,15 @@
             let pairId = cloud.baseStats.pairId;
             if (pairId === undefined || pairId === null) return null;
             let matchOwner = owner !== null ? owner : cloud.owner;
-            return towers.find(t => t !== cloud && t.energy > 0 && !t.underConstruction && t.baseStats && t.baseStats.isCloud && t.baseStats.pairId === pairId && t.owner === matchOwner) || null;
+            if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+            let list = _cloudPairIndexCache.get(_makeCloudPairKey(pairId, matchOwner));
+            if (!list || list.length <= 0) return null;
+            for (let i = 0; i < list.length; i++) {
+                let t = list[i];
+                if (t === cloud) continue;
+                if (t.energy > 0 && !t.underConstruction) return t;
+            }
+            return null;
         }
 
         function isCloudPortalLink(gx1, gy1, gx2, gy2, owner) {
@@ -6101,19 +6417,26 @@
         }
 
         function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null) {
-            if (sx === ex && sy === ey) return [{ x: ex, y: ey }];
+            let perfStart = performance.now();
+            let sourceTag = _activePathfindSource || PATH_SOURCE_UNSPECIFIED;
+            if (sx === ex && sy === ey) {
+                _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                return [{ x: ex, y: ey }];
+            }
             // Cloud portals should be usable for all unit pathing modes whenever owner context is known.
             let usePortalEdges = (pathOwner !== null);
             let movementProfile = _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint);
+            let cacheKey = null;
 
             let gridData = grid;
             let gridW = GRID_W;
             let gridH = GRID_H;
 
             if (movementProfile) {
-                let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
+                cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                 let cached = sharedPathCache.get(cacheKey);
                 if (cached && !_isPathCacheExpired(cached, PATH_CACHE_TTL_TICKS)) {
+                    _recordPathfindCall(sourceTag, performance.now() - perfStart, true);
                     return cached.path;
                 }
                 if (cached) sharedPathCache.delete(cacheKey);
@@ -6134,7 +6457,10 @@
                         }
                     }
                     if (best) { ex = best.x; ey = best.y; }
-                    else return null;
+                    else {
+                        _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                        return null;
+                    }
                 }
             }
 
@@ -6166,8 +6492,25 @@
             _heapPush(startH, startKey);
 
             while (_astarHeapSz > 0) {
-                _heapPop();
-                let curKey = _astarPopK;
+                let heapSz = --_astarHeapSz;
+                let curKey = _astarHeapK[0];
+                if (heapSz > 0) {
+                    let hF = _astarHeapF, hK = _astarHeapK;
+                    hF[0] = hF[heapSz];
+                    hK[0] = hK[heapSz];
+                    let i = 0;
+                    while (true) {
+                        let l = (i << 1) + 1;
+                        if (l >= heapSz) break;
+                        let r = l + 1;
+                        let s = l;
+                        if (r < heapSz && hF[r] < hF[l]) s = r;
+                        if (hF[i] <= hF[s]) break;
+                        let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
+                        let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
+                        i = s;
+                    }
+                }
                 if (visitedGen[curKey] === epoch) continue;
                 visitedGen[curKey] = epoch;
 
@@ -6182,10 +6525,10 @@
                     }
                     path.reverse();
                     if (movementProfile) {
-                        let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                         sharedPathCache.set(cacheKey, { path: path, tick: gameTime, version: pathTopologyVersion });
                         _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
                     }
+                    _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
                     return path;
                 }
 
@@ -6233,11 +6576,49 @@
             }
 
             if (movementProfile) {
-                let cacheKey = _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortalEdges);
                 sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
                 _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
             }
+            _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
             return null;
+        }
+
+        function findPathAStarTagged(sourceTag, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null) {
+            return _withPathfindSource(sourceTag, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint));
+        }
+
+        function _makeSpawnerRallyTemplateKey(spawner, startGx, startGy, endGx, endGy, unit) {
+            let movementProfile = _resolveMovementProfile(!!(unit && unit.isFlying), getPathCanWalkForUnit(unit), null) || 'dynamic';
+            return [
+                spawner.type,
+                spawner.owner,
+                spawner.gx,
+                spawner.gy,
+                startGx,
+                startGy,
+                endGx,
+                endGy,
+                movementProfile,
+                pathTopologyVersion
+            ].join('|');
+        }
+
+        function _getSpawnerRallyTemplatePath(cacheKey) {
+            let entry = sharedSpawnerRallyTemplateCache.get(cacheKey);
+            if (entry && !_isPathCacheExpired(entry, SPAWNER_RALLY_TEMPLATE_TTL_TICKS)) {
+                return entry.path;
+            }
+            if (entry) sharedSpawnerRallyTemplateCache.delete(cacheKey);
+            return null;
+        }
+
+        function _setSpawnerRallyTemplatePath(cacheKey, path) {
+            sharedSpawnerRallyTemplateCache.set(cacheKey, {
+                path,
+                tick: gameTime,
+                version: pathTopologyVersion
+            });
+            _trimPathCacheIfNeeded(sharedSpawnerRallyTemplateCache, SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES);
         }
 
         function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
@@ -8099,6 +8480,7 @@
             }
 
             pickScoutDestination() {
+                if (Number.isFinite(this._nextScoutRetargetTick) && gameTime < this._nextScoutRetargetTick) return;
                 let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                 let rgx = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_W);
                 let rgy = Math.floor((typeof rng === 'function' ? rng() : Math.random()) * GRID_H);
@@ -8106,13 +8488,14 @@
                 rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
                 this._scoutTarget = { gx: rgx, gy: rgy };
                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                    this.path = findPathAStar(ugx, ugy, rgx, rgy, true, null, this.owner);
+                    this.path = findPathAStarTagged('scout_ai', ugx, ugy, rgx, rgy, true, null, this.owner);
                     this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                     pathfindBudget++;
                 } else {
                     this.path = null;
                     this.pathIndex = 0;
                 }
+                this._nextScoutRetargetTick = gameTime + Math.max(8, Math.floor(TICK_RATE * 0.5));
                 this.commandState = CMD_MOVING;
             }
 
@@ -8557,11 +8940,11 @@
                                 let lgx = Math.floor(lockX / TILE), lgy = Math.floor(lockY / TILE);
                                 let dest = findNearestWalkable(lgx, lgy, ugx, ugy, this);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
+                                    this.path = findPathAStarTagged('ai_combat', ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                                     this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                     pathfindBudget++;
                                 } else {
-                                    this._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_MOVING };
+                                    this._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_MOVING, src: 'ai_combat' };
                                 }
                                 this.commandState = CMD_MOVING;
                             } else {
@@ -8611,7 +8994,7 @@
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
+                                this.path = findPathAStarTagged('ai_combat', ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
                             } else {
@@ -8649,7 +9032,7 @@
                             let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                                this.path = findPathAStar(ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
+                                this.path = findPathAStarTagged('ai_combat', ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                                 this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                                 pathfindBudget++;
                             } else {
@@ -9156,6 +9539,7 @@
             }
 
             applyUnitLevelScaling(u, spawnInfo.level);
+            u.energy = u.maxEnergy;
             units.push(u);
             players[owner].popCount++;
 
@@ -9163,7 +9547,13 @@
             if (rallyTarget) {
                 let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                    u.path = findPathAStar(spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                    let rallyCacheKey = _makeSpawnerRallyTemplateKey(spawner, spawnPos.x, spawnPos.y, rgx, rgy, u);
+                    let templatedPath = _getSpawnerRallyTemplatePath(rallyCacheKey);
+                    if (!templatedPath) {
+                        templatedPath = findPathAStarTagged('spawner_rally', spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                        _setSpawnerRallyTemplatePath(rallyCacheKey, templatedPath);
+                    }
+                    u.path = templatedPath;
                     u.pathIndex = 0;
                     if (spawner.type === 'barrack') {
                         u.commandState = CMD_ATTACK_MOVING;
@@ -9676,6 +10066,36 @@
             return true;
         }
 
+        const WORKER_REPATH_MIN_INTERVAL_TICKS = 8;
+        const WORKER_REPATH_STALL_TICKS = 45;
+
+        function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = null, cacheProfileHint = null, force = false) {
+            if (!u) return null;
+            let key = String(targetGx) + ',' + String(targetGy) + '|' + (cacheProfileHint || 'default') + '|' + (canWalk ? 'cw1' : 'cw0');
+            if (!Number.isFinite(u._workerLastPathX) || !Number.isFinite(u._workerLastPathY)) {
+                u._workerLastPathX = u.x;
+                u._workerLastPathY = u.y;
+                u._workerPathStallTicks = 0;
+            } else {
+                let moved = Math.hypot(u.x - u._workerLastPathX, u.y - u._workerLastPathY);
+                u._workerPathStallTicks = moved >= 1.5 ? 0 : Math.max(0, Number(u._workerPathStallTicks) || 0) + 1;
+                u._workerLastPathX = u.x;
+                u._workerLastPathY = u.y;
+            }
+
+            let lastTick = Math.floor(Number(u._workerLastPathTick) || -999999);
+            let sameTarget = (u._workerLastPathKey === key);
+            let stalled = (Number(u._workerPathStallTicks) || 0) >= WORKER_REPATH_STALL_TICKS;
+            if (!force && sameTarget && !stalled && (gameTime - lastTick) < WORKER_REPATH_MIN_INTERVAL_TICKS) {
+                return u.path || null;
+            }
+
+            let path = findPathAStarTagged('worker_ai', startGx, startGy, targetGx, targetGy, false, canWalk, u.owner, cacheProfileHint);
+            u._workerLastPathKey = key;
+            u._workerLastPathTick = gameTime;
+            return path;
+        }
+
         // Worker AI logic - runs inside Unit.update() for collector/salvager/builder/healer types
         function updateWorkerAI(u) {
             if (!u.workerState) return;
@@ -9757,6 +10177,7 @@
                                     grid[mine.gy][mine.gx].type = TYPE_FLOOR;
                                     let idx = goldMines.indexOf(mine);
                                     if (idx >= 0) goldMines.splice(idx, 1);
+                                    clearTileEntity(mine.gx, mine.gy, mine);
                                     dirtyGrid = true;
                                 }
                             }
@@ -9890,7 +10311,7 @@
                             // If displaced while en route, re-path back to the same target.
                             let canWalk = _builderCanWalk(u.owner);
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                            u.path = findPathAStar(startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner, 'builder');
+                            u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'builder');
                             u.pathIndex = 0;
                             u.commandState = CMD_MOVING;
                             return;
@@ -10017,7 +10438,7 @@
                             u.workerState = 'MOVING_TO_BUILD';
                             let canWalk = _builderCanWalk(u.owner);
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                            u.path = findPathAStar(startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, false, canWalk, u.owner, 'builder');
+                            u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'builder');
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                         } else {
                             let route = getSpawnerRoute('builder_spawner', null);
@@ -10127,7 +10548,7 @@
                         if (dist > 24) {
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                             let targetGx = Math.floor(tx / TILE), targetGy = Math.floor(ty / TILE);
-                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
                             u.pathIndex = 0;
                             u.commandState = CMD_MOVING;
                             return;
@@ -10243,7 +10664,7 @@
                             u.workerState = 'MOVING_TO_HEAL';
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                             let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
-                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                         } else {
                             let route = getSpawnerRoute('healer_spawner', null);
@@ -10270,7 +10691,7 @@
                         _setWorkerTarget(u, target, 'research');
                         u.workerState = 'MOVING_TO_RESEARCH';
                         let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                        u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, null, u.owner);
+                        u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, null, null);
                         u.pathIndex = 0;
                         u.commandState = CMD_MOVING;
                     } else {
@@ -10288,7 +10709,7 @@
                         let dist = Math.hypot(target.x - u.x, target.y - u.y);
                         if (dist > 24) {
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                            u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, null, u.owner);
+                            u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, null, null);
                             u.pathIndex = 0;
                             u.commandState = CMD_MOVING;
                             return;
@@ -10376,7 +10797,7 @@
                             u.workerState = 'MOVING_TO_RESEARCH';
                             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                             let targetGx = Math.floor(u.workerTarget.x / TILE), targetGy = Math.floor(u.workerTarget.y / TILE);
-                            u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                            u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
                             u.pathIndex = 0;
                             u.commandState = CMD_MOVING;
                         } else {
@@ -10953,7 +11374,7 @@
             _setWorkerTarget(u, target, targetType);
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-            u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner);
+            u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, null, true);
             if (u.path) {
                 _collectorRememberGatherSite(u, target, targetType);
                 u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -10978,7 +11399,7 @@
                 _setWorkerTarget(u, bestItem, null);
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
                 let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                u.path = findPathAStar(startGx, startGy, bestItem.gx, bestItem.gy, false, canWalk, u.owner);
+                u.path = _requestWorkerPath(u, startGx, startGy, bestItem.gx, bestItem.gy, canWalk, null, true);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
                 else { _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
@@ -11033,7 +11454,7 @@
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             if (u.builderHasMaterial) {
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner, 'builder');
+                u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, 'builder', true);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 return;
             }
@@ -11047,7 +11468,7 @@
             } else {
                 // No spawner or no energy â€” go build directly (slow mode)
                 u.workerState = 'MOVING_TO_BUILD';
-                u.path = findPathAStar(startGx, startGy, target.gx, target.gy, false, canWalk, u.owner, 'builder');
+                u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, 'builder', true);
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
         }
@@ -11077,7 +11498,7 @@
 
             for (let s of collectorSpawners) {
                 if (s.type !== type || s.owner !== u.owner || s.energy <= 0 || s.underConstruction) continue;
-                let path = findPathAStar(startGx, startGy, s.gx, s.gy, false, canWalk, u.owner);
+                let path = _requestWorkerPath(u, startGx, startGy, s.gx, s.gy, canWalk, null);
                 if (!path || path.length === 0) continue;
                 let score = Math.max(0, path.length - 1);
                 if (score < bestScore) {
@@ -11273,6 +11694,10 @@
             if (target.energy <= 0 || target.underConstruction || target.markedForSalvage) return false;
             if (!isAutoResearchEnabled(target) || target.isUpgrading) return false;
             let task = target.researchTask;
+            if (!task) {
+                task = tryAdvancePlayerResearchTask(owner);
+                target.researchTask = task || null;
+            }
             if (!task) return false;
             return (task.workDone || 0) < task.workRequired;
         }
@@ -11348,7 +11773,7 @@
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    u.path = findPathAStar(startGx, startGy, queueTarget.gx, queueTarget.gy, false, null, u.owner);
+                    u.path = _requestWorkerPath(u, startGx, startGy, queueTarget.gx, queueTarget.gy, null, null, true);
                     u.pathIndex = 0;
                     u.commandState = CMD_MOVING;
                     return;
@@ -11384,7 +11809,7 @@
                     u.workerState = 'MOVING_TO_HEAL';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                     let targetGx = Math.floor(target.x / TILE), targetGy = Math.floor(target.y / TILE);
-                    u.path = findPathAStar(startGx, startGy, targetGx, targetGy, false, null, u.owner);
+                    u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null, true);
                     u.pathIndex = 0;
                     u.commandState = CMD_MOVING;
                     return;
@@ -13292,6 +13717,8 @@
             if (gameOver) return;
             gameTime++;
             pathfindBudget = 0;
+            _resetPathfindPerfTick();
+            _updateAdaptivePathBudget();
 
             let floorChanged = false;
             for (let y = 0; y < GRID_H; y++) {
@@ -13323,15 +13750,24 @@
             if (units.length > 0 && pathfindBudget < MAX_PATHS_PER_TICK) {
                 let start = pendingPathResolveCursor % units.length;
                 let checked = 0;
-                while (checked < units.length && pathfindBudget < MAX_PATHS_PER_TICK) {
+                let pending = [];
+                while (checked < units.length) {
                     let idx = (start + checked) % units.length;
                     checked++;
                     let u = units[idx];
                     if (u.dead || !u._pendingPathTarget) continue;
+                    pending.push(u);
+                }
+                pending.sort((a, b) => {
+                    return _pendingPathPriority(a._pendingPathTarget && a._pendingPathTarget.src) - _pendingPathPriority(b._pendingPathTarget && b._pendingPathTarget.src);
+                });
+                for (let u of pending) {
+                    if (pathfindBudget >= MAX_PATHS_PER_TICK) break;
                     let pt = u._pendingPathTarget;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                     let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                    let src = pt && pt.src ? pt.src : 'deferred_resolver';
+                    u.path = findPathAStarTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                     u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                     u.commandState = pt.cmd;
                     u._pendingPathTarget = null;
@@ -13419,6 +13855,7 @@
             else stopLaserSound();
 
             updateVisibility(localPlayerId);
+            _finalizePathfindPerfTick(_countPendingPathBacklog());
         }
 
         // ============================================================
@@ -13439,6 +13876,7 @@
             let multiBuilderAssignTargets = [];
             let multiCollectorAssignTargets = [];
             let multiHealerAssignTargets = [];
+            let multiResearcherAssignTargets = [];
 
             function isCtrlMultiCommand(evt) {
                 if (!evt) return false;
@@ -13823,7 +14261,9 @@
                     ? multiBuilderAssignTargets
                     : (targetType === 'mine' || targetType === 'farm')
                         ? multiCollectorAssignTargets
-                        : multiHealerAssignTargets;
+                        : (targetType === 'research')
+                            ? multiResearcherAssignTargets
+                            : multiHealerAssignTargets;
                 if (appendToMultiTargets && multiTargets.length > 0) {
                     multiTargets.push({ targetGx, targetGy });
                     if (multiTargets.length > 12) multiTargets.shift();
@@ -13866,6 +14306,7 @@
 
             function canPlaceSelectedBuildItemAt(gx, gy, purchaseCount) {
                 if (!selectedBuildItem) return false;
+                if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return false;
                 let _cd = BASE_CARD_TYPES[selectedBuildItem];
                 if (selectedBuildItem === 'area_upgrader') {
                     let aId = grid[gy][gx].areaId;
@@ -14056,6 +14497,27 @@
                             }
                         } else if (!isCtrlMulti) {
                             multiHealerAssignTargets = [];
+                        }
+
+                        if (researcherUnits.length > 0) {
+                            let researchTarget = null;
+                            let researchBestDist = Infinity;
+                            for (let s of collectorSpawners) {
+                                if (!_isResearcherTargetBuilding(s, localPlayerId)) continue;
+                                if (!isTileVisible(s.gx, s.gy)) continue;
+                                let d = Math.hypot(s.x - world.x, s.y - world.y);
+                                if (d > 22 || d >= researchBestDist) continue;
+                                researchBestDist = d;
+                                researchTarget = s;
+                            }
+                            if (researchTarget) {
+                                applyWorkerAssignTargets(researcherUnits, 'research', researchTarget.gx, researchTarget.gy, isCtrlMulti);
+                                updateInfoPanel();
+                                let nonWorkers = activeUnits.filter(u => !u.workerType);
+                                if (nonWorkers.length === 0) return;
+                            }
+                        } else if (!isCtrlMulti) {
+                            multiResearcherAssignTargets = [];
                         }
 
                         // --- Normal combat unit targeting ---
@@ -14631,7 +15093,7 @@
             }
             document.querySelectorAll('.go-graph-metric').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    let metric = btn.dataset.metric || 'energy';
+                    let metric = btn.dataset.metric || 'units';
                     renderGameGraph(metric);
                 });
             });
@@ -14955,12 +15417,12 @@
             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 let dest = findNearestWalkable(gx, gy, ugx, ugy, u);
-                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                 u._pendingPathTarget = null;
                 pathfindBudget++;
             } else {
-                u._pendingPathTarget = { gx, gy, cmd: CMD_MOVING };
+                u._pendingPathTarget = { gx, gy, cmd: CMD_MOVING, src: 'player_commands' };
                 u.path = null;
                 u.pathIndex = 0;
             }
@@ -15191,13 +15653,13 @@
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                                u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
                             } else {
                                 // Defer pathfinding to a later tick
-                                u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_MOVING };
+                                u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_MOVING, src: 'player_commands' };
                                 u.path = null; u.pathIndex = 0;
                             }
                         }
@@ -15216,12 +15678,12 @@
                             if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                                u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                                u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                                 u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                 u._pendingPathTarget = null;
                                 pathfindBudget++;
                             } else {
-                                u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_ATTACK_MOVING };
+                                u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_ATTACK_MOVING, src: 'player_commands' };
                                 u.path = null; u.pathIndex = 0;
                             }
                         }
@@ -15237,12 +15699,12 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                                    u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                                     u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                                     u._pendingPathTarget = null;
                                     pathfindBudget++;
                                 } else {
-                                    u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING };
+                                    u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
                                     u.path = null; u.pathIndex = 0;
                                 }
                             }
@@ -15262,11 +15724,11 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy, u);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
-                                    u.path = findPathAStar(ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                                    u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                                     u.pathIndex = 0; u._pendingPathTarget = null;
                                     pathfindBudget++;
                                 } else {
-                                    u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING };
+                                    u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
                                     u.path = null; u.pathIndex = 0;
                                 }
                             }
@@ -15374,6 +15836,28 @@
                                 else _clearHealerQueueCommit(u);
                                 _healerFindTarget(u, myGx, myGy);
                             }
+                        } else if (u.workerType === 'researcher' && a.targetType === 'research') {
+                            let rTarget = getTileEntityRef(a.targetGx, a.targetGy);
+                            if (!_isResearcherTargetBuilding(rTarget, playerId)) rTarget = null;
+                            if (rTarget) {
+                                if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
+                                _clearWorkerTarget(u);
+                                _setWorkerTarget(u, rTarget, 'research');
+                                u.workerState = 'MOVING_TO_RESEARCH';
+                                u._workerNextIdleRetargetTick = gameTime;
+                                u._researchSpawnerTarget = null;
+                                let path = _requestWorkerPath(u, myGx, myGy, rTarget.gx, rTarget.gy, null, null);
+                                if (path && path.length > 0) {
+                                    u.path = path;
+                                    u.pathIndex = 0;
+                                    u.commandState = CMD_MOVING;
+                                } else {
+                                    u.commandState = CMD_IDLE;
+                                }
+                            }
                         }
                     }
                 } else if (a.action === 'setRally') {
@@ -15454,65 +15938,41 @@
                 } else if (a.action === 'reorderResearch') {
                     let r = getSpawnerAtTile(a.gx, a.gy);
                     if (!(r && r.owner === playerId && r.type === 'research')) r = null;
-                    if (r) {
+                    if (r || getOwnedActiveResearchLabs(playerId).length > 0) {
                         let p = ensurePlayerResearchQueueState(playerId);
-                        let len = p.researchQueue.length;
                         let fromIsActive = !!a.fromActive;
                         let toIsActive = !!a.toActive;
+                        let ordered = [];
+                        if (p.researchTask) ordered.push(p.researchTask);
+                        for (let task of p.researchQueue) ordered.push(task);
+                        if (ordered.length <= 1) continue;
 
-                        let normalizeQueuedTask = (task) => {
-                            if (!task) return null;
-                            return { ...task, workDone: 0 };
-                        };
+                        let from = fromIsActive ? 0 : (Math.floor(Number(a.fromIndex)) + 1);
+                        if (!Number.isFinite(from) || from < 0 || from >= ordered.length) continue;
 
-                        let makeActiveTaskFromQueued = (task) => {
-                            let next = normalizeQueuedTask(task);
-                            if (!next) return null;
-                            next.workDone = 0;
-                            return next;
-                        };
-
+                        let rawTo = Math.floor(Number(a.toIndex));
+                        let to = 0;
                         if (toIsActive) {
-                            if (fromIsActive || len <= 0) continue;
-                            let from = Math.floor(Number(a.fromIndex));
-                            if (!Number.isFinite(from)) continue;
-                            from = Math.max(0, Math.min(len - 1, from));
-                            let [newActive] = p.researchQueue.splice(from, 1);
-                            if (!newActive) continue;
-                            let oldActive = p.researchTask ? normalizeQueuedTask(p.researchTask) : null;
-                            if (oldActive) {
-                                let insertAt = Math.max(0, Math.min(from, p.researchQueue.length));
-                                p.researchQueue.splice(insertAt, 0, oldActive);
-                            }
-                            p.researchTask = makeActiveTaskFromQueued(newActive);
-                            continue;
-                        }
-
-                        if (fromIsActive) {
-                            if (!p.researchTask || len <= 0) continue;
-                            let to = Math.floor(Number(a.toIndex));
-                            if (!Number.isFinite(to)) continue;
-                            to = Math.max(0, Math.min(len - 1, to));
-                            let [newActive] = p.researchQueue.splice(to, 1);
-                            if (!newActive) continue;
-                            let oldActive = normalizeQueuedTask(p.researchTask);
-                            p.researchQueue.splice(to, 0, oldActive);
-                            p.researchTask = makeActiveTaskFromQueued(newActive);
-                            continue;
-                        }
-
-                        if (len > 1) {
-                            let from = Math.floor(Number(a.fromIndex));
-                            let to = Math.floor(Number(a.toIndex));
-                            if (Number.isFinite(from) && Number.isFinite(to)) {
-                                from = Math.max(0, Math.min(len - 1, from));
-                                to = Math.max(0, Math.min(len - 1, to));
-                                if (from !== to) {
-                                    let [task] = p.researchQueue.splice(from, 1);
-                                    if (task) p.researchQueue.splice(to, 0, task);
-                                }
+                            to = 0;
+                        } else {
+                            if (!Number.isFinite(rawTo)) continue;
+                            if (fromIsActive) {
+                                to = Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
+                            } else {
+                                to = rawTo <= 0
+                                    ? 0
+                                    : Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
                             }
                         }
+                        if (from === to) continue;
+
+                        let [task] = ordered.splice(from, 1);
+                        if (!task) continue;
+                        ordered.splice(to, 0, task);
+
+                        p.researchTask = ordered[0] || null;
+                        p.researchQueue.length = 0;
+                        for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
                     }
                 } else if (a.action === 'markSalvage') {
                     // Toggle salvage mark on a building at gx,gy
@@ -15814,7 +16274,7 @@
             if (_hudCache.energy !== energy) { _hudCache.energy = energy; _hudEls.energy.textContent = `⚡ ${formatBigNumber(energy)}`; }
             let playerCap = getPlayerPopCap(localPlayerId);
             let cfgCap = getConfiguredMaxPop();
-            let popText = `Pop: ${p.popCount}/${playerCap}/${cfgCap}`;
+            let popText = `Pop: ${String(p.popCount).padStart(3, ' ')}/${String(playerCap).padStart(3, ' ')}/${String(cfgCap).padStart(3, ' ')}`;
             if (_hudCache.popText !== popText) { _hudCache.popText = popText; _hudEls.pop.textContent = popText; }
             let secs = Math.floor(gameTime / TICK_RATE);
             if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
@@ -17991,15 +18451,14 @@
                     : NaN;
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
-                let rowCursor = 'grab';
 
-                html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
+                html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
                 html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button><span>${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${e.gx}" data-gy="${e.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -18050,15 +18509,14 @@
                     : NaN;
 
                 let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
-                let rowCursor = 'grab';
 
-                html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" draggable="true" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;cursor:${rowCursor}">`;
+                html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
                 html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
                 html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
                 html += `</div>`;
                 html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-                html += `<span style="color:#fd0">${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span>`;
+                html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button><span>${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span></span>`;
                 html += `<div style="display:flex;align-items:center;gap:4px">`;
                 html += `<span class="info-research-dequeue-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
                 html += `<span class="info-research-buy-btn" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" style="cursor:${preview.atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
@@ -18866,92 +19324,38 @@
 
             restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
 
-            // Drag/drop reorder for research queue (includes active-task swapping at top)
-            panel.querySelectorAll('.info-research-queue-item').forEach(item => {
-                let isActiveItem = item.dataset.active === '1';
-                ensureResearchQueueDragReleaseHooks();
-
-                item.addEventListener('mousedown', (ev) => {
-                    if (ev.button !== 0) return;
-                    setResearchQueueDragGuard(true, false);
+            panel.querySelectorAll('.info-research-move-top-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = Number.parseInt(btn.dataset.gx, 10);
+                    let gy = Number.parseInt(btn.dataset.gy, 10);
+                    let owner = Number.parseInt(btn.dataset.owner, 10);
+                    let fromIndex = Math.floor(Number(btn.dataset.pendingIndex));
+                    let fromActive = btn.dataset.active === '1';
+                    if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(owner)) return;
+                    if (!Number.isFinite(fromIndex)) return;
+                    if (fromActive) return;
+                    let queueLen = getPlayerResearchQueue(owner).length;
+                    if (fromIndex < 0 || fromIndex >= queueLen) return;
+                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex: 0, fromActive: false, toActive: false });
+                    refreshThisPanel();
                 });
+            });
 
-                item.addEventListener('dragstart', (ev) => {
-                    let fromIndex = Number.parseInt(item.dataset.pendingIndex, 10);
-                    let fromActive = isActiveItem;
-                    if (!Number.isFinite(fromIndex) || (!fromActive && fromIndex < 0)) {
-                        ev.preventDefault();
-                        return;
-                    }
-                    let payload = {
-                        owner: item.dataset.owner || '',
-                        gx: item.dataset.gx || '',
-                        gy: item.dataset.gy || '',
-                        fromIndex,
-                        fromActive
-                    };
-                    setResearchQueueDragGuard(true, false);
-                    item.style.opacity = '0.55';
-                    if (ev.dataTransfer) {
-                        ev.dataTransfer.effectAllowed = 'move';
-                        ev.dataTransfer.setData('text/plain', JSON.stringify(payload));
-                    }
-                });
-
-                item.addEventListener('dragend', () => {
-                    setResearchQueueDragGuard(false, true);
-                    item.style.opacity = '';
-                    panel.querySelectorAll('.info-research-queue-item').forEach(el => {
-                        el.style.boxShadow = '';
-                    });
-                });
-
-                item.addEventListener('dragover', (ev) => {
-                    let raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
-                    if (!raw) return;
-                    let payload = null;
-                    try { payload = JSON.parse(raw); } catch { payload = null; }
-                    if (!payload) return;
-                    if (String(payload.owner || '') !== String(item.dataset.owner || '')) return;
-                    if (String(payload.gx || '') !== String(item.dataset.gx || '')) return;
-                    if (String(payload.gy || '') !== String(item.dataset.gy || '')) return;
-                    ev.preventDefault();
-                    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
-                    item.style.boxShadow = 'inset 0 0 0 1px #4af';
-                });
-
-                item.addEventListener('dragleave', () => {
-                    item.style.boxShadow = '';
-                });
-
-                item.addEventListener('drop', (ev) => {
-                    ev.preventDefault();
-                    item.style.boxShadow = '';
-                    setResearchQueueDragGuard(false, false);
-                    let raw = ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
-                    if (!raw) return;
-                    let payload = null;
-                    try { payload = JSON.parse(raw); } catch { payload = null; }
-                    if (!payload) return;
-
-                    if (String(payload.owner || '') !== String(item.dataset.owner || '')) return;
-                    if (String(payload.gx || '') !== String(item.dataset.gx || '')) return;
-                    if (String(payload.gy || '') !== String(item.dataset.gy || '')) return;
-
-                    let fromIndex = Math.floor(Number(payload.fromIndex));
-                    let fromActive = !!payload.fromActive;
-                    if (!Number.isFinite(fromIndex) || (!fromActive && fromIndex < 0)) return;
-                    let toIndex = Number.parseInt(item.dataset.pendingIndex, 10);
-                    let toActive = item.dataset.active === '1';
-                    if (!Number.isFinite(toIndex)) return;
-                    if (toIndex < 0) toIndex = 0;
-                    if (fromActive === toActive && fromIndex === toIndex) return;
-
-                    let gx = Number.parseInt(item.dataset.gx, 10);
-                    let gy = Number.parseInt(item.dataset.gy, 10);
-                    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
-
-                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex, fromActive, toActive });
+            panel.querySelectorAll('.info-research-move-bottom-btn').forEach(btn => {
+                bindInstantPress(btn, () => {
+                    let gx = Number.parseInt(btn.dataset.gx, 10);
+                    let gy = Number.parseInt(btn.dataset.gy, 10);
+                    let owner = Number.parseInt(btn.dataset.owner, 10);
+                    let fromIndex = Math.floor(Number(btn.dataset.pendingIndex));
+                    let fromActive = btn.dataset.active === '1';
+                    if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(owner)) return;
+                    if (!Number.isFinite(fromIndex)) return;
+                    let queueLen = getPlayerResearchQueue(owner).length;
+                    if (queueLen <= 0) return;
+                    let toIndex = queueLen - 1;
+                    if (!fromActive && (fromIndex < 0 || fromIndex >= queueLen)) return;
+                    if (!fromActive && fromIndex === toIndex) return;
+                    queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex, fromActive, toActive: false });
                     refreshThisPanel();
                 });
             });
@@ -21130,7 +21534,7 @@
             localDefeated = false;
             spectateMode = 'none';
             resignedTeams = new Set();
-            graphMetric = 'energy';
+            graphMetric = 'units';
             gameStatsHistory = [];
             researchPanelOpenState = {};
             researchQueuePanelOpenState = {};
