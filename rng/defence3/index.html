@@ -7834,6 +7834,88 @@
             return target.textCtx;
         }
 
+        const LEVEL_TEXT_SPRITE_CACHE = new Map();
+        const LEVEL_TEXT_SPRITE_CACHE_MAX = 512;
+        const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
+        const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
+
+        function _trimSpriteCache(cache, maxEntries) {
+            if (cache.size <= maxEntries) return;
+            let removeCount = cache.size - maxEntries;
+            for (let key of cache.keys()) {
+                cache.delete(key);
+                removeCount--;
+                if (removeCount <= 0) break;
+            }
+        }
+
+        function _getBuildingLevelTextSprite(label) {
+            let txt = String(label || '');
+            let cached = LEVEL_TEXT_SPRITE_CACHE.get(txt);
+            if (cached) return cached;
+
+            let scale = 2;
+            let canvas = document.createElement('canvas');
+            canvas.width = 32 * scale;
+            canvas.height = 48 * scale;
+            let c = canvas.getContext('2d');
+            c.setTransform(scale, 0, 0, scale, 0, 0);
+            c.clearRect(0, 0, 32, 48);
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.font = '700 8px Arial';
+            c.lineJoin = 'round';
+            c.strokeStyle = 'rgba(0,0,0,0.95)';
+            c.lineWidth = 2;
+            c.strokeText(txt, 16, 11);
+            c.fillStyle = '#eee';
+            c.fillText(txt, 16, 11);
+
+            cached = { canvas, scale };
+            LEVEL_TEXT_SPRITE_CACHE.set(txt, cached);
+            _trimSpriteCache(LEVEL_TEXT_SPRITE_CACHE, LEVEL_TEXT_SPRITE_CACHE_MAX);
+            return cached;
+        }
+
+        function _bindBuildingLevelTextSprite(target, label) {
+            if (!target) return;
+            let sprite = _getBuildingLevelTextSprite(label);
+            target.textCanvas = sprite.canvas;
+            target.textCtx = null;
+            target._textCanvasScale = sprite.scale;
+        }
+
+        function _getUnitLevelTextSprite(label) {
+            let txt = String(label || '');
+            let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(txt);
+            if (cached) return cached;
+
+            let scale = 2;
+            let width = 28;
+            let height = 14;
+            let canvas = document.createElement('canvas');
+            canvas.width = width * scale;
+            canvas.height = height * scale;
+            let c = canvas.getContext('2d');
+            c.setTransform(scale, 0, 0, scale, 0, 0);
+            c.clearRect(0, 0, width, height);
+            c.font = '700 7px Arial';
+            c.textAlign = 'center';
+            c.textBaseline = 'bottom';
+            c.fillStyle = '#ddd';
+            c.shadowColor = '#000';
+            c.shadowBlur = 1;
+            c.shadowOffsetX = 0;
+            c.shadowOffsetY = 0;
+            c.fillText(txt, width * 0.5, height - 1);
+            c.shadowColor = 'transparent';
+
+            cached = { canvas, width, height };
+            UNIT_LEVEL_TEXT_SPRITE_CACHE.set(txt, cached);
+            _trimSpriteCache(UNIT_LEVEL_TEXT_SPRITE_CACHE, UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX);
+            return cached;
+        }
+
         function drawLevelTextCache(ctx, target, x, y) {
             if (!target || !target.textCanvas || !target._textCanvasScale) return;
             let scale = target._textCanvasScale;
@@ -7881,20 +7963,8 @@
         }
 
         function updateItemTextCache(item) {
-            let c = ensureLevelTextCanvas(item);
-            let scale = item._textCanvasScale || 1;
-            c.setTransform(scale, 0, 0, scale, 0, 0);
-            c.clearRect(0, 0, 32, 48);
             let label = getLevelLabelText(item);
-            c.textAlign = "center";
-            c.textBaseline = "middle";
-            c.font = "700 8px Arial";
-            c.lineJoin = 'round';
-            c.strokeStyle = 'rgba(0,0,0,0.95)';
-            c.lineWidth = 2;
-            c.strokeText(label, 16, 11);
-            c.fillStyle = "#eee";
-            c.fillText(label, 16, 11);
+            _bindBuildingLevelTextSprite(item, label);
         }
 
         // ============================================================
@@ -7919,7 +7989,7 @@
                 this.maxEnergy = baseEnergy;
                 this.energy = baseEnergy;
 
-                this.textCtx = ensureLevelTextCanvas(this);
+                this.textCtx = null;
                 this.updateTextCache();
                 this.updateStats();
                 this.cd = 0; this.angle = 0;
@@ -7937,20 +8007,8 @@
             }
 
             updateTextCache() {
-                let c = ensureLevelTextCanvas(this);
-                let scale = this._textCanvasScale || 1;
-                c.setTransform(scale, 0, 0, scale, 0, 0);
-                c.clearRect(0, 0, 32, 48);
                 let label = getLevelLabelText(this);
-                c.textAlign = "center";
-                c.textBaseline = "middle";
-                c.font = "700 8px Arial";
-                c.lineJoin = 'round';
-                c.strokeStyle = 'rgba(0,0,0,0.95)';
-                c.lineWidth = 2;
-                c.strokeText(label, 16, 11);
-                c.fillStyle = "#eee";
-                c.fillText(label, 16, 11);
+                _bindBuildingLevelTextSprite(this, label);
             }
 
             updateStats() {
@@ -9377,21 +9435,11 @@
                 }
 
                 if (shouldShowUnitLevels()) {
-                    ctx.save();
-                    ctx.font = '700 7px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillStyle = '#ddd';
-                    // Use shadow instead of strokeText (faster)
-                    ctx.shadowColor = '#000';
-                    ctx.shadowBlur = 1;
-                    ctx.shadowOffsetX = 0;
-                    ctx.shadowOffsetY = 0;
                     let txt = getUnitLevelLabelText(this);
-                    let ty = this.y - this.r - 7;
-                    ctx.fillText(txt, this.x, ty);
-                    ctx.shadowColor = 'transparent';
-                    ctx.restore();
+                    let sprite = _getUnitLevelTextSprite(txt);
+                    let dx = Math.round(this.x - sprite.width * 0.5);
+                    let dy = Math.round(this.y - this.r - 7 - sprite.height);
+                    ctx.drawImage(sprite.canvas, dx, dy, sprite.width, sprite.height);
                 }
 
                 // Carrying value indicator for workers
@@ -12511,6 +12559,43 @@
             ctx.restore();
         }
 
+        const PROGRESS_BAR_SPRITE_CACHE = new Map();
+        const PROGRESS_BAR_SPRITE_CACHE_MAX = 4096;
+
+        function _getProgressBarSprite(width, height, bgColor, fillColor, pctInt) {
+            let w = Math.max(1, Math.floor(width || 1));
+            let h = Math.max(1, Math.floor(height || 1));
+            let p = Math.max(0, Math.min(100, Math.floor(pctInt || 0)));
+            let key = w + 'x' + h + '|' + bgColor + '|' + fillColor + '|' + p;
+            let cached = PROGRESS_BAR_SPRITE_CACHE.get(key);
+            if (cached) return cached;
+
+            let c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            let g = c.getContext('2d');
+            g.fillStyle = bgColor;
+            g.fillRect(0, 0, w, h);
+            if (p > 0) {
+                g.fillStyle = fillColor;
+                g.fillRect(0, 0, Math.round((w * p) / 100), h);
+            }
+
+            PROGRESS_BAR_SPRITE_CACHE.set(key, c);
+            _trimSpriteCache(PROGRESS_BAR_SPRITE_CACHE, PROGRESS_BAR_SPRITE_CACHE_MAX);
+            return c;
+        }
+
+        function _drawCachedProgressBar(ctx, centerX, y, width, height, pct, bgColor, fillColor) {
+            let w = Math.max(1, Math.floor(width || 1));
+            let h = Math.max(1, Math.floor(height || 1));
+            let pctInt = Math.round(Math.max(0, Math.min(1, Number(pct) || 0)) * 100);
+            let sprite = _getProgressBarSprite(w, h, bgColor, fillColor, pctInt);
+            let x = Math.round(centerX - w / 2);
+            let py = Math.round(y);
+            ctx.drawImage(sprite, x, py, w, h);
+        }
+
         function drawBuildingEnergyProgressBar(ctx, entity, centerX, y, width = 24, height = 3) {
             let maxEnergy = entity && entity.maxEnergy ? entity.maxEnergy : 0;
             if (maxEnergy <= 0) return false;
@@ -12522,16 +12607,10 @@
             if (hasStackQueue) {
                 let stackPct = getThingStackingProgressRatio(entity);
                 let stackY = y - height;
-                ctx.fillStyle = '#11291c';
-                ctx.fillRect(centerX - width / 2, stackY, width, height);
-                ctx.fillStyle = '#2fd27f';
-                ctx.fillRect(centerX - width / 2, stackY, width * stackPct, height);
+                _drawCachedProgressBar(ctx, centerX, stackY, width, height, stackPct, '#11291c', '#2fd27f');
             }
 
-            ctx.fillStyle = isProgress ? '#333' : '#600';
-            ctx.fillRect(centerX - width / 2, y, width, height);
-            ctx.fillStyle = isProgress ? '#fa0' : '#0f0';
-            ctx.fillRect(centerX - width / 2, y, width * pct, height);
+            _drawCachedProgressBar(ctx, centerX, y, width, height, pct, isProgress ? '#333' : '#600', isProgress ? '#fa0' : '#0f0');
             return true;
         }
 
@@ -13288,6 +13367,9 @@
 
             let activeSelectedEntities = getActiveEntities();
             let activeSelectedUnits = getActiveUnits();
+            let selectedEntityRects = [];
+            let buildingRallySegments = [];
+            let buildingRallyMarkers = [];
 
             // Selected entities highlight
             for (let ent of activeSelectedEntities) {
@@ -13295,30 +13377,13 @@
                 let ex = ent.x || (ent.gx * TILE + 16);
                 let ey = ent.y || (ent.gy * TILE + 16);
                 if (showSelectionOutlinesForBuildings()) {
-                    applyOverlayLineType(ctx, selectionOutlineType);
-                    ctx.strokeStyle = '#9aa'; ctx.lineWidth = 1;
-                    ctx.strokeRect(ex - 18, ey - 18, 36, 36);
-                    ctx.setLineDash([]);
+                    selectedEntityRects.push([ex - 18, ey - 18, 36, 36]);
                 }
                 // Rally point for barracks and spawners (including research labs)
                 if (['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
                     let rx = ent.rallyX, ry = ent.rallyY;
-                    if (showRallyLinesForBuildings()) {
-                        applyOverlayLineType(ctx, rallyLineType);
-                        ctx.strokeStyle = '#9aa'; ctx.lineWidth = 1;
-                        ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(rx, ry); ctx.stroke();
-                        ctx.fillStyle = '#9aa';
-                        ctx.beginPath(); ctx.moveTo(rx, ry - 12); ctx.lineTo(rx + 8, ry - 8); ctx.lineTo(rx, ry - 4); ctx.fill();
-                        ctx.strokeStyle = '#9aa'; ctx.lineWidth = 1;
-                        ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx, ry - 12); ctx.stroke();
-                        ctx.setLineDash([]);
-                    } else {
-                        ctx.strokeStyle = '#9aa';
-                        ctx.lineWidth = 1.5;
-                        ctx.beginPath(); ctx.arc(rx, ry, 6, 0, 6.28); ctx.stroke();
-                        ctx.beginPath(); ctx.moveTo(rx - 4, ry); ctx.lineTo(rx + 4, ry); ctx.stroke();
-                        ctx.beginPath(); ctx.moveTo(rx, ry - 4); ctx.lineTo(rx, ry + 4); ctx.stroke();
-                    }
+                    buildingRallySegments.push([ex, ey, rx, ry]);
+                    buildingRallyMarkers.push([rx, ry]);
                 }
                 if (ent instanceof Tower && ent.owner === localPlayerId) {
                     let marker = resolveTowerPreferredTargetVisual(ent);
@@ -13332,6 +13397,60 @@
                         ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 6.28); ctx.fill();
                         ctx.restore();
                     }
+                }
+            }
+
+            if (selectedEntityRects.length > 0) {
+                applyOverlayLineType(ctx, selectionOutlineType);
+                ctx.strokeStyle = '#9aa';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for (let rect of selectedEntityRects) {
+                    ctx.rect(rect[0], rect[1], rect[2], rect[3]);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            if (buildingRallyMarkers.length > 0) {
+                if (showRallyLinesForBuildings()) {
+                    applyOverlayLineType(ctx, rallyLineType);
+                    ctx.strokeStyle = '#9aa';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    for (let seg of buildingRallySegments) {
+                        ctx.moveTo(seg[0], seg[1]);
+                        ctx.lineTo(seg[2], seg[3]);
+                        ctx.moveTo(seg[2], seg[3]);
+                        ctx.lineTo(seg[2], seg[3] - 12);
+                    }
+                    ctx.stroke();
+
+                    ctx.fillStyle = '#9aa';
+                    ctx.beginPath();
+                    for (let pos of buildingRallyMarkers) {
+                        let rx = pos[0], ry = pos[1];
+                        ctx.moveTo(rx, ry - 12);
+                        ctx.lineTo(rx + 8, ry - 8);
+                        ctx.lineTo(rx, ry - 4);
+                        ctx.closePath();
+                    }
+                    ctx.fill();
+                    ctx.setLineDash([]);
+                } else {
+                    ctx.strokeStyle = '#9aa';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    for (let pos of buildingRallyMarkers) {
+                        let rx = pos[0], ry = pos[1];
+                        ctx.moveTo(rx + 6, ry);
+                        ctx.arc(rx, ry, 6, 0, 6.28);
+                        ctx.moveTo(rx - 4, ry);
+                        ctx.lineTo(rx + 4, ry);
+                        ctx.moveTo(rx, ry - 4);
+                        ctx.lineTo(rx, ry + 4);
+                    }
+                    ctx.stroke();
                 }
             }
 
@@ -13468,12 +13587,17 @@
                 if (markers.size === 0) return;
                 ctx.strokeStyle = color;
                 ctx.lineWidth = 1.5;
+                ctx.beginPath();
                 for (let pos of markers.values()) {
                     let dx = pos[0], dy = pos[1];
-                    ctx.beginPath(); ctx.arc(dx, dy, 6, 0, 6.28); ctx.stroke();
-                    ctx.beginPath(); ctx.moveTo(dx - 4, dy); ctx.lineTo(dx + 4, dy); ctx.stroke();
-                    ctx.beginPath(); ctx.moveTo(dx, dy - 4); ctx.lineTo(dx, dy + 4); ctx.stroke();
+                    ctx.moveTo(dx + 6, dy);
+                    ctx.arc(dx, dy, 6, 0, 6.28);
+                    ctx.moveTo(dx - 4, dy);
+                    ctx.lineTo(dx + 4, dy);
+                    ctx.moveTo(dx, dy - 4);
+                    ctx.lineTo(dx, dy + 4);
                 }
+                ctx.stroke();
             };
 
             drawMarkers(moveMarkers, '#4f4');
