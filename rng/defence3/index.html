@@ -5180,6 +5180,224 @@
         return selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
     }
 
+    const OVERLAY_SPRITE_CACHE_MAX_SIDE = 2048;
+    const OVERLAY_SPRITE_CACHE_MAX_AREA = 2200000;
+    const _unitSelectionRingSpriteCache = new Map();
+    const _overlayRectOutlineSpriteCache = new Map();
+    const _overlayLineSpriteCache = new Map();
+    const _overlayMarkerSpriteCache = new Map();
+
+    function _getCachedOverlaySprite(cacheEntry, key, minX, minY, maxX, maxY, drawFn) {
+        if (!cacheEntry || typeof drawFn !== 'function') return null;
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+
+        let pad = 4;
+        let sx = Math.floor(minX - pad);
+        let sy = Math.floor(minY - pad);
+        let ex = Math.ceil(maxX + pad);
+        let ey = Math.ceil(maxY + pad);
+        let w = Math.max(1, ex - sx + 1);
+        let h = Math.max(1, ey - sy + 1);
+
+        if (w > OVERLAY_SPRITE_CACHE_MAX_SIDE || h > OVERLAY_SPRITE_CACHE_MAX_SIDE || (w * h) > OVERLAY_SPRITE_CACHE_MAX_AREA) {
+            cacheEntry.key = '';
+            cacheEntry.sprite = null;
+            return null;
+        }
+
+        if (cacheEntry.key === key && cacheEntry.sprite) return cacheEntry.sprite;
+
+        let canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        let c = canvas.getContext('2d');
+        c.imageSmoothingEnabled = false;
+        c.translate(-sx, -sy);
+        drawFn(c);
+
+        let sprite = { canvas, x: sx, y: sy };
+        cacheEntry.key = key;
+        cacheEntry.sprite = sprite;
+        return sprite;
+    }
+
+    function _overlayBoundsVisible(minX, minY, maxX, maxY, viewMinX, viewMinY, viewMaxX, viewMaxY, pad = 0) {
+        let p = Math.max(0, Number(pad) || 0);
+        if ((maxX + p) < viewMinX) return false;
+        if ((maxY + p) < viewMinY) return false;
+        if ((minX - p) > viewMaxX) return false;
+        if ((minY - p) > viewMaxY) return false;
+        return true;
+    }
+
+    function _getUnitSelectionRingSprite(radius, lineType, strokeColor) {
+        let r = Math.max(2, Math.round(Number(radius) || 0));
+        let key = r + '|' + String(lineType || OVERLAY_LINE_SOLID) + '|' + String(strokeColor || '#9aa');
+        let cached = _unitSelectionRingSpriteCache.get(key);
+        if (cached) return cached;
+
+        let pad = 3;
+        let size = Math.max(8, (r + pad) * 2 + 2);
+        let half = size * 0.5;
+        let c = document.createElement('canvas');
+        c.width = size;
+        c.height = size;
+        let g = c.getContext('2d');
+        g.imageSmoothingEnabled = false;
+        g.strokeStyle = strokeColor || '#9aa';
+        g.lineWidth = 1;
+        if (lineType === OVERLAY_LINE_DOTTED) g.setLineDash([4, 3]);
+        else g.setLineDash([]);
+        g.beginPath();
+        g.arc(half, half, r, 0, 6.28);
+        g.stroke();
+        g.setLineDash([]);
+
+        cached = { canvas: c, size, half };
+        _unitSelectionRingSpriteCache.set(key, cached);
+        if (_unitSelectionRingSpriteCache.size > 80) {
+            let trim = _unitSelectionRingSpriteCache.size - 80;
+            for (let k of _unitSelectionRingSpriteCache.keys()) {
+                _unitSelectionRingSpriteCache.delete(k);
+                trim--;
+                if (trim <= 0) break;
+            }
+        }
+        return cached;
+    }
+
+    function _trimSmallSpriteCache(cache, maxEntries) {
+        if (!cache || cache.size <= maxEntries) return;
+        let trim = cache.size - maxEntries;
+        for (let k of cache.keys()) {
+            cache.delete(k);
+            trim--;
+            if (trim <= 0) break;
+        }
+    }
+
+    function _getOverlayRectOutlineSprite(w, h, lineType, strokeColor, lineWidth = 1) {
+        let rw = Math.max(2, Math.round(Number(w) || 0));
+        let rh = Math.max(2, Math.round(Number(h) || 0));
+        let lw = Math.max(1, Number(lineWidth) || 1);
+        let color = String(strokeColor || '#9aa');
+        let key = rw + '|' + rh + '|' + String(lineType || OVERLAY_LINE_SOLID) + '|' + color + '|' + lw;
+        let cached = _overlayRectOutlineSpriteCache.get(key);
+        if (cached) return cached;
+
+        let pad = Math.ceil(lw) + 2;
+        let cw = rw + pad * 2;
+        let ch = rh + pad * 2;
+        let c = document.createElement('canvas');
+        c.width = cw;
+        c.height = ch;
+        let g = c.getContext('2d');
+        g.imageSmoothingEnabled = false;
+        g.strokeStyle = color;
+        g.lineWidth = lw;
+        if (lineType === OVERLAY_LINE_DOTTED) g.setLineDash([4, 3]);
+        else g.setLineDash([]);
+        g.strokeRect(pad + 0.5, pad + 0.5, rw - 1, rh - 1);
+        g.setLineDash([]);
+
+        cached = { canvas: c, offsetX: pad, offsetY: pad };
+        _overlayRectOutlineSpriteCache.set(key, cached);
+        _trimSmallSpriteCache(_overlayRectOutlineSpriteCache, 32);
+        return cached;
+    }
+
+    function _getOverlayLineSprite(lineType, strokeColor, lineWidth = 1) {
+        let len = 64;
+        let lw = Math.max(1, Number(lineWidth) || 1);
+        let color = String(strokeColor || '#9aa');
+        let key = String(lineType || OVERLAY_LINE_SOLID) + '|' + color + '|' + lw;
+        let cached = _overlayLineSpriteCache.get(key);
+        if (cached) return cached;
+
+        let pad = Math.ceil(lw) + 2;
+        let cw = len + pad * 2;
+        let ch = pad * 2 + 2;
+        let cy = ch * 0.5;
+        let c = document.createElement('canvas');
+        c.width = cw;
+        c.height = ch;
+        let g = c.getContext('2d');
+        g.imageSmoothingEnabled = false;
+        g.strokeStyle = color;
+        g.lineWidth = lw;
+        if (lineType === OVERLAY_LINE_DOTTED) g.setLineDash([4, 3]);
+        else g.setLineDash([]);
+        g.beginPath();
+        g.moveTo(pad, cy + 0.5);
+        g.lineTo(pad + len, cy + 0.5);
+        g.stroke();
+        g.setLineDash([]);
+
+        cached = { canvas: c, halfW: cw * 0.5, halfH: ch * 0.5, baseLen: len };
+        _overlayLineSpriteCache.set(key, cached);
+        _trimSmallSpriteCache(_overlayLineSpriteCache, 128);
+        return cached;
+    }
+
+    function _drawOverlayLineSprite(ctx, x1, y1, x2, y2, lineType, strokeColor, lineWidth = 1) {
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let len = Math.hypot(dx, dy);
+        if (len < 1) return;
+        let sprite = _getOverlayLineSprite(lineType, strokeColor, lineWidth);
+        let cx = (x1 + x2) * 0.5;
+        let cy = (y1 + y2) * 0.5;
+        let ang = Math.atan2(dy, dx);
+        let sx = len / sprite.baseLen;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(ang);
+        ctx.scale(sx, 1);
+        ctx.drawImage(sprite.canvas, -sprite.halfW, -sprite.halfH);
+        ctx.restore();
+    }
+
+    function _getOverlayMarkerSprite(kind, color) {
+        let k = String(kind || 'plus');
+        let cKey = String(color || '#9aa');
+        let key = k + '|' + cKey;
+        let cached = _overlayMarkerSpriteCache.get(key);
+        if (cached) return cached;
+
+        let c = document.createElement('canvas');
+        c.width = 20;
+        c.height = 20;
+        let g = c.getContext('2d');
+        g.imageSmoothingEnabled = false;
+
+        if (k === 'rally_arrow') {
+            g.fillStyle = cKey;
+            g.beginPath();
+            g.moveTo(6, 2);
+            g.lineTo(14, 6);
+            g.lineTo(6, 10);
+            g.closePath();
+            g.fill();
+            cached = { canvas: c, offsetX: 6, offsetY: 10 };
+        } else {
+            g.strokeStyle = cKey;
+            g.lineWidth = 1.5;
+            g.beginPath();
+            g.moveTo(16, 10);
+            g.arc(10, 10, 6, 0, 6.28);
+            g.moveTo(6, 10);
+            g.lineTo(14, 10);
+            g.moveTo(10, 6);
+            g.lineTo(10, 14);
+            g.stroke();
+            cached = { canvas: c, offsetX: 10, offsetY: 10 };
+        }
+
+        _overlayMarkerSpriteCache.set(key, cached);
+        _trimSmallSpriteCache(_overlayMarkerSpriteCache, 16);
+        return cached;
+    }
+
         // Tick system
         let currentTick = 0;
         let localInputBuffer = {}; // {tick: [actions]}
@@ -9557,15 +9775,6 @@
 
             draw(ctx) {
                 if (this.dead || this.teleportHideTicks > 0) return;
-                // Owner indicator ring
-                let selected = selectedUnits.includes(this) && activeSubGroups[getUnitGroupKey(this)] !== false;
-                if (selected && showSelectionOutlinesForUnits()) {
-                    applyOverlayLineType(ctx, selectionOutlineType);
-                    ctx.strokeStyle = '#9aa'; ctx.lineWidth = 1;
-                    ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 4, 0, 6.28); ctx.stroke();
-                    ctx.setLineDash([]);
-                }
-
                 // Unit body
                 let strokeColor = '#000', lw = 1;
                 if (this.burning > 0) strokeColor = '#f50';
@@ -14089,24 +14298,43 @@
 
             let activeSelectedEntities = getActiveEntities();
             let activeSelectedUnits = getActiveUnits();
+            let localOwnerIndex = players.findIndex(p => p.id === myPeerId);
+            let overlayViewMinX = camera.x;
+            let overlayViewMinY = camera.y;
+            let overlayViewMaxX = camera.x + vw;
+            let overlayViewMaxY = camera.y + vh;
             let selectedEntityRects = [];
-            let buildingRallySegments = [];
-            let buildingRallyMarkers = [];
+            let stationaryBuildingRallySegments = [];
+            let stationaryBuildingRallyMarkers = [];
+            let dynamicBuildingRallySegments = [];
+            let dynamicBuildingRallyMarkers = [];
+            let towerRangeEntries = [];
 
-            // Selected entities highlight
+            // Selected entities highlight + rally + tower target/range metadata.
             for (let ent of activeSelectedEntities) {
                 if (ent.energy !== undefined && ent.energy <= 0) continue;
                 let ex = ent.x || (ent.gx * TILE + 16);
                 let ey = ent.y || (ent.gy * TILE + 16);
-                if (showSelectionOutlinesForBuildings()) {
+                let entVisible = _overlayBoundsVisible(ex, ey, ex, ey, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 64);
+
+                if (entVisible && showSelectionOutlinesForBuildings()) {
                     selectedEntityRects.push([ex - 18, ey - 18, 36, 36]);
                 }
-                // Rally point for barracks and spawners (including research labs)
+
                 if (['barrack', 'spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
                     let rx = ent.rallyX, ry = ent.rallyY;
-                    buildingRallySegments.push([ex, ey, rx, ry]);
-                    buildingRallyMarkers.push([rx, ry]);
+                    let segVisible = _overlayBoundsVisible(Math.min(ex, rx), Math.min(ey, ry), Math.max(ex, rx), Math.max(ey, ry), overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 20);
+                    if (!segVisible) continue;
+                    let isDynamicRally = ent.rallyTargetUnitId != null;
+                    if (isDynamicRally) {
+                        dynamicBuildingRallySegments.push([ex, ey, rx, ry]);
+                        dynamicBuildingRallyMarkers.push([rx, ry]);
+                    } else {
+                        stationaryBuildingRallySegments.push([ex, ey, rx, ry]);
+                        stationaryBuildingRallyMarkers.push([rx, ry]);
+                    }
                 }
+
                 if (ent instanceof Tower && ent.owner === localPlayerId) {
                     let marker = resolveTowerPreferredTargetVisual(ent);
                     if (marker && Number.isFinite(marker.x) && Number.isFinite(marker.y)) {
@@ -14120,78 +14348,83 @@
                         ctx.restore();
                     }
                 }
+
+                if (renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
+                    if (ent instanceof Tower) {
+                        let visTiles = getEntityVisibilityRangeTiles(ent);
+                        let rr = Number.isFinite(visTiles) ? visTiles * TILE : 0;
+                        if (rr > 0) {
+                            if (!_overlayBoundsVisible(ex - rr, ey - rr, ex + rr, ey + rr, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 8)) continue;
+                            let color = (ent.owner === localOwnerIndex || !isMultiplayer) ? 'rgba(0,255,0,0.15)' : 'rgba(255,0,0,0.15)';
+                            towerRangeEntries.push([ex, ey, rr, color]);
+                        }
+                    }
+                }
             }
 
             if (selectedEntityRects.length > 0) {
-                applyOverlayLineType(ctx, selectionOutlineType);
-                ctx.strokeStyle = '#9aa';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
+                let rectSprite = _getOverlayRectOutlineSprite(36, 36, selectionOutlineType, '#9aa', 1);
                 for (let rect of selectedEntityRects) {
-                    ctx.rect(rect[0], rect[1], rect[2], rect[3]);
+                    ctx.drawImage(rectSprite.canvas, Math.round(rect[0] - rectSprite.offsetX), Math.round(rect[1] - rectSprite.offsetY));
                 }
-                ctx.stroke();
-                ctx.setLineDash([]);
             }
 
-            if (buildingRallyMarkers.length > 0) {
+            if (stationaryBuildingRallyMarkers.length > 0) {
                 if (showRallyLinesForBuildings()) {
-                    applyOverlayLineType(ctx, rallyLineType);
-                    ctx.strokeStyle = '#9aa';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    for (let seg of buildingRallySegments) {
-                        ctx.moveTo(seg[0], seg[1]);
-                        ctx.lineTo(seg[2], seg[3]);
-                        ctx.moveTo(seg[2], seg[3]);
-                        ctx.lineTo(seg[2], seg[3] - 12);
+                    let markerSprite = _getOverlayMarkerSprite('rally_arrow', '#9aa');
+                    for (let seg of stationaryBuildingRallySegments) {
+                        _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, '#9aa', 1);
+                        _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, '#9aa', 1);
                     }
-                    ctx.stroke();
-
-                    ctx.fillStyle = '#9aa';
-                    ctx.beginPath();
-                    for (let pos of buildingRallyMarkers) {
+                    for (let pos of stationaryBuildingRallyMarkers) {
                         let rx = pos[0], ry = pos[1];
-                        ctx.moveTo(rx, ry - 12);
-                        ctx.lineTo(rx + 8, ry - 8);
-                        ctx.lineTo(rx, ry - 4);
-                        ctx.closePath();
+                        ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY));
                     }
-                    ctx.fill();
-                    ctx.setLineDash([]);
                 } else {
-                    ctx.strokeStyle = '#9aa';
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    for (let pos of buildingRallyMarkers) {
+                    let markerSprite = _getOverlayMarkerSprite('plus', '#9aa');
+                    for (let pos of stationaryBuildingRallyMarkers) {
                         let rx = pos[0], ry = pos[1];
-                        ctx.moveTo(rx + 6, ry);
-                        ctx.arc(rx, ry, 6, 0, 6.28);
-                        ctx.moveTo(rx - 4, ry);
-                        ctx.lineTo(rx + 4, ry);
-                        ctx.moveTo(rx, ry - 4);
-                        ctx.lineTo(rx, ry + 4);
+                        ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY));
                     }
-                    ctx.stroke();
                 }
             }
 
-            // Range Outlines
-            if (renderRangeMode !== RENDER_RANGE_NONE) {
-                ctx.lineWidth = 1;
-                if (renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
-                    for (let ent of activeSelectedEntities) {
-                        if (!(ent instanceof Tower)) continue;
-                        if (ent.energy !== undefined && ent.energy <= 0) continue;
-                        let visTiles = getEntityVisibilityRangeTiles(ent);
-                        let rr = Number.isFinite(visTiles) ? visTiles * TILE : 0;
-                        if (rr <= 0) continue;
-                        let ex = ent.x || (ent.gx * TILE + 16);
-                        let ey = ent.y || (ent.gy * TILE + 16);
-                        ctx.strokeStyle = (ent.owner === players.findIndex(p => p.id === myPeerId) || !isMultiplayer) ? `rgba(0,255,0,0.15)` : `rgba(255,0,0,0.15)`;
-                        ctx.beginPath(); ctx.arc(ex, ey, rr, 0, 6.28); ctx.stroke();
+            if (dynamicBuildingRallyMarkers.length > 0) {
+                if (showRallyLinesForBuildings()) {
+                    let markerSprite = _getOverlayMarkerSprite('rally_arrow', '#9aa');
+                    for (let seg of dynamicBuildingRallySegments) {
+                        _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, '#9aa', 1);
+                        _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, '#9aa', 1);
+                    }
+                    for (let pos of dynamicBuildingRallyMarkers) {
+                        let rx = pos[0], ry = pos[1];
+                        ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY));
+                    }
+                } else {
+                    let markerSprite = _getOverlayMarkerSprite('plus', '#9aa');
+                    for (let pos of dynamicBuildingRallyMarkers) {
+                        let rx = pos[0], ry = pos[1];
+                        ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY));
                     }
                 }
+            }
+
+            // Range overlays: cache stationary tower circles, draw unit circles dynamically.
+            if (renderRangeMode !== RENDER_RANGE_NONE) {
+                if (towerRangeEntries.length > 0) {
+                    let spriteByKey = new Map();
+                    for (let e of towerRangeEntries) {
+                        let rr = Math.max(2, Math.round(e[2]));
+                        let sKey = rr + '|' + e[3];
+                        let ring = spriteByKey.get(sKey);
+                        if (!ring) {
+                            ring = _getUnitSelectionRingSprite(rr, OVERLAY_LINE_SOLID, e[3]);
+                            spriteByKey.set(sKey, ring);
+                        }
+                        ctx.drawImage(ring.canvas, Math.round(e[0] - ring.half), Math.round(e[1] - ring.half));
+                    }
+                }
+
                 if (renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
                     for (let u of activeSelectedUnits) {
                         if (!u || u.dead) continue;
@@ -14199,9 +14432,31 @@
                         if (rr <= 0) continue;
                         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
                         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-                        ctx.strokeStyle = (u.owner === players.findIndex(p => p.id === myPeerId) || !isMultiplayer) ? `rgba(120,220,255,0.18)` : `rgba(255,150,150,0.18)`;
-                        ctx.beginPath(); ctx.arc(ux, uy, rr, 0, 6.28); ctx.stroke();
+                        if (!_overlayBoundsVisible(ux - rr, uy - rr, ux + rr, uy + rr, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 8)) continue;
+                        let color = (u.owner === localOwnerIndex || !isMultiplayer) ? 'rgba(120,220,255,0.18)' : 'rgba(255,150,150,0.18)';
+                        let ring = _getUnitSelectionRingSprite(rr, OVERLAY_LINE_SOLID, color);
+                        ctx.drawImage(ring.canvas, Math.round(ux - ring.half), Math.round(uy - ring.half));
                     }
+                }
+            }
+
+            if (showSelectionOutlinesForUnits() && activeSelectedUnits.length > 0) {
+                let spriteByRadius = new Map();
+                for (let u of activeSelectedUnits) {
+                    if (!u || u.dead) continue;
+                    let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
+                    let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
+                    let rr = (Number(u.r) || 8) + 4;
+                    if (!_overlayBoundsVisible(ux - rr, uy - rr, ux + rr, uy + rr, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 6)) continue;
+                    let rKey = Math.max(2, Math.round(rr));
+                    let ring = spriteByRadius.get(rKey);
+                    if (!ring) {
+                        ring = _getUnitSelectionRingSprite(rKey, selectionOutlineType, '#9aa');
+                        spriteByRadius.set(rKey, ring);
+                    }
+                    let dx = Math.round(ux - ring.half);
+                    let dy = Math.round(uy - ring.half);
+                    ctx.drawImage(ring.canvas, dx, dy);
                 }
             }
 
@@ -14276,50 +14531,31 @@
 
             if (showRallyLinesForUnits() && (moveSegments.length > 0 || attackMoveSegments.length > 0)) {
                 let maxWaypointLines = 320;
-                ctx.lineWidth = 1;
-                applyOverlayLineType(ctx, rallyLineType);
 
                 if (moveSegments.length > 0) {
                     let moveStep = Math.max(1, Math.ceil(moveSegments.length / maxWaypointLines));
-                    ctx.strokeStyle = 'rgba(100,255,100,0.5)';
-                    ctx.beginPath();
                     for (let i = 0; i < moveSegments.length; i += moveStep) {
                         let seg = moveSegments[i];
-                        ctx.moveTo(seg[0], seg[1]);
-                        ctx.lineTo(seg[2], seg[3]);
+                        _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, 'rgba(100,255,100,0.5)', 1);
                     }
-                    ctx.stroke();
                 }
 
                 if (attackMoveSegments.length > 0) {
                     let attackStep = Math.max(1, Math.ceil(attackMoveSegments.length / maxWaypointLines));
-                    ctx.strokeStyle = 'rgba(255,100,100,0.5)';
-                    ctx.beginPath();
                     for (let i = 0; i < attackMoveSegments.length; i += attackStep) {
                         let seg = attackMoveSegments[i];
-                        ctx.moveTo(seg[0], seg[1]);
-                        ctx.lineTo(seg[2], seg[3]);
+                        _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, 'rgba(255,100,100,0.5)', 1);
                     }
-                    ctx.stroke();
                 }
-                ctx.setLineDash([]);
             }
 
             let drawMarkers = (markers, color) => {
                 if (markers.size === 0) return;
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
+                let markerSprite = _getOverlayMarkerSprite('plus', color);
                 for (let pos of markers.values()) {
                     let dx = pos[0], dy = pos[1];
-                    ctx.moveTo(dx + 6, dy);
-                    ctx.arc(dx, dy, 6, 0, 6.28);
-                    ctx.moveTo(dx - 4, dy);
-                    ctx.lineTo(dx + 4, dy);
-                    ctx.moveTo(dx, dy - 4);
-                    ctx.lineTo(dx, dy + 4);
+                    ctx.drawImage(markerSprite.canvas, Math.round(dx - markerSprite.offsetX), Math.round(dy - markerSprite.offsetY));
                 }
-                ctx.stroke();
             };
 
             drawMarkers(moveMarkers, '#4f4');
