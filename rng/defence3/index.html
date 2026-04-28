@@ -646,6 +646,13 @@
             left: 0;
         }
 
+        #gameCanvas,
+        #gameBackgroundCanvas,
+        #minimapCanvas {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
         /* LEFT PANEL (minimap + shop) */
         #left-panel {
             width: 220px;
@@ -6507,7 +6514,7 @@
 
             // Builders can stand on active build/upgrade targets.
             if (unit.workerType === 'builder') {
-                if (_hasUnderConstructionOrUpgradingAt(gx, gy)) return true;
+                if (_canBuilderPassTile(unit.owner, gx, gy)) return true;
             }
 
             // Salvagers can stand on owned marked-for-salvage targets.
@@ -7968,6 +7975,12 @@
         const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
         const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
 
+        function _getUiSpriteScale() {
+            // Render tiny text/glyph sprites at higher internal resolution to reduce color interpolation.
+            let dpr = Number(window.devicePixelRatio) || 1;
+            return Math.max(1, Math.min(3, Math.round(dpr * 2)));
+        }
+
         function _trimSpriteCache(cache, maxEntries) {
             if (cache.size <= maxEntries) return;
             let removeCount = cache.size - maxEntries;
@@ -7980,18 +7993,23 @@
 
         function _getBuildingLevelTextSprite(label) {
             let txt = String(label || '');
-            let cached = LEVEL_TEXT_SPRITE_CACHE.get(txt);
+            let scale = _getUiSpriteScale();
+            let key = txt + '|' + scale;
+            let cached = LEVEL_TEXT_SPRITE_CACHE.get(key);
             if (cached) return cached;
 
-            let scale = 1;
+            let width = 32;
+            let height = 48;
             let canvas = document.createElement('canvas');
-            canvas.width = 32 * scale;
-            canvas.height = 48 * scale;
+            canvas.width = width * scale;
+            canvas.height = height * scale;
             let c = canvas.getContext('2d');
-            c.clearRect(0, 0, 32, 48);
+            c.imageSmoothingEnabled = false;
+            c.setTransform(scale, 0, 0, scale, 0, 0);
+            c.clearRect(0, 0, width, height);
             c.textAlign = 'center';
             c.textBaseline = 'middle';
-            c.font = '700 8px Arial';
+            c.font = '700 8px Segoe UI, Arial, sans-serif';
             c.lineJoin = 'round';
             c.strokeStyle = 'rgba(0,0,0,0.95)';
             c.lineWidth = 2;
@@ -8000,7 +8018,7 @@
             c.fillText(txt, 16, 11);
 
             cached = { canvas, scale };
-            LEVEL_TEXT_SPRITE_CACHE.set(txt, cached);
+            LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
             _trimSpriteCache(LEVEL_TEXT_SPRITE_CACHE, LEVEL_TEXT_SPRITE_CACHE_MAX);
             return cached;
         }
@@ -8015,29 +8033,32 @@
 
         function _getUnitLevelTextSprite(label) {
             let txt = String(label || '');
-            let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(txt);
+            let scale = _getUiSpriteScale();
+            let key = txt + '|' + scale;
+            let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(key);
             if (cached) return cached;
 
             let width = 28;
             let height = 14;
             let canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
+            canvas.width = width * scale;
+            canvas.height = height * scale;
             let c = canvas.getContext('2d');
+            c.imageSmoothingEnabled = false;
+            c.setTransform(scale, 0, 0, scale, 0, 0);
             c.clearRect(0, 0, width, height);
-            c.font = '700 7px Arial';
+            c.font = '700 7px Segoe UI, Arial, sans-serif';
             c.textAlign = 'center';
             c.textBaseline = 'bottom';
             c.fillStyle = '#ddd';
-            c.shadowColor = '#000';
-            c.shadowBlur = 1;
-            c.shadowOffsetX = 0;
-            c.shadowOffsetY = 0;
+            c.strokeStyle = 'rgba(0,0,0,0.95)';
+            c.lineJoin = 'round';
+            c.lineWidth = 1.5;
+            c.strokeText(txt, width * 0.5, height - 1);
             c.fillText(txt, width * 0.5, height - 1);
-            c.shadowColor = 'transparent';
 
             cached = { canvas, width, height };
-            UNIT_LEVEL_TEXT_SPRITE_CACHE.set(txt, cached);
+            UNIT_LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
             _trimSpriteCache(UNIT_LEVEL_TEXT_SPRITE_CACHE, UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX);
             return cached;
         }
@@ -8204,22 +8225,25 @@
 
         function _getUnitStatusGlyphSprite(symbol, color) {
             let txt = String(symbol || '');
-            let key = txt + '|' + String(color || '#fff');
+            let scale = _getUiSpriteScale();
+            let key = txt + '|' + String(color || '#fff') + '|' + scale;
             let cached = UNIT_STATUS_GLYPH_CACHE.get(key);
             if (cached) return cached;
 
             let w = 14, h = 12;
             let c = document.createElement('canvas');
-            c.width = w;
-            c.height = h;
+            c.width = w * scale;
+            c.height = h * scale;
             let g = c.getContext('2d');
+            g.imageSmoothingEnabled = false;
+            g.setTransform(scale, 0, 0, scale, 0, 0);
             g.clearRect(0, 0, w, h);
-            g.font = '700 10px Arial';
+            g.font = '700 10px Segoe UI Emoji, Segoe UI Symbol, Segoe UI, Arial, sans-serif';
             g.textAlign = 'center';
             g.textBaseline = 'middle';
             g.fillStyle = color;
-            g.shadowColor = '#000';
-            g.shadowBlur = 1;
+            g.shadowColor = 'transparent';
+            g.shadowBlur = 0;
             g.fillText(txt, w * 0.5, h * 0.5 + 0.5);
             g.shadowColor = 'transparent';
 
@@ -10687,6 +10711,13 @@
                                     u._builderSpawnerTarget = route.spawner;
                                     return;
                                 } else {
+                                    if (u.workerTransferCooldown <= 0 && players[owner].energy >= tripCost) {
+                                        // No route available: buy material on-site and keep full builder throughput.
+                                        players[owner].energy -= tripCost;
+                                        recordEnergyDelta(owner, 'builder', -tripCost);
+                                        u.builderHasMaterial = true;
+                                        u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
+                                    }
                                     u.workerState = 'BUILDING_IN_PLACE';
                                     return;
                                 }
@@ -10819,18 +10850,39 @@
                         }
                     }
                 } else if (u.workerState === 'BUILDING_IN_PLACE') {
-                    // Building in place without returning for gold (every 20 ticks add 1 ENERGY)
+                    // Build in place. Prefer full builder throughput when enough energy is available.
                     if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
                         _builderRememberWorkSite(u);
                         _clearWorkerTarget(u);
                         _builderFindTarget(u, myGx, myGy);
                         return;
                     }
-                    if (gameTime % 20 === 0 && players[owner].energy >= 1) {
+
+                    if (!u.builderHasMaterial && u.workerTransferCooldown <= 0) {
+                        let tripCost = getBuilderTripGoldCost(u);
+                        if (players[owner].energy >= tripCost) {
+                            players[owner].energy -= tripCost;
+                            recordEnergyDelta(owner, 'builder', -tripCost);
+                            u.builderHasMaterial = true;
+                            u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
+                        }
+                    }
+
+                    let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
+                    let dps = u.builderDps || baseBuild;
+                    let buildStep = 0;
+                    if (u.builderHasMaterial) {
+                        buildStep = dps;
+                    } else if (gameTime % 20 === 0 && players[owner].energy >= 1) {
+                        // Last-resort slow trickle when no full material transfer is possible.
                         players[owner].energy -= 1;
+                        buildStep = 1;
+                    }
+
+                    if (buildStep > 0) {
                         let t = u.workerTarget;
                         if (t.underConstruction) {
-                            t.energy = Math.min(t.maxEnergy, t.energy + 1);
+                            t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
                             if (t.energy >= t.maxEnergy) {
                                 markConstructionComplete(t);
                                 refreshThingProgressState(t);
@@ -10844,7 +10896,7 @@
                                 }
                             }
                         } else if (t.isUpgrading) {
-                            t.energy = Math.min(t.maxEnergy, t.energy + 1);
+                            t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
                             if (t.energy >= t.maxEnergy) {
                                 if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
                                 t.effectiveLevel++;
@@ -10864,7 +10916,7 @@
                             }
                         } else if (t.isStacking) {
                             let stackCost = getThingStackingEnergyCost(t);
-                            t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + 1;
+                            t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + buildStep;
                             let stackedAny = false;
                             while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
                                 t.stackingWorkDone -= stackCost;
@@ -10884,6 +10936,7 @@
                                 _builderFindTarget(u, myGx, myGy);
                             }
                         }
+                        if (u.builderHasMaterial) u.builderHasMaterial = false;
                     }
                     // Check if energy became available â€” switch back to gold trips
                     let route = getSpawnerRoute('builder_spawner', null);
@@ -11448,8 +11501,27 @@
             return _activeBuilderPathTiles.has(_builderWorkTileKey(nx, ny));
         }
 
+        function _hasOwnedTileEntityAt(owner, nx, ny) {
+            if (!Number.isFinite(owner) || nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) return false;
+            let ref = getTileEntityRef(nx, ny);
+            if (!ref || !Number.isFinite(ref.owner)) return false;
+            return ref.owner === owner;
+        }
+
+        function _canBuilderPassTile(owner, nx, ny) {
+            return _hasOwnedTileEntityAt(owner, nx, ny);
+        }
+
+        const _builderCanWalkByOwner = new Map();
+
         function _builderCanWalk(owner) {
-            return BUILDER_CAN_WALK;
+            let o = Number.isFinite(owner) ? Math.floor(owner) : -1;
+            let cached = _builderCanWalkByOwner.get(o);
+            if (cached) return cached;
+            let fn = (nx, ny) => _canBuilderPassTile(o, nx, ny);
+            fn._pathProfileKey = `builder_${o}`;
+            _builderCanWalkByOwner.set(o, fn);
+            return fn;
         }
 
         function getBuilderTripGoldCost(u) {
@@ -11667,11 +11739,6 @@
             }
             return best ? best.target : null;
         }
-
-        const BUILDER_CAN_WALK = (nx, ny) => {
-            return _hasUnderConstructionOrUpgradingAt(nx, ny);
-        };
-        BUILDER_CAN_WALK._pathProfileKey = 'builder';
 
         function getPathCanWalkForUnit(unit) {
             if (!unit || unit.isFlying) return null;
@@ -14399,11 +14466,12 @@
         }
 
         function drawMinimap() {
-            const DRAW_Z_MINIMAP = 600;
             let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
             let tilePx = Math.max(1, scale);
             let vis = visibilityGrid;
             let lastFill = null;
+
+            minimapCtx.imageSmoothingEnabled = false;
 
             if (_minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
                 _minimapStaticDirty = true;
@@ -14430,8 +14498,8 @@
                 minimapCtx.fillRect(startX * scale, y * scale, runW, tilePx);
             };
 
-            setFrameDrawImageDepth(DRAW_Z_MINIMAP);
-            queueDrawImage(minimapCtx, _minimapStaticCanvas, 0, 0);
+            // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
+            minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
 
             // Unknown areas
             if (!fullVisibility && vis.length > 0) {
@@ -14624,9 +14692,14 @@
                     let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
                     let src = pt && pt.src ? pt.src : 'deferred_resolver';
                     u.path = findPathAStarTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                    u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                    u.commandState = pt.cmd;
-                    u._pendingPathTarget = null;
+                    if (u.path && u.path.length > 0) {
+                        u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                        u.commandState = pt.cmd;
+                        u._pendingPathTarget = null;
+                    } else {
+                        u.path = null;
+                        u.pathIndex = 0;
+                    }
                     pathfindBudget++;
                 }
                 pendingPathResolveCursor = (start + checked) % units.length;
@@ -14733,6 +14806,7 @@
             let gameArea = document.getElementById('game-area');
             let multiRallyPoints = [];
             let multiUnitCommandPoints = [];
+            let multiTowerTargetPoints = [];
             let multiBuilderAssignTargets = [];
             let multiCollectorAssignTargets = [];
             let multiHealerAssignTargets = [];
@@ -14754,7 +14828,6 @@
                 if (!selSpawners || selSpawners.length === 0) return;
                 if (appendToMultiRally && multiRallyPoints.length > 0) {
                     multiRallyPoints.push({ x: targetX, y: targetY, targetUnitId });
-                    if (multiRallyPoints.length > 12) multiRallyPoints.shift();
                 } else {
                     multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
                 }
@@ -15099,7 +15172,6 @@
                 if (!unitIds || unitIds.length === 0) return;
                 if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
                     multiUnitCommandPoints.push({ x: targetX, y: targetY });
-                    if (multiUnitCommandPoints.length > 12) multiUnitCommandPoints.shift();
                 } else {
                     multiUnitCommandPoints = [{ x: targetX, y: targetY }];
                 }
@@ -15115,6 +15187,26 @@
                 }
             }
 
+            function applyTowerTargetAssignments(selTowers, targetSpec, appendToMultiTargets) {
+                if (!selTowers || selTowers.length === 0 || !targetSpec) return;
+                if (appendToMultiTargets && multiTowerTargetPoints.length > 0) {
+                    multiTowerTargetPoints.push({ ...targetSpec });
+                } else {
+                    multiTowerTargetPoints = [{ ...targetSpec }];
+                }
+                if (multiTowerTargetPoints.length === 0) multiTowerTargetPoints = [{ ...targetSpec }];
+
+                let buckets = Array.from({ length: multiTowerTargetPoints.length }, () => []);
+                for (let i = 0; i < selTowers.length; i++) buckets[i % multiTowerTargetPoints.length].push(selTowers[i]);
+
+                for (let i = 0; i < buckets.length; i++) {
+                    if (buckets[i].length === 0) continue;
+                    let target = multiTowerTargetPoints[i];
+                    let towerCoords = buckets[i].map(t => ({ gx: t.gx, gy: t.gy }));
+                    queueAction({ action: 'towerTarget', towerCoords, target });
+                }
+            }
+
             function applyWorkerAssignTargets(workerUnits, targetType, targetGx, targetGy, appendToMultiTargets) {
                 if (!workerUnits || workerUnits.length === 0) return;
                 let multiTargets = targetType === 'build'
@@ -15126,7 +15218,6 @@
                             : multiHealerAssignTargets;
                 if (appendToMultiTargets && multiTargets.length > 0) {
                     multiTargets.push({ targetGx, targetGy });
-                    if (multiTargets.length > 12) multiTargets.shift();
                 } else {
                     multiTargets.length = 0;
                     multiTargets.push({ targetGx, targetGy });
@@ -15283,13 +15374,13 @@
                             else if (targetHit.kind === 'item') towerTarget = { type: 'item', gx: targetHit.gx, gy: targetHit.gy };
                         }
                         if (towerTarget) {
-                            let towerCoords = selTowers.map(t => ({ gx: t.gx, gy: t.gy }));
-                            queueAction({ action: 'towerTarget', towerCoords, target: towerTarget });
+                                applyTowerTargetAssignments(selTowers, towerTarget, isCtrlMulti);
                             issuedStructureCommand = true;
                         } else {
                             // Right-click on ground: clear preferred target for selected towers
                             let towerCoords = selTowers.map(t => ({ gx: t.gx, gy: t.gy }));
                             queueAction({ action: 'towerTarget', towerCoords, target: null });
+                                if (!isCtrlMulti) multiTowerTargetPoints = [];
                             issuedStructureCommand = true;
                         }
                     }
@@ -15401,11 +15492,31 @@
                             }
                             let unitIds = combatUnits.map(u => u.id);
                             if (targetUnit) {
-                                queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
-                                if (!isCtrlMulti) multiUnitCommandPoints = [];
+                                if (isCtrlMulti) {
+                                    // Allow enemy clicks to be part of multi-point command chains.
+                                    applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attackMove');
+                                } else {
+                                    queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
+                                    multiUnitCommandPoints = [];
+                                }
+                                if (workerIds.length > 0) {
+                                    // Keep mixed selections moving; workers cannot attack unit targets directly.
+                                    queueAction({ action: 'move', unitIds: workerIds, targetX: targetUnit.x, targetY: targetUnit.y });
+                                }
                             } else if (targetBuilding) {
-                                queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
-                                if (!isCtrlMulti) multiUnitCommandPoints = [];
+                                let targetBuildingX = Number.isFinite(targetBuilding.x) ? targetBuilding.x : (targetBuildingGx * TILE + TILE * 0.5);
+                                let targetBuildingY = Number.isFinite(targetBuilding.y) ? targetBuilding.y : (targetBuildingGy * TILE + TILE * 0.5);
+                                if (isCtrlMulti) {
+                                    // Allow enemy clicks to be part of multi-point command chains.
+                                    applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackMove');
+                                } else {
+                                    queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
+                                    multiUnitCommandPoints = [];
+                                }
+                                if (workerIds.length > 0) {
+                                    // Keep mixed selections moving; workers cannot attack building targets directly.
+                                    queueAction({ action: 'move', unitIds: workerIds, targetX: targetBuildingX, targetY: targetBuildingY });
+                                }
                             } else if (attackMoveMode) {
                                 applyUnitCommandTargets(unitIds, world.x, world.y, isCtrlMulti, 'attackMove');
                                 attackMoveMode = false;
@@ -16296,8 +16407,14 @@
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 let dest = findNearestWalkable(gx, gy, ugx, ugy, u);
                 u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                u._pendingPathTarget = null;
+                if (u.path && u.path.length > 0) {
+                    u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                    u._pendingPathTarget = null;
+                } else {
+                    u.path = null;
+                    u.pathIndex = 0;
+                    u._pendingPathTarget = { gx, gy, cmd: CMD_MOVING, src: 'player_commands' };
+                }
                 pathfindBudget++;
             } else {
                 u._pendingPathTarget = { gx, gy, cmd: CMD_MOVING, src: 'player_commands' };
@@ -16532,8 +16649,14 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                                 u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                                u._pendingPathTarget = null;
+                                if (u.path && u.path.length > 0) {
+                                    u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                                    u._pendingPathTarget = null;
+                                } else {
+                                    u.path = null;
+                                    u.pathIndex = 0;
+                                    u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_MOVING, src: 'player_commands' };
+                                }
                                 pathfindBudget++;
                             } else {
                                 // Defer pathfinding to a later tick
@@ -16557,8 +16680,14 @@
                                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                                 u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                                u._pendingPathTarget = null;
+                                if (u.path && u.path.length > 0) {
+                                    u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                                    u._pendingPathTarget = null;
+                                } else {
+                                    u.path = null;
+                                    u.pathIndex = 0;
+                                    u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_ATTACK_MOVING, src: 'player_commands' };
+                                }
                                 pathfindBudget++;
                             } else {
                                 u._pendingPathTarget = { gx: targetGx, gy: targetGy, cmd: CMD_ATTACK_MOVING, src: 'player_commands' };
@@ -16578,8 +16707,14 @@
                                 let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                                    u._pendingPathTarget = null;
+                                    if (u.path && u.path.length > 0) {
+                                        u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                                        u._pendingPathTarget = null;
+                                    } else {
+                                        u.path = null;
+                                        u.pathIndex = 0;
+                                        u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
+                                    }
                                     pathfindBudget++;
                                 } else {
                                     u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
@@ -16603,7 +16738,14 @@
                                 let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy, u);
                                 if (pathfindBudget < MAX_PATHS_PER_TICK) {
                                     u.path = findPathAStarTagged('player_commands', ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                                    u.pathIndex = 0; u._pendingPathTarget = null;
+                                    if (u.path && u.path.length > 0) {
+                                        u.pathIndex = 0;
+                                        u._pendingPathTarget = null;
+                                    } else {
+                                        u.path = null;
+                                        u.pathIndex = 0;
+                                        u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
+                                    }
                                     pathfindBudget++;
                                 } else {
                                     u._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: 'player_commands' };
@@ -23868,6 +24010,7 @@
             if (!minimapCanvas) return false;
             if (!minimapCtx) minimapCtx = minimapCanvas.getContext('2d');
             if (!minimapCtx) return false;
+            minimapCtx.imageSmoothingEnabled = false;
 
             let mmDpr = window.devicePixelRatio || 1;
             if (minimapCanvas.width !== MINIMAP_SIZE * mmDpr || minimapCanvas.height !== MINIMAP_SIZE * mmDpr) {
@@ -23876,6 +24019,7 @@
                 minimapCanvas.style.width = MINIMAP_SIZE + 'px';
                 minimapCanvas.style.height = MINIMAP_SIZE + 'px';
                 minimapCtx.setTransform(mmDpr, 0, 0, mmDpr, 0, 0);
+                minimapCtx.imageSmoothingEnabled = false;
                 _minimapStaticCanvas = null;
                 _minimapStaticCtx = null;
                 _minimapStaticDirty = true;
@@ -23896,6 +24040,8 @@
 
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            bgCtx.imageSmoothingEnabled = false;
 
             if (!_renderInitEventsBound) {
                 window.addEventListener('resize', () => {
