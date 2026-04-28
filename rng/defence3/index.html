@@ -1810,7 +1810,7 @@
             if (isMultiplayer && !isHost && gameStarted && connections[0]) {
                 try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch {}
             }
-            updateBuildMenu();
+            requestBuildMenuRefresh();
             updateInfoPanel();
         }
 
@@ -8046,7 +8046,7 @@
         let _frameDrawImageQueueActive = false;
         let _frameDrawImageQueue = [];
         let _frameDrawImageContexts = new Set();
-        let _frameDrawImageInitialStateByCtx = new Map();
+        let _frameDrawImageCurrentZ = 0;
         let _frameDrawImageIdCounter = 1;
         const _frameDrawImageIdBySource = new WeakMap();
 
@@ -8066,33 +8066,25 @@
             };
         }
 
-        function _restoreDrawImageCtxState(ctx, st) {
-            if (!ctx || !st) return;
-            ctx.setTransform(st.ta, st.tb, st.tc, st.td, st.te, st.tf);
-            ctx.globalAlpha = st.alpha;
-            ctx.globalCompositeOperation = st.comp;
-            ctx.imageSmoothingEnabled = st.smooth;
-            ctx.filter = st.filter;
-        }
-
         function beginFrameDrawImageQueue() {
             _frameDrawImageQueueActive = true;
             _frameDrawImageQueue.length = 0;
             _frameDrawImageContexts.clear();
-            _frameDrawImageInitialStateByCtx.clear();
+            _frameDrawImageCurrentZ = 0;
         }
 
-        function queueDrawImage(ctx, image) {
+        function setFrameDrawImageDepth(z) {
+            _frameDrawImageCurrentZ = Number.isFinite(z) ? z : 0;
+        }
+
+        function queueDrawImage(ctx, image, ...args) {
             if (!ctx || !image) return;
 
             if (!_frameDrawImageQueueActive) {
-                ctx.drawImage(image, ...Array.prototype.slice.call(arguments, 2));
+                ctx.drawImage(image, ...args);
                 return;
             }
 
-            if (!_frameDrawImageInitialStateByCtx.has(ctx)) {
-                _frameDrawImageInitialStateByCtx.set(ctx, _captureDrawImageCtxState(ctx));
-            }
             _frameDrawImageContexts.add(ctx);
 
             let imageId = _frameDrawImageIdBySource.get(image);
@@ -8102,11 +8094,11 @@
             }
 
             let st = _captureDrawImageCtxState(ctx);
-            let args = Array.prototype.slice.call(arguments, 2);
             _frameDrawImageQueue.push({
                 ctx,
                 image,
                 args,
+                z: _frameDrawImageCurrentZ,
                 imageId,
                 ta: st.ta,
                 tb: st.tb,
@@ -8128,62 +8120,75 @@
                 return;
             }
 
-            let buckets = new Map();
-            let bucketOrder = [];
+            let bucketsByZ = new Map();
+            let zOrder = [];
             for (let cmd of _frameDrawImageQueue) {
-                let key = cmd.imageId;
-                if (!buckets.has(key)) {
-                    buckets.set(key, []);
-                    bucketOrder.push(key);
+                let zKey = cmd.z;
+                if (!bucketsByZ.has(zKey)) {
+                    bucketsByZ.set(zKey, []);
+                    zOrder.push(zKey);
                 }
-                buckets.get(key).push(cmd);
+                bucketsByZ.get(zKey).push(cmd);
             }
+            zOrder.sort((a, b) => b - a); // Furthest/highest z first, closest last.
 
             let liveStateByCtx = new Map();
-            for (let id of bucketOrder) {
-                let cmds = buckets.get(id);
-                for (let cmd of cmds) {
-                    let c = cmd.ctx;
-                    let s = liveStateByCtx.get(c);
+            for (let c of _frameDrawImageContexts) c.save();
+            for (let z of zOrder) {
+                let imageBuckets = new Map();
+                let imageOrder = [];
+                let zCmds = bucketsByZ.get(z);
+                for (let cmd of zCmds) {
+                    let id = cmd.imageId;
+                    if (!imageBuckets.has(id)) {
+                        imageBuckets.set(id, []);
+                        imageOrder.push(id);
+                    }
+                    imageBuckets.get(id).push(cmd);
+                }
 
-                    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
-                        c.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
-                        if (!s) s = {};
-                        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
-                    }
-                    if (!s || s.alpha !== cmd.alpha) {
-                        c.globalAlpha = cmd.alpha;
-                        if (!s) s = {};
-                        s.alpha = cmd.alpha;
-                    }
-                    if (!s || s.comp !== cmd.comp) {
-                        c.globalCompositeOperation = cmd.comp;
-                        if (!s) s = {};
-                        s.comp = cmd.comp;
-                    }
-                    if (!s || s.smooth !== cmd.smooth) {
-                        c.imageSmoothingEnabled = cmd.smooth;
-                        if (!s) s = {};
-                        s.smooth = cmd.smooth;
-                    }
-                    if (!s || s.filter !== cmd.filter) {
-                        c.filter = cmd.filter;
-                        if (!s) s = {};
-                        s.filter = cmd.filter;
-                    }
-                    liveStateByCtx.set(c, s);
+                for (let id of imageOrder) {
+                    let cmds = imageBuckets.get(id);
+                    for (let cmd of cmds) {
+                        let c = cmd.ctx;
+                        let s = liveStateByCtx.get(c);
 
-                    c.drawImage(cmd.image, ...cmd.args);
+                        if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
+                            c.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
+                            if (!s) s = {};
+                            s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
+                        }
+                        if (!s || s.alpha !== cmd.alpha) {
+                            c.globalAlpha = cmd.alpha;
+                            if (!s) s = {};
+                            s.alpha = cmd.alpha;
+                        }
+                        if (!s || s.comp !== cmd.comp) {
+                            c.globalCompositeOperation = cmd.comp;
+                            if (!s) s = {};
+                            s.comp = cmd.comp;
+                        }
+                        if (!s || s.smooth !== cmd.smooth) {
+                            c.imageSmoothingEnabled = cmd.smooth;
+                            if (!s) s = {};
+                            s.smooth = cmd.smooth;
+                        }
+                        if (!s || s.filter !== cmd.filter) {
+                            c.filter = cmd.filter;
+                            if (!s) s = {};
+                            s.filter = cmd.filter;
+                        }
+                        liveStateByCtx.set(c, s);
+
+                        c.drawImage(cmd.image, ...cmd.args);
+                    }
                 }
             }
 
-            for (let c of _frameDrawImageContexts) {
-                _restoreDrawImageCtxState(c, _frameDrawImageInitialStateByCtx.get(c));
-            }
+            for (let c of _frameDrawImageContexts) c.restore();
 
             _frameDrawImageQueue.length = 0;
             _frameDrawImageContexts.clear();
-            _frameDrawImageInitialStateByCtx.clear();
             _frameDrawImageQueueActive = false;
         }
 
@@ -13062,6 +13067,7 @@
 
         const FLOOR_ITEM_SPRITE_CACHE = new Map();
         const FLOOR_ITEM_SPRITE_CACHE_MAX = 512;
+        const GOLD_MINE_TILE_SPRITE_CACHE = new Map();
 
         function _getFloorItemEnergyBucket(item) {
             let maxEnergy = Number(item && item.maxEnergy) || 0;
@@ -13134,6 +13140,30 @@
             }
             drawBuildingEnergyProgressBar(ctx, item, x, y + 2, TILE - 8, 3);
             if (item.textCanvas && shouldShowBuildingLevels()) drawLevelTextCache(ctx, item, x, y);
+        }
+
+        function _getGoldMineTileSprite(isActive) {
+            let key = isActive ? 'active' : 'depleted';
+            let cached = GOLD_MINE_TILE_SPRITE_CACHE.get(key);
+            if (cached) return cached;
+
+            let c = document.createElement('canvas');
+            c.width = TILE;
+            c.height = TILE;
+            let g = c.getContext('2d');
+            g.clearRect(0, 0, TILE, TILE);
+            if (isActive) {
+                g.fillStyle = '#fd0';
+                g.fillRect(2, 2, TILE - 4, TILE - 4);
+            } else {
+                g.globalAlpha = 0.28;
+                g.fillStyle = '#9a9000';
+                g.fillRect(2, 2, TILE - 4, TILE - 4);
+                g.globalAlpha = 1;
+            }
+
+            GOLD_MINE_TILE_SPRITE_CACHE.set(key, c);
+            return c;
         }
 
         // Thumbnail cache for build menu and sub-group icons
@@ -13362,11 +13392,15 @@
         let _combinedTerrainCanvas = null; // Base terrain only (floor/walls)
         let _combinedTerrainCtx = null;
         let _combinedTerrainDirty = true;
+        let _combinedTerrainDirtyFull = true;
+        let _combinedTerrainDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
         let _minimapStaticCanvas = null;
         let _minimapStaticCtx = null;
         let _minimapStaticDirty = true;
         let _minimapStaticScale = 0;
         let _minimapStaticTilePx = 0;
+        let _staticCacheNeedsCommit = true;
+        let _staticCacheCommitVersion = -1;
         let _staticLayerCache = {
             valid: false,
             cameraX: 0,
@@ -13380,7 +13414,8 @@
             maxGx: 0,
             maxGy: 0,
             fullVisibility: false,
-            visibilityVersion: -1
+            visibilityVersion: -1,
+            staticCommitVersion: -1
         };
 
         function invalidateStaticLayerCache() {
@@ -13392,21 +13427,110 @@
             return _areaById[areaId] || null;
         }
 
-        function _markCombinedBgFullDirty() {
-            _combinedBgDirtyFull = true;
-            _combinedBgDirtyBounds = null;
-            _combinedTerrainDirty = true;
-            _minimapStaticDirty = true;
-            dirtyGrid = true;
-            dirtyAreas = true;
+        function _requestStaticCacheCommit() {
+            _staticCacheNeedsCommit = true;
         }
 
-        function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false, terrainChanged = false) {
+        function _clampTileRect(minGx, minGy, maxGx, maxGy) {
             minGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(minGx)));
             minGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(minGy)));
             maxGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(maxGx)));
             maxGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(maxGy)));
-            if (maxGx < minGx || maxGy < minGy) return;
+            if (maxGx < minGx || maxGy < minGy) return null;
+            return { minGx, minGy, maxGx, maxGy };
+        }
+
+        function _markCombinedTerrainFullDirty() {
+            _combinedTerrainDirty = true;
+            _combinedTerrainDirtyFull = true;
+            _combinedTerrainDirtyBounds = null;
+        }
+
+        function _markCombinedTerrainRectDirty(minGx, minGy, maxGx, maxGy) {
+            // Pad by one tile so neighboring wall borders/outlines stay coherent.
+            let rect = _clampTileRect(minGx - 1, minGy - 1, maxGx + 1, maxGy + 1);
+            if (!rect) return;
+            _combinedTerrainDirty = true;
+            if (_combinedTerrainDirtyFull) return;
+            if (_combinedTerrainDirtyBounds) {
+                _combinedTerrainDirtyBounds.minGx = Math.min(_combinedTerrainDirtyBounds.minGx, rect.minGx);
+                _combinedTerrainDirtyBounds.minGy = Math.min(_combinedTerrainDirtyBounds.minGy, rect.minGy);
+                _combinedTerrainDirtyBounds.maxGx = Math.max(_combinedTerrainDirtyBounds.maxGx, rect.maxGx);
+                _combinedTerrainDirtyBounds.maxGy = Math.max(_combinedTerrainDirtyBounds.maxGy, rect.maxGy);
+            } else {
+                _combinedTerrainDirtyBounds = rect;
+            }
+        }
+
+        function _hasPendingStaticCacheDirty() {
+            return !!(
+                _staticCacheNeedsCommit ||
+                _combinedBgDirtyFull ||
+                _combinedBgDirtyBounds ||
+                _combinedTerrainDirty ||
+                _minimapStaticDirty ||
+                dirtyGrid ||
+                dirtyAreas
+            );
+        }
+
+        // scope: 'all' | 'background' | 'minimap'
+        function commitStaticCaches(force = false, scope = 'all') {
+            let wantsBackground = scope === 'all' || scope === 'background';
+            let wantsMinimap = scope === 'all' || scope === 'minimap';
+
+            let hasBackgroundDirty =
+                !!_combinedBgDirtyFull ||
+                !!_combinedBgDirtyBounds ||
+                !!_combinedTerrainDirty ||
+                !!dirtyGrid ||
+                !!dirtyAreas ||
+                !_combinedBgCanvas ||
+                !_combinedBgCtx;
+            let hasMinimapDirty =
+                !!_minimapStaticDirty ||
+                !_minimapStaticCanvas;
+
+            let shouldCommitBackground = wantsBackground && (force || hasBackgroundDirty);
+            let shouldCommitMinimap = wantsMinimap && (force || hasMinimapDirty);
+            if (!shouldCommitBackground && !shouldCommitMinimap) return;
+            let didRebuild = false;
+
+            if (shouldCommitBackground) {
+                rebuildCombinedBackgroundCache();
+                didRebuild = true;
+            }
+
+            if (shouldCommitMinimap) {
+                let scale = MINIMAP_SIZE / GRID_W;
+                let tilePx = Math.max(1, scale);
+                if (_minimapStaticDirty || !_minimapStaticCanvas || _minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+                    rebuildMinimapStaticLayer(scale, tilePx);
+                    didRebuild = true;
+                }
+            }
+
+            _staticCacheNeedsCommit = _hasPendingStaticCacheDirty();
+            if (didRebuild) _staticCacheCommitVersion++;
+        }
+
+        function _markCombinedBgFullDirty() {
+            _combinedBgDirtyFull = true;
+            _combinedBgDirtyBounds = null;
+            _markCombinedTerrainFullDirty();
+            _minimapStaticDirty = true;
+            dirtyGrid = true;
+            dirtyAreas = true;
+            _requestStaticCacheCommit();
+        }
+
+        function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false, terrainChanged = false) {
+            let rect = _clampTileRect(minGx, minGy, maxGx, maxGy);
+            if (!rect) return;
+            minGx = rect.minGx;
+            minGy = rect.minGy;
+            maxGx = rect.maxGx;
+            maxGy = rect.maxGy;
 
             if (!_combinedBgDirtyFull) {
                 if (_combinedBgDirtyBounds) {
@@ -13419,10 +13543,11 @@
                 }
             }
 
-            if (terrainChanged) _combinedTerrainDirty = true;
+            if (terrainChanged) _markCombinedTerrainRectDirty(minGx, minGy, maxGx, maxGy);
             _minimapStaticDirty = true;
             dirtyGrid = true;
             if (markAreas) dirtyAreas = true;
+            _requestStaticCacheCommit();
         }
 
         function _markCombinedBgTileDirty(gx, gy, pad = 0, terrainChanged = false) {
@@ -13479,7 +13604,7 @@
                 _combinedBgCtx.imageSmoothingEnabled = false;
                 _areaColorCache = null;
                 _areaOutlinePathCache = null;
-                _combinedTerrainDirty = true;
+                _markCombinedTerrainFullDirty();
                 _markCombinedBgFullDirty();
                 invalidateStaticLayerCache();
             }
@@ -13492,32 +13617,44 @@
                 _combinedTerrainCanvas.height = WORLD_H;
                 _combinedTerrainCtx = _combinedTerrainCanvas.getContext('2d');
                 _combinedTerrainCtx.imageSmoothingEnabled = false;
-                _combinedTerrainDirty = true;
+                _markCombinedTerrainFullDirty();
             }
         }
 
         function rebuildCombinedTerrainCache() {
             ensureCombinedTerrainCanvas();
             let c = _combinedTerrainCtx;
-            c.clearRect(0, 0, WORLD_W, WORLD_H);
+            let rect = _combinedTerrainDirtyFull
+                ? { minGx: 0, minGy: 0, maxGx: GRID_W - 1, maxGy: GRID_H - 1 }
+                : (_combinedTerrainDirtyBounds || null);
+            if (!rect) {
+                _combinedTerrainDirty = false;
+                return;
+            }
+
+            let startX = rect.minGx * TILE;
+            let startY = rect.minGy * TILE;
+            let width = (rect.maxGx - rect.minGx + 1) * TILE;
+            let height = (rect.maxGy - rect.minGy + 1) * TILE;
+            c.clearRect(startX, startY, width, height);
 
             c.fillStyle = C_FLOOR;
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
+            for (let y = rect.minGy; y <= rect.maxGy; y++) {
+                for (let x = rect.minGx; x <= rect.maxGx; x++) {
                     if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
                 }
             }
 
             c.fillStyle = '#222';
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
+            for (let y = rect.minGy; y <= rect.maxGy; y++) {
+                for (let x = rect.minGx; x <= rect.maxGx; x++) {
                     if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
                 }
             }
 
             c.fillStyle = C_WALL;
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
+            for (let y = rect.minGy; y <= rect.maxGy; y++) {
+                for (let x = rect.minGx; x <= rect.maxGx; x++) {
                     if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
                 }
             }
@@ -13525,13 +13662,15 @@
             c.strokeStyle = '#444';
             c.lineWidth = 1;
             c.beginPath();
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
+            for (let y = rect.minGy; y <= rect.maxGy; y++) {
+                for (let x = rect.minGx; x <= rect.maxGx; x++) {
                     if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
                 }
             }
             c.stroke();
             _combinedTerrainDirty = false;
+            _combinedTerrainDirtyFull = false;
+            _combinedTerrainDirtyBounds = null;
         }
 
         function rebuildCombinedBackgroundCache() {
@@ -13553,7 +13692,7 @@
                     _combinedBgDirtyBounds.minGy,
                     _combinedBgDirtyBounds.maxGx,
                     _combinedBgDirtyBounds.maxGy,
-                    dirtyAreas
+                    true
                 );
             }
 
@@ -13565,7 +13704,7 @@
 
         function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
             ensureCombinedBgCanvas();
-            if (_combinedBgDirtyFull || _combinedBgDirtyBounds || dirtyAreas) rebuildCombinedBackgroundCache();
+            if (_staticCacheCommitVersion < 0) commitStaticCaches(true);
             let sx = minGx * TILE, sy = minGy * TILE;
             let sw = (maxGx - minGx + 1) * TILE;
             let sh = (maxGy - minGy + 1) * TILE;
@@ -13601,8 +13740,7 @@
                 c.maxGy !== maxGy ||
                 c.fullVisibility !== fullVisibility ||
                 (!fullVisibility && c.visibilityVersion !== visibilityVersion) ||
-                dirtyGrid ||
-                dirtyAreas;
+                c.staticCommitVersion !== _staticCacheCommitVersion;
 
             if (!needsRedraw) return;
 
@@ -13627,6 +13765,7 @@
             c.maxGy = maxGy;
             c.fullVisibility = fullVisibility;
             c.visibilityVersion = visibilityVersion;
+            c.staticCommitVersion = _staticCacheCommitVersion;
         }
 
         function rebuildAreaColorCache() {
@@ -13722,6 +13861,12 @@
         }
 
         function draw() {
+            const DRAW_Z_BACKGROUND = 500;
+            const DRAW_Z_STRUCTURES = 400;
+            const DRAW_Z_UNITS = 300;
+            const DRAW_Z_PARTICLES = 200;
+            const DRAW_Z_OVERLAY = 100;
+
             let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
             let minGx = Math.max(0, Math.floor(camera.x / TILE) - 1);
             let minGy = Math.max(0, Math.floor(camera.y / TILE) - 1);
@@ -13740,6 +13885,7 @@
 
             // Fallback (if bg layer context is unavailable)
             if (!bgCtx) {
+                setFrameDrawImageDepth(DRAW_Z_BACKGROUND);
                 drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy);
                 drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy);
             }
@@ -13752,29 +13898,12 @@
                 visibleGoldMines.push(m);
             }
 
-            // Always use low-detail mine rendering (batched vector rects).
-            let useGoldMineLowDetail = true;
-
-            if (useGoldMineLowDetail) {
-                // Active mines (single batched fill)
-                ctx.fillStyle = '#fd0';
-                ctx.beginPath();
-                for (let m of visibleGoldMines) {
-                    if (m.gold <= 0) continue;
-                    ctx.rect(m.gx * TILE + 2, m.gy * TILE + 2, TILE - 4, TILE - 4);
-                }
-                ctx.fill();
-
-                // Depleted mines (single batched fill with lighter alpha)
-                ctx.globalAlpha = 0.28;
-                ctx.fillStyle = '#9a9000';
-                ctx.beginPath();
-                for (let m of visibleGoldMines) {
-                    if (m.gold > 0) continue;
-                    ctx.rect(m.gx * TILE + 2, m.gy * TILE + 2, TILE - 4, TILE - 4);
-                }
-                ctx.fill();
-                ctx.globalAlpha = 1;
+            setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
+            let activeMineSprite = _getGoldMineTileSprite(true);
+            let depletedMineSprite = _getGoldMineTileSprite(false);
+            for (let m of visibleGoldMines) {
+                let mineSprite = m.gold > 0 ? activeMineSprite : depletedMineSprite;
+                queueDrawImage(ctx, mineSprite, m.gx * TILE, m.gy * TILE, TILE, TILE);
             }
 
             // Gold mine amount labels (re-enabled for FPS comparison testing).
@@ -13800,6 +13929,7 @@
             }
 
             // Floor items
+            setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
             for (let y = minGy; y <= maxGy; y++) {
                 for (let x = minGx; x <= maxGx; x++) {
                     if (grid[y][x].item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) drawFloorItem(ctx, grid[y][x], x * TILE, y * TILE);
@@ -13815,6 +13945,7 @@
             }
 
             // Towers
+            setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
             for (let t of towers) {
                 if (t.gx < minGx - 2 || t.gx > maxGx + 2 || t.gy < minGy - 2 || t.gy > maxGy + 2) continue;
                 if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
@@ -13822,6 +13953,7 @@
             }
 
             // Collector/Salvager spawners
+            setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
             collectorSpawners.forEach(s => {
                 if (s.gx >= minGx && s.gx <= maxGx && s.gy >= minGy && s.gy <= maxGy) {
                     if (fullVisibility || (visibilityGrid[s.gy] && visibilityGrid[s.gy][s.gx] > 0)) s.draw(ctx);
@@ -13829,6 +13961,7 @@
             });
 
             // Barracks
+            setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
             barracks.forEach(b => {
                 if (b.gx >= minGx && b.gx <= maxGx && b.gy >= minGy && b.gy <= maxGy) {
                     if (fullVisibility || (visibilityGrid[b.gy] && visibilityGrid[b.gy][b.gx] > 0)) b.draw(ctx);
@@ -13836,6 +13969,7 @@
             });
 
             // Units (interpolated positions for smooth rendering)
+            setFrameDrawImageDepth(DRAW_Z_UNITS);
             let alpha = tickAlpha;
             for (let u of units) {
                 if (u.dead) continue;
@@ -13849,6 +13983,7 @@
             }
 
             // Projectiles (interpolated)
+            setFrameDrawImageDepth(DRAW_Z_PARTICLES);
             for (let p of projectiles) {
                 let rx = p.x, ry = p.y;
                 p.x = p.prevX + (p.x - p.prevX) * alpha;
@@ -14121,6 +14256,7 @@
 
             // Build preview ghost
             if (selectedBuildItem) {
+                setFrameDrawImageDepth(DRAW_Z_OVERLAY);
                 let gx = Math.floor(mouseWorldX / TILE), gy = Math.floor(mouseWorldY / TILE);
                 if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
                     let canBuild;
@@ -14259,14 +14395,19 @@
         }
 
         function drawMinimap() {
+            const DRAW_Z_MINIMAP = 600;
             let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
             let tilePx = Math.max(1, scale);
             let vis = visibilityGrid;
             let lastFill = null;
 
-            if (dirtyGrid || dirtyAreas) _minimapStaticDirty = true;
-            if (_minimapStaticDirty || !_minimapStaticCanvas || _minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
-                rebuildMinimapStaticLayer(scale, tilePx);
+            if (_minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+                _minimapStaticDirty = true;
+                _requestStaticCacheCommit();
+                commitStaticCaches(true);
+            }
+            if (_staticCacheCommitVersion < 0 || !_minimapStaticCanvas) {
+                commitStaticCaches(true);
             }
 
             const setMinimapFill = (color) => {
@@ -14285,6 +14426,7 @@
                 minimapCtx.fillRect(startX * scale, y * scale, runW, tilePx);
             };
 
+            setFrameDrawImageDepth(DRAW_Z_MINIMAP);
             queueDrawImage(minimapCtx, _minimapStaticCanvas, 0, 0);
 
             // Unknown areas
@@ -14445,6 +14587,7 @@
             }
             if (floorChanged) {
                 _minimapStaticDirty = true;
+                _requestStaticCacheCommit();
                 recalculateAdjacency();
             }
 
@@ -15052,7 +15195,7 @@
                     return false;
                 }
                 queueAction({ action: 'place', gx, gy, itemType: selectedBuildItem, autoUpgradeEnabled: defaultAutoUpgradeEnabled, buildEnabled: defaultAutoBuildEnabled, count: purchaseCount });
-                updateBuildMenu();
+                requestBuildMenuRefresh();
                 return true;
             }
 
@@ -15075,7 +15218,7 @@
                     if (selectedBuildItem) {
                         if (localDefeated) {
                             selectedBuildItem = null;
-                            updateBuildMenu();
+                            requestBuildMenuRefresh();
                             stopBuildPlacementDrag();
                             return;
                         }
@@ -15096,7 +15239,7 @@
 
                         if (!keepSelected) {
                             selectedBuildItem = null;
-                            updateBuildMenu();
+                            requestBuildMenuRefresh();
                             stopBuildPlacementDrag();
                         }
                         return;
@@ -15107,7 +15250,7 @@
                 } else if (e.button === 2) { // Right click
                     e.preventDefault();
                     if (localDefeated) return;
-                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); stopBuildPlacementDrag(); return; }
+                    if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
                     let isCtrlMulti = isCtrlMultiCommand(e);
                     let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
                     let issuedStructureCommand = false;
@@ -15426,7 +15569,7 @@
                     e.preventDefault();
                     if (!gameStarted || gameOver) return;
                         if (localDefeated) return;
-                    if (selectedBuildItem) { selectedBuildItem = null; updateBuildMenu(); stopBuildPlacementDrag(); return; }
+                    if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
 
                     let isCtrlMulti = isCtrlMultiCommand(e);
                     let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
@@ -15481,7 +15624,7 @@
                     if (setStartingResourcesPopupOpen(false)) return;
                     if (setHelpPopupOpen(false)) return;
                     stopBuildPlacementDrag();
-                    selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; updateBuildMenu(); updateInfoPanel();
+                    selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; requestBuildMenuRefresh(); updateInfoPanel();
                 }
 
                 let popupGroupKey = String(e.key || '').toLowerCase();
@@ -17018,7 +17161,13 @@
 
         let _buildMenuTab = null;
         let _buildMenuItems = {}; // key -> div element
+        let _buildMenuPriceSpans = {}; // key -> price span element
+        let _buildMenuNeedsRefresh = true;
     let appFullscreen = false;
+
+        function requestBuildMenuRefresh() {
+            _buildMenuNeedsRefresh = true;
+        }
 
         function bindInstantPress(el, handler, opts = null) {
             if (!el || typeof handler !== 'function') return;
@@ -17119,6 +17268,16 @@
             descEl.classList.remove('empty');
             descEl.textContent = '';
             updateShopStatsInMinimap();
+        }
+
+        function _computeCloudUnavailableSet(playerId = localPlayerId) {
+            let unavailable = new Set();
+            for (let t of towers) {
+                if (!t || t.owner !== playerId || !(t.energy > 0)) continue;
+                if (!t.type || !t.type.startsWith('cloud_')) continue;
+                unavailable.add(t.type);
+            }
+            return unavailable;
         }
 
         function updateShopStatsInMinimap() {
@@ -17435,20 +17594,27 @@
 
         function updateBuildMenu() {
             let container = document.getElementById('build-items');
+            if (!container) return;
             let items = BUILD_CATEGORIES[activeBuildTab] || [];
+            let cloudUnavailable = _computeCloudUnavailableSet(localPlayerId);
+            let purchaseMultiplier = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+
+            _buildMenuNeedsRefresh = false;
 
             // Full rebuild only when tab changes
             if (_buildMenuTab !== activeBuildTab) {
                 _buildMenuTab = activeBuildTab;
                 _buildMenuItems = {};
+                _buildMenuPriceSpans = {};
                 container.innerHTML = '';
                 for (let key of items) {
                     let def = BASE_CARD_TYPES[key]; if (!def) continue;
                     let div = document.createElement('div');
                     div.className = 'build-item';
                     div.dataset.key = key;
-                    let displayPrice = getBuildMenuEnergyCost(key, buildPurchaseMultiplier);
-                    if (!isBuildItemAvailable(key)) div.classList.add('unavailable');
+                    let displayPrice = getBuildMenuEnergyCost(key, purchaseMultiplier);
+                    let available = key.startsWith('cloud_') ? !cloudUnavailable.has(key) : true;
+                    if (!available) div.classList.add('unavailable');
                     if (selectedBuildItem === key) div.classList.add('selected');
                     let thumbUrl = getItemThumbnail(key, 28);
                     let iconWrap = document.createElement('span');
@@ -17468,33 +17634,35 @@
                     bindInstantPress(div, () => {
                         if (!isBuildItemAvailable(key)) return;
                         selectedBuildItem = selectedBuildItem === key ? null : key;
-                        _patchBuildMenuClasses();
+                        updateBuildMenu();
                     });
                     container.appendChild(div);
                     _buildMenuItems[key] = div;
+                    _buildMenuPriceSpans[key] = priceSpan;
                 }
             } else {
                 // Stable update: just patch classes and prices
-                _patchBuildMenuClasses();
+                _patchBuildMenuClasses(items, cloudUnavailable, purchaseMultiplier);
             }
             updateSelectedBuildDescription();
         }
 
-        function _patchBuildMenuClasses() {
-            let items = BUILD_CATEGORIES[activeBuildTab] || [];
-            for (let key of items) {
+        function _patchBuildMenuClasses(items, cloudUnavailable, purchaseMultiplier) {
+            let list = items || BUILD_CATEGORIES[activeBuildTab] || [];
+            let unavailableSet = cloudUnavailable || _computeCloudUnavailableSet(localPlayerId);
+            let count = Math.max(1, Math.floor(purchaseMultiplier || buildPurchaseMultiplier || 1));
+            for (let key of list) {
                 let def = BASE_CARD_TYPES[key]; if (!def) continue;
                 let div = _buildMenuItems[key]; if (!div) continue;
-                let displayPrice = getBuildMenuEnergyCost(key, buildPurchaseMultiplier);
-                let available = isBuildItemAvailable(key);
+                let displayPrice = getBuildMenuEnergyCost(key, count);
+                let available = key.startsWith('cloud_') ? !unavailableSet.has(key) : true;
                 div.classList.remove('cant-afford');
                 div.classList.toggle('unavailable', !available);
                 if (!available && selectedBuildItem === key) selectedBuildItem = null;
                 div.classList.toggle('selected', selectedBuildItem === key);
-                let priceSpan = div.querySelector('.bi-price');
+                let priceSpan = _buildMenuPriceSpans[key];
                 if (priceSpan) priceSpan.textContent = `⚡${formatBigNumber(displayPrice)}`;
             }
-            updateSelectedBuildDescription();
         }
 
         function initBuildTabs() {
@@ -21982,7 +22150,7 @@
             let st = document.getElementById('lobby-status');
             if (st) st.textContent = statusText || (asHost ? 'Lobby ready. Configure settings and start when ready.' : 'Waiting for host to start...');
             renderOnlineLobby();
-            updateBuildMenu();
+            requestBuildMenuRefresh();
             updateInfoPanel();
             updateSpectateButtonVisibility();
         }
@@ -22573,7 +22741,7 @@
             recalculateAdjacency();
             dirtyGrid = true; dirtyAreas = true;
             gameStarted = true;
-            updateBuildMenu();
+            requestBuildMenuRefresh();
             updateControlGroupBar();
             startBackgroundMusic();
 
@@ -23546,7 +23714,10 @@
             currentTick++;
         }
 
+        // Stagger periodic tasks so expensive refreshes don't bunch on one frame.
         let _buildMenuRefreshCounter = 0;
+        let _minimapRefreshCounter = 10;
+        let _backgroundCacheRefreshCounter = 20;
     let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
     let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
         function gameFrame(timestamp) {
@@ -23596,11 +23767,21 @@
                 _fpsDisplay = Math.round(_fpsFrameCount * 1000 / (timestamp - _fpsLastTime));
                 _fpsFrameCount = 0; _fpsLastTime = timestamp;
             }
-            // Refresh build menu and info panel every ~30 frames
+            // Refresh build menu and info panel every ~30 frames.
             if (++_buildMenuRefreshCounter >= 30) {
                 _buildMenuRefreshCounter = 0;
-                updateBuildMenu();
+                if (_buildMenuNeedsRefresh) updateBuildMenu();
                 if (!researchQueueDragInProgress) updateInfoPanel();
+            }
+            // Refresh minimap static layer every ~30 frames on a different phase.
+            if (++_minimapRefreshCounter >= 30) {
+                _minimapRefreshCounter = 0;
+                commitStaticCaches(false, 'minimap');
+            }
+            // Refresh combined background/static terrain every ~30 frames on a third phase.
+            if (++_backgroundCacheRefreshCounter >= 30) {
+                _backgroundCacheRefreshCounter = 0;
+                commitStaticCaches(false, 'background');
             }
             requestAnimationFrame(gameFrame);
         }
@@ -23694,6 +23875,7 @@
                 _minimapStaticCanvas = null;
                 _minimapStaticCtx = null;
                 _minimapStaticDirty = true;
+                _requestStaticCacheCommit();
             }
 
             viewW = gameArea.clientWidth;
@@ -23733,7 +23915,7 @@
 
             initInput();
             initBuildTabs();
-            updateBuildMenu();
+            requestBuildMenuRefresh();
             loadOrCreateLocalIdentity();
             initLobbySettingsCarousel();
 
