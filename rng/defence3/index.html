@@ -8042,11 +8042,156 @@
             return cached;
         }
 
+        // Frame-local drawImage queue: batches by source image to improve sprite cache locality.
+        let _frameDrawImageQueueActive = false;
+        let _frameDrawImageQueue = [];
+        let _frameDrawImageContexts = new Set();
+        let _frameDrawImageInitialStateByCtx = new Map();
+        let _frameDrawImageIdCounter = 1;
+        const _frameDrawImageIdBySource = new WeakMap();
+
+        function _captureDrawImageCtxState(ctx) {
+            let t = ctx.getTransform();
+            return {
+                ta: t.a,
+                tb: t.b,
+                tc: t.c,
+                td: t.d,
+                te: t.e,
+                tf: t.f,
+                alpha: ctx.globalAlpha,
+                comp: ctx.globalCompositeOperation,
+                smooth: ctx.imageSmoothingEnabled,
+                filter: ctx.filter || 'none'
+            };
+        }
+
+        function _restoreDrawImageCtxState(ctx, st) {
+            if (!ctx || !st) return;
+            ctx.setTransform(st.ta, st.tb, st.tc, st.td, st.te, st.tf);
+            ctx.globalAlpha = st.alpha;
+            ctx.globalCompositeOperation = st.comp;
+            ctx.imageSmoothingEnabled = st.smooth;
+            ctx.filter = st.filter;
+        }
+
+        function beginFrameDrawImageQueue() {
+            _frameDrawImageQueueActive = true;
+            _frameDrawImageQueue.length = 0;
+            _frameDrawImageContexts.clear();
+            _frameDrawImageInitialStateByCtx.clear();
+        }
+
+        function queueDrawImage(ctx, image) {
+            if (!ctx || !image) return;
+
+            if (!_frameDrawImageQueueActive) {
+                ctx.drawImage(image, ...Array.prototype.slice.call(arguments, 2));
+                return;
+            }
+
+            if (!_frameDrawImageInitialStateByCtx.has(ctx)) {
+                _frameDrawImageInitialStateByCtx.set(ctx, _captureDrawImageCtxState(ctx));
+            }
+            _frameDrawImageContexts.add(ctx);
+
+            let imageId = _frameDrawImageIdBySource.get(image);
+            if (!imageId) {
+                imageId = _frameDrawImageIdCounter++;
+                _frameDrawImageIdBySource.set(image, imageId);
+            }
+
+            let st = _captureDrawImageCtxState(ctx);
+            let args = Array.prototype.slice.call(arguments, 2);
+            _frameDrawImageQueue.push({
+                ctx,
+                image,
+                args,
+                imageId,
+                ta: st.ta,
+                tb: st.tb,
+                tc: st.tc,
+                td: st.td,
+                te: st.te,
+                tf: st.tf,
+                alpha: st.alpha,
+                comp: st.comp,
+                smooth: st.smooth,
+                filter: st.filter
+            });
+        }
+
+        function flushFrameDrawImageQueue() {
+            if (!_frameDrawImageQueueActive) return;
+            if (_frameDrawImageQueue.length <= 0) {
+                _frameDrawImageQueueActive = false;
+                return;
+            }
+
+            let buckets = new Map();
+            let bucketOrder = [];
+            for (let cmd of _frameDrawImageQueue) {
+                let key = cmd.imageId;
+                if (!buckets.has(key)) {
+                    buckets.set(key, []);
+                    bucketOrder.push(key);
+                }
+                buckets.get(key).push(cmd);
+            }
+
+            let liveStateByCtx = new Map();
+            for (let id of bucketOrder) {
+                let cmds = buckets.get(id);
+                for (let cmd of cmds) {
+                    let c = cmd.ctx;
+                    let s = liveStateByCtx.get(c);
+
+                    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
+                        c.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
+                        if (!s) s = {};
+                        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
+                    }
+                    if (!s || s.alpha !== cmd.alpha) {
+                        c.globalAlpha = cmd.alpha;
+                        if (!s) s = {};
+                        s.alpha = cmd.alpha;
+                    }
+                    if (!s || s.comp !== cmd.comp) {
+                        c.globalCompositeOperation = cmd.comp;
+                        if (!s) s = {};
+                        s.comp = cmd.comp;
+                    }
+                    if (!s || s.smooth !== cmd.smooth) {
+                        c.imageSmoothingEnabled = cmd.smooth;
+                        if (!s) s = {};
+                        s.smooth = cmd.smooth;
+                    }
+                    if (!s || s.filter !== cmd.filter) {
+                        c.filter = cmd.filter;
+                        if (!s) s = {};
+                        s.filter = cmd.filter;
+                    }
+                    liveStateByCtx.set(c, s);
+
+                    c.drawImage(cmd.image, ...cmd.args);
+                }
+            }
+
+            for (let c of _frameDrawImageContexts) {
+                _restoreDrawImageCtxState(c, _frameDrawImageInitialStateByCtx.get(c));
+            }
+
+            _frameDrawImageQueue.length = 0;
+            _frameDrawImageContexts.clear();
+            _frameDrawImageInitialStateByCtx.clear();
+            _frameDrawImageQueueActive = false;
+        }
+
         function drawLevelTextCache(ctx, target, x, y) {
             if (!target || !target.textCanvas || !target._textCanvasScale) return;
             let dx = Math.round(x - 16);
             let dy = Math.round(y - 24);
-            ctx.drawImage(target.textCanvas, dx, dy, 32, 48);
+            queueDrawImage(ctx, target.textCanvas, dx, dy, 32, 48);
         }
 
         const UNIT_STATUS_GLYPH_CACHE = new Map();
@@ -8083,7 +8228,7 @@
             let s = _getUnitStatusGlyphSprite(symbol, color);
             let dx = Math.round(x - s.width * 0.5);
             let dy = Math.round(y - s.height * 0.5);
-            ctx.drawImage(s.canvas, dx, dy, s.width, s.height);
+            queueDrawImage(ctx, s.canvas, dx, dy, s.width, s.height);
         }
 
         const UNIT_STAR_PATH_CACHE = new Map();
@@ -9599,7 +9744,7 @@
                     let sprite = _getUnitLevelTextSprite(txt);
                     let dx = Math.round(this.x - sprite.width * 0.5);
                     let dy = Math.round(this.y - this.r - 7 - sprite.height);
-                    ctx.drawImage(sprite.canvas, dx, dy, sprite.width, sprite.height);
+                    queueDrawImage(ctx, sprite.canvas, dx, dy, sprite.width, sprite.height);
                 }
 
                 // Carrying value indicator for workers
@@ -12857,7 +13002,7 @@
 
         function drawTowerIcon(ctx, x, y, color, angle, level, type, active) {
             let sprite = _getTowerIconSprite(color, angle, type, active);
-            ctx.drawImage(sprite, Math.round(x - 16), Math.round(y - 16));
+            queueDrawImage(ctx, sprite, Math.round(x - 16), Math.round(y - 16));
         }
 
         const PROGRESS_BAR_SPRITE_CACHE = new Map();
@@ -12894,7 +13039,7 @@
             let sprite = _getProgressBarSprite(w, h, bgColor, fillColor, pctInt);
             let x = Math.round(centerX - w / 2);
             let py = Math.round(y);
-            ctx.drawImage(sprite, x, py, w, h);
+            queueDrawImage(ctx, sprite, x, py, w, h);
         }
 
         function drawBuildingEnergyProgressBar(ctx, entity, centerX, y, width = 24, height = 3) {
@@ -12981,7 +13126,7 @@
                 ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
             }
             let floorSprite = _getFloorItemSprite(item);
-            if (floorSprite) ctx.drawImage(floorSprite, px, py, TILE, TILE);
+            if (floorSprite) queueDrawImage(ctx, floorSprite, px, py, TILE, TILE);
             if (item.underConstruction) {
                 ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
             } else if (item.isUpgrading) {
@@ -13186,7 +13331,7 @@
             if (img && img.complete && img.naturalWidth > 0) {
                 ctx.save();
                 ctx.globalAlpha = canBuild ? 0.78 : 0.62;
-                ctx.drawImage(img, gx * TILE + 1, gy * TILE + 1, TILE - 2, TILE - 2);
+                queueDrawImage(ctx, img, gx * TILE + 1, gy * TILE + 1, TILE - 2, TILE - 2);
                 ctx.restore();
             }
 
@@ -13424,7 +13569,7 @@
             let sx = minGx * TILE, sy = minGy * TILE;
             let sw = (maxGx - minGx + 1) * TILE;
             let sh = (maxGy - minGy + 1) * TILE;
-            ctx.drawImage(_combinedBgCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+            queueDrawImage(ctx, _combinedBgCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
         }
 
         function drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy) {
@@ -13584,6 +13729,7 @@
             let maxGy = Math.min(GRID_H - 1, Math.ceil((camera.y + vh) / TILE) + 1);
 
             renderStaticLayer(minGx, minGy, maxGx, maxGy);
+            beginFrameDrawImageQueue();
 
             ctx.save();
             let dpr = window.devicePixelRatio || 1;
@@ -14036,6 +14182,7 @@
 
             // Minimap
             drawMinimap();
+            flushFrameDrawImageQueue();
         }
 
         function rebuildMinimapStaticLayer(scale, tilePx) {
@@ -14138,7 +14285,7 @@
                 minimapCtx.fillRect(startX * scale, y * scale, runW, tilePx);
             };
 
-            minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
+            queueDrawImage(minimapCtx, _minimapStaticCanvas, 0, 0);
 
             // Unknown areas
             if (!fullVisibility && vis.length > 0) {
