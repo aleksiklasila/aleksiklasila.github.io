@@ -13968,6 +13968,10 @@
                 }
             });
 
+            // Flush queued background/structure sprites now so immediate unit draws happen on top.
+            flushFrameDrawImageQueue();
+            beginFrameDrawImageQueue();
+
             // Units (interpolated positions for smooth rendering)
             setFrameDrawImageDepth(DRAW_Z_UNITS);
             let alpha = tickAlpha;
