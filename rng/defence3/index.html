@@ -260,6 +260,7 @@
         #starting-resources-popup,
         #statsmap-popup,
         #research-matrix-popup,
+        #optimization-popup,
         #config-popup {
             position: fixed;
             inset: 0;
@@ -275,6 +276,7 @@
         #starting-resources-popup.hidden,
         #statsmap-popup.hidden,
         #research-matrix-popup.hidden,
+        #optimization-popup.hidden,
         #config-popup.hidden {
             display: none;
         }
@@ -284,6 +286,7 @@
         #starting-resources-popup-card,
         #statsmap-popup-card,
         #research-matrix-popup-card,
+        #optimization-popup-card,
         #config-popup-card {
             width: min(560px, calc(100vw - 28px));
             max-height: calc(100vh - 28px);
@@ -320,6 +323,10 @@
 
         #starting-resources-popup-card {
             width: min(680px, calc(100vw - 28px));
+        }
+
+        #optimization-popup-card {
+            width: min(640px, calc(100vw - 28px));
         }
 
         #config-popup-card {
@@ -1224,10 +1231,6 @@
                         <label for="cfg-pipeline-delay">Lockstep Pipeline Delay (ticks)</label>
                         <input id="cfg-pipeline-delay" type="number" min="0" max="12" value="2" style="width:72px" title="Minimum lockstep pipeline delay in ticks">
                     </div>
-                    <div class="lobby-setting-row">
-                        <label for="cfg-unit-eff-stats-ticks">Unit Stats Update Delay (ticks) </label>
-                        <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
-                    </div>
                     <div class="lobby-col-footer">Host controls these settings for everyone in online matches.</div>
                 </div>
 
@@ -1278,6 +1281,7 @@
                         <input id="cfg-full-vis" type="checkbox" checked title="Disable Fog of War">
                     </div>
                     <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
+                        <button id="btn-open-optimization" type="button" style="font-size:11px;padding:4px 8px">Optimization</button>
                         <button id="btn-open-config" type="button" style="font-size:11px;padding:4px 8px">Config</button>
                     </div>
                     <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
@@ -1417,6 +1421,30 @@
             </div>
             <div class="help-mode">Edit JS object literal. Host applied config is shared to all clients at match start.</div>
             <textarea id="config-editor-text" spellcheck="false"></textarea>
+        </div>
+    </div>
+
+    <div id="optimization-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="optimization-title">
+        <div id="optimization-popup-card">
+            <div class="help-title-row">
+                <h3 id="optimization-title" style="color:#8dc6ff; font-size:18px; margin:0">Optimization Settings</h3>
+                <button id="btn-optimization-close" style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>
+            </div>
+            <div class="help-mode">Host controls these settings for solo and multiplayer.</div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+                <div class="lobby-setting-row" style="margin:0;">
+                    <label for="cfg-unit-eff-stats-ticks">Unit Stats Update Delay (ticks)</label>
+                    <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
+                </div>
+                <div class="lobby-setting-row" style="margin:0;">
+                    <label for="cfg-unit-collision-ticks">Unit Collision Update Delay (ticks)</label>
+                    <input id="cfg-unit-collision-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between unit-to-unit separation checks per unit">
+                </div>
+                <div class="lobby-setting-row" style="margin:0;">
+                    <label for="cfg-astar-max-iters">A* Iterations Limit</label>
+                    <input id="cfg-astar-max-iters" type="number" min="256" max="18000" value="18000" style="width:90px" title="Hard cap for A* node expansions per path request">
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1774,7 +1802,6 @@
             spectateMode = mode;
             localDefeated = true;
             fullVisibility = true;
-            dirtyGrid = true;
             selectedBuildItem = null;
             selectedUnits = [];
             selectedEntities = [];
@@ -1818,6 +1845,7 @@
                 if (grid[t.gy] && grid[t.gy][t.gx]) {
                     grid[t.gy][t.gx].type = TYPE_FLOOR;
                     grid[t.gy][t.gx].owner = -1;
+                    _markCombinedBgTileDirty(t.gx, t.gy, 0, true);
                 }
             }
             for (let i = barracks.length - 1; i >= 0; i--) {
@@ -2951,6 +2979,8 @@
                     TICK_RATE,
                     LOCKSTEP_PIPELINE_MIN,
                     UNIT_EFFECTIVE_STATS_RECALC_TICKS,
+                    UNIT_COLLISION_RECALC_TICKS,
+                    ASTAR_MAX_ITERS_LIMIT,
                 },
                 progression: {
                     RESEARCH_COST_EXP,
@@ -3020,6 +3050,8 @@
             setValue('cfg-tick-rate', TICK_RATE);
             setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
             setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
+            setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
+            setValue('cfg-astar-max-iters', ASTAR_MAX_ITERS_LIMIT);
             setValue('cfg-max-thing-level', MAX_THING_LEVEL);
             setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
         }
@@ -3063,6 +3095,12 @@
             applyTimingConfig(nextTickRate, nextPipelineDelay);
             if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
                 UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+            }
+            if (Number.isFinite(Number(cfg.UNIT_COLLISION_RECALC_TICKS))) {
+                UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS))));
+            }
+            if (Number.isFinite(Number(cfg.ASTAR_MAX_ITERS_LIMIT))) {
+                ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT))));
             }
 
             if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
@@ -3152,6 +3190,14 @@
             return wasOpen !== open;
         }
 
+        function setOptimizationPopupOpen(open) {
+            let popup = document.getElementById('optimization-popup');
+            if (!popup) return false;
+            let wasOpen = !popup.classList.contains('hidden');
+            popup.classList.toggle('hidden', !open);
+            return wasOpen !== open;
+        }
+
         function applyConfigEditorChanges() {
             let ta = document.getElementById('config-editor-text');
             if (!ta) return;
@@ -3200,6 +3246,8 @@
             cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
             cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
             cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+            cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
+            cfg.ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(getNumber('cfg-astar-max-iters', cfg.ASTAR_MAX_ITERS_LIMIT))));
 
             snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
             snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
@@ -3225,6 +3273,8 @@
             MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
             MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
+            UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
+            ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT) || ASTAR_MAX_ITERS_LIMIT)));
             applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
 
             let gameModeEl = document.getElementById('cfg-gamemode');
@@ -3237,7 +3287,7 @@
             let numberIds = [
                 'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy',
                 'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max',
-                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks'
+                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-max-iters'
             ];
             let selectIds = ['cfg-gamemode', 'cfg-map-type'];
             let checkboxIds = ['cfg-full-vis'];
@@ -3399,6 +3449,8 @@
         let TICK_RATE = 20; // ticks per second (menu configurable)
         let TICK_MS = 1000 / TICK_RATE;
         let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
+        let UNIT_COLLISION_RECALC_TICKS = 5;
+        let ASTAR_MAX_ITERS_LIMIT = 18000;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
     let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
@@ -4857,25 +4909,75 @@
         const TILE_ENTITY_GOLDMINE = 'goldmine';
         let tileEntityType = []; // 2D lookup [y][x] -> string type
         let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
+        let _activeTileEntities = new Set();
+        let _adjacencyDirtyTiles = new Set();
+        let _adjacencyNeedsRecalc = true;
+        let _adjacencyDirtyAll = true;
+        let _adjacencyLastRecalcTick = -1;
+
+        function _adjTileKey(gx, gy) {
+            return gy * GRID_W + gx;
+        }
+
+        function _markAdjacencyDirtyAt(gx, gy, pad = 0) {
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+            let p = Math.max(0, Math.floor(Number(pad) || 0));
+            let minX = Math.max(0, Math.floor(gx) - p);
+            let maxX = Math.min(GRID_W - 1, Math.floor(gx) + p);
+            let minY = Math.max(0, Math.floor(gy) - p);
+            let maxY = Math.min(GRID_H - 1, Math.floor(gy) + p);
+            for (let y = minY; y <= maxY; y++) {
+                for (let x = minX; x <= maxX; x++) {
+                    _adjacencyDirtyTiles.add(_adjTileKey(x, y));
+                }
+            }
+            _adjacencyNeedsRecalc = true;
+        }
+
+        function requestAdjacencyRecalc(gx = null, gy = null, pad = 1) {
+            if (Number.isFinite(gx) && Number.isFinite(gy)) {
+                _markAdjacencyDirtyAt(gx, gy, pad);
+            } else {
+                _adjacencyDirtyAll = true;
+                _adjacencyNeedsRecalc = true;
+            }
+        }
+
+        function _requestAdjacencyRecalcForThing(thing, pad = 1) {
+            if (!thing || !Number.isFinite(thing.gx) || !Number.isFinite(thing.gy)) {
+                requestAdjacencyRecalc();
+                return;
+            }
+            requestAdjacencyRecalc(thing.gx, thing.gy, pad);
+        }
 
         function initTileEntityLookup() {
             tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
             tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
+            _activeTileEntities = new Set();
+            requestAdjacencyRecalc();
         }
 
         function setTileEntity(gx, gy, type, ref) {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
             if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
+            let prevRef = tileEntityRef[gy][gx];
+            if (prevRef && prevRef !== ref) _activeTileEntities.delete(prevRef);
             tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
             tileEntityRef[gy][gx] = ref || null;
+            if (ref) _activeTileEntities.add(ref);
+            _markAdjacencyDirtyAt(gx, gy, 1);
         }
 
         function clearTileEntity(gx, gy, expectedRef = null) {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
             if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
             if (expectedRef && tileEntityRef[gy][gx] !== expectedRef) return;
+            let prevRef = tileEntityRef[gy][gx];
+            if (prevRef) _activeTileEntities.delete(prevRef);
             tileEntityType[gy][gx] = TILE_ENTITY_NONE;
             tileEntityRef[gy][gx] = null;
+            _markAdjacencyDirtyAt(gx, gy, 1);
         }
 
         function getTileEntityType(gx, gy) {
@@ -5887,7 +5989,14 @@
         const SPAWNER_ROUTE_CACHE_MAX_ENTRIES = 800;
         const SPAWNER_RALLY_TEMPLATE_TTL_TICKS = 20;
         const SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES = 1000;
+        const ASTAR_MAX_ITERS_BASE = 2048;
+        const ASTAR_MAX_ITERS_HARD = 18000;
+        const ASTAR_NODE_BUDGET_PER_PATH = 360;
+        const ASTAR_NODE_BUDGET_MIN_PER_TICK = 2400;
+        const ASTAR_NODE_BUDGET_MAX_PER_TICK = 22000;
         const WORKER_HEAVY_AI_STRIDE = 3;
+        let astarNodeBudgetPerTick = 9000;
+        let astarNodeBudgetRemaining = 9000;
         let sharedPathCache = new Map();
         let sharedSpawnerRouteCache = new Map();
         let sharedSpawnerRallyTemplateCache = new Map();
@@ -6466,6 +6575,15 @@
 
             let bufSize = gridW * gridH;
             _ensureAstarBuffers(bufSize);
+            let configuredAstarLimit = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(ASTAR_MAX_ITERS_HARD, Math.floor(Number(ASTAR_MAX_ITERS_LIMIT) || ASTAR_MAX_ITERS_HARD)));
+            let maxAstarIterations = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(configuredAstarLimit, (bufSize >> 1) + ASTAR_MAX_ITERS_BASE));
+            maxAstarIterations = Math.min(maxAstarIterations, Math.max(0, astarNodeBudgetRemaining));
+            if (maxAstarIterations <= 0) {
+                _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                return null;
+            }
+            let astarIterations = 0;
+            let abortedByBudget = false;
 
             // Bump epoch; on overflow reset arrays
             if (++_astarEpoch > 2000000000) {
@@ -6532,6 +6650,13 @@
                     return path;
                 }
 
+                astarIterations++;
+                astarNodeBudgetRemaining = Math.max(0, astarNodeBudgetRemaining - 1);
+                if (astarIterations > maxAstarIterations || astarNodeBudgetRemaining <= 0) {
+                    abortedByBudget = true;
+                    break;
+                }
+
                 let cx = curKey % gridW, cy = (curKey / gridW) | 0;
                 let cg = gScoreVal[curKey];
 
@@ -6575,7 +6700,7 @@
                 }
             }
 
-            if (movementProfile) {
+            if (movementProfile && !abortedByBudget) {
                 sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
                 _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
             }
@@ -7382,11 +7507,15 @@
         }
 
         function shouldShowBuildingLevels() {
-            return levelVisibilityMode === LEVEL_VISIBILITY_ALL || levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS;
+            if (!(levelVisibilityMode === LEVEL_VISIBILITY_ALL || levelVisibilityMode === LEVEL_VISIBILITY_BUILDINGS)) return false;
+            if (!camera || !Number.isFinite(camera.zoom)) return true;
+            return camera.zoom >= 0.62;
         }
 
         function shouldShowUnitLevels() {
-            return levelVisibilityMode === LEVEL_VISIBILITY_ALL;
+            if (levelVisibilityMode !== LEVEL_VISIBILITY_ALL) return false;
+            if (!camera || !Number.isFinite(camera.zoom)) return true;
+            return camera.zoom >= 0.7;
         }
 
         function getLevelVisibilityButtonText() {
@@ -7854,12 +7983,11 @@
             let cached = LEVEL_TEXT_SPRITE_CACHE.get(txt);
             if (cached) return cached;
 
-            let scale = 2;
+            let scale = 1;
             let canvas = document.createElement('canvas');
             canvas.width = 32 * scale;
             canvas.height = 48 * scale;
             let c = canvas.getContext('2d');
-            c.setTransform(scale, 0, 0, scale, 0, 0);
             c.clearRect(0, 0, 32, 48);
             c.textAlign = 'center';
             c.textBaseline = 'middle';
@@ -7890,14 +8018,12 @@
             let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(txt);
             if (cached) return cached;
 
-            let scale = 2;
             let width = 28;
             let height = 14;
             let canvas = document.createElement('canvas');
-            canvas.width = width * scale;
-            canvas.height = height * scale;
+            canvas.width = width;
+            canvas.height = height;
             let c = canvas.getContext('2d');
-            c.setTransform(scale, 0, 0, scale, 0, 0);
             c.clearRect(0, 0, width, height);
             c.font = '700 7px Arial';
             c.textAlign = 'center';
@@ -7918,15 +8044,46 @@
 
         function drawLevelTextCache(ctx, target, x, y) {
             if (!target || !target.textCanvas || !target._textCanvasScale) return;
-            let scale = target._textCanvasScale;
             let dx = Math.round(x - 16);
             let dy = Math.round(y - 24);
-            ctx.save();
-            let prevSmoothing = ctx.imageSmoothingEnabled;
-            ctx.imageSmoothingEnabled = true;
-            ctx.drawImage(target.textCanvas, 0, 0, 32 * scale, 48 * scale, dx, dy, 32, 48);
-            ctx.imageSmoothingEnabled = prevSmoothing;
-            ctx.restore();
+            ctx.drawImage(target.textCanvas, dx, dy, 32, 48);
+        }
+
+        const UNIT_STATUS_GLYPH_CACHE = new Map();
+        const UNIT_STATUS_GLYPH_CACHE_MAX = 64;
+
+        function _getUnitStatusGlyphSprite(symbol, color) {
+            let txt = String(symbol || '');
+            let key = txt + '|' + String(color || '#fff');
+            let cached = UNIT_STATUS_GLYPH_CACHE.get(key);
+            if (cached) return cached;
+
+            let w = 14, h = 12;
+            let c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            let g = c.getContext('2d');
+            g.clearRect(0, 0, w, h);
+            g.font = '700 10px Arial';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillStyle = color;
+            g.shadowColor = '#000';
+            g.shadowBlur = 1;
+            g.fillText(txt, w * 0.5, h * 0.5 + 0.5);
+            g.shadowColor = 'transparent';
+
+            cached = { canvas: c, width: w, height: h };
+            UNIT_STATUS_GLYPH_CACHE.set(key, cached);
+            _trimSpriteCache(UNIT_STATUS_GLYPH_CACHE, UNIT_STATUS_GLYPH_CACHE_MAX);
+            return cached;
+        }
+
+        function drawUnitStatusGlyph(ctx, symbol, color, x, y) {
+            let s = _getUnitStatusGlyphSprite(symbol, color);
+            let dx = Math.round(x - s.width * 0.5);
+            let dy = Math.round(y - s.height * 0.5);
+            ctx.drawImage(s.canvas, dx, dy, s.width, s.height);
         }
 
         const UNIT_STAR_PATH_CACHE = new Map();
@@ -8661,49 +8818,52 @@
                     case CMD_ATTACKING: this.doAttacking(spd); break;
                     case CMD_HOLDING: this.doHolding(); break;
                 }
-                // Separation from nearby units
-                let selfCollisionR = this.getCollisionRadius();
-                let sepRange = selfCollisionR * 2;
-                let pushX = 0, pushY = 0;
-                let myLayer = this.getCollisionLayer();
-                forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
-                    if (other === this || other.dead) return;
-                    if (other.getCollisionLayer() !== myLayer) return;
-                    dx = -dx; dy = -dy;
-                    let d = Math.sqrt(Math.max(0, d2));
-                    let minDist = selfCollisionR + other.getCollisionRadius();
-                    if (d < minDist) {
-                        let nx = 0, ny = 0;
-                        if (d > 0.001) {
-                            nx = dx / d;
-                            ny = dy / d;
-                        } else {
-                            // Exact overlap fallback: use current movement direction (no random/id jitter).
-                            let mdx = this.vx, mdy = this.vy;
-                            if (Math.hypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
-                                let pn = this.path[this.pathIndex];
-                                mdx = pn.x * TILE + 16 - this.x;
-                                mdy = pn.y * TILE + 16 - this.y;
-                            }
-                            if (Math.abs(mdx) >= Math.abs(mdy)) {
-                                nx = mdx >= 0 ? 0 : 0;
-                                ny = mdx >= 0 ? -1 : 1;
+                // Separation from nearby units (staggered to reduce per-tick cost spikes).
+                let collisionInterval = getUnitCollisionRecalcTicks();
+                if (collisionInterval <= 1 || ((gameTime + this.id) % collisionInterval) === 0) {
+                    let selfCollisionR = this.getCollisionRadius();
+                    let sepRange = selfCollisionR * 2;
+                    let pushX = 0, pushY = 0;
+                    let myLayer = this.getCollisionLayer();
+                    forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
+                        if (other === this || other.dead) return;
+                        if (other.getCollisionLayer() !== myLayer) return;
+                        dx = -dx; dy = -dy;
+                        let d = Math.sqrt(Math.max(0, d2));
+                        let minDist = selfCollisionR + other.getCollisionRadius();
+                        if (d < minDist) {
+                            let nx = 0, ny = 0;
+                            if (d > 0.001) {
+                                nx = dx / d;
+                                ny = dy / d;
                             } else {
-                                nx = mdy >= 0 ? 1 : -1;
-                                ny = 0;
+                                // Exact overlap fallback: use current movement direction (no random/id jitter).
+                                let mdx = this.vx, mdy = this.vy;
+                                if (Math.hypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
+                                    let pn = this.path[this.pathIndex];
+                                    mdx = pn.x * TILE + 16 - this.x;
+                                    mdy = pn.y * TILE + 16 - this.y;
+                                }
+                                if (Math.abs(mdx) >= Math.abs(mdy)) {
+                                    nx = mdx >= 0 ? 0 : 0;
+                                    ny = mdx >= 0 ? -1 : 1;
+                                } else {
+                                    nx = mdy >= 0 ? 1 : -1;
+                                    ny = 0;
+                                }
                             }
+                            let force = (minDist - Math.max(d, 0.001)) * 0.3;
+                            pushX += nx * force;
+                            pushY += ny * force;
                         }
-                        let force = (minDist - Math.max(d, 0.001)) * 0.3;
-                        pushX += nx * force;
-                        pushY += ny * force;
-                    }
-                });
-                if (pushX !== 0 || pushY !== 0) {
-                    this.x += pushX; this.y += pushY;
-                    // Clamp to walkable area
-                    let ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-                    if (!this.isFlying && !canUnitOccupyTile(this, ngx, ngy)) {
-                        this.x -= pushX; this.y -= pushY;
+                    });
+                    if (pushX !== 0 || pushY !== 0) {
+                        this.x += pushX; this.y += pushY;
+                        // Clamp to walkable area
+                        let ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
+                        if (!this.isFlying && !canUnitOccupyTile(this, ngx, ngy)) {
+                            this.x -= pushX; this.y -= pushY;
+                        }
                     }
                 }
                 pushUnitOutOfBlockedTile(this);
@@ -9443,26 +9603,27 @@
                 }
 
                 // Carrying value indicator for workers
+                let statusY = this.y - this.r - 9;
                 if (this.carryingValue > 0) {
-                    ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
+                    drawUnitStatusGlyph(ctx, '⚡', '#fd0', this.x, statusY);
                 } else if (this.workerType === 'builder' && this.workerState) {
                     // Builder visual: hammer when building, ⚡ when fetching energy.
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
-                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, '⚡', '#fd0', this.x, statusY);
                     } else if (this.workerState === 'MOVING_TO_BUILD' || this.workerState === 'BUILDING_IN_PLACE') {
-                        ctx.fillStyle = '#fa0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('\uD83D\uDD28', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, '\uD83D\uDD28', '#fa0', this.x, statusY);
                     }
                 } else if (this.workerType === 'healer' && this.workerState) {
                     if (this.workerState === 'RETURNING_FOR_GOLD') {
-                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, '⚡', '#fd0', this.x, statusY);
                     } else if (this.workerState === 'MOVING_TO_HEAL' || this.workerState === 'HEALING') {
-                        ctx.fillStyle = '#fff'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('+', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, '+', '#fff', this.x, statusY);
                     }
                 } else if (this.workerType === 'researcher' && this.workerState) {
                     if (this.workerState === 'RETURNING_FOR_GOLD' || !this.researcherHasMaterial) {
-                        ctx.fillStyle = '#fd0'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('⚡', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, '⚡', '#fd0', this.x, statusY);
                     } else if (this.workerState === 'MOVING_TO_RESEARCH' || this.workerState === 'RESEARCHING') {
-                        ctx.fillStyle = '#7bf'; ctx.font = '10px Arial'; ctx.textAlign = 'center'; ctx.fillText('R', this.x, this.y - this.r - 9);
+                        drawUnitStatusGlyph(ctx, 'R', '#7bf', this.x, statusY);
                     }
                 }
             }
@@ -10226,6 +10387,7 @@
                                     let idx = goldMines.indexOf(mine);
                                     if (idx >= 0) goldMines.splice(idx, 1);
                                     clearTileEntity(mine.gx, mine.gy, mine);
+                                    _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
                                     dirtyGrid = true;
                                 }
                             }
@@ -10392,6 +10554,7 @@
                                     markConstructionComplete(t);
                                     refreshThingProgressState(t);
                                     if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
+                                    _requestAdjacencyRecalcForThing(t, 1);
                                     recalculateAdjacency();
                                     _builderRememberWorkSite(u, t);
                                     if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
@@ -10411,6 +10574,7 @@
                                     refreshThingProgressState(t);
                                     if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                    _requestAdjacencyRecalcForThing(t, 1);
                                     recalculateAdjacency();
                                     if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                         _builderRememberWorkSite(u, t);
@@ -10432,6 +10596,7 @@
                                 }
                                 if (stackedAny) {
                                     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                    _requestAdjacencyRecalcForThing(t, 1);
                                     recalculateAdjacency();
                                 }
                                 refreshThingProgressState(t);
@@ -10520,6 +10685,7 @@
                                 markConstructionComplete(t);
                                 refreshThingProgressState(t);
                                 if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
+                                _requestAdjacencyRecalcForThing(t, 1);
                                 recalculateAdjacency();
                                 _builderRememberWorkSite(u, t);
                                 if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
@@ -10538,6 +10704,7 @@
                                 refreshThingProgressState(t);
                                 if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                _requestAdjacencyRecalcForThing(t, 1);
                                 recalculateAdjacency();
                                 if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
                                     _builderRememberWorkSite(u, t);
@@ -10557,6 +10724,7 @@
                             }
                             if (stackedAny) {
                                 if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+                                _requestAdjacencyRecalcForThing(t, 1);
                                 recalculateAdjacency();
                             }
                             refreshThingProgressState(t);
@@ -11953,182 +12121,284 @@
             }
         }
 
-        function recalculateAdjacency() {
-            _bumpPathTopologyVersion();
-            areas.forEach(a => a.active = false);
-            dirtyAreas = true;
-            towers.forEach(t => { t.effectiveStacks = t.stacks; });
-            for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { if (grid[y][x].item) grid[y][x].item.effectiveStacks = grid[y][x].item.stacks || 1; }
+        function _isOperationalAdjacencyEntity(obj) {
+            if (!obj) return false;
+            if (obj.underConstruction) return false;
+            let lvl = (obj.effectiveLevel !== undefined ? obj.effectiveLevel : obj.level);
+            if (lvl !== undefined && lvl <= 0) return false;
+            return true;
+        }
 
-            const isOperationalEntity = (obj) => {
-                if (!obj) return false;
-                if (obj.underConstruction) return false;
-                let lvl = (obj.effectiveLevel !== undefined ? obj.effectiveLevel : obj.level);
-                if (lvl !== undefined && lvl <= 0) return false;
-                return true;
+        function _getAdjacencySignatureAt(gx, gy) {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
+            let ref = getTileEntityRef(gx, gy);
+            if (!ref || !_isOperationalAdjacencyEntity(ref)) return null;
+            if (ref instanceof Tower) {
+                if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_WALL) return null;
+                let owner = Number.isFinite(ref.owner) ? ref.owner : grid[gy][gx].owner;
+                if (!Number.isFinite(owner) || owner < 0) return null;
+                let type = String(ref.type || '');
+                if (!type) return null;
+                return {
+                    obj: ref,
+                    isTower: true,
+                    owner,
+                    type,
+                    unitType: '',
+                    sigKey: `T|${owner}|${type}`
+                };
+            }
+
+            if (getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE) return null;
+            let owner = Number.isFinite(ref.owner) ? ref.owner : (grid[gy] && grid[gy][gx] ? grid[gy][gx].owner : -1);
+            if (!Number.isFinite(owner) || owner < 0) return null;
+            let type = String(ref.type || '');
+            if (!type) return null;
+            let unitType = type === 'barrack' ? String(ref.unitType || 'norm') : '';
+            return {
+                obj: ref,
+                isTower: false,
+                owner,
+                type,
+                unitType,
+                sigKey: `I|${owner}|${type}|${unitType}`
+            };
+        }
+
+        function _runAdjacencyRecalculation() {
+            if (!_adjacencyNeedsRecalc) return;
+            if (!_adjacencyDirtyAll && _adjacencyDirtyTiles.size <= 0) {
+                _adjacencyNeedsRecalc = false;
+                return;
+            }
+
+            let runFull = _adjacencyDirtyAll || _adjacencyDirtyTiles.size > 1200;
+            let prevAreaActive = areas.map(a => !!(a && a.active));
+            let areaVisualsChanged = false;
+            let touchedAreaIds = new Set();
+            let seeds = [];
+            let seedKeySet = new Set();
+
+            let pushSeedAt = (gx, gy) => {
+                let sig = _getAdjacencySignatureAt(gx, gy);
+                if (!sig || !sig.obj || !Number.isFinite(sig.obj.gx) || !Number.isFinite(sig.obj.gy)) return;
+                let key = _adjTileKey(sig.obj.gx, sig.obj.gy);
+                if (seedKeySet.has(key)) return;
+                seedKeySet.add(key);
+                seeds.push(sig.obj);
+            };
+
+            if (runFull) {
+                for (let i = 0; i < areas.length; i++) touchedAreaIds.add(i);
+                for (let ent of _activeTileEntities) {
+                    if (!ent || !Number.isFinite(ent.gx) || !Number.isFinite(ent.gy)) continue;
+                    pushSeedAt(ent.gx, ent.gy);
+                }
+            } else {
+                for (let key of _adjacencyDirtyTiles) {
+                    let gx = key % GRID_W;
+                    let gy = Math.floor(key / GRID_W);
+                    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
+                    let cell = grid[gy] && grid[gy][gx];
+                    if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) touchedAreaIds.add(cell.areaId);
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            pushSeedAt(gx + dx, gy + dy);
+                        }
+                    }
+                }
+            }
+
+            if (runFull) {
+                for (let a of areas) if (a) a.active = false;
+            } else {
+                for (let aId of touchedAreaIds) {
+                    let a = getAreaById(aId);
+                    if (a) a.active = false;
+                }
+            }
+
+            towers.forEach(t => { t.effectiveStacks = t.stacks; });
+
+            const areaSignatureCache = new Map();
+            const getAreaSignatureKey = (aId) => {
+                if (areaSignatureCache.has(aId)) return areaSignatureCache.get(aId);
+                let area = getAreaById(aId);
+                if (!area || !Array.isArray(area.cells) || area.cells.length <= 0) {
+                    areaSignatureCache.set(aId, null);
+                    return null;
+                }
+                let firstKey = null;
+                for (let cp of area.cells) {
+                    let sig = _getAdjacencySignatureAt(cp.x, cp.y);
+                    if (!sig) {
+                        areaSignatureCache.set(aId, null);
+                        return null;
+                    }
+                    if (firstKey === null) firstKey = sig.sigKey;
+                    else if (firstKey !== sig.sigKey) {
+                        areaSignatureCache.set(aId, null);
+                        return null;
+                    }
+                }
+                areaSignatureCache.set(aId, firstKey);
+                return firstKey;
             };
 
             let visited = new Set();
-            const gid = (x, y) => `${x},${y}`;
+            let dirs4 = [[0, 1], [0, -1], [1, 0], [-1, 0]];
 
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    let cell = grid[y][x], type = null, isTower = false, ownerCheck = -1;
-                    if (cell.type === TYPE_WALL) {
-                        let t = getTowerAtTile(x, y);
-                        if (t && isOperationalEntity(t)) { type = t.type; isTower = true; ownerCheck = t.owner; }
-                    } else if (cell.item && isOperationalEntity(cell.item)) { type = cell.item.type; ownerCheck = cell.owner; }
-                    if (!type || visited.has(gid(x, y))) continue;
+            for (let seed of seeds) {
+                if (!seed || !Number.isFinite(seed.gx) || !Number.isFinite(seed.gy)) continue;
+                let rootSig = _getAdjacencySignatureAt(seed.gx, seed.gy);
+                if (!rootSig) continue;
+                let rootKey = _adjTileKey(seed.gx, seed.gy);
+                if (visited.has(rootKey)) continue;
 
-                    let group = [], queue = [{ x, y }], rootObj = null;
-                    visited.add(gid(x, y));
-                    if (isTower) { let t = getTowerAtTile(x, y); if (t && isOperationalEntity(t)) { group.push(t); rootObj = t; } }
-                    else if (isOperationalEntity(cell.item)) { group.push(cell.item); rootObj = cell.item; }
-                    if (!rootObj) continue;
-                    let touchedAreas = new Set([cell.areaId]);
+                let queue = [{ x: seed.gx, y: seed.gy }];
+                let qHead = 0;
+                let group = [];
+                let touchedAreas = new Set();
 
-                    const enqueueMatchingCell = (tx, ty) => {
-                        if (tx < 0 || tx >= GRID_W || ty < 0 || ty >= GRID_H) return;
-                        let key = gid(tx, ty);
-                        if (visited.has(key)) return;
+                const enqueueMatchingCell = (tx, ty) => {
+                    if (tx < 0 || tx >= GRID_W || ty < 0 || ty >= GRID_H) return;
+                    let key = _adjTileKey(tx, ty);
+                    if (visited.has(key)) return;
+                    let sig = _getAdjacencySignatureAt(tx, ty);
+                    if (!sig || sig.sigKey !== rootSig.sigKey) return;
+                    visited.add(key);
+                    queue.push({ x: tx, y: ty });
+                    group.push(sig.obj);
+                    let cell = grid[ty] && grid[ty][tx];
+                    if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) {
+                        touchedAreas.add(cell.areaId);
+                        touchedAreaIds.add(cell.areaId);
+                    }
+                };
 
-                        let tc = grid[ty][tx], tObj = null, tType = null;
-                        if (isTower) {
-                            if (tc.type !== TYPE_WALL) return;
-                            let tt = getTowerAtTile(tx, ty);
-                            if (!tt || tt.owner !== ownerCheck || !isOperationalEntity(tt)) return;
-                            tObj = tt; tType = tt.type;
-                        } else {
-                            if (!tc.item || tc.owner !== ownerCheck || !isOperationalEntity(tc.item)) return;
-                            tObj = tc.item; tType = tc.item.type;
-                        }
+                enqueueMatchingCell(seed.gx, seed.gy);
 
-                        if (!tObj || tType !== type) return;
-                        if (type === 'barrack' && rootObj && tObj.unitType !== rootObj.unitType) return;
+                while (qHead < queue.length) {
+                    let cur = queue[qHead++];
+                    for (let d of dirs4) {
+                        let nx = cur.x + d[0], ny = cur.y + d[1];
+                        enqueueMatchingCell(nx, ny);
 
-                        visited.add(key);
-                        queue.push({ x: tx, y: ty });
-                        group.push(tObj);
-                        touchedAreas.add(tc.areaId);
-                    };
-
-                    while (queue.length > 0) {
-                        let cur = queue.shift();
-                        for (let [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                            let nx = cur.x + dx, ny = cur.y + dy;
-                            if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-                            let key = gid(nx, ny), nc = grid[ny][nx], nType = null, nObj = null;
-                            if (isTower) {
-                                if (nc.type === TYPE_WALL) { let nt = getTowerAtTile(nx, ny); if (nt && nt.owner === ownerCheck && isOperationalEntity(nt)) { nType = nt.type; nObj = nt; } }
-                            } else { if (nc.item && nc.owner === ownerCheck && isOperationalEntity(nc.item)) { nType = nc.item.type; nObj = nc.item; } }
-
-                            if (nObj && rootObj) {
-                                if (type === 'barrack' && nType === 'barrack' && nObj.unitType !== rootObj.unitType) nType = null;
-                            }
-
-                            if (!visited.has(key) && nType === type) {
-                                visited.add(key); queue.push({ x: nx, y: ny }); group.push(nObj); touchedAreas.add(nc.areaId);
-                            }
-
-                            // Cloud bridge: if this frontier touches a cloud endpoint, link matching groups across both endpoints.
-                            let cloud = null;
-                            if (nc.type === TYPE_WALL) {
-                                let nt = getTowerAtTile(nx, ny);
-                                if (nt && nt.owner === ownerCheck && isOperationalEntity(nt) && nt.baseStats && nt.baseStats.isCloud) cloud = nt;
-                            }
-                            if (cloud) {
-                                let partner = towers.find(pt => pt !== cloud && pt.owner === ownerCheck && isOperationalEntity(pt) && pt.baseStats && pt.baseStats.isCloud && pt.baseStats.pairId === cloud.baseStats.pairId);
-                                let endpoints = [cloud];
-                                if (partner) endpoints.push(partner);
-                                for (let ep of endpoints) {
-                                    for (let [dx2, dy2] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
-                                        enqueueMatchingCell(ep.gx + dx2, ep.gy + dy2);
-                                    }
-                                }
+                        let cloud = getTowerAtTile(nx, ny);
+                        if (!cloud || cloud.owner !== rootSig.owner || !_isOperationalAdjacencyEntity(cloud) || !(cloud.baseStats && cloud.baseStats.isCloud)) continue;
+                        let partner = getPairedCloudTower(cloud, rootSig.owner);
+                        let endpoints = [cloud];
+                        if (partner) endpoints.push(partner);
+                        for (let ep of endpoints) {
+                            for (let d2 of dirs4) {
+                                enqueueMatchingCell(ep.gx + d2[0], ep.gy + d2[1]);
                             }
                         }
                     }
+                }
 
-                    // Area multiplier
-                    let areaMult = 1;
-                    touchedAreas.forEach(aId => {
-                        if (aId === -1) return;
-                        let area = getAreaById(aId);
-                        if (!area) return;
-                        let filled = true;
-                        for (let cp of area.cells) {
-                            let c = grid[cp.y][cp.x], occ = false;
-                            if (isTower) { if (c.type === TYPE_WALL) { let t = getTowerAtTile(cp.x, cp.y); if (t && isOperationalEntity(t) && t.type === type && t.owner === ownerCheck) occ = true; } }
-                            else { if (c.item && isOperationalEntity(c.item) && c.item.type === type && c.owner === ownerCheck) { if (type !== 'barrack' || c.item.unitType === rootObj.unitType) occ = true; } }
-                            if (!occ) { filled = false; break; }
-                        }
-                        if (filled) { area.active = true; let power = (area.multiplierLevel || 0) + 1; areaMult *= Math.pow(area.cells.length, power); }
-                    });
+                if (group.length <= 0) continue;
 
-                    let groupSize = group.length;
-                    group.forEach(obj => {
-                        obj.stacks = getThingStackedStacks(obj);
-                        obj.manualStacks = getThingManualStacks(obj);
-                        let actualStacks = obj.stacks || 1;
-                        let baseStacks = actualStacks;
+                let areaMult = 1;
+                for (let aId of touchedAreas) {
+                    let area = getAreaById(aId);
+                    if (!area) continue;
+                    let areaSig = getAreaSignatureKey(aId);
+                    if (areaSig !== rootSig.sigKey) continue;
+                    let power = (area.multiplierLevel || 0) + 1;
+                    areaMult *= Math.pow(area.cells.length, power);
+                }
 
-                        obj.effectiveStacks = baseStacks * groupSize * areaMult;
+                let groupSize = group.length;
+                for (let obj of group) {
+                    obj.stacks = getThingStackedStacks(obj);
+                    obj.manualStacks = getThingManualStacks(obj);
+                    let actualStacks = obj.stacks || 1;
+                    obj.effectiveStacks = actualStacks * groupSize * areaMult;
 
-                        let potentialLevel = stackCountToLevel(obj.effectiveStacks);
-                        obj.potentialEffectiveLevel = potentialLevel;
+                    let potentialLevel = stackCountToLevel(obj.effectiveStacks);
+                    obj.potentialEffectiveLevel = potentialLevel;
+                    if (obj.effectiveLevel === undefined) obj.effectiveLevel = 1;
 
-                        if (obj.effectiveLevel === undefined) obj.effectiveLevel = 1;
+                    if (obj.potentialEffectiveLevel < obj.effectiveLevel) {
+                        obj.effectiveLevel = obj.potentialEffectiveLevel;
+                        obj.isUpgrading = false;
+                    }
 
-                        // Drop effectiveLevel if potential drops below it
-                        if (obj.potentialEffectiveLevel < obj.effectiveLevel) {
-                            obj.effectiveLevel = obj.potentialEffectiveLevel;
-                            obj.isUpgrading = false;
-                        }
+                    if (!isAutoUpgradeEnabled(obj) && obj.isUpgrading) {
+                        obj.isUpgrading = false;
+                    }
 
-                        // Pause auto-upgrade if disabled
-                        if (!isAutoUpgradeEnabled(obj) && obj.isUpgrading) {
-                            obj.isUpgrading = false;
-                        }
+                    if (obj.potentialEffectiveLevel > obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
+                        beginUpgradeProgress(obj, obj.effectiveLevel + 1);
+                    }
 
-                        // Trigger or resume upgrade if we can reach a higher level and auto-upgrade is enabled
-                        if (obj.potentialEffectiveLevel > obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
-                            beginUpgradeProgress(obj, obj.effectiveLevel + 1);
-                        }
+                    if (!obj.underConstruction && !obj.isUpgrading) {
+                        obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
+                        if (!obj.isStacking) obj.stackingWorkDone = 0;
+                    } else if (obj.isUpgrading) {
+                        obj.isStacking = false;
+                    }
 
-                        if (!obj.underConstruction && !obj.isUpgrading) {
-                            obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
-                            if (!obj.isStacking) obj.stackingWorkDone = 0;
-                        } else if (obj.isUpgrading) {
-                            obj.isStacking = false;
-                        }
-
-                        if (obj.updateStats) {
-                            obj.effectiveGroupSize = groupSize; obj.effectiveAreaMult = areaMult;
-                            obj.updateStats();
+                    if (obj.updateStats) {
+                        obj.effectiveGroupSize = groupSize;
+                        obj.effectiveAreaMult = areaMult;
+                        obj.updateStats();
+                    } else {
+                        obj.effectiveGroupSize = groupSize;
+                        obj.effectiveAreaMult = areaMult;
+                        let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
+                        let stats = calculateItemStats(statsType, obj.effectiveLevel, obj.owner);
+                        if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
+                            obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
+                            if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
+                            obj.energy = Math.min(obj.energy, obj.maxEnergy);
+                            if (stats.damage) obj.damage = stats.damage;
                         } else {
-                            obj.effectiveGroupSize = groupSize; obj.effectiveAreaMult = areaMult;
-                            let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-                            let stats = calculateItemStats(statsType, obj.effectiveLevel, obj.owner);
-                            if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
-                                obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
-                                if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
-                                obj.energy = Math.min(obj.energy, obj.maxEnergy);
-                                if (stats.damage) obj.damage = stats.damage;
-                            } else {
-                                let ratio = obj.maxEnergy > 0 ? obj.energy / obj.maxEnergy : 1;
-                                obj.maxEnergy = stats.maxEnergy; if (stats.damage) obj.damage = stats.damage;
-                                obj.energy = obj.maxEnergy * ratio;
-                            }
-                            updateItemTextCache(obj);
+                            let ratio = obj.maxEnergy > 0 ? obj.energy / obj.maxEnergy : 1;
+                            obj.maxEnergy = stats.maxEnergy;
+                            if (stats.damage) obj.damage = stats.damage;
+                            obj.energy = obj.maxEnergy * ratio;
                         }
-                    });
+                        updateItemTextCache(obj);
+                    }
                 }
             }
-            areas.forEach(a => { if (!a.active && a.multiplierLevel > 0) { a.multiplierLevel = 0; dirtyAreas = true; } });
+
+            for (let aId of touchedAreaIds) {
+                let a = getAreaById(aId);
+                if (!a) continue;
+                let nextActive = !!getAreaSignatureKey(aId);
+                if (!nextActive && a.multiplierLevel > 0) {
+                    a.multiplierLevel = 0;
+                    areaVisualsChanged = true;
+                }
+                if (!!prevAreaActive[aId] !== nextActive) areaVisualsChanged = true;
+                a.active = nextActive;
+            }
+
+            if (areaVisualsChanged) dirtyAreas = true;
+
+            _bumpPathTopologyVersion();
+            _adjacencyNeedsRecalc = false;
+            _adjacencyDirtyAll = false;
+            _adjacencyDirtyTiles.clear();
+            _adjacencyLastRecalcTick = gameTime;
+        }
+
+        function recalculateAdjacency(forceFull = false) {
+            if (forceFull) _adjacencyDirtyAll = true;
+            _adjacencyNeedsRecalc = true;
+            if (_adjacencyLastRecalcTick === gameTime) return;
+            _runAdjacencyRecalculation();
         }
 
         function getUnitEffectiveStatsRecalcTicks() {
             return Math.max(1, Math.min(240, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1)));
+        }
+
+        function getUnitCollisionRecalcTicks() {
+            return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
         }
 
         function recalculateUnitEffectiveStats() {
@@ -12305,6 +12575,7 @@
                 if ((area.multiplierLevel || 0) >= 5) return false;
                 area.multiplierLevel = (area.multiplierLevel || 0) + 1;
                 _markCombinedBgAreaDirty(aId, 1);
+                for (let cp of area.cells) requestAdjacencyRecalc(cp.x, cp.y, 0);
                 recalculateAdjacency();
                 return true;
             }
@@ -12331,7 +12602,7 @@
                     placedNewStructure = true;
                     placedNewWallStructure = true;
                 }
-                _markCombinedBgTileDirty(gx, gy);
+                _markCombinedBgTileDirty(gx, gy, 0, true);
             } else if (itemKey.startsWith('barrack_')) {
                 let unitType = cardDef.unitType || 'norm';
                 let existing = getBarrackAtTile(gx, gy);
@@ -12478,7 +12749,7 @@
                 clearTileEntity(building.gx, building.gy, building);
                 grid[building.gy][building.gx].type = TYPE_FLOOR;
                 grid[building.gy][building.gx].owner = -1;
-                _markCombinedBgTileDirty(building.gx, building.gy);
+                _markCombinedBgTileDirty(building.gx, building.gy, 0, true);
                 recalculateAdjacency();
                 recalculateLaserConnections();
             } else if (building instanceof Barrack || (building.type === 'barrack')) {
@@ -12530,33 +12801,63 @@
         // ============================================================
         // DRAWING HELPERS
         // ============================================================
-        function drawTowerIcon(ctx, x, y, color, angle, level, type, active) {
+        const TOWER_ICON_SPRITE_CACHE = new Map();
+        const TOWER_ICON_SPRITE_CACHE_MAX = 1024;
+
+        function _quantizeTowerAngle(angle) {
+            let a = Number.isFinite(angle) ? angle : 0;
+            let steps = 32;
+            let tau = Math.PI * 2;
+            a = ((a % tau) + tau) % tau;
+            let idx = Math.round((a / tau) * steps) % steps;
+            return (idx / steps) * tau;
+        }
+
+        function _getTowerIconSprite(color, angle, type, active) {
+            let key = `${type || ''}|${String(color || '')}|${String(!!active)}|${_quantizeTowerAngle(angle).toFixed(3)}`;
+            let cached = TOWER_ICON_SPRITE_CACHE.get(key);
+            if (cached) return cached;
+
+            let c = document.createElement('canvas');
+            c.width = 32;
+            c.height = 32;
+            let g = c.getContext('2d');
+            let cx = 16, cy = 16;
+            let qa = _quantizeTowerAngle(angle);
+
             if (type === 'laser') {
-                ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(x, y, 10, 0, 6.28); ctx.fill();
-                ctx.strokeStyle = '#000'; ctx.stroke();
-                ctx.fillStyle = active ? '#f00' : '#400'; ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.28); ctx.fill();
-                return;
+                g.fillStyle = '#222'; g.beginPath(); g.arc(cx, cy, 10, 0, 6.28); g.fill();
+                g.strokeStyle = '#000'; g.stroke();
+                g.fillStyle = active ? '#f00' : '#400'; g.beginPath(); g.arc(cx, cy, 6, 0, 6.28); g.fill();
+            } else if (type === 'elements') {
+                g.save(); g.translate(cx, cy - 2); g.rotate(qa);
+                g.fillStyle = '#f44'; g.fillRect(-6, -6, 3, 12);
+                g.fillStyle = '#4f4'; g.fillRect(-3, -6, 3, 12);
+                g.fillStyle = '#4af'; g.fillRect(0, -6, 3, 12);
+                g.fillStyle = '#afe'; g.fillRect(3, -6, 3, 12);
+                g.fillStyle = 'black'; g.fillRect(-6, 2, 12, 4);
+                g.restore();
+            } else if (type && type.startsWith('cloud')) {
+                g.fillStyle = '#000'; g.beginPath(); g.arc(cx, cy - 2, 12, 0, 6.28); g.fill();
+                g.fillStyle = color; g.beginPath();
+                g.arc(cx - 4, cy + 1, 5, 0, 6.28); g.arc(cx + 4, cy + 1, 5, 0, 6.28); g.arc(cx, cy - 5, 6, 0, 6.28);
+                g.fill();
+            } else {
+                g.fillStyle = '#000'; g.beginPath(); g.arc(cx, cy - 2, 10, 0, 6.28); g.fill();
+                g.save(); g.translate(cx, cy - 2); g.rotate(qa);
+                g.fillStyle = color; g.fillRect(-6, -6, 12, 12);
+                g.fillStyle = 'black'; g.fillRect(0, -2, 12, 4);
+                g.restore();
             }
-            if (type === 'elements') {
-                ctx.save(); ctx.translate(x, y - 2); ctx.rotate(angle);
-                ctx.fillStyle = "#f44"; ctx.fillRect(-6, -6, 3, 12);
-                ctx.fillStyle = "#4f4"; ctx.fillRect(-3, -6, 3, 12);
-                ctx.fillStyle = "#4af"; ctx.fillRect(0, -6, 3, 12);
-                ctx.fillStyle = "#afe"; ctx.fillRect(3, -6, 3, 12);
-                ctx.fillStyle = 'black'; ctx.fillRect(-6, 2, 12, 4);
-                ctx.restore(); return;
-            }
-            if (type && type.startsWith('cloud')) {
-                ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y - 2, 12, 0, 6.28); ctx.fill();
-                ctx.fillStyle = color; ctx.beginPath();
-                ctx.arc(x - 4, y + 1, 5, 0, 6.28); ctx.arc(x + 4, y + 1, 5, 0, 6.28); ctx.arc(x, y - 5, 6, 0, 6.28);
-                ctx.fill(); return;
-            }
-            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(x, y - 2, 10, 0, 6.28); ctx.fill();
-            ctx.save(); ctx.translate(x, y - 2); ctx.rotate(angle);
-            ctx.fillStyle = color; ctx.fillRect(-6, -6, 12, 12);
-            ctx.fillStyle = 'black'; ctx.fillRect(0, -2, 12, 4);
-            ctx.restore();
+
+            TOWER_ICON_SPRITE_CACHE.set(key, c);
+            _trimSpriteCache(TOWER_ICON_SPRITE_CACHE, TOWER_ICON_SPRITE_CACHE_MAX);
+            return c;
+        }
+
+        function drawTowerIcon(ctx, x, y, color, angle, level, type, active) {
+            let sprite = _getTowerIconSprite(color, angle, type, active);
+            ctx.drawImage(sprite, Math.round(x - 16), Math.round(y - 16));
         }
 
         const PROGRESS_BAR_SPRITE_CACHE = new Map();
@@ -12614,6 +12915,62 @@
             return true;
         }
 
+        const FLOOR_ITEM_SPRITE_CACHE = new Map();
+        const FLOOR_ITEM_SPRITE_CACHE_MAX = 512;
+
+        function _getFloorItemEnergyBucket(item) {
+            let maxEnergy = Number(item && item.maxEnergy) || 0;
+            if (maxEnergy <= 0) return 20;
+            let pct = Math.max(0, Math.min(1, (Number(item.energy) || 0) / maxEnergy));
+            return Math.round(pct * 20);
+        }
+
+        function _buildFloorItemSprite(type, bucket) {
+            let c = document.createElement('canvas');
+            c.width = TILE;
+            c.height = TILE;
+            let g = c.getContext('2d');
+            let x = TILE * 0.5, y = TILE * 0.5;
+            if (type === 'sand' || type === 'lava' || type === 'poison_puddle' || type === 'ice_patch' || type === 'water_puddle') {
+                let colors = { sand: '#875', lava: '#d22', poison_puddle: '#2d2', ice_patch: '#afe', water_puddle: '#4af' };
+                g.fillStyle = colors[type]; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
+                let alpha = Math.max(0, 1 - (Math.max(0, Math.min(20, bucket)) / 20));
+                g.fillStyle = `rgba(0,0,0,${alpha})`; g.beginPath(); g.arc(x, y, 8, 0, 6.28); g.fill();
+            } else if (type === 'farm') {
+                g.fillStyle = '#da0'; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
+                g.font = '14px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('\uD83C\uDF3E', x, y);
+            } else if (type === 'house') {
+                g.fillStyle = '#c95';
+                g.fillRect(x - 10, y - 6, 20, 14);
+                g.fillStyle = '#844';
+                g.beginPath();
+                g.moveTo(x - 12, y - 6);
+                g.lineTo(x, y - 14);
+                g.lineTo(x + 12, y - 6);
+                g.closePath();
+                g.fill();
+                g.fillStyle = '#222';
+                g.fillRect(x - 2, y + 1, 4, 7);
+            } else if (type === 'mine') {
+                g.fillStyle = '#444'; g.beginPath(); g.arc(x, y, 8, 0, 6.28); g.fill();
+                g.fillStyle = '#f00'; g.beginPath(); g.arc(x, y, 3, 0, 6.28); g.fill();
+            }
+            return c;
+        }
+
+        function _getFloorItemSprite(item) {
+            if (!item || !item.type) return null;
+            let bucket = _getFloorItemEnergyBucket(item);
+            let dynamic = (item.type === 'sand' || item.type === 'lava' || item.type === 'poison_puddle' || item.type === 'ice_patch' || item.type === 'water_puddle');
+            let key = dynamic ? `${item.type}|${bucket}` : `${item.type}|base`;
+            let cached = FLOOR_ITEM_SPRITE_CACHE.get(key);
+            if (cached) return cached;
+            cached = _buildFloorItemSprite(item.type, bucket);
+            FLOOR_ITEM_SPRITE_CACHE.set(key, cached);
+            _trimSpriteCache(FLOOR_ITEM_SPRITE_CACHE, FLOOR_ITEM_SPRITE_CACHE_MAX);
+            return cached;
+        }
+
         function drawFloorItem(ctx, cell, px, py) {
             let item = cell.item;
             if (!item || item.draw) return;
@@ -12623,30 +12980,8 @@
                 ctx.strokeStyle = PLAYER_COLORS_DIM[cell.owner]; ctx.lineWidth = 1;
                 ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
             }
-            if (item.type === 'sand' || item.type === 'lava' || item.type === 'poison_puddle' || item.type === 'ice_patch' || item.type === 'water_puddle') {
-                let colors = { sand: '#875', lava: '#d22', poison_puddle: '#2d2', ice_patch: '#afe', water_puddle: '#4af' };
-                ctx.fillStyle = colors[item.type]; ctx.beginPath(); ctx.arc(x, y, 12, 0, 6.28); ctx.fill();
-                let energyPct = item.maxEnergy > 0 ? item.energy / item.maxEnergy : 1;
-                ctx.fillStyle = `rgba(0,0,0,${Math.max(0, 1 - energyPct)})`; ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.28); ctx.fill();
-            } else if (item.type === 'farm') {
-                ctx.fillStyle = '#da0'; ctx.beginPath(); ctx.arc(x, y, 12, 0, 6.28); ctx.fill();
-                ctx.font = "14px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#fff"; ctx.fillText("\uD83C\uDF3E", x, y);
-            } else if (item.type === 'house') {
-                ctx.fillStyle = '#c95';
-                ctx.fillRect(x - 10, y - 6, 20, 14);
-                ctx.fillStyle = '#844';
-                ctx.beginPath();
-                ctx.moveTo(x - 12, y - 6);
-                ctx.lineTo(x, y - 14);
-                ctx.lineTo(x + 12, y - 6);
-                ctx.closePath();
-                ctx.fill();
-                ctx.fillStyle = '#222';
-                ctx.fillRect(x - 2, y + 1, 4, 7);
-            } else if (item.type === 'mine') {
-                ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(x, y, 8, 0, 6.28); ctx.fill();
-                ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.28); ctx.fill();
-            }
+            let floorSprite = _getFloorItemSprite(item);
+            if (floorSprite) ctx.drawImage(floorSprite, px, py, TILE, TILE);
             if (item.underConstruction) {
                 ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
             } else if (item.isUpgrading) {
@@ -12879,6 +13214,14 @@
         let _areaOutlinePathCache = null; // Array: [areaId] -> Path2D
         let _combinedBgCanvas = null; // Full world background (grid + area outlines)
         let _combinedBgCtx = null;
+        let _combinedTerrainCanvas = null; // Base terrain only (floor/walls)
+        let _combinedTerrainCtx = null;
+        let _combinedTerrainDirty = true;
+        let _minimapStaticCanvas = null;
+        let _minimapStaticCtx = null;
+        let _minimapStaticDirty = true;
+        let _minimapStaticScale = 0;
+        let _minimapStaticTilePx = 0;
         let _staticLayerCache = {
             valid: false,
             cameraX: 0,
@@ -12907,11 +13250,13 @@
         function _markCombinedBgFullDirty() {
             _combinedBgDirtyFull = true;
             _combinedBgDirtyBounds = null;
+            _combinedTerrainDirty = true;
+            _minimapStaticDirty = true;
             dirtyGrid = true;
             dirtyAreas = true;
         }
 
-        function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false) {
+        function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false, terrainChanged = false) {
             minGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(minGx)));
             minGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(minGy)));
             maxGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(maxGx)));
@@ -12929,12 +13274,14 @@
                 }
             }
 
+            if (terrainChanged) _combinedTerrainDirty = true;
+            _minimapStaticDirty = true;
             dirtyGrid = true;
             if (markAreas) dirtyAreas = true;
         }
 
-        function _markCombinedBgTileDirty(gx, gy, pad = 0) {
-            _markCombinedBgRectDirty(gx - pad, gy - pad, gx + pad, gy + pad, false);
+        function _markCombinedBgTileDirty(gx, gy, pad = 0, terrainChanged = false) {
+            _markCombinedBgRectDirty(gx - pad, gy - pad, gx + pad, gy + pad, false, terrainChanged);
         }
 
         function _markCombinedBgAreaDirty(areaId, pad = 1) {
@@ -12956,37 +13303,10 @@
             let height = (maxGy - minGy + 1) * TILE;
 
             c.clearRect(startX, startY, width, height);
-
-            c.fillStyle = C_FLOOR;
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
-                }
+            if (_combinedTerrainDirty || !_combinedTerrainCanvas || !_combinedTerrainCtx) {
+                rebuildCombinedTerrainCache();
             }
-
-            c.fillStyle = '#222';
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
-                }
-            }
-
-            c.fillStyle = C_WALL;
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
-                }
-            }
-
-            c.strokeStyle = '#444';
-            c.lineWidth = 1;
-            c.beginPath();
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
-                    if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
-                }
-            }
-            c.stroke();
+            c.drawImage(_combinedTerrainCanvas, startX, startY, width, height, startX, startY, width, height);
 
             if (redrawAreaOutlines && _areaOutlinePathCache && _areaColorCache) {
                 c.save();
@@ -13014,9 +13334,59 @@
                 _combinedBgCtx.imageSmoothingEnabled = false;
                 _areaColorCache = null;
                 _areaOutlinePathCache = null;
+                _combinedTerrainDirty = true;
                 _markCombinedBgFullDirty();
                 invalidateStaticLayerCache();
             }
+        }
+
+        function ensureCombinedTerrainCanvas() {
+            if (!_combinedTerrainCanvas || _combinedTerrainCanvas.width !== WORLD_W || _combinedTerrainCanvas.height !== WORLD_H) {
+                _combinedTerrainCanvas = document.createElement('canvas');
+                _combinedTerrainCanvas.width = WORLD_W;
+                _combinedTerrainCanvas.height = WORLD_H;
+                _combinedTerrainCtx = _combinedTerrainCanvas.getContext('2d');
+                _combinedTerrainCtx.imageSmoothingEnabled = false;
+                _combinedTerrainDirty = true;
+            }
+        }
+
+        function rebuildCombinedTerrainCache() {
+            ensureCombinedTerrainCanvas();
+            let c = _combinedTerrainCtx;
+            c.clearRect(0, 0, WORLD_W, WORLD_H);
+
+            c.fillStyle = C_FLOOR;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
+                }
+            }
+
+            c.fillStyle = '#222';
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+                }
+            }
+
+            c.fillStyle = C_WALL;
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+
+            c.strokeStyle = '#444';
+            c.lineWidth = 1;
+            c.beginPath();
+            for (let y = 0; y < GRID_H; y++) {
+                for (let x = 0; x < GRID_W; x++) {
+                    if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
+                }
+            }
+            c.stroke();
+            _combinedTerrainDirty = false;
         }
 
         function rebuildCombinedBackgroundCache() {
@@ -13025,7 +13395,7 @@
             if (!_areaOutlinePathCache) rebuildAreaOutlinePathCache();
             let c = _combinedBgCtx;
 
-            if (!_combinedBgDirtyFull && !_combinedBgDirtyBounds && (dirtyGrid || dirtyAreas)) {
+            if (!_combinedBgDirtyFull && !_combinedBgDirtyBounds && dirtyAreas) {
                 _combinedBgDirtyFull = true;
             }
 
@@ -13050,7 +13420,7 @@
 
         function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
             ensureCombinedBgCanvas();
-            if (dirtyGrid || dirtyAreas) rebuildCombinedBackgroundCache();
+            if (_combinedBgDirtyFull || _combinedBgDirtyBounds || dirtyAreas) rebuildCombinedBackgroundCache();
             let sx = minGx * TILE, sy = minGy * TILE;
             let sw = (maxGx - minGx + 1) * TILE;
             let sh = (maxGy - minGy + 1) * TILE;
@@ -13668,65 +14038,131 @@
             drawMinimap();
         }
 
-        function drawMinimap() {
-            minimapCtx.fillStyle = '#111';
-            minimapCtx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
-            let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
+        function rebuildMinimapStaticLayer(scale, tilePx) {
+            if (!_minimapStaticCanvas || _minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+                _minimapStaticCanvas = document.createElement('canvas');
+                _minimapStaticCanvas.width = MINIMAP_SIZE;
+                _minimapStaticCanvas.height = MINIMAP_SIZE;
+                _minimapStaticCtx = _minimapStaticCanvas.getContext('2d');
+                _minimapStaticCtx.imageSmoothingEnabled = false;
+                _minimapStaticScale = scale;
+                _minimapStaticTilePx = tilePx;
+            }
 
-            // Unknown areas
-            if (!fullVisibility && visibilityGrid.length > 0) {
-                minimapCtx.fillStyle = '#000';
-                for (let y = 0; y < GRID_H; y++) {
-                    for (let x = 0; x < GRID_W; x++) {
-                        if (!visibilityGrid[y] || visibilityGrid[y][x] === 0) {
-                            minimapCtx.fillRect(x * scale, y * scale, Math.max(1, scale), Math.max(1, scale));
+            let c = _minimapStaticCtx;
+            c.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+            c.fillStyle = '#111';
+            c.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+            let lastFill = null;
+            const setFill = (color) => {
+                if (lastFill !== color) {
+                    c.fillStyle = color;
+                    lastFill = color;
+                }
+            };
+            const drawCell = (gx, gy, color) => {
+                setFill(color);
+                c.fillRect(gx * scale, gy * scale, tilePx, tilePx);
+            };
+            const drawRun = (startX, endX, y, color) => {
+                if (endX <= startX) return;
+                setFill(color);
+                let cells = endX - startX;
+                let runW = ((cells - 1) * scale) + tilePx;
+                c.fillRect(startX * scale, y * scale, runW, tilePx);
+            };
+
+            for (let t of towers) drawCell(t.gx, t.gy, PLAYER_COLORS[t.owner]);
+            for (let b of barracks) drawCell(b.gx, b.gy, PLAYER_COLORS[b.owner]);
+            for (let s of collectorSpawners) drawCell(s.gx, s.gy, PLAYER_COLORS[s.owner]);
+
+            for (let y = 0; y < GRID_H; y++) {
+                let runStart = -1;
+                let runOwner = -1;
+                for (let x = 0; x <= GRID_W; x++) {
+                    let owner = -1;
+                    if (x < GRID_W) {
+                        let cell = grid[y][x];
+                        if (cell.item && cell.owner >= 0) owner = cell.owner;
+                    }
+
+                    if (owner >= 0) {
+                        if (runStart < 0) {
+                            runStart = x;
+                            runOwner = owner;
+                        } else if (owner !== runOwner) {
+                            drawRun(runStart, x, y, PLAYER_COLORS_DIM[runOwner] || PLAYER_COLORS[runOwner]);
+                            runStart = x;
+                            runOwner = owner;
                         }
+                    } else if (runStart >= 0) {
+                        drawRun(runStart, x, y, PLAYER_COLORS_DIM[runOwner] || PLAYER_COLORS[runOwner]);
+                        runStart = -1;
+                        runOwner = -1;
                     }
                 }
             }
 
-            // Walls/buildings
-            for (let t of towers) {
-                if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
-                minimapCtx.fillStyle = PLAYER_COLORS[t.owner];
-                minimapCtx.fillRect(t.gx * scale, t.gy * scale, Math.max(1, scale), Math.max(1, scale));
-            }
-            for (let b of barracks) {
-                if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
-                minimapCtx.fillStyle = PLAYER_COLORS[b.owner];
-                minimapCtx.fillRect(b.gx * scale, b.gy * scale, Math.max(1, scale), Math.max(1, scale));
-            }
-
-            for (let s of collectorSpawners) {
-                if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
-                minimapCtx.fillStyle = PLAYER_COLORS[s.owner];
-                minimapCtx.fillRect(s.gx * scale, s.gy * scale, Math.max(1, scale), Math.max(1, scale));
-            }
-
-            for (let y = 0; y < GRID_H; y++) {
-                for (let x = 0; x < GRID_W; x++) {
-                    let cell = grid[y][x];
-                    if (!cell.item || cell.owner < 0) continue;
-                    if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
-                    minimapCtx.fillStyle = PLAYER_COLORS_DIM[cell.owner] || PLAYER_COLORS[cell.owner];
-                    minimapCtx.fillRect(x * scale, y * scale, Math.max(1, scale), Math.max(1, scale));
-                }
-            }
-
-            // Gold mines
             for (let m of goldMines) {
-                if (m.gold <= 0) continue;
-                if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
-                minimapCtx.fillStyle = '#fd0';
-                minimapCtx.fillRect(m.gx * scale, m.gy * scale, Math.max(1, scale), Math.max(1, scale));
+                if (m.gold > 0) drawCell(m.gx, m.gy, '#fd0');
+            }
+
+            _minimapStaticDirty = false;
+        }
+
+        function drawMinimap() {
+            let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
+            let tilePx = Math.max(1, scale);
+            let vis = visibilityGrid;
+            let lastFill = null;
+
+            if (dirtyGrid || dirtyAreas) _minimapStaticDirty = true;
+            if (_minimapStaticDirty || !_minimapStaticCanvas || _minimapStaticScale !== scale || _minimapStaticTilePx !== tilePx) {
+                rebuildMinimapStaticLayer(scale, tilePx);
+            }
+
+            const setMinimapFill = (color) => {
+                if (lastFill !== color) {
+                    minimapCtx.fillStyle = color;
+                    lastFill = color;
+                }
+            };
+
+            const drawMinimapRun = (startX, endX, y, color) => {
+                if (endX <= startX) return;
+                setMinimapFill(color);
+                let cells = endX - startX;
+                // Width for merged cells keeps the same visual coverage as per-cell fillRect.
+                let runW = ((cells - 1) * scale) + tilePx;
+                minimapCtx.fillRect(startX * scale, y * scale, runW, tilePx);
+            };
+
+            minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
+
+            // Unknown areas
+            if (!fullVisibility && vis.length > 0) {
+                for (let y = 0; y < GRID_H; y++) {
+                    let row = vis[y];
+                    let runStart = -1;
+                    for (let x = 0; x <= GRID_W; x++) {
+                        let hidden = x < GRID_W && (!row || row[x] === 0);
+                        if (hidden) {
+                            if (runStart < 0) runStart = x;
+                        } else if (runStart >= 0) {
+                            drawMinimapRun(runStart, x, y, '#000');
+                            runStart = -1;
+                        }
+                    }
+                }
             }
 
             // Units
             for (let u of units) {
                 if (u.dead) continue;
                 let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
-                if (!fullVisibility && (!visibilityGrid[cgy] || visibilityGrid[cgy][cgx] === 0)) continue;
-                minimapCtx.fillStyle = PLAYER_COLORS[u.owner];
+                if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0)) continue;
+                setMinimapFill(PLAYER_COLORS[u.owner]);
                 let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
                 minimapCtx.fillRect(ux, uy, 2, 2);
             }
@@ -13843,6 +14279,8 @@
             pathfindBudget = 0;
             _resetPathfindPerfTick();
             _updateAdaptivePathBudget();
+            astarNodeBudgetPerTick = Math.max(ASTAR_NODE_BUDGET_MIN_PER_TICK, Math.min(ASTAR_NODE_BUDGET_MAX_PER_TICK, MAX_PATHS_PER_TICK * ASTAR_NODE_BUDGET_PER_PATH));
+            astarNodeBudgetRemaining = astarNodeBudgetPerTick;
 
             let floorChanged = false;
             for (let y = 0; y < GRID_H; y++) {
@@ -13859,7 +14297,7 @@
                 }
             }
             if (floorChanged) {
-                dirtyGrid = true;
+                _minimapStaticDirty = true;
                 recalculateAdjacency();
             }
 
@@ -13977,6 +14415,10 @@
             for (let t of towers) { if (t.type === 'laser' && t.laserState === 1 && !t.underConstruction) { anyLaserActive = true; break; } }
             if (anyLaserActive) startLaserSound();
             else stopLaserSound();
+
+            if (_adjacencyNeedsRecalc && _adjacencyLastRecalcTick !== gameTime) {
+                _runAdjacencyRecalculation();
+            }
 
             updateVisibility(localPlayerId);
             _finalizePathfindPerfTick(_countPendingPathBacklog());
@@ -15091,6 +15533,8 @@
             const btnResearchClose = document.getElementById('btn-research-close');
             const btnOpenStartingResources = document.getElementById('btn-open-starting-resources');
             const btnStartingResourcesClose = document.getElementById('btn-starting-resources-close');
+            const btnOpenOptimization = document.getElementById('btn-open-optimization');
+            const btnOptimizationClose = document.getElementById('btn-optimization-close');
             const btnOpenConfig = document.getElementById('btn-open-config');
             const btnConfigClose = document.getElementById('btn-config-close');
             const btnConfigApply = document.getElementById('btn-config-apply');
@@ -15107,6 +15551,7 @@
             const startingResourcesPopup = document.getElementById('starting-resources-popup');
             const statsMapPopup = document.getElementById('statsmap-popup');
             const researchMatrixPopup = document.getElementById('research-matrix-popup');
+            const optimizationPopup = document.getElementById('optimization-popup');
             const configPopup = document.getElementById('config-popup');
             const btnResign = document.getElementById('btn-resign');
             const goBtnSpectate = document.getElementById('go-btn-spectate');
@@ -15126,6 +15571,16 @@
             if (btnOpenStartingResources) {
                 btnOpenStartingResources.addEventListener('click', () => {
                     setStartingResourcesPopupOpen(true);
+                });
+            }
+            if (btnOpenOptimization) {
+                btnOpenOptimization.addEventListener('click', () => {
+                    setOptimizationPopupOpen(true);
+                });
+            }
+            if (btnOptimizationClose) {
+                btnOptimizationClose.addEventListener('click', () => {
+                    setOptimizationPopupOpen(false);
                 });
             }
             if (btnOpenConfig) {
@@ -15268,6 +15723,11 @@
             if (researchMatrixPopup) {
                 researchMatrixPopup.addEventListener('mousedown', (e) => {
                     if (e.target === researchMatrixPopup) setResearchStatMatrixPopupOpen(false);
+                });
+            }
+            if (optimizationPopup) {
+                optimizationPopup.addEventListener('mousedown', (e) => {
+                    if (e.target === optimizationPopup) setOptimizationPopupOpen(false);
                 });
             }
             if (configPopup) {
@@ -19733,7 +20193,6 @@
             let el = document.getElementById('game-over');
             el.style.display = 'flex';
             fullVisibility = true;
-            dirtyGrid = true;
             document.getElementById('go-title').textContent = winner === localPlayerId ? 'VICTORY' : 'DEFEAT';
             document.getElementById('go-title').style.color = winner === localPlayerId ? '#4f4' : '#f44';
             let secs = Math.floor(gameTime / TICK_RATE);
@@ -21546,6 +22005,8 @@
             STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-energy').value) || 2000));
             MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));
+            UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number((document.getElementById('cfg-unit-collision-ticks') || {}).value) || 5)));
+            ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number((document.getElementById('cfg-astar-max-iters') || {}).value) || 18000)));
 
             let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
@@ -23083,6 +23544,9 @@
                 minimapCanvas.style.width = MINIMAP_SIZE + 'px';
                 minimapCanvas.style.height = MINIMAP_SIZE + 'px';
                 minimapCtx.setTransform(mmDpr, 0, 0, mmDpr, 0, 0);
+                _minimapStaticCanvas = null;
+                _minimapStaticCtx = null;
+                _minimapStaticDirty = true;
             }
 
             viewW = gameArea.clientWidth;
