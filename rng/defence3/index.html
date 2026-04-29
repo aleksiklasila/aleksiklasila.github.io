@@ -39,11 +39,6 @@
             z-index: 20;
         }
 
-        body.app-fullscreen #game-area {
-            border-left: 0;
-            border-right: 0;
-        }
-
         /* LOBBY */
         #lobby {
             position: fixed;
@@ -54,29 +49,15 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 12px;
+            padding: 18px 14px;
         }
 
         #lobby h1 {
-            font-size: 28px;
-            color: #4af;
-            margin-bottom: 10px;
-        }
-
-        #lobby input,
-        #lobby button {
-            font-family: inherit;
-            font-size: 14px;
-            padding: 8px 16px;
-            border: 1px solid #444;
-            background: #222;
+            font-size: clamp(28px, 4.2vw, 44px);
+            line-height: 1.05;
+            margin-bottom: 14px;
             color: #fff;
-            border-radius: 4px;
-        }
-
-        #lobby button {
-            cursor: pointer;
-            background: #335;
+            text-align: center;
         }
 
         #lobby button:hover {
@@ -1287,6 +1268,10 @@
                         <label>Starting Energy</label>
                         <input id="cfg-starting-energy" type="number" min="0" max="1000000000" value="2000" style="width:90px">
                     </div>
+                    <div class="lobby-setting-row">
+                        <label>Starting A*</label>
+                        <input id="cfg-starting-astar" type="number" min="0" max="1000000000" value="9000" style="width:90px">
+                    </div>
                     <div class="lobby-setting-row compact">
                         <label>Max Level</label>
                         <input id="cfg-max-thing-level" type="number" min="1" max="100" step="1" value="20" style="width:72px">
@@ -1322,9 +1307,9 @@
                         <input id="cfg-astar-mine-count" type="number" min="0" max="5000" value="1200" style="width:72px">
                     </div>
                     <div class="lobby-setting-row grouped">
-                        <input id="cfg-astar-mine-min" type="number" min="10" max="500000000000" value="6000" >
+                        <input id="cfg-astar-mine-min" type="number" min="10" max="500000000000" value="20000" >
                         <span class="range-sep">-</span>
-                        <input id="cfg-astar-mine-max" type="number" min="10" max="500000000000" value="6000" >
+                        <input id="cfg-astar-mine-max" type="number" min="10" max="500000000000" value="20000" >
                     </div>
                     <div class="lobby-setting-row compact">
                         <label>Max Research Level</label>
@@ -1359,7 +1344,7 @@
     <!-- HUD -->
     <div id="hud">
     <span class="hud-energy" id="hud-energy">⚡ 300</span>
-        <span class="hud-astar" id="hud-astar">★ 9000 / 9000</span>
+        <span class="hud-astar" id="hud-astar">★ 9000</span>
         <span class="hud-pop" id="hud-pop">Pop: 0/200/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
@@ -1466,8 +1451,8 @@
                     <input id="cfg-unit-collision-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between unit-to-unit separation checks per unit">
                 </div>
                 <div class="lobby-setting-row" style="margin:0;">
-                    <label for="cfg-astar-max-iters">★ Max Capacity</label>
-                    <input id="cfg-astar-max-iters" type="number" min="256" max="18000" value="18000" style="width:90px" title="Maximum stored ★ resource per player">
+                    <label for="cfg-astar-iter-budget-per-player">A* Iter Budget / Player / Tick</label>
+                    <input id="cfg-astar-iter-budget-per-player" type="number" min="256" max="500000" value="9000" style="width:90px" title="Internal A* node-expansion budget available to each player every tick">
                 </div>
             </div>
         </div>
@@ -2448,7 +2433,10 @@
         function makeDefaultStartingResourcesConfig() {
             return {
                 researchLevels: {},
-                spawnCounts: {}
+                spawnCounts: {
+                    'building:astar_spawner': { 1: 1 },
+                    'unit:astar_collector': { 1: 1 },
+                }
             };
         }
 
@@ -3000,6 +2988,7 @@
                     ASTAR_MINE_MIN,
                     ASTAR_MINE_MAX,
                     STARTING_MONEY,
+                    STARTING_ASTAR,
                     MAP_TYPE,
                     TYPE_FLOOR,
                     TYPE_WALL,
@@ -3009,6 +2998,7 @@
                     UNIT_EFFECTIVE_STATS_RECALC_TICKS,
                     UNIT_COLLISION_RECALC_TICKS,
                     ASTAR_MAX_ITERS_LIMIT,
+                    ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
                 },
                 progression: {
                     RESEARCH_COST_EXP,
@@ -3077,12 +3067,13 @@
             setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
             setValue('cfg-max-pop', CONFIG_MAX_POP);
             setValue('cfg-starting-energy', STARTING_MONEY);
+            setValue('cfg-starting-astar', STARTING_ASTAR);
             setValue('cfg-map-type', MAP_TYPE);
             setValue('cfg-tick-rate', TICK_RATE);
             setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
             setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
             setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
-            setValue('cfg-astar-max-iters', ASTAR_MAX_ITERS_LIMIT);
+            setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
             setValue('cfg-max-thing-level', MAX_THING_LEVEL);
             setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
         }
@@ -3121,6 +3112,7 @@
             if (Number.isFinite(Number(cfg.ASTAR_MINE_MIN))) ASTAR_MINE_MIN = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MIN)));
             if (Number.isFinite(Number(cfg.ASTAR_MINE_MAX))) ASTAR_MINE_MAX = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MAX)));
             if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
+            if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
             if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
             if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
 
@@ -3135,6 +3127,9 @@
             }
             if (Number.isFinite(Number(cfg.ASTAR_MAX_ITERS_LIMIT))) {
                 ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT))));
+            }
+            if (Number.isFinite(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))) {
+                ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
             }
 
             if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
@@ -3278,13 +3273,14 @@
             cfg.ASTAR_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-astar-mine-min', cfg.ASTAR_MINE_MIN)));
             cfg.ASTAR_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-astar-mine-max', cfg.ASTAR_MINE_MAX)));
             cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
+            cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
             cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
             cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
             cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
             cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
             cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
             cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
-            cfg.ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(getNumber('cfg-astar-max-iters', cfg.ASTAR_MAX_ITERS_LIMIT))));
+            cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
 
             snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
             snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
@@ -3308,13 +3304,14 @@
             ASTAR_MINE_MIN = cfg.ASTAR_MINE_MIN;
             ASTAR_MINE_MAX = cfg.ASTAR_MINE_MAX;
             STARTING_MONEY = cfg.STARTING_MONEY;
+            STARTING_ASTAR = cfg.STARTING_ASTAR;
             MAP_TYPE = cfg.MAP_TYPE;
             CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
             MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
             MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
             UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
-            ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT) || ASTAR_MAX_ITERS_LIMIT)));
+            ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
             applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
 
             let gameModeEl = document.getElementById('cfg-gamemode');
@@ -3325,9 +3322,9 @@
 
         function createMainMenuSettingsSnapshot() {
             let numberIds = [
-                'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy',
+                'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
                 'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
-                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-max-iters'
+                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player'
             ];
             let selectIds = ['cfg-gamemode', 'cfg-map-type'];
             let checkboxIds = ['cfg-full-vis'];
@@ -3486,6 +3483,7 @@
         let ASTAR_MINE_MIN = 500;
         let ASTAR_MINE_MAX = 1500;
         let STARTING_MONEY = 2000;
+        let STARTING_ASTAR = 9000;
         let MAP_TYPE = 'random';
         let TYPE_FLOOR = 0, TYPE_WALL = 1;
     let CONFIG_MAX_POP = 200;
@@ -3494,6 +3492,7 @@
         let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
         let UNIT_COLLISION_RECALC_TICKS = 5;
         let ASTAR_MAX_ITERS_LIMIT = 18000;
+        let ASTAR_ITER_BUDGET_PER_PLAYER_TICK = 9000;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
     let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
@@ -3539,7 +3538,8 @@
             ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
             water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", wetDuration: 3, target: 'floor' },
             mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", blastDamage: 135, blastRadius: 0.42, target: 'floor' },
-            farm: { name: "Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", multiplier: 0.02, target: 'floor' },
+            farm: { name: "Energy Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", multiplier: 0.02, target: 'floor' },
+            astar_farm: { name: "A* Farm", price: 50, icon: "\u2605", color: "#9aa", multiplier: 0.02, target: 'floor' },
 
             // Special
             spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", energy: 60, target: 'floor' },
@@ -3664,6 +3664,7 @@
         // Keep towerEnergy mirrored for compatibility with existing checks/UI code paths.
         const BASE_CARD_DEFAULT_ENERGY = {
             farm: 1000,
+            astar_farm: 1000,
             sand: 30,
             lava: 30,
             poison_puddle: 30,
@@ -3721,7 +3722,8 @@
             ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
             water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
             mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-            farm: "Collectors can harvest here; farm level multiplies collector gather speed.",
+            farm: "Energy collectors can harvest here; farm level multiplies energy gather speed.",
+            astar_farm: "A* collectors can harvest here; farm level multiplies A* gather speed.",
             // Special
             spawner: "Spawns collectors that gather energy from mines.",
             astar_spawner: "Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.",
@@ -3776,7 +3778,7 @@
         const BUILD_CATEGORIES = {
             barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
             towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower'],
-            floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm'],
+            floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm', 'astar_farm'],
             special: ['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
         };
 
@@ -3805,26 +3807,26 @@
 
         // Unit combat stats
         const BASE_UNIT_STATS = {
-            norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-            fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-            tank: { energy: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-            boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-            flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            mole: { energy: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-            poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-            fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-            water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-            ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-            laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-            snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-            scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 23, transferCooldown: 2.0, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, gatherPerTrip: 200, transferCooldown: 2.0, color: '#bbb', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, transferCooldown: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, builderDps: 25, transferCooldown: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, healerDps: 5, transferCooldown: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-            researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, researcherDps: 15, transferCooldown: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-            king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
+            norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, astarCost: 1, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+            fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, astarCost: 1, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+            tank: { energy: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, astarCost: 1, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+            boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, astarCost: 1, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+            flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, astarCost: 1, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            mole: { energy: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, astarCost: 1, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+            poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+            fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, astarCost: 1, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+            water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, astarCost: 1, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+            ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+            laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+            snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, astarCost: 1, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+            scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, astarCost: 1, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+            collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 23, transferCooldown: 2.0, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 230, transferCooldown: 2.0, color: '#bbb', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, transferCooldown: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, builderDps: 25, transferCooldown: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, healerDps: 5, transferCooldown: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, researcherDps: 15, transferCooldown: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, astarCost: 1, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
         const UNIT_LEVEL_SCALING = {
@@ -3853,7 +3855,7 @@
         let MAX_THING_LEVEL = 20;
         let MAX_RESEARCH_LEVEL = 10;
 
-        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, baseTime: true, spawnCd: true };
+        const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true };
         const RESEARCH_STAT_LABELS = {
             maxEnergy: 'Max Energy',
             popCap: 'Pop Cap',
@@ -3879,6 +3881,7 @@
             atk: 'Attack',
             attackRange: 'Range',
             atkCd: 'Atk Cooldown',
+            astarCost: 'A* / Tile',
             transferCooldown: 'Transfer Cooldown',
             gatherPerTrip: 'Gather Speed',
             builderDps: 'Build Speed',
@@ -3888,17 +3891,17 @@
         };
 
         const RESEARCHABLE_UNIT_STATS = {
-            _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd'],
-            collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown'],
-            astar_collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown'],
-            salvager_unit: ['energy', 'speed', 'visionRange', 'transferCooldown'],
-            builder_unit: ['energy', 'speed', 'visionRange', 'builderDps', 'transferCooldown'],
-            healer_unit: ['energy', 'speed', 'visionRange', 'healerDps', 'transferCooldown'],
-            researcher_unit: ['energy', 'speed', 'visionRange', 'researcherDps', 'transferCooldown'],
-            king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd']
+            _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost'],
+            collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
+            astar_collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
+            salvager_unit: ['energy', 'speed', 'visionRange', 'transferCooldown', 'astarCost'],
+            builder_unit: ['energy', 'speed', 'visionRange', 'builderDps', 'transferCooldown', 'astarCost'],
+            healer_unit: ['energy', 'speed', 'visionRange', 'healerDps', 'transferCooldown', 'astarCost'],
+            researcher_unit: ['energy', 'speed', 'visionRange', 'researcherDps', 'transferCooldown', 'astarCost'],
+            king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost']
         };
 
-        const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown'];
+        const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
         const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
 
         function getSpawnedUnitTypeForBuildingKey(key) {
@@ -3936,6 +3939,7 @@
                 healerDps: Infinity,
                 researcherDps: Infinity,
                 transferCooldown: 0.3,
+                astarCost: 0.1,
             },
             building: {
                 maxEnergy: Infinity,
@@ -3955,7 +3959,7 @@
                     let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
                     return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
                 },
-                multiplier: ({ key }) => key === 'farm' ? 10 : Infinity,
+                multiplier: ({ key }) => (key === 'farm' || key === 'astar_farm') ? 10 : Infinity,
                 efficiency: 3,
             }
         };
@@ -4075,9 +4079,11 @@
             let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
             let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
             let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
+            let astarCostLevelExp = Math.max(1, Number(unitCfg.astarCostLevelExp) || 1.08);
             let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
             let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
             let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
+            let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * Math.pow(astarCostLevelExp, lvl - 1));
             let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
             let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
             let researcherDps = unitType === 'researcher_unit' ? Math.max(1, Math.round(researcherBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
@@ -4087,7 +4093,7 @@
                 transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
             }
 
-            return { energy, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown };
+            return { energy, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost };
         }
 
         function computeBaseBuildingStatsAtLevel(type, level) {
@@ -4148,7 +4154,7 @@
                 }
             }
 
-            if (key === 'farm') {
+            if (key === 'farm' || key === 'astar_farm') {
                 let baseMultiplier = Number.isFinite(def.multiplier) ? def.multiplier : (Number(bCfg.farmBaseMultiplierFallback) || 1);
                 let farmPolyCoeff = Number(bCfg.farmLevelPolyCoeff) || 1;
                 let farmPowExp = Math.max(0, Number(bCfg.farmLevelPowerExp) || 0);
@@ -4524,7 +4530,7 @@
             if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
             if (statKey === 'blastDamage') return compact(value, 2);
             if (statKey === 'blastRadius') return `${compact(value, 2)} tiles`;
-            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'multiplier') return compact(value, 2);
+            if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
             if (statKey === 'efficiency') return compact(value, 2);
             if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
             if (statKey === 'builderDps' || statKey === 'healerDps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
@@ -4810,6 +4816,7 @@
             let healerDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'healerDps');
             let researcherDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'researcherDps');
             let transferCooldownSec = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'transferCooldown');
+            let astarCost = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'astarCost');
 
             if (!Number.isFinite(maxEnergy)) maxEnergy = Math.max(1, Math.floor(unit.baseEnergy || unit.maxEnergy || 1));
             if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
@@ -4833,11 +4840,13 @@
             if (!Number.isFinite(researcherDps)) researcherDps = 0;
             if (!Number.isFinite(gatherPerTrip)) gatherPerTrip = 0;
             if (!Number.isFinite(transferCooldownSec)) transferCooldownSec = Number((BASE_UNIT_STATS[unit.unitType] || {}).transferCooldown);
+            if (!Number.isFinite(astarCost)) astarCost = Number((BASE_UNIT_STATS[unit.unitType] || {}).astarCost);
             if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') gatherPerTrip = Math.max(1, Number(gatherPerTrip) || 1);
             if (unit.workerType === 'builder') builderDps = Math.max(1, Math.round(builderDps));
             if (unit.workerType === 'healer') healerDps = Math.max(1, Math.round(healerDps));
             if (unit.workerType === 'researcher') researcherDps = Math.max(1, Math.round(researcherDps));
             if (unit.workerType) transferCooldownSec = Math.max(0.01, Number(transferCooldownSec) || 0.01);
+            astarCost = Math.max(0.1, Number(astarCost) || 1);
             let transferCooldownTicks = unit.workerType ? secondsToTicks(transferCooldownSec) : 0;
 
             return {
@@ -4853,7 +4862,8 @@
                 healerDps,
                 researcherDps,
                 transferCooldownSec,
-                transferCooldownTicks
+                transferCooldownTicks,
+                astarCost
             };
         }
 
@@ -4887,6 +4897,7 @@
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
             unit.attackRange = scaled.attackRange;
+            unit.astarCost = scaled.astarCost;
             if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerDps = scaled.healerDps;
@@ -4903,6 +4914,7 @@
             unit.baseLevelSpeed = scaled.speed;
             unit.baseLevelVisionRange = scaled.visionRange;
             unit.baseLevelAttackRange = scaled.attackRange;
+            unit.baseLevelAstarCost = scaled.astarCost;
             if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.baseLevelGatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.baseLevelhealerDps = scaled.healerDps;
@@ -4927,6 +4939,7 @@
             unit.speed = scaled.speed;
             unit.visionRange = scaled.visionRange;
             unit.attackRange = scaled.attackRange;
+            unit.astarCost = scaled.astarCost;
             if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
             if (unit.workerType === 'healer') unit.healerDps = scaled.healerDps;
@@ -5112,7 +5125,7 @@
         let droppedItems = [];
 
         const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
-        let players = Array.from({ length: 8 }, () => ({ energy: 2000, astar: 18000, astarMax: 18000, popCount: 0 }));
+        let players = Array.from({ length: 8 }, () => ({ energy: 2000, astar: 9000, popCount: 0 }));
         let playerPopCaps = Array.from({ length: 8 }, () => 200);
         let _popCapScratchByOwner = new Int32Array(0);
         let localPlayerId = 0;
@@ -6317,39 +6330,41 @@
             _ensurePathBudgetArrays();
             pathfindBudget = 0;
             _updateAdaptivePathBudget();
-            astarNodeBudgetPerTick = Math.max(0, Math.floor(Number(ASTAR_MAX_ITERS_LIMIT) || 0));
+            astarNodeBudgetPerTick = Math.max(0, Math.floor(Number(ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || 0));
             astarNodeBudgetRemaining = astarNodeBudgetPerTick;
             for (let i = 0; i < players.length; i++) {
                 pathfindBudgetByPlayer[i] = 0;
-                let player = players[i] || {};
-                let maxAstar = Math.max(0, Math.floor(Number(player.astarMax) || astarNodeBudgetPerTick));
-                let parsedAstar = Number(player.astar);
-                let curAstar = Number.isFinite(parsedAstar)
-                    ? Math.max(0, Math.min(maxAstar, Math.floor(parsedAstar)))
-                    : maxAstar;
-                player.astarMax = maxAstar;
-                player.astar = curAstar;
-                astarNodeBudgetPerTickByPlayer[i] = maxAstar;
-                astarNodeBudgetRemainingByPlayer[i] = curAstar;
+                astarNodeBudgetPerTickByPlayer[i] = astarNodeBudgetPerTick;
+                astarNodeBudgetRemainingByPlayer[i] = astarNodeBudgetPerTick;
             }
+        }
+
+        function _setPlayerAstarBudget(owner, value) {
+            let pid = _normalizeOwnerId(owner);
+            if (pid < 0 || !players[pid]) return;
+            players[pid].astar = Math.max(0, Number(value) || 0);
         }
 
         function _getPlayerAstarBudgetAvailable(owner) {
             let pid = _normalizeOwnerId(owner);
-            if (pid < 0) return astarNodeBudgetPerTick;
-            return Math.max(0, Number(astarNodeBudgetPerTickByPlayer[pid]) || 0);
+            if (pid < 0 || !players[pid]) return 0;
+            return Math.max(0, Number(players[pid].astar) || 0);
         }
 
         function _getPlayerAstarBudgetRemaining(owner) {
             let pid = _normalizeOwnerId(owner);
-            if (pid < 0) return astarNodeBudgetRemaining;
-            return Math.max(0, Number(astarNodeBudgetRemainingByPlayer[pid]) || 0);
+            if (pid < 0 || !players[pid]) return 0;
+            return Math.max(0, Number(players[pid].astar) || 0);
         }
 
         function _getPlayerAstarBudgetUsed(owner) {
-            let available = _getPlayerAstarBudgetAvailable(owner);
-            let remaining = _getPlayerAstarBudgetRemaining(owner);
-            return Math.max(0, available - remaining);
+            return 0;
+        }
+
+        function _getPlayerAstarIterationBudgetRemaining(owner) {
+            let pid = _normalizeOwnerId(owner);
+            if (pid < 0) return astarNodeBudgetRemaining;
+            return Math.max(0, Number(astarNodeBudgetRemainingByPlayer[pid]) || 0);
         }
 
         function _canUsePathfindRequestBudget(owner) {
@@ -6367,7 +6382,7 @@
             pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
         }
 
-        function _consumeAstarNodeBudget(owner, count = 1) {
+        function _consumeAstarNodeBudget(owner, count = 1, unit = null, sourceTag = null) {
             let amount = Math.max(0, Math.floor(Number(count) || 0));
             if (amount <= 0) return;
             let pid = _normalizeOwnerId(owner);
@@ -6376,7 +6391,40 @@
                 return;
             }
             astarNodeBudgetRemainingByPlayer[pid] = Math.max(0, astarNodeBudgetRemainingByPlayer[pid] - amount);
-            if (players[pid]) players[pid].astar = astarNodeBudgetRemainingByPlayer[pid];
+        }
+
+        function _tryConsumeAstarNodeBudget(owner, count = 1) {
+            let amount = Math.max(0, Math.floor(Number(count) || 0));
+            if (amount <= 0) return true;
+            if (_getPlayerAstarIterationBudgetRemaining(owner) < amount) return false;
+            _consumeAstarNodeBudget(owner, amount);
+            return true;
+        }
+
+        function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = null) {
+            let delta = Math.max(0, Number(amount) || 0);
+            if (!(delta > 0)) return;
+            let pid = _normalizeOwnerId(owner);
+            if (pid < 0 || !players[pid]) return;
+            players[pid].astar = Math.max(0, (Number(players[pid].astar) || 0) - delta);
+            _recordAstarUsage(pid, delta, unit, sourceTag);
+        }
+
+        function _tryConsumeAstarMoveCost(u, tiles = 1) {
+            if (!u) return false;
+            let tileCount = Math.max(0, Number(tiles) || 0);
+            let amount = tileCount * Math.max(0.1, Number(u.astarCost) || Number((BASE_UNIT_STATS[u.unitType] || {}).astarCost) || 1);
+            if (amount <= 0) return true;
+            let pid = _normalizeOwnerId(u.owner);
+            if (pid < 0) return true;
+            if (_getPlayerAstarBudgetRemaining(u.owner) < amount) {
+                _setUnitAstarBudgetBlockedIndicator(u, 1);
+                u.vx = 0;
+                u.vy = 0;
+                return false;
+            }
+            _consumePlayerAstarStockpile(u.owner, amount, u, 'movement');
+            return true;
         }
 
         function _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks = null) {
@@ -6388,60 +6436,28 @@
 
         function _markUnitAstarBudgetBlocked(u, cooldownTicks = null) {
             if (!u) return;
-            let cd = Math.max(1, Math.floor(Number(cooldownTicks) || _getAstarBudgetIdleCooldownTicks()));
             _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks);
-            if (u._pendingPathTarget) {
-                let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                let pt = u._pendingPathTarget;
-                let fallback = _buildFallbackShortestPath(ugx, ugy, pt.gx, pt.gy);
-                if (fallback && fallback.length > 0) {
-                    u.path = fallback;
-                    u.pathIndex = (fallback.length > 1 && fallback[0].x === ugx && fallback[0].y === ugy) ? 1 : 0;
-                    u.pathIsFallbackAstar = true;
-                    u.commandState = pt.cmd;
-                }
-            }
+            let cd = Math.max(1, Math.floor(Number(cooldownTicks) || _getAstarBudgetIdleCooldownTicks()));
             if (u.workerState) {
                 u._workerNextIdleRetargetTick = Math.max(gameTime + cd, Number(u._workerNextIdleRetargetTick) || 0);
             }
         }
 
-        function _buildFallbackShortestPath(sx, sy, ex, ey) {
-            let tx = Math.max(0, Math.min(GRID_W - 1, Math.floor(Number(ex) || 0)));
-            let ty = Math.max(0, Math.min(GRID_H - 1, Math.floor(Number(ey) || 0)));
-            let cx = Math.max(0, Math.min(GRID_W - 1, Math.floor(Number(sx) || 0)));
-            let cy = Math.max(0, Math.min(GRID_H - 1, Math.floor(Number(sy) || 0)));
-            let path = [{ x: cx, y: cy }];
-
-            // Fast fallback: greedy depth-first style stepping that always moves closer.
-            while (cx !== tx || cy !== ty) {
-                let dx = tx - cx;
-                let dy = ty - cy;
-                if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) cx += Math.sign(dx);
-                else if (dy !== 0) cy += Math.sign(dy);
-                else if (dx !== 0) cx += Math.sign(dx);
-                path.push({ x: cx, y: cy });
-            }
-            return path;
-        }
-
         function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fallback') {
-            let path = _buildFallbackShortestPath(sx, sy, ex, ey);
-            if (u) {
-                u.pathIsFallbackAstar = true;
-                u._pendingPathTarget = { gx: ex, gy: ey, cmd, src };
-                u.pathIndex = (path.length > 1 && path[0].x === sx && path[0].y === sy) ? 1 : 0;
-                u.commandState = cmd;
-                _setUnitAstarBudgetBlockedIndicator(u);
-            }
-            return path;
+            if (!u) return null;
+            u.pathIsFallbackAstar = false;
+            u.path = null;
+            u.pathIndex = 0;
+            u._pendingPathTarget = { gx: ex, gy: ey, cmd, src };
+            u.commandState = cmd;
+            _setUnitAstarBudgetBlockedIndicator(u, 1);
+            return null;
         }
 
         function _tryUpgradeAstarFallbackPath(u) {
             if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget || u.dead) return;
             if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
             if (!_canUsePathfindRequestBudget(u.owner)) return;
-            if (_getPlayerAstarBudgetRemaining(u.owner) <= 0) return;
 
             let pt = u._pendingPathTarget;
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -6458,7 +6474,7 @@
             if (_lastPathfindAbortedByBudget) _setUnitAstarBudgetBlockedIndicator(u);
         }
 
-        function _recordAstarUsage(owner, usedNodes) {
+        function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
             let pid = _normalizeOwnerId(owner);
             if (pid < 0) return;
             let used = Math.max(0, Number(usedNodes) || 0);
@@ -6467,16 +6483,18 @@
             let bucket = _ensureAstarLogPlayer(pid);
             if (!bucket) return;
 
-            let unitType = String(_activePathfindUnitType || 'other');
+            let unitType = String((unit && unit.unitType) || _activePathfindUnitType || 'other');
             let unitMetric = _astarMetricKeyForUnitType(unitType);
-            let unitId = Number.isFinite(Number(_activePathfindUnitId)) ? Math.floor(Number(_activePathfindUnitId)) : null;
+            let unitId = (unit && Number.isFinite(Number(unit.id)))
+                ? Math.floor(Number(unit.id))
+                : (Number.isFinite(Number(_activePathfindUnitId)) ? Math.floor(Number(_activePathfindUnitId)) : null);
             bucket.push({
                 tick: gameTime,
                 owner: pid,
                 unitType,
                 unitMetric,
                 unitId,
-                source: String(_activePathfindSource || PATH_SOURCE_UNSPECIFIED),
+                source: String(sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED),
                 used
             });
 
@@ -7084,14 +7102,9 @@
             _ensureAstarBuffers(bufSize);
             let configuredAstarLimit = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(ASTAR_MAX_ITERS_HARD, Math.floor(Number(ASTAR_MAX_ITERS_LIMIT) || ASTAR_MAX_ITERS_HARD)));
             let maxAstarIterations = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(configuredAstarLimit, (bufSize >> 1) + ASTAR_MAX_ITERS_BASE));
-            maxAstarIterations = Math.min(maxAstarIterations, Math.max(0, _getPlayerAstarBudgetRemaining(ownerForBudget)));
-            if (maxAstarIterations <= 0) {
-                _lastPathfindAbortedByBudget = true;
-                _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
-                return null;
-            }
             let astarIterations = 0;
             let abortedByBudget = false;
+            let budgetOwner = Number.isFinite(pathOwner) ? pathOwner : _activePathfindOwner;
 
             // Bump epoch; on overflow reset arrays
             if (++_astarEpoch > 2000000000) {
@@ -7154,14 +7167,17 @@
                         sharedPathCache.set(cacheKey, { path: path, tick: gameTime, version: pathTopologyVersion });
                         _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
                     }
-                    _recordAstarUsage(ownerForBudget, astarIterations);
                     _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
                     return path;
                 }
 
+                if (!_tryConsumeAstarNodeBudget(budgetOwner, 1)) {
+                    abortedByBudget = true;
+                    _lastPathfindAbortedByBudget = true;
+                    break;
+                }
                 astarIterations++;
-                _consumeAstarNodeBudget(ownerForBudget, 1);
-                if (astarIterations > maxAstarIterations || _getPlayerAstarBudgetRemaining(ownerForBudget) <= 0) {
+                if (astarIterations > maxAstarIterations) {
                     abortedByBudget = true;
                     _lastPathfindAbortedByBudget = true;
                     break;
@@ -7214,7 +7230,6 @@
                 sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
                 _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
             }
-            _recordAstarUsage(ownerForBudget, astarIterations);
             _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
             return null;
         }
@@ -7308,17 +7323,15 @@
             unit.y = dest.y * TILE + TILE * 0.5;
             unit.path = null;
             unit.pathIndex = 0;
-            if (unit.pathIsFallbackAstar && unit._pendingPathTarget) {
+            if (unit._pendingPathTarget) {
                 _tryUpgradeAstarFallbackPath(unit);
                 if (!unit.path || unit.path.length <= 0) {
                     if (unit.workerState === 'MANUAL_MOVE') {
-                        unit._pendingPathTarget = null;
-                        unit.pathIsFallbackAstar = false;
+                        unit.commandState = unit._pendingPathTarget.cmd;
+                        return;
                     }
-                    unit.commandState = CMD_IDLE;
+                    unit.commandState = unit._pendingPathTarget.cmd;
                 }
-            } else {
-                unit._pendingPathTarget = null;
             }
         }
 
@@ -8474,7 +8487,7 @@
         function getUnitRenderActionRangePx(u) {
             if (!u) return 0;
             // Worker interaction checks use a fixed touch distance in AI logic.
-            if (u.workerType === 'collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
+            if (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
                 return 24;
             }
             let atkRange = Math.max(0, Number(u.attackRange) || 0);
@@ -10290,6 +10303,7 @@
 
                     let nextNodeInTile = this.path[this.pathIndex + 1];
                     if (nextNodeInTile && isCloudPortalLink(curNode.x, curNode.y, nextNodeInTile.x, nextNodeInTile.y, this.owner)) {
+                        if (!_tryConsumeAstarMoveCost(this, 1)) return false;
                         let laneOffsetNow = Math.max(1.5, Math.min(4, this.r * 0.6));
                         let nTx = nextNodeInTile.x * TILE + 16;
                         let nTy = nextNodeInTile.y * TILE + 16;
@@ -10306,6 +10320,7 @@
                         this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
                         this.pathIndex += 2;
                     } else {
+                        if (this.pathIndex > 0 && !_tryConsumeAstarMoveCost(this, 1)) return false;
                         this.pathIndex++;
                     }
 
@@ -10319,8 +10334,9 @@
                     this.pathIndex = 0;
                     if (this.pathIsFallbackAstar && this._pendingPathTarget) {
                         _tryUpgradeAstarFallbackPath(this);
-                    } else {
-                        this._pendingPathTarget = null;
+                    }
+                    if (this._pendingPathTarget) {
+                        this.commandState = this._pendingPathTarget.cmd;
                     }
                     return true;
                 }
@@ -10359,6 +10375,7 @@
                 if (dist < 4) {
                     let nextNode = this.path[this.pathIndex + 1];
                     if (nextNode && isCloudPortalLink(node.x, node.y, nextNode.x, nextNode.y, this.owner)) {
+                        if (!_tryConsumeAstarMoveCost(this, 1)) return false;
                         let nTx = nextNode.x * TILE + 16;
                         let nTy = nextNode.y * TILE + 16;
                         let postNode = this.path[this.pathIndex + 2] || null;
@@ -10376,6 +10393,7 @@
                         if (this.pathIndex >= this.path.length) return true;
                         return false;
                     }
+                    if (this.pathIndex > 0 && !_tryConsumeAstarMoveCost(this, 1)) return false;
                     this.pathIndex++;
                     if (this.pathIndex >= this.path.length) return true;
                     return false;
@@ -11382,13 +11400,14 @@
             }
 
             if (!_canUsePathfindRequestBudget(u.owner)) {
-                return _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
+                _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
+                return null;
             }
 
             _consumePathfindRequestBudget(u.owner);
             let path = _findPathForUnitTagged('worker_ai', u, startGx, startGy, targetGx, targetGy, ignoreWalls, canWalk, u.owner, cacheProfile);
             if (!path && _lastPathfindAbortedByBudget) {
-                path = _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
+                _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
             }
             u._workerLastPathKey = key;
             u._workerLastPathTick = gameTime;
@@ -11522,7 +11541,7 @@
                         let preferMine = u._lastMineTarget;
                         u._lastMineTarget = null;
                         if (!canRunHeavyAi) return;
-                        if (preferMine && preferMine.gold > 0) {
+                        if (preferMine && preferMine.gold > 0 && _canAssignWorkerTargetExclusive(u, preferMine, 'mine')) {
                             _collectorAssignMine(u, preferMine, myGx, myGy);
                         } else {
                             _collectorFindTarget(u, myGx, myGy);
@@ -11534,7 +11553,7 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _astarCollectorFindTarget(u);
                 } else if (u.workerState === 'MOVING_TO_ASTAR') {
-                    if (!u.workerTarget || u.workerTarget.astar <= 0) {
+                    if (!_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner)) {
                         _clearWorkerTarget(u); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
@@ -11547,10 +11566,18 @@
                                 gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
                             }
                             if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
-                            let extract = Math.min(gatherPerTrip, u.workerTarget.astar);
-                            u.workerTarget.astar -= extract;
+                            if (u.workerTargetType === 'astar_farm') {
+                                let lvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.effectiveStacks || u.workerTarget.stacks || 1));
+                                let mult = getBuildingStatForOwner(owner, 'astar_farm', lvl, 'multiplier');
+                                if (!Number.isFinite(mult) || mult <= 0) mult = 1;
+                                gatherPerTrip *= mult;
+                            }
+                            let extract = u.workerTargetType === 'astar_mine'
+                                ? Math.min(gatherPerTrip, u.workerTarget.astar)
+                                : gatherPerTrip;
+                            if (u.workerTargetType === 'astar_mine') u.workerTarget.astar -= extract;
                             u.carryingValue = extract;
-                            if (u.workerTarget.astar <= 0) {
+                            if (u.workerTargetType === 'astar_mine' && u.workerTarget.astar <= 0) {
                                 let mine = u.workerTarget;
                                 grid[mine.gy][mine.gx].type = TYPE_FLOOR;
                                 let idx = astarMines.indexOf(mine);
@@ -11562,6 +11589,7 @@
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
                             _astarCollectorRememberGatherSite(u, u.workerTarget);
                             u._astarLastMineTarget = u.workerTarget;
+                            u._astarLastMineTargetType = u.workerTargetType;
                             _clearWorkerTarget(u); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u);
                         } else {
                             _clearWorkerTarget(u); _astarCollectorFindTarget(u);
@@ -11581,16 +11609,20 @@
                         if (u.carryingValue > 0 && isAtDropoff) {
                             if (u.workerTransferCooldown > 0) return;
                             let player = players[owner];
-                            let nextValue = Math.min(Math.max(0, Number(player.astarMax) || 0), Math.max(0, Number(player.astar) || 0) + u.carryingValue);
-                            player.astar = nextValue;
+                            let curAstar = Math.max(0, Number(player.astar) || 0);
+                            let nextValue = curAstar + Math.max(0, Number(u.carryingValue) || 0);
+                            _setPlayerAstarBudget(owner, nextValue);
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
                         }
                         u.carryingValue = 0;
                         let preferMine = u._astarLastMineTarget;
+                        let preferMineType = u._astarLastMineTargetType;
                         u._astarLastMineTarget = null;
+                        u._astarLastMineTargetType = null;
                         if (!canRunHeavyAi) return;
-                        if (preferMine && preferMine.astar > 0) {
-                            _astarCollectorAssignMine(u, preferMine);
+                        if (_isAstarCollectorTargetValid(preferMine, preferMineType, owner)
+                            && _canAssignWorkerTargetExclusive(u, preferMine, preferMineType)) {
+                            _astarCollectorAssignTarget(u, preferMine, preferMineType);
                         } else {
                             _astarCollectorFindTarget(u);
                         }
@@ -12342,9 +12374,77 @@
             return best;
         }
 
+        function _isAstarCollectorTargetValid(target, targetType, owner) {
+            if (!target) return false;
+            if (targetType === 'astar_mine') {
+                return Number.isFinite(target.astar) && target.astar > 0;
+            }
+            if (targetType === 'astar_farm') {
+                return target.type === 'astar_farm' && target.owner === owner && !target.underConstruction && target.energy > 0;
+            }
+            return false;
+        }
+
+        function _getAstarCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+            if (preferredType === 'astar_mine' || preferredType === null) {
+                let mine = getAstarMineAt(gx, gy);
+                if (mine && mine.astar <= 0) mine = null;
+                if (mine) return { target: mine, type: 'astar_mine' };
+            }
+            if (preferredType === 'astar_farm' || preferredType === null) {
+                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                    let cell = grid[gy][gx];
+                    let item = cell && cell.item;
+                    if (item && item.type === 'astar_farm' && item.owner === owner && !item.underConstruction && item.energy > 0) {
+                        return { target: item, type: 'astar_farm' };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function _getAstarCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) {
+            let best = null;
+            let bestDist = radius;
+
+            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+            let mineTileRadius = Math.max(1, Math.ceil(radius / TILE));
+            let mineMinGx = Math.max(0, gx - mineTileRadius), mineMaxGx = Math.min(GRID_W - 1, gx + mineTileRadius);
+            let mineMinGy = Math.max(0, gy - mineTileRadius), mineMaxGy = Math.min(GRID_H - 1, gy + mineTileRadius);
+            for (let y = mineMinGy; y <= mineMaxGy; y++) {
+                for (let x = mineMinGx; x <= mineMaxGx; x++) {
+                    let m = getAstarMineAt(x, y);
+                    if (!m || m.astar <= 0) continue;
+                    let d = Math.hypot(m.x - worldX, m.y - worldY);
+                    if (d <= bestDist) {
+                        bestDist = d;
+                        best = { target: m, type: 'astar_mine' };
+                    }
+                }
+            }
+
+            let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
+            let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    let cell = grid[y][x];
+                    let item = cell && cell.item;
+                    if (!item || item.type !== 'astar_farm' || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
+                    let d = Math.hypot(item.x - worldX, item.y - worldY);
+                    if (d <= bestDist) {
+                        bestDist = d;
+                        best = { target: item, type: 'astar_farm' };
+                    }
+                }
+            }
+            return best;
+        }
+
         // Collector: find nearest gold mine/farm/drop, preferring area around last gather source.
         function _collectorFindTarget(u, myGx, myGy) {
-            if (_isCollectorTargetValid(u._collectorPinnedTarget, u._collectorPinnedTargetType, u.owner)) {
+            if (_isCollectorTargetValid(u._collectorPinnedTarget, u._collectorPinnedTargetType, u.owner)
+                && _canAssignWorkerTargetExclusive(u, u._collectorPinnedTarget, u._collectorPinnedTargetType)) {
                 _collectorAssignTarget(u, u._collectorPinnedTarget, u._collectorPinnedTargetType, myGx, myGy);
                 return;
             }
@@ -12848,12 +12948,13 @@
             return { x: u.x, y: u.y };
         }
 
-        function _astarCollectorAssignMine(u, mine) {
-            _setWorkerTarget(u, mine, 'astar_mine');
+        function _astarCollectorAssignTarget(u, target, targetType) {
+            _setWorkerTarget(u, target, targetType);
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-            u.path = _requestWorkerPath(u, startGx, startGy, mine.gx, mine.gy, _astarCollectorCanWalk, 'astar_collector', true);
+            let canWalk = targetType === 'astar_mine' ? _astarCollectorCanWalk : null;
+            u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, 'astar_collector', true);
             if (u.path) {
-                _astarCollectorRememberGatherSite(u, mine);
+                _astarCollectorRememberGatherSite(u, target);
                 u.workerState = 'MOVING_TO_ASTAR';
                 u.pathIndex = 0;
                 u.commandState = CMD_MOVING;
@@ -12864,9 +12965,22 @@
             }
         }
 
+        function _astarCollectorAssignMine(u, mine) {
+            _astarCollectorAssignTarget(u, mine, 'astar_mine');
+        }
+
         function _astarCollectorFindTarget(u) {
+            if (_isAstarCollectorTargetValid(u._astarPinnedTarget, u._astarPinnedTargetType, u.owner)
+                && _canAssignWorkerTargetExclusive(u, u._astarPinnedTarget, u._astarPinnedTargetType)) {
+                _astarCollectorAssignTarget(u, u._astarPinnedTarget, u._astarPinnedTargetType);
+                return;
+            }
+            u._astarPinnedTarget = null;
+            u._astarPinnedTargetType = null;
+
             let origin = _astarCollectorGetSearchOrigin(u);
-            let bestMine = null;
+            let bestTarget = null;
+            let bestTargetType = null;
             let bestScore = Infinity;
             let anchorSpawner = _findClosestSpawner(u, 'astar_spawner');
             for (let mine of astarMines) {
@@ -12878,11 +12992,40 @@
                 if (u.workerTarget === mine) score -= TILE * 0.75;
                 if (score < bestScore) {
                     bestScore = score;
-                    bestMine = mine;
+                    bestTarget = mine;
+                    bestTargetType = 'astar_mine';
                 }
             }
-            if (bestMine) {
-                _astarCollectorAssignMine(u, bestMine);
+
+            let originGx = Math.floor(origin.x / TILE);
+            let originGy = Math.floor(origin.y / TILE);
+            let searchRadius = Math.min(Math.max(GRID_W, GRID_H), Math.max(6, Math.floor(Math.min(GRID_W, GRID_H) * 0.4)));
+            let minGx = Math.max(0, originGx - searchRadius);
+            let maxGx = Math.min(GRID_W - 1, originGx + searchRadius);
+            let minGy = Math.max(0, originGy - searchRadius);
+            let maxGy = Math.min(GRID_H - 1, originGy + searchRadius);
+            for (let y = minGy; y <= maxGy; y++) {
+                for (let x = minGx; x <= maxGx; x++) {
+                    let cell = grid[y][x];
+                    let item = cell && cell.item;
+                    if (!item || item.type !== 'astar_farm') continue;
+                    if (item.owner !== u.owner) continue;
+                    if (item.underConstruction || item.energy <= 0) continue;
+                    if (!_canAssignWorkerTargetExclusive(u, item, 'astar_farm')) continue;
+                    let originDist = Math.hypot(item.x - origin.x, item.y - origin.y);
+                    let spawnerDist = anchorSpawner ? Math.hypot(item.x - anchorSpawner.x, item.y - anchorSpawner.y) : Math.hypot(item.x - u.x, item.y - u.y);
+                    let score = spawnerDist + originDist * 0.25;
+                    if (u.workerTarget === item) score -= TILE * 0.75;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestTarget = item;
+                        bestTargetType = 'astar_farm';
+                    }
+                }
+            }
+
+            if (bestTarget) {
+                _astarCollectorAssignTarget(u, bestTarget, bestTargetType);
                 return;
             }
             u.workerState = 'IDLE';
@@ -14253,6 +14396,9 @@
             } else if (type === 'farm') {
                 g.fillStyle = '#da0'; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
                 g.font = '14px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('\uD83C\uDF3E', x, y);
+            } else if (type === 'astar_farm') {
+                g.fillStyle = '#888'; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
+                g.font = '14px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('\u2605', x, y);
             } else if (type === 'house') {
                 g.fillStyle = '#c95';
                 g.fillRect(x - 10, y - 6, 20, 14);
@@ -14334,13 +14480,11 @@
             let cached = GOLD_MINE_TILE_SPRITE_CACHE.get(key);
             if (cached) return cached;
 
-            let scale = _getUiSpriteScale();
             let c = document.createElement('canvas');
-            c.width = TILE * scale;
-            c.height = TILE * scale;
+            c.width = TILE;
+            c.height = TILE;
             let g = c.getContext('2d');
             g.imageSmoothingEnabled = false;
-            g.setTransform(scale, 0, 0, scale, 0, 0);
             g.clearRect(0, 0, TILE, TILE);
             g.fillStyle = isActive ? '#8a8a8a' : '#555';
             g.fillRect(2, 2, TILE - 4, TILE - 4);
@@ -14420,10 +14564,21 @@
                 ctx.fill();
                 ctx.fillStyle = unitColor; ctx.beginPath(); ctx.arc(cx, cy + 4 * s, 5 * s, 0, 6.28); ctx.fill();
             } else if (key === 'spawner') {
-                ctx.fillStyle = '#432'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
-                ctx.fillStyle = '#aaa'; ctx.beginPath();
-                for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(cx + Math.cos(a) * 8 * s, cy + Math.sin(a) * 8 * s); }
-                ctx.closePath(); ctx.fill();
+                ctx.strokeStyle = PLAYER_COLORS[0] || '#4488ff';
+                ctx.lineWidth = Math.max(1, s);
+                ctx.strokeRect(cx - 14 * s, cy - 14 * s, 28 * s, 28 * s);
+                ctx.fillStyle = '#432';
+                ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
+                ctx.fillStyle = '#f3d55b';
+                ctx.fillRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = Math.max(1, s * 0.9);
+                ctx.strokeRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
+                ctx.fillStyle = '#111';
+                ctx.font = `${Math.max(8, Math.round(11 * s))}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('\u26A1', cx, cy + 1 * s);
             } else if (key === 'astar_spawner') {
                 ctx.fillStyle = '#555'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
                 ctx.fillStyle = '#f0f0f0';
@@ -14465,6 +14620,10 @@
                     ctx.fillStyle = '#da0'; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
                     ctx.font = Math.round(14 * s) + "px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                     ctx.fillStyle = "#fff"; ctx.fillText("\uD83C\uDF3E", cx, cy);
+                } else if (key === 'astar_farm') {
+                    ctx.fillStyle = '#888'; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
+                    ctx.font = Math.round(14 * s) + "px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                    ctx.fillStyle = "#fff"; ctx.fillText("\u2605", cx, cy);
                 } else if (key === 'house') {
                     ctx.fillStyle = '#c95'; ctx.fillRect(cx - 10 * s, cy - 6 * s, 20 * s, 14 * s);
                     ctx.fillStyle = '#844';
@@ -15867,11 +16026,7 @@
             if (units.length > 0) {
                 let start = pendingPathResolveCursor % units.length;
                 let checked = 0;
-                let pendingBuckets = [
-                    [[], [], [], [], []],
-                    [[], [], [], [], []],
-                    [[], [], [], [], []]
-                ];
+                let pendingBuckets = [[], [], [], [], []];
                 while (checked < units.length) {
                     let idx = (start + checked) % units.length;
                     checked++;
@@ -15879,37 +16034,33 @@
                     if (u.dead || !u._pendingPathTarget) continue;
                     let src = u._pendingPathTarget && u._pendingPathTarget.src;
                     let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
-                    let unitTier = Math.max(0, Math.min(2, _getAstarPriorityTierForUnitType(u.unitType)));
-                    pendingBuckets[unitTier][srcTier].push(u);
+                    pendingBuckets[srcTier].push(u);
                 }
 
-                for (let unitTier = 2; unitTier >= 0; unitTier--) {
-                    for (let srcTier = 0; srcTier <= 4; srcTier++) {
-                        let pending = pendingBuckets[unitTier][srcTier];
-                        for (let i = 0; i < pending.length; i++) {
-                            let u = pending[i];
-                            let pt = u && u._pendingPathTarget;
-                            if (!u || u.dead || !pt) continue;
-                            if (u.pathIsFallbackAstar) continue;
-                            if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
-                            if (!_canUsePathfindRequestBudget(u.owner)) {
-                                _markUnitAstarBudgetBlocked(u);
-                                continue;
-                            }
+                for (let srcTier = 0; srcTier <= 4; srcTier++) {
+                    let pending = pendingBuckets[srcTier];
+                    for (let i = 0; i < pending.length; i++) {
+                        let u = pending[i];
+                        let pt = u && u._pendingPathTarget;
+                        if (!u || u.dead || !pt) continue;
+                        if (u.pathIsFallbackAstar) continue;
+                        if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
+                        if (!_canUsePathfindRequestBudget(u.owner)) {
+                            _markUnitAstarBudgetBlocked(u);
+                            continue;
+                        }
 
-                            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                            let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-                            let src = pt && pt.src ? pt.src : 'deferred_resolver';
-                            _consumePathfindRequestBudget(u.owner);
-                            u.path = _findPathForUnitTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                            if (u.path && u.path.length > 0) {
-                                u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                                u.commandState = pt.cmd;
-                                u._pendingPathTarget = null;
-                            } else {
-                                u.path = _makeFallbackPathForUnit(u, ugx, ugy, pt.gx, pt.gy, pt.cmd, src);
-                                u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                            }
+                        let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+                        let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
+                        let src = pt && pt.src ? pt.src : 'deferred_resolver';
+                        _consumePathfindRequestBudget(u.owner);
+                        u.path = _findPathForUnitTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                        if (u.path && u.path.length > 0) {
+                            u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                            u.commandState = pt.cmd;
+                            u._pendingPathTarget = null;
+                        } else {
+                            _markUnitAstarBudgetBlocked(u, 1);
                         }
                     }
                 }
@@ -16251,6 +16402,19 @@
                         post: () => { m._isGoldMine = true; }
                     });
                 }
+                for (let m of astarMines) {
+                    if (!isTileVisible(m.gx, m.gy)) continue;
+                    candidates.push({
+                        kind: 'entity',
+                        ref: m,
+                        x: m.x,
+                        y: m.y,
+                        hitShape: { kind: 'circle', r: 12 },
+                        hitRadius: 20,
+                        hitZ: 5,
+                        post: () => { m._isAstarMine = true; }
+                    });
+                }
                 return pickNearestHitCandidate(candidates, worldX, worldY);
             }
 
@@ -16286,6 +16450,16 @@
                         if (!m || !isTileVisible(m.gx, m.gy)) continue;
                         if (!isWorldPointInCurrentView(m.x, m.y, 12)) continue;
                         m._isGoldMine = true;
+                        out.push(m);
+                    }
+                    return out;
+                }
+
+                if (sampleEntity._isAstarMine) {
+                    for (let m of astarMines) {
+                        if (!m || !isTileVisible(m.gx, m.gy)) continue;
+                        if (!isWorldPointInCurrentView(m.x, m.y, 12)) continue;
+                        m._isAstarMine = true;
                         out.push(m);
                     }
                     return out;
@@ -16422,7 +16596,7 @@
                 if (!workerUnits || workerUnits.length === 0) return;
                 let multiTargets = targetType === 'build'
                     ? multiBuilderAssignTargets
-                    : (targetType === 'mine' || targetType === 'farm')
+                    : (targetType === 'mine' || targetType === 'farm' || targetType === 'astar_mine' || targetType === 'astar_farm')
                         ? multiCollectorAssignTargets
                         : (targetType === 'research')
                             ? multiResearcherAssignTargets
@@ -16618,10 +16792,11 @@
                         // --- Worker targeting logic ---
                         let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
                         let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
+                        let astarCollectorUnits = activeUnits.filter(u => u.workerType === 'astar_collector');
                         let salvagerUnits = activeUnits.filter(u => u.workerType === 'salvager');
                         let healerUnits = activeUnits.filter(u => u.workerType === 'healer');
                         let researcherUnits = activeUnits.filter(u => u.workerType === 'researcher');
-                        let workerIds = [...builderUnits, ...collectorUnits, ...salvagerUnits, ...healerUnits, ...researcherUnits].map(u => u.id);
+                        let workerIds = [...builderUnits, ...collectorUnits, ...astarCollectorUnits, ...salvagerUnits, ...healerUnits, ...researcherUnits].map(u => u.id);
 
                         if (builderUnits.length > 0) {
                             // Generic builder-targeting for any placeable object that can be built/upgraded.
@@ -16641,6 +16816,18 @@
                             let gatherTarget = _getCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22);
                             if (gatherTarget) {
                                 applyWorkerAssignTargets(collectorUnits, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
+                                updateInfoPanel();
+                                let nonWorkers = activeUnits.filter(u => !u.workerType);
+                                if (nonWorkers.length === 0) return;
+                            }
+                        } else if (!isCtrlMulti) {
+                            multiCollectorAssignTargets = [];
+                        }
+
+                        if (astarCollectorUnits.length > 0) {
+                            let gatherTarget = _getAstarCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22);
+                            if (gatherTarget) {
+                                applyWorkerAssignTargets(astarCollectorUnits, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
                                 updateInfoPanel();
                                 let nonWorkers = activeUnits.filter(u => !u.workerType);
                                 if (nonWorkers.length === 0) return;
@@ -16836,6 +17023,11 @@
                             for (let m of goldMines) {
                                 if (!isTileVisible(m.gx, m.gy)) continue;
                                 if (m.x >= sx && m.x <= ex && m.y >= sy && m.y <= ey) { m._isGoldMine = true; newEntities.push(m); }
+                            }
+                            // A* mines within box
+                            for (let m of astarMines) {
+                                if (!isTileVisible(m.gx, m.gy)) continue;
+                                if (m.x >= sx && m.x <= ex && m.y >= sy && m.y <= ey) { m._isAstarMine = true; newEntities.push(m); }
                             }
                             if (e.shiftKey) {
                                 for (let u of newUnits) { if (!selectedUnits.includes(u)) selectedUnits.push(u); }
@@ -17580,8 +17772,11 @@
                 u._astarLastGatherY = null;
                 u._astarLastGatherGx = null;
                 u._astarLastGatherGy = null;
+                u._astarPinnedTarget = null;
+                u._astarPinnedTargetType = null;
                 u._astarNextSpawner = null;
                 u._astarLastMineTarget = null;
+                u._astarLastMineTargetType = null;
             } else if (u.workerType === 'builder') {
                 u._builderLastWorkX = null;
                 u._builderLastWorkY = null;
@@ -18079,6 +18274,18 @@
                                 u._collectorPinnedTargetType = gather.type;
                                 _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
                             }
+                        } else if (u.workerType === 'astar_collector' && (a.targetType === 'astar_mine' || a.targetType === 'astar_farm')) {
+                            let gather = _getAstarCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
+                            if (gather && _isAstarCollectorTargetValid(gather.target, gather.type, playerId)) {
+                                if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
+                                _clearWorkerTarget(u);
+                                u._astarPinnedTarget = gather.target;
+                                u._astarPinnedTargetType = gather.type;
+                                _astarCollectorAssignTarget(u, gather.target, gather.type);
+                            }
                         } else if (u.workerType === 'healer' && a.targetType === 'queue') {
                             let qTarget = getTileEntityRef(a.targetGx, a.targetGy);
                             if (!(qTarget && qTarget.owner === playerId && ((qTarget instanceof Barrack) || isSpawnerEntity(qTarget)))) qTarget = null;
@@ -18356,7 +18563,6 @@
         const ENERGY_DELTA_WINDOW_OPTIONS = [1, 10, 30, 60];
         const ENERGY_DELTA_DEFAULT_WINDOW_SECONDS = 10;
         const ENERGY_DELTA_LOG_MAX_SECONDS = 70;
-        const ASTAR_PRIORITY_LEVELS = ['medium', 'high', 'low'];
         const ASTAR_USAGE_LOG_MAX_SECONDS = 70;
         let infoPanelSectionCollapsed = {
             energyDelta: false,
@@ -18373,7 +18579,6 @@
         };
         let infoPanelAstarWindowSecByMetric = {
             total: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
-            top_unit: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
             king: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
             collector: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
             salvager: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
@@ -18384,7 +18589,6 @@
         };
         let energyDeltaEventLogByPlayer = Array.from({ length: 8 }, () => []);
         let astarUsageEventLogByPlayer = Array.from({ length: 8 }, () => []);
-        let astarPriorityByUnitType = {};
 
         function _normalizeOwnerId(owner) {
             let idx = Math.floor(Number(owner));
@@ -18407,29 +18611,6 @@
             if (unitType === 'healer_unit') return 'healer';
             if (unitType === 'researcher_unit') return 'researcher';
             return String(unitType || 'other');
-        }
-
-        function _readAstarPriority(unitType) {
-            let key = String(unitType || 'other');
-            let val = String(astarPriorityByUnitType[key] || 'medium');
-            if (!ASTAR_PRIORITY_LEVELS.includes(val)) val = 'medium';
-            return val;
-        }
-
-        function _getAstarPriorityTierForUnitType(unitType) {
-            let p = _readAstarPriority(unitType);
-            if (p === 'high') return 2;
-            if (p === 'low') return 0;
-            return 1;
-        }
-
-        function _cycleAstarPriorityForUnitType(unitType) {
-            let key = String(unitType || 'other');
-            let cur = _readAstarPriority(key);
-            let idx = ASTAR_PRIORITY_LEVELS.indexOf(cur);
-            let next = ASTAR_PRIORITY_LEVELS[(idx + 1) % ASTAR_PRIORITY_LEVELS.length];
-            astarPriorityByUnitType[key] = next;
-            return next;
         }
 
         function _getAstarBudgetIdleCooldownTicks() {
@@ -18591,43 +18772,6 @@
             return sum / sec;
         }
 
-        function _findTopAstarUnitInWindow(owner, windowSeconds) {
-            let bucket = _ensureAstarLogPlayer(owner);
-            if (!bucket || bucket.length === 0) return null;
-            let sec = Math.max(1, Number(windowSeconds) || ENERGY_DELTA_DEFAULT_WINDOW_SECONDS);
-            let windowTicks = Math.max(1, Math.floor(TICK_RATE * sec));
-            let cutoffTick = gameTime - windowTicks;
-            let byUnit = new Map();
-            for (let i = 0; i < bucket.length; i++) {
-                let ev = bucket[i];
-                if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoffTick) continue;
-                if (!Number.isFinite(ev.unitId)) continue;
-                let prev = byUnit.get(ev.unitId) || { used: 0, unitType: ev.unitType || 'other' };
-                prev.used += Math.max(0, Number(ev.used) || 0);
-                prev.unitType = ev.unitType || prev.unitType;
-                byUnit.set(ev.unitId, prev);
-            }
-            let best = null;
-            for (let [unitId, data] of byUnit.entries()) {
-                if (!best || data.used > best.used) best = { unitId, used: data.used, unitType: data.unitType || 'other' };
-            }
-            if (!best) return null;
-            let unit = units.find(u => u && !u.dead && u.owner === owner && u.id === best.unitId) || null;
-            return {
-                unitId: best.unitId,
-                unitType: best.unitType,
-                usedPerSec: best.used / sec,
-                unit
-            };
-        }
-
-        function _formatAstarPriorityLabel(unitType) {
-            let p = _readAstarPriority(unitType);
-            if (p === 'high') return 'High';
-            if (p === 'low') return 'Low';
-            return 'Medium';
-        }
-
         function _prettyUnitTypeLabel(unitType) {
             if (unitType === 'collector') return 'Collector';
             if (unitType === 'astar_collector') return 'A*er';
@@ -18660,51 +18804,38 @@
                 return '#9aa';
             };
             let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
-            let priorityBtn = (unitType) => `<button class="info-astar-priority-btn" data-unit-type="${unitType}" title="★ priority for this unit type" style="cursor:pointer;background:#202428;color:#cfe;border:1px solid #3f5968;border-radius:3px;font-size:10px;line-height:1;padding:1px 6px;min-width:58px;text-align:center">${_formatAstarPriorityLabel(unitType)}</button>`;
 
-            let usageRow = (metric, label, matcherFn, unitTypeForPriority = '') => {
+            let usageRow = (metric, label, matcherFn) => {
                 let sec = getAstarWindowSeconds(metric);
                 let value = _getPlayerAstarUsageRate(owner, sec, matcherFn);
-                let pri = unitTypeForPriority ? priorityBtn(unitTypeForPriority) : '';
                 return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
                     + secBtn(metric, sec)
                     + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
                     + `<span class="info-value" style="color:${colorUsage(value)}">${fmtUsage(value)} ★/s</span>`
-                    + pri
                     + `</div>`;
             };
-
-            let topSec = getAstarWindowSeconds('top_unit');
-            let topUnit = _findTopAstarUnitInWindow(owner, topSec);
-            let topRate = topUnit ? topUnit.usedPerSec : 0;
 
             let html = _buildCollapsibleInfoSectionTitle('astarBudget', '★ Budget');
             if (!_isInfoSectionCollapsed('astarBudget')) {
                 let totalSec = getAstarWindowSeconds('total');
                 let totalUsedRate = _getPlayerAstarUsageRate(owner, totalSec, null);
-                let stockCur = Math.max(0, Math.floor(_getPlayerAstarBudgetRemaining(owner)));
-                let stockMax = Math.max(0, Math.floor(_getPlayerAstarBudgetAvailable(owner)));
+                let stockCur = Math.max(0, Number(_getPlayerAstarBudgetRemaining(owner)) || 0);
+                html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+                    + `<span class="info-label" style="color:#bbb;min-width:68px">Stock:</span>`
+                    + `<span class="info-value" style="color:#ddd">${formatBigNumber(stockCur, 1)} ★</span>`
+                    + `</div>`;
                 html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
                     + secBtn('total', totalSec)
-                    + `<span class="info-label" style="color:#bbb;min-width:68px">Total:</span>`
-                    + `<span class="info-value" style="color:#ddd">${formatBigNumber(stockCur, 0)} / ${formatBigNumber(stockMax, 0)} ★</span>`
-                    + `</div>`;
-                html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-                    + `<span class="info-label" style="color:#bbb;min-width:68px"></span>`
+                    + `<span class="info-label" style="color:#bbb;min-width:68px">Spend:</span>`
                     + `<span class="info-value" style="color:${colorBudget(-totalUsedRate)}">${fmtBudget(-totalUsedRate)} ★/s</span>`
                     + `</div>`;
-                html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-                    + secBtn('top_unit', topSec)
-                    + `<button class="info-astar-top-unit-btn" data-unit-id="${topUnit ? topUnit.unitId : ''}" title="Jump to top ★ user" style="cursor:pointer;background:#202428;color:#ffd;border:1px solid #8a7b3a;border-radius:3px;font-size:10px;line-height:1;padding:1px 6px;min-width:68px;text-align:center">Top ★</button>`
-                    + `<span class="info-value" style="color:${colorUsage(topRate)}">${fmtUsage(topRate)} ★/s</span>`
-                    + `</div>`;
 
-                html += usageRow('king', 'King', ev => ev.unitMetric === 'king', 'king');
-                html += usageRow('collector', 'Collector', ev => ev.unitMetric === 'collector', 'collector');
-                html += usageRow('salvager', 'Salvager', ev => ev.unitMetric === 'salvager', 'salvager_unit');
-                html += usageRow('builder', 'Builder', ev => ev.unitMetric === 'builder', 'builder_unit');
-                html += usageRow('healer', 'Healer', ev => ev.unitMetric === 'healer', 'healer_unit');
-                html += usageRow('researcher', 'Researcher', ev => ev.unitMetric === 'researcher', 'researcher_unit');
+                html += usageRow('king', 'King', ev => ev.unitMetric === 'king');
+                html += usageRow('collector', 'Collector', ev => ev.unitMetric === 'collector');
+                html += usageRow('salvager', 'Salvager', ev => ev.unitMetric === 'salvager');
+                html += usageRow('builder', 'Builder', ev => ev.unitMetric === 'builder');
+                html += usageRow('healer', 'Healer', ev => ev.unitMetric === 'healer');
+                html += usageRow('researcher', 'Researcher', ev => ev.unitMetric === 'researcher');
 
                 let special = new Set(['king', 'collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
                 let otherTypes = new Set();
@@ -18716,7 +18847,7 @@
                 let sortedOtherTypes = Array.from(otherTypes).sort();
                 for (let unitType of sortedOtherTypes) {
                     let metric = `u_${unitType}`;
-                    html += usageRow(metric, _prettyUnitTypeLabel(unitType), ev => ev.unitType === unitType, unitType);
+                    html += usageRow(metric, _prettyUnitTypeLabel(unitType), ev => ev.unitType === unitType);
                 }
             }
             html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
@@ -18801,12 +18932,11 @@
             let energy = Math.floor(p.energy);
             if (_hudCache.energy !== energy) { _hudCache.energy = energy; _hudEls.energy.textContent = `⚡ ${formatBigNumber(energy)}`; }
             let astarCur = Math.max(0, Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId)));
-            let astarMax = Math.max(0, Math.floor(_getPlayerAstarBudgetAvailable(localPlayerId)));
-            let astarText = `★ ${formatBigNumber(astarCur)} / ${formatBigNumber(astarMax)}`;
+            let astarText = `★ ${formatBigNumber(astarCur)}`;
             if (_hudCache.astarText !== astarText && _hudEls.astar) { _hudCache.astarText = astarText; _hudEls.astar.textContent = astarText; }
             let playerCap = getPlayerPopCap(localPlayerId);
             let cfgCap = getConfiguredMaxPop();
-            let popText = `Pop: ${String(p.popCount).padStart(3, ' ')}/${String(playerCap).padStart(3, ' ')}/${String(cfgCap).padStart(3, ' ')}`;
+            let popText = `Pop: ${String(p.popCount)}/${String(playerCap)}/${String(cfgCap)}`;
             if (_hudCache.popText !== popText) { _hudCache.popText = popText; _hudEls.pop.textContent = popText; }
             let secs = Math.floor(gameTime / TICK_RATE);
             if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
@@ -19950,6 +20080,7 @@
 
         function getEntityGroupKey(e) {
             if (e._isGoldMine) return 'goldmine';
+            if (e._isAstarMine) return 'astarmine';
             if (ignoreLevelSubgroups) {
                 if (e.type === 'barrack') return 'barrack_' + e.unitType;
                 if (e instanceof Tower) return 'tower_' + e.type;
@@ -19969,6 +20100,7 @@
 
         function getEntityGroupLabel(e) {
             if (e._isGoldMine) return 'Energy Mine';
+            if (e._isAstarMine) return 'A* Mine';
             if (e.type === 'barrack') return ((BASE_CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
             if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).name || e.type;
             if (e.type === 'spawner') return 'Collector';
@@ -19985,6 +20117,7 @@
             let e = grp.items[0];
             if (grp.isUnit) return e.unitType;
             if (e._isGoldMine) return 'goldmine';
+            if (e._isAstarMine) return 'astarmine';
             if (e.type === 'barrack') return 'barrack_' + e.unitType;
             if (e instanceof Tower) return e.type;
             if (e.type === 'spawner' || e.type === 'astar_spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') return e.type;
@@ -19996,6 +20129,7 @@
             let e = grp.items[0];
             if (grp.isUnit) return (BASE_UNIT_STATS[e.unitType] || {}).color || '#fff';
             if (e._isGoldMine) return '#fd0';
+            if (e._isAstarMine) return '#bbb';
             if (e.type === 'barrack') return (BASE_UNIT_STATS[e.unitType] || {}).color || '#686';
             if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).color || '#fff';
             let ct = BASE_CARD_TYPES[e.type] || {};
@@ -20007,6 +20141,7 @@
             let e = grp.items[0];
             if (grp.isUnit) return getUnitBaseLevel(e);
             if (e._isGoldMine) return null;
+            if (e._isAstarMine) return null;
             if (e.underConstruction) return 0;
             if (e.effectiveLevel !== undefined) return getThingEffectiveLevel(e);
             if (e.level !== undefined || e.stacks) return getThingBaseLevel(e);
@@ -20014,7 +20149,7 @@
         }
 
         function getEntityLevelToken(e) {
-            if (!e || e._isGoldMine) return null;
+            if (!e || e._isGoldMine || e._isAstarMine) return null;
             if (e.underConstruction) return 'build';
             if (e.isUpgrading) return 'upg';
             if (e.isStacking) return 'stack';
@@ -20411,12 +20546,14 @@
             if (e.type === 'sand') html += infoRow('Effect', '50% slow');
             if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
             if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
-            if (e.type === 'farm') {
-                let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'multiplier');
-                let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'multiplier');
+            if (e.type === 'farm' || e.type === 'astar_farm') {
+                let statKey = e.type === 'astar_farm' ? 'astar_farm' : 'farm';
+                let baseInc = getBuildingStatForOwner(e.owner, statKey, baseLevel, 'multiplier');
+                let effInc = getBuildingStatForOwner(e.owner, statKey, effLevel, 'multiplier');
                 if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
                 if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-                html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
+                let gatherLabel = e.type === 'astar_farm' ? 'x A* gather' : 'x gather';
+                html += infoRow('Multiplier', `${baseInc.toFixed(2)}${gatherLabel}`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}${gatherLabel}` : undefined);
             }
             if (e.type === 'house') {
                 let basePopCap = getBuildingStatForOwner(e.owner, 'house', baseLevel, 'popCap');
@@ -20445,6 +20582,15 @@
             let pct = e.maxGold > 0 ? Math.round(e.gold / e.maxGold * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
             html += infoDesc('Natural energy deposit. Send collectors to gather.');
+            return html;
+        }
+
+        function renderAstarMineInfo(e) {
+            let html = '';
+            html += infoRow('A*', formatInfoFraction(Math.floor(e.astar), e.maxAstar));
+            let pct = e.maxAstar > 0 ? Math.round(e.astar / e.maxAstar * 100) : 0;
+            html += infoRow('Remaining', `${pct}%`);
+            html += infoDesc('Natural A* deposit. Send A*ers to gather.');
             return html;
         }
 
@@ -20528,6 +20674,9 @@
                 }), baseDps, baseDps !== effDps ? effDps : undefined);
             }
             html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, Math.abs(baseSpd - effSpd) > 0.001 ? `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}` : undefined);
+            let baseAstarCost = Math.max(0.1, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
+            let effAstarCost = Math.max(0.1, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
+            html += infoRow(withInfoPanelStatMatrixButton('A* / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), Math.abs(baseAstarCost - effAstarCost) > 1e-6 ? formatBigNumber(effAstarCost, 2) : undefined);
             html += infoRow('State', ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][u.commandState]);
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -20717,6 +20866,7 @@
 
         function renderEntityBlock(e) {
             if (e._isGoldMine) return renderGoldMineInfo(e);
+            if (e._isAstarMine) return renderAstarMineInfo(e);
             let ctx = getInfoPanelMatrixContextForEntity(e);
             if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackInfo(e));
             if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerInfo(e));
@@ -20732,6 +20882,7 @@
             if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackGroupInfo(group));
             if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerGroupInfo(group));
             if (e._isGoldMine) return renderGoldMineGroupInfo(group);
+            if (e._isAstarMine) return renderAstarMineGroupInfo(group);
             if (e.type === 'research') return runWithInfoPanelStatMatrixContext(ctx, () => renderResearchGroupInfo(group));
             if (e.type === 'spawner' || e.type === 'astar_spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return runWithInfoPanelStatMatrixContext(ctx, () => renderSpawnerGroupInfo(group));
             if (e.type && BASE_CARD_TYPES[e.type]) return runWithInfoPanelStatMatrixContext(ctx, () => renderFloorItemGroupInfo(group));
@@ -20747,6 +20898,18 @@
             let pct = totalMax > 0 ? Math.round(totalGold / totalMax * 100) : 0;
             html += infoRow('Remaining', `${pct}%`);
             html += infoDesc('Natural energy deposit. Send collectors to gather.');
+            return html;
+        }
+
+        function renderAstarMineGroupInfo(group) {
+            let html = '';
+            let totalAstar = 0, totalMax = 0;
+            for (let m of group) { totalAstar += m.astar; totalMax += m.maxAstar; }
+            html += infoRow('Count', group.length);
+            html += infoRow('A*', formatInfoFraction(Math.floor(totalAstar), totalMax));
+            let pct = totalMax > 0 ? Math.round(totalAstar / totalMax * 100) : 0;
+            html += infoRow('Remaining', `${pct}%`);
+            html += infoDesc('Natural A* deposit. Send A*ers to gather.');
             return html;
         }
 
@@ -21685,7 +21848,7 @@
                 } else {
                     let e0 = items[0];
                     let prefix = items.length > 1 ? `${items.length}x ` : '';
-                    if (e0._isGoldMine) {
+                    if (e0._isGoldMine || e0._isAstarMine) {
                         html += `<div class="info-title">${subgroupPopupBtnHtml}${prefix}${label}</div>`;
                     } else {
                         let mixedEntityLevels = false;
@@ -22936,8 +23099,10 @@
                 gameMode = data.cfg.gameMode || 'destroy';
                 CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
                 STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
+                STARTING_ASTAR = Math.max(0, Number(data.cfg.startingAstar) || 9000);
                 MAP_TYPE = data.cfg.mapType || 'random';
                 UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(data.cfg.unitEffectiveStatsRecalcTicks) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
+                ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(data.cfg.astarIterBudgetPerPlayerTick) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
                 applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
 
                 RESEARCH_COST_EXP = Math.max(1, Number(data.cfg.researchCostExp) || 1.85);
@@ -23162,30 +23327,6 @@
                     let metric = btn.getAttribute('data-metric') || '';
                     if (!metric) return;
                     cycleAstarWindowSeconds(metric);
-                    updateInfoPanel();
-                });
-            });
-
-            panel.querySelectorAll('.info-astar-priority-btn').forEach(btn => {
-                bindInstantPress(btn, () => {
-                    let unitType = btn.getAttribute('data-unit-type') || '';
-                    if (!unitType) return;
-                    _cycleAstarPriorityForUnitType(unitType);
-                    updateInfoPanel();
-                });
-            });
-
-            panel.querySelectorAll('.info-astar-top-unit-btn').forEach(btn => {
-                bindInstantPress(btn, () => {
-                    let unitId = Number(btn.getAttribute('data-unit-id'));
-                    if (!Number.isFinite(unitId)) return;
-                    let u = units.find(x => x && !x.dead && x.id === unitId && x.owner === localPlayerId);
-                    if (!u) return;
-                    camera.x = u.x - (viewW / camera.zoom) / 2;
-                    camera.y = u.y - (viewH / camera.zoom) / 2;
-                    clampCamera();
-                    selectedUnits = [u];
-                    selectedEntities = [];
                     updateInfoPanel();
                 });
             });
@@ -23934,10 +24075,12 @@
                 gameMode: gameMode,
                 maxPop: CONFIG_MAX_POP,
                 startingMoney: STARTING_MONEY,
+                startingAstar: STARTING_ASTAR,
                 mapType: MAP_TYPE,
                 tickRate: TICK_RATE,
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
                 unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
+                astarIterBudgetPerPlayerTick: ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
                 researchCostExp: RESEARCH_COST_EXP,
                 researchWorkExp: RESEARCH_WORK_EXP,
                 researchWorkBase: RESEARCH_WORK_BASE,
@@ -24031,10 +24174,11 @@
             gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
             CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
             STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-energy').value) || 2000));
+            STARTING_ASTAR = Math.max(0, Number((document.getElementById('cfg-starting-astar') || {}).value) || STARTING_ASTAR);
             MAP_TYPE = document.getElementById('cfg-map-type').value || 'random';
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));
             UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number((document.getElementById('cfg-unit-collision-ticks') || {}).value) || 5)));
-            ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number((document.getElementById('cfg-astar-max-iters') || {}).value) || 18000)));
+            ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number((document.getElementById('cfg-astar-iter-budget-per-player') || {}).value) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
 
             let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
@@ -24154,8 +24298,7 @@
 
             for (let p of players) {
                 p.energy = STARTING_MONEY;
-                p.astarMax = ASTAR_MAX_ITERS_LIMIT;
-                p.astar = p.astarMax;
+                p.astar = STARTING_ASTAR;
                 p.popCount = 0;
                 p.researchLevels = {};
                 p.researchMultipliers = {};
