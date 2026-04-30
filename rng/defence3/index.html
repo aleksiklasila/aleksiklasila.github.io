@@ -1452,7 +1452,7 @@
                 </div>
                 <div class="lobby-setting-row" style="margin:0;">
                     <label for="cfg-astar-iter-budget-per-player">A* Iter Budget / Player / Tick</label>
-                    <input id="cfg-astar-iter-budget-per-player" type="number" min="256" max="500000" value="9000" style="width:90px" title="Internal A* node-expansion budget available to each player every tick">
+                    <input id="cfg-astar-iter-budget-per-player" type="number" min="256" max="1000000" value="20000" style="width:90px" title="Internal A* node-expansion budget available to each player every tick">
                 </div>
             </div>
         </div>
@@ -6290,6 +6290,8 @@
         const PATH_CACHE_TTL_TICKS = 24;
         const PATH_CACHE_MAX_ENTRIES = 3000;
         const PATH_CACHE_TRIM_CHUNK = 96;
+        const PARTIAL_PATH_CACHE_TTL_TICKS = 36;
+        const PARTIAL_PATH_CACHE_MAX_ENTRIES = 2000;
         const SPAWNER_ROUTE_CACHE_TTL_TICKS = 10;
         const SPAWNER_ROUTE_CACHE_MAX_ENTRIES = 800;
         const SPAWNER_RALLY_TEMPLATE_TTL_TICKS = 20;
@@ -6306,6 +6308,7 @@
         let astarNodeBudgetPerTickByPlayer = new Int32Array(0);
         let astarNodeBudgetRemainingByPlayer = new Int32Array(0);
         let sharedPathCache = new Map();
+        let sharedPartialPathCache = new Map();
         let sharedSpawnerRouteCache = new Map();
         let sharedSpawnerRallyTemplateCache = new Map();
 
@@ -6445,7 +6448,7 @@
 
         function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fallback') {
             if (!u) return null;
-            u.pathIsFallbackAstar = false;
+            u.pathIsFallbackAstar = true;
             u.path = null;
             u.pathIndex = 0;
             u._pendingPathTarget = { gx: ex, gy: ey, cmd, src };
@@ -6802,6 +6805,7 @@
             pathTopologyVersion++;
             if (pathTopologyVersion > 1000000000) pathTopologyVersion = 1;
             if (sharedPathCache.size > 0) sharedPathCache.clear();
+            if (sharedPartialPathCache.size > 0) sharedPartialPathCache.clear();
             if (sharedSpawnerRouteCache.size > 0) sharedSpawnerRouteCache.clear();
             if (sharedSpawnerRallyTemplateCache.size > 0) sharedSpawnerRallyTemplateCache.clear();
         }
@@ -7061,6 +7065,9 @@
             let usePortalEdges = (pathOwner !== null);
             let movementProfile = _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint);
             let cacheKey = null;
+            let resumePrefixPath = null;
+            let resumeStartX = sx;
+            let resumeStartY = sy;
 
             let gridData = grid;
             let gridW = GRID_W;
@@ -7074,6 +7081,33 @@
                     return cached.path;
                 }
                 if (cached) sharedPathCache.delete(cacheKey);
+
+                let partial = sharedPartialPathCache.get(cacheKey);
+                if (partial && !_isPathCacheExpired(partial, PARTIAL_PATH_CACHE_TTL_TICKS) && Array.isArray(partial.path) && partial.path.length > 1) {
+                    let last = partial.path[partial.path.length - 1];
+                    if (last && Number.isFinite(last.x) && Number.isFinite(last.y) && last.x >= 0 && last.x < GRID_W && last.y >= 0 && last.y < GRID_H) {
+                        resumePrefixPath = partial.path;
+                        resumeStartX = Math.floor(last.x);
+                        resumeStartY = Math.floor(last.y);
+                    }
+                } else if (partial) {
+                    sharedPartialPathCache.delete(cacheKey);
+                }
+            }
+
+            if (resumePrefixPath) {
+                sx = resumeStartX;
+                sy = resumeStartY;
+                if (sx === ex && sy === ey) {
+                    let full = resumePrefixPath;
+                    if (movementProfile) {
+                        sharedPathCache.set(cacheKey, { path: full, tick: gameTime, version: pathTopologyVersion });
+                        sharedPartialPathCache.delete(cacheKey);
+                        _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
+                    }
+                    _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+                    return full;
+                }
             }
 
             // Resolve cloud tile cache once per call (O(1) per lookup in hot path)
@@ -7163,8 +7197,14 @@
                         k = astarFrom[k];
                     }
                     path.reverse();
+                    if (resumePrefixPath && resumePrefixPath.length > 0) {
+                        let merged = resumePrefixPath.slice();
+                        for (let i = 1; i < path.length; i++) merged.push(path[i]);
+                        path = merged;
+                    }
                     if (movementProfile) {
                         sharedPathCache.set(cacheKey, { path: path, tick: gameTime, version: pathTopologyVersion });
+                        sharedPartialPathCache.delete(cacheKey);
                         _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
                     }
                     _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
@@ -7226,8 +7266,40 @@
                 }
             }
 
+            if (abortedByBudget && movementProfile && cacheKey) {
+                let partialPath = [];
+                let pk = _astarHeapSz > 0 ? _astarHeapK[0] : -1;
+                if (!(pk >= 0)) {
+                    // Fallback: at least keep current local start so next attempt can resume deterministically.
+                    partialPath = [{ x: sx, y: sy }];
+                } else {
+                    let guard = 0;
+                    while (pk >= 0 && guard <= (GRID_W * GRID_H)) {
+                        guard++;
+                        partialPath.push({ x: pk % gridW, y: (pk / gridW) | 0 });
+                        if (pk === startKey) break;
+                        let parent = astarFrom[pk];
+                        if (!Number.isFinite(parent) || parent < 0 || parent === pk) break;
+                        pk = parent;
+                    }
+                    partialPath.reverse();
+                }
+
+                if (resumePrefixPath && resumePrefixPath.length > 0 && partialPath.length > 0) {
+                    let mergedPartial = resumePrefixPath.slice();
+                    for (let i = 1; i < partialPath.length; i++) mergedPartial.push(partialPath[i]);
+                    partialPath = mergedPartial;
+                }
+
+                if (partialPath.length > 1) {
+                    sharedPartialPathCache.set(cacheKey, { path: partialPath, tick: gameTime, version: pathTopologyVersion });
+                    _trimPathCacheIfNeeded(sharedPartialPathCache, PARTIAL_PATH_CACHE_MAX_ENTRIES);
+                }
+            }
+
             if (movementProfile && !abortedByBudget) {
                 sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
+                sharedPartialPathCache.delete(cacheKey);
                 _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
             }
             _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
@@ -15986,6 +16058,20 @@
             visibilityVersion++;
         }
 
+        function _buildDeterministicUnitUpdateOrderForTick() {
+            let order = units.slice();
+            if (order.length <= 1) return order;
+            let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
+            for (let i = order.length - 1; i > 0; i--) {
+                s = ((s * 1664525) + 1013904223) >>> 0;
+                let j = s % (i + 1);
+                let tmp = order[i];
+                order[i] = order[j];
+                order[j] = tmp;
+            }
+            return order;
+        }
+
         // ============================================================
         // GAME TICK
         // ============================================================
@@ -16081,9 +16167,17 @@
             for (let i = projectiles.length - 1; i >= 0; i--) { if (!projectiles[i].update()) projectiles.splice(i, 1); }
 
             // Units
+            // Shuffle unit update order per tick so A* budget contention is shared
+            // across different units over time (deterministically for lockstep).
+            let unitUpdateOrder = _buildDeterministicUnitUpdateOrderForTick();
+            for (let i = 0; i < unitUpdateOrder.length; i++) {
+                let u = unitUpdateOrder[i];
+                if (!u) continue;
+                u.update();
+            }
+
             for (let i = units.length - 1; i >= 0; i--) {
                 let u = units[i];
-                u.update();
                 if (u.dead) {
                     if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y);
                     // Drop energy on death (bounty)
