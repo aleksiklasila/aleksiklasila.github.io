@@ -2051,9 +2051,19 @@
         }
 
         function countTeamUnits(pid) {
-            let n = 0;
-            for (let u of units) if (u.owner === pid && !u.dead) n++;
-            return n;
+            let owner = Math.floor(Number(pid));
+            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplex.length > 0) {
+                let n = 0;
+                let chunkCount = CHUNKS_W * CHUNKS_H;
+                for (let chunkKey = 0; chunkKey < chunkCount; chunkKey++) {
+                    let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                    n += spatialUnitsComplex[playerBase] || 0;
+                }
+                return n;
+            }
+            let fallback = 0;
+            for (let u of units) if (u.owner === pid && !u.dead) fallback++;
+            return fallback;
         }
 
         function countTeamStructures(pid) {
@@ -6215,12 +6225,30 @@
         let CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
         let CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
         let spatialUnits = []; // flat array of Sets
+        let spatialUnitsComplex = new Int32Array(0); // [chunk][player][total + perUnitType...]
+        let spatialUnitTypeToIndex = Object.create(null);
+        let spatialNormUnitTypeIndex = 0;
+        let spatialUnitsComplexUnitTypeCount = 0;
+        let spatialUnitsComplexPlayerCount = 0;
+        let spatialUnitsComplexStridePerPlayer = 0;
+        let spatialUnitsComplexStridePerChunk = 0;
 
         function initSpatialHash() {
             CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
             CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
             spatialUnits = [];
             for (let i = 0; i < CHUNKS_W * CHUNKS_H; i++) spatialUnits.push(new Set());
+
+            spatialUnitTypeToIndex = Object.create(null);
+            let unitKeys = Object.keys(BASE_UNIT_STATS || {});
+            if (!unitKeys.includes('norm')) unitKeys.push('norm');
+            for (let i = 0; i < unitKeys.length; i++) spatialUnitTypeToIndex[unitKeys[i]] = i;
+            spatialNormUnitTypeIndex = Number.isFinite(spatialUnitTypeToIndex.norm) ? spatialUnitTypeToIndex.norm : 0;
+            spatialUnitsComplexUnitTypeCount = unitKeys.length;
+            spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
+            spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + each unit type
+            spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
+            spatialUnitsComplex = new Int32Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
         }
         function getSpatialKey(wx, wy) {
             let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
@@ -6232,13 +6260,55 @@
         function updateUnitSpatial(u) {
             let newKey = getSpatialKey(u.x, u.y);
             if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
-                spatialUnits[u._spatialKey].delete(u);
+                if (spatialUnits[u._spatialKey].delete(u)) {
+                    let owner = Math.floor(Number(u.owner));
+                    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
+                        let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
+                            ? u._spatialUnitTypeIdx
+                            : (Number.isFinite(spatialUnitTypeToIndex[u.unitType]) ? spatialUnitTypeToIndex[u.unitType] : spatialNormUnitTypeIndex);
+                        let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                        let totalIdx = playerBase;
+                        let typeCountIdx = playerBase + 1 + typeIdx;
+                        spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
+                        spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
+                    }
+                }
+            }
+            if (u._spatialKey === newKey) {
+                spatialUnits[newKey].add(u);
+                return;
             }
             spatialUnits[newKey].add(u);
+            let owner = Math.floor(Number(u.owner));
+            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
+                let typeIdx = spatialUnitTypeToIndex[u.unitType];
+                if (!Number.isFinite(typeIdx)) typeIdx = spatialNormUnitTypeIndex;
+                u._spatialUnitTypeIdx = typeIdx;
+                let playerBase = (newKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                let totalIdx = playerBase;
+                let typeCountIdx = playerBase + 1 + typeIdx;
+                spatialUnitsComplex[totalIdx] += 1;
+                spatialUnitsComplex[typeCountIdx] += 1;
+            }
             u._spatialKey = newKey;
         }
         function removeUnitSpatial(u) {
-            if (u._spatialKey !== undefined) spatialUnits[u._spatialKey].delete(u);
+            if (u._spatialKey !== undefined) {
+                if (spatialUnits[u._spatialKey].delete(u)) {
+                    let owner = Math.floor(Number(u.owner));
+                    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
+                        let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
+                            ? u._spatialUnitTypeIdx
+                            : (Number.isFinite(spatialUnitTypeToIndex[u.unitType]) ? spatialUnitTypeToIndex[u.unitType] : spatialNormUnitTypeIndex);
+                        let playerBase = (u._spatialKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                        let totalIdx = playerBase;
+                        let typeCountIdx = playerBase + 1 + typeIdx;
+                        spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
+                        spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
+                    }
+                }
+                u._spatialKey = undefined;
+            }
         }
         function getUnitsInRange(wx, wy, rangePx) {
             let result = [];
@@ -6262,43 +6332,82 @@
             let r = Math.max(0, Number(rangePx) || 0);
             let pad = (opts && Number.isFinite(opts.pad)) ? Math.max(0, opts.pad) : TILE;
             let scan = r + pad;
-            let chunkWorldSize = CHUNK_SIZE * TILE;
-            let minCx = Math.floor((wx - scan) / (CHUNK_SIZE * TILE));
-            let maxCx = Math.floor((wx + scan) / (CHUNK_SIZE * TILE));
-            let minCy = Math.floor((wy - scan) / (CHUNK_SIZE * TILE));
-            let maxCy = Math.floor((wy + scan) / (CHUNK_SIZE * TILE));
-            minCx = Math.max(0, minCx); maxCx = Math.min(CHUNKS_W - 1, maxCx);
-            minCy = Math.max(0, minCy); maxCy = Math.min(CHUNKS_H - 1, maxCy);
-
+            let cws = CHUNK_SIZE * TILE;
+            let minCx = Math.max(0, Math.floor((wx - scan) / cws));
+            let maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + scan) / cws));
+            let minCy = Math.max(0, Math.floor((wy - scan) / cws));
+            let maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + scan) / cws));
             let radiusSq = r * r;
             let includeDead = !!(opts && opts.includeDead);
             let exact = !(opts && opts.exact === false);
             let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
-            let chunkCols = CHUNKS_W;
-            let chunks = spatialUnits;
 
-            function chunkCanIntersectCircle(cx, cy) {
-                if (!exact) return true;
-                let minX = cx * chunkWorldSize;
-                let minY = cy * chunkWorldSize;
-                let maxX = minX + chunkWorldSize;
-                let maxY = minY + chunkWorldSize;
-                let nearestX = wx < minX ? minX : (wx > maxX ? maxX : wx);
-                let nearestY = wy < minY ? minY : (wy > maxY ? maxY : wy);
-                let dx = wx - nearestX;
-                let dy = wy - nearestY;
-                return (dx * dx + dy * dy) <= radiusSq;
+            let playerFilter = -1, enemyFilter = -1, unitTypeFilterIdx = -1, unitTypeFilter = '';
+            let hasPlayerFilter = false, hasEnemyFilter = false, hasUnitTypeFilter = false;
+            let cplx = spatialUnitsComplex, cplxSC = spatialUnitsComplexStridePerChunk;
+            let cplxSP = spatialUnitsComplexStridePerPlayer, nPlayers = spatialUnitsComplexPlayerCount;
+            let canCplx = cplx.length > 0 && cplxSC > 0 && cplxSP > 0;
+            if (opts) {
+                if (Number.isFinite(opts.player)) {
+                    playerFilter = Math.floor(opts.player);
+                    if (playerFilter < 0 || playerFilter >= nPlayers) return false;
+                    hasPlayerFilter = true;
+                }
+                if (Number.isFinite(opts.enemyOfPlayer)) {
+                    enemyFilter = Math.floor(opts.enemyOfPlayer);
+                    if (enemyFilter < 0 || enemyFilter >= nPlayers) return false;
+                    hasEnemyFilter = true;
+                }
+                if (hasPlayerFilter && hasEnemyFilter && playerFilter === enemyFilter) return false;
+                if (typeof opts.unitType === 'string' && opts.unitType.length > 0) {
+                    unitTypeFilter = opts.unitType;
+                    unitTypeFilterIdx = spatialUnitTypeToIndex[unitTypeFilter];
+                    if (!Number.isFinite(unitTypeFilterIdx)) return false;
+                    hasUnitTypeFilter = true;
+                }
             }
+            let useFilters = canCplx && (hasPlayerFilter || hasEnemyFilter || hasUnitTypeFilter);
+            let typeOff = 1 + unitTypeFilterIdx; // only valid when hasUnitTypeFilter
+            let chunks = spatialUnits, chunkCols = CHUNKS_W;
 
-            // Fast path for the common case used by combat/vision scans.
+            // Hot path: no dead, exact, no predicate (all combat/vision/aggro scans)
             if (!includeDead && exact && !predicate) {
                 for (let cy = minCy; cy <= maxCy; cy++) {
                     let rowBase = cy * chunkCols;
                     for (let cx = minCx; cx <= maxCx; cx++) {
-                        let chunk = chunks[rowBase + cx];
+                        let ck = rowBase + cx;
+                        if (useFilters) {
+                            let cb = ck * cplxSC;
+                            if (hasPlayerFilter) {
+                                let pb = cb + playerFilter * cplxSP;
+                                if (hasUnitTypeFilter ? cplx[pb + typeOff] <= 0 : cplx[pb] <= 0) continue;
+                            } else if (hasEnemyFilter) {
+                                let ok = false;
+                                for (let pid = 0; pid < nPlayers; pid++) {
+                                    if (pid === enemyFilter) continue;
+                                    let pb = cb + pid * cplxSP;
+                                    if (hasUnitTypeFilter ? cplx[pb + typeOff] > 0 : cplx[pb] > 0) { ok = true; break; }
+                                }
+                                if (!ok) continue;
+                            } else {
+                                let ok = false;
+                                for (let pid = 0; pid < nPlayers; pid++) {
+                                    if (cplx[cb + pid * cplxSP + typeOff] > 0) { ok = true; break; }
+                                }
+                                if (!ok) continue;
+                            }
+                        }
+                        let chunk = chunks[ck];
                         if (!chunk || chunk.size <= 0) continue;
-                        if (!chunkCanIntersectCircle(cx, cy)) continue;
+                        let minX = cx * cws, minY = cy * cws;
+                        let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
+                        let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
+                        let ddx = wx - nx, ddy = wy - ny;
+                        if (ddx * ddx + ddy * ddy > radiusSq) continue;
                         for (let u of chunk) {
+                            if (hasPlayerFilter && u.owner !== playerFilter) continue;
+                            if (hasEnemyFilter && u.owner === enemyFilter) continue;
+                            if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
                             if (u.dead) continue;
                             let dx = u.x - wx, dy = u.y - wy;
                             let d2 = dx * dx + dy * dy;
@@ -6310,13 +6419,45 @@
                 return false;
             }
 
+            // General path
             for (let cy = minCy; cy <= maxCy; cy++) {
                 let rowBase = cy * chunkCols;
                 for (let cx = minCx; cx <= maxCx; cx++) {
-                    let chunk = chunks[rowBase + cx];
+                    let ck = rowBase + cx;
+                    if (useFilters) {
+                        let cb = ck * cplxSC;
+                        if (hasPlayerFilter) {
+                            let pb = cb + playerFilter * cplxSP;
+                            if (hasUnitTypeFilter ? cplx[pb + typeOff] <= 0 : cplx[pb] <= 0) continue;
+                        } else if (hasEnemyFilter) {
+                            let ok = false;
+                            for (let pid = 0; pid < nPlayers; pid++) {
+                                if (pid === enemyFilter) continue;
+                                let pb = cb + pid * cplxSP;
+                                if (hasUnitTypeFilter ? cplx[pb + typeOff] > 0 : cplx[pb] > 0) { ok = true; break; }
+                            }
+                            if (!ok) continue;
+                        } else {
+                            let ok = false;
+                            for (let pid = 0; pid < nPlayers; pid++) {
+                                if (cplx[cb + pid * cplxSP + typeOff] > 0) { ok = true; break; }
+                            }
+                            if (!ok) continue;
+                        }
+                    }
+                    let chunk = chunks[ck];
                     if (!chunk || chunk.size <= 0) continue;
-                    if (!chunkCanIntersectCircle(cx, cy)) continue;
+                    if (exact) {
+                        let minX = cx * cws, minY = cy * cws;
+                        let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
+                        let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
+                        let ddx = wx - nx, ddy = wy - ny;
+                        if (ddx * ddx + ddy * ddy > radiusSq) continue;
+                    }
                     for (let u of chunk) {
+                        if (hasPlayerFilter && u.owner !== playerFilter) continue;
+                        if (hasEnemyFilter && u.owner === enemyFilter) continue;
+                        if (hasUnitTypeFilter && u.unitType !== unitTypeFilter) continue;
                         if (!includeDead && u.dead) continue;
                         let dx = u.x - wx, dy = u.y - wy;
                         let d2 = dx * dx + dy * dy;
@@ -9503,7 +9644,6 @@
                 let dPrimary = rangePx, dSecondary = rangePx, dImmune = rangePx;
 
                 forEachUnitInRange(this.x, this.y, rangePx, (u, d2) => {
-                    if (u.owner === this.owner) return;
                     if (u.turretImmune) return;
                     let d = Math.sqrt(d2);
 
@@ -9523,7 +9663,7 @@
                         if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
                         else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
                     }
-                });
+                }, { enemyOfPlayer: this.owner });
 
                 let target = bestPrimary || bestSecondary || bestImmune;
 
@@ -9649,14 +9789,13 @@
 
                 let checkHits = () => {
                     if (forEachUnitInRange(this.x, this.y, 16, (u) => {
-                        if (u.owner === this.sourceOwner || u.dead) return;
                         let hitRange = u.r + 8;
                         let dx = u.x - this.x, dy = u.y - this.y;
                         if (dx * dx + dy * dy <= hitRange * hitRange) {
                             this.hit(u);
                             return true;
                         }
-                    })) return true;
+                    }, { enemyOfPlayer: this.sourceOwner })) return true;
                     for (let list of [towers, barracks, collectorSpawners]) {
                         for (let b of list) {
                             if (b.owner === this.sourceOwner || b.energy <= 0) continue;
@@ -9717,13 +9856,13 @@
 
                 if (hasBlast) {
                     forEachUnitInRange(this.x, this.y, splashRadiusPx, (e) => {
-                        if (e === t || e.owner === this.sourceOwner || e.turretImmune || e.dead) return;
+                        if (e === t || e.turretImmune) return;
                         let prevEnergy = e.energy;
                         e.energy -= splashDmg;
                         pushHostileDamageAlert(e, prevEnergy - e.energy, this.sourceOwner);
                         if (this.type === 'fire') applyStatusEffect(e, 'fire', this.level || 1, splashDmg * 0.05, this.sourceOwner, this.type);
                         if (e.energy <= 0 && !e.dead) e.dead = true;
-                    });
+                    }, { enemyOfPlayer: this.sourceOwner });
                 }
                 if (t.energy <= 0 && !t.dead) { t.dead = true; createExplosion(t.x, t.y, "#e44", 6); }
             }
@@ -9981,12 +10120,12 @@
                             let blastRadiusPx = Math.max(0, blastRadiusTiles * TILE);
 
                             forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
-                                if (!u || u.dead || u.owner === item.owner) return;
+                                if (!u) return;
                                 let prevEnergy = u.energy;
                                 u.energy -= blastDamage;
                                 pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
                                 if (u.energy <= 0 && !u.dead) u.dead = true;
-                            });
+                            }, { enemyOfPlayer: item.owner });
 
                             createExplosion(this.x, this.y, "#f80", 15);
                             playSound('mine_explode', this.x, this.y);
@@ -10098,12 +10237,11 @@
                 let aggroRange = this.visionRange * TILE;
                 let closest = null, closestD = aggroRange;
                 forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
-                    if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                     if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     let d = Math.sqrt(d2);
                     if (d < closestD) { closestD = d; closest = u; }
-                });
+                }, { enemyOfPlayer: this.owner });
                 if (closest) {
                     this.targetUnit = closest;
                     this.forcedAttackTarget = false;
@@ -10206,12 +10344,11 @@
                 let aggroRange = this.visionRange * TILE;
                 let closest = null, closestD = aggroRange;
                 forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
-                    if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                     if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     let d = Math.sqrt(d2);
                     if (d < closestD) { closestD = d; closest = u; }
-                });
+                }, { enemyOfPlayer: this.owner });
                 if (closest) {
                     this.targetUnit = closest;
                     this.forcedAttackTarget = false;
@@ -10498,14 +10635,13 @@
 
             doHolding() {
                 forEachUnitInRange(this.x, this.y, this.attackRange, (u) => {
-                    if (u.owner === this.owner || u.dead) return;
                     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                     if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
                     if (this.attackTimer <= 0) {
                         this._performAttackOnUnit(u);
                         return true;
                     }
-                });
+                }, { enemyOfPlayer: this.owner });
             }
 
             followPath(spd) {
@@ -13595,7 +13731,7 @@
                     level: _getTargetPriorityLevel(target),
                     isUpgrading: false
                 });
-            }, { includeDead: false });
+            }, { includeDead: false, player: u.owner });
 
             if (nearCandidates.length > 0) {
                 let nearPick = _pickDistributedWorkerTarget(u, nearCandidates);
@@ -14122,10 +14258,22 @@
                 let u = info.u;
                 let radiusPx = Math.max(0.5, Number(u.baseLevelVisionRange) || Number(u.visionRange) || 0.5) * TILE;
                 let similarCount = 0;
-                forEachUnitInRange(u.x, u.y, radiusPx, (other) => {
-                    if (!other || other.owner !== u.owner || other.unitType !== u.unitType) return;
-                    similarCount++;
-                });
+                if (CHUNK_SIZE === 1 && radiusPx <= (TILE * 0.51) && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplex.length > 0) {
+                    let owner = Math.floor(Number(u.owner));
+                    let typeIdx = spatialUnitTypeToIndex[u.unitType];
+                    let gx = Math.floor(u.x / TILE);
+                    let gy = Math.floor(u.y / TILE);
+                    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && Number.isFinite(typeIdx) && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                        let chunkKey = gy * CHUNKS_W + gx;
+                        let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                        similarCount = spatialUnitsComplex[playerBase + 1 + typeIdx] || 0;
+                    }
+                }
+                if (similarCount <= 0) {
+                    forEachUnitInRange(u.x, u.y, radiusPx, () => {
+                        similarCount++;
+                    }, { player: u.owner, unitType: u.unitType });
+                }
 
                 if (similarCount < 1) similarCount = 1;
                 let effStacks = Math.max(1, Math.floor(similarCount * info.baseStacks));
@@ -19172,17 +19320,42 @@
                 builder: 0,
                 healer: 0
             };
+            let hasFastWorkerTotals = false;
+
+            if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplex.length > 0) {
+                hasFastWorkerTotals = true;
+                let collectorIdx = spatialUnitTypeToIndex.collector;
+                let astarCollectorIdx = spatialUnitTypeToIndex.astar_collector;
+                let salvagerIdx = spatialUnitTypeToIndex.salvager_unit;
+                let researcherIdx = spatialUnitTypeToIndex.researcher_unit;
+                let builderIdx = spatialUnitTypeToIndex.builder_unit;
+                let healerIdx = spatialUnitTypeToIndex.healer_unit;
+
+                let chunkCount = CHUNKS_W * CHUNKS_H;
+                for (let chunkKey = 0; chunkKey < chunkCount; chunkKey++) {
+                    let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                    totalCounts.total += spatialUnitsComplex[playerBase] || 0;
+                    if (Number.isFinite(collectorIdx)) totalCounts.collector += spatialUnitsComplex[playerBase + 1 + collectorIdx] || 0;
+                    if (Number.isFinite(astarCollectorIdx)) totalCounts.astarCollector += spatialUnitsComplex[playerBase + 1 + astarCollectorIdx] || 0;
+                    if (Number.isFinite(salvagerIdx)) totalCounts.salvager += spatialUnitsComplex[playerBase + 1 + salvagerIdx] || 0;
+                    if (Number.isFinite(researcherIdx)) totalCounts.researcher += spatialUnitsComplex[playerBase + 1 + researcherIdx] || 0;
+                    if (Number.isFinite(builderIdx)) totalCounts.builder += spatialUnitsComplex[playerBase + 1 + builderIdx] || 0;
+                    if (Number.isFinite(healerIdx)) totalCounts.healer += spatialUnitsComplex[playerBase + 1 + healerIdx] || 0;
+                }
+            }
 
             for (let u of units) {
                 if (!u || u.dead || u.owner !== owner || !u.workerType) continue;
 
-                totalCounts.total++;
-                if (u.workerType === 'collector') totalCounts.collector++;
-                else if (u.workerType === 'astar_collector') totalCounts.astarCollector++;
-                else if (u.workerType === 'salvager') totalCounts.salvager++;
-                else if (u.workerType === 'researcher') totalCounts.researcher++;
-                else if (u.workerType === 'builder') totalCounts.builder++;
-                else if (u.workerType === 'healer') totalCounts.healer++;
+                if (!hasFastWorkerTotals) {
+                    totalCounts.total++;
+                    if (u.workerType === 'collector') totalCounts.collector++;
+                    else if (u.workerType === 'astar_collector') totalCounts.astarCollector++;
+                    else if (u.workerType === 'salvager') totalCounts.salvager++;
+                    else if (u.workerType === 'researcher') totalCounts.researcher++;
+                    else if (u.workerType === 'builder') totalCounts.builder++;
+                    else if (u.workerType === 'healer') totalCounts.healer++;
+                }
 
                 let isIdleLike = (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING);
                 if (!isIdleLike) continue;
