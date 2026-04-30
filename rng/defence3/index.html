@@ -4051,6 +4051,54 @@
             return baseValue + (cap - baseValue) * t;
         }
 
+        function getUnitStatFallbackValue(unitType, statKey) {
+            let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
+            let unitCfg = UNIT_FORMULA_CONFIG || {};
+            if (statKey === 'energy') return Math.max(1, Math.floor(Number(s.energy) || 1));
+            if (statKey === 'atk') return Math.max(0, Number(s.atk) || 0);
+            if (statKey === 'atkCd') return Math.max(0.01, Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5));
+            if (statKey === 'speed') return Math.max(0.1, Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1));
+            if (statKey === 'visionRange') return Math.max(0.25, Number(s.visionRange) || Math.max(0.25, Number(unitCfg.baseVisionFallback) || 4));
+            if (statKey === 'attackRange') return Math.max(0, Number(s.attackRange) || 0);
+            if (statKey === 'gatherPerTrip') return Math.max(0, Number(s.gatherPerTrip) || 0);
+            if (statKey === 'builderDps') return Math.max(0, Number(s.builderDps) || 0);
+            if (statKey === 'healerDps') return Math.max(0, Number(s.healerDps) || 0);
+            if (statKey === 'researcherDps') return Math.max(0, Number(s.researcherDps) || 0);
+            if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(s.transferCooldown) || 0.01) : 0;
+            if (statKey === 'astarCost') return Math.max(0.1, Number(s.astarCost) || 1);
+            return NaN;
+        }
+
+        function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
+            let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
+            let v = Number.isFinite(value) ? value : getUnitStatFallbackValue(unitType, statKey);
+            if (statKey === 'energy') return Math.max(1, Math.floor(v));
+            if (statKey === 'atk') return Math.max(0, Number(v) || 0);
+            if (statKey === 'atkCd') return Math.max(0.01, Number(v) || 0.01);
+            if (statKey === 'speed') return Math.max(0.1, Number(v) || 0.1);
+            if (statKey === 'visionRange') return Math.max(0.25, Number(v) || 0.25);
+            if (statKey === 'attackRange') return Math.max(0, Number(v) || 0);
+            if (statKey === 'gatherPerTrip') {
+                if (unitType === 'collector' || unitType === 'astar_collector') return Math.max(1, Number(v) || 1);
+                return 0;
+            }
+            if (statKey === 'builderDps') {
+                if (unitType === 'builder_unit') return Math.max(1, Math.round(Number(v) || 1));
+                return 0;
+            }
+            if (statKey === 'healerDps') {
+                if (unitType === 'healer_unit') return Math.max(1, Math.round(Number(v) || 1));
+                return 0;
+            }
+            if (statKey === 'researcherDps') {
+                if (unitType === 'researcher_unit') return Math.max(1, Math.round(Number(v) || 1));
+                return 0;
+            }
+            if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(v) || 0.01) : 0;
+            if (statKey === 'astarCost') return Math.max(0.1, Number(v) || 1);
+            return v;
+        }
+
         function computeBaseUnitStatsAtLevel(unitType, level) {
             let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
             let lvl = Math.max(1, clampThingLevel(level));
@@ -4312,7 +4360,8 @@
                         let maxValueBeforeCap = applyResearchLevelToBaseValue('unit', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL);
                         for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                             let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r);
-                            arr[r] = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
+                            let capped = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
+                            arr[r] = normalizePrecomputedUnitStatValue(unitType, statKey, capped);
                         }
                         levelEntry[statKey] = arr;
                     }
@@ -4355,8 +4404,8 @@
             let lvl = clampThingLevel(level);
             let rLvl = clampResearchLevel(researchLevel);
             let arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
-            if (!arr) return NaN;
-            return arr[rLvl];
+            if (!arr) return normalizePrecomputedUnitStatValue(key, statKey, NaN);
+            return normalizePrecomputedUnitStatValue(key, statKey, arr[rLvl]);
         }
 
         function getBuildingStatFromMap(buildingKey, level, statKey, researchLevel = 0) {
@@ -4811,49 +4860,24 @@
         function computeUnitLevelScaledStats(unit, level) {
             if (!unit) return null;
             let lvl = Math.max(1, clampThingLevel(level || 1));
+            let unitType = unit.unitType || 'norm';
+            let owner = Number.isFinite(unit.owner) ? unit.owner : localPlayerId;
 
-            let maxEnergy = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'energy');
-            let attackDamage = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atk');
-            let attackCooldownSec = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'atkCd');
-            let speed = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'speed');
-            let visionRange = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'visionRange');
-            let attackRangeTiles = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'attackRange');
-            let gatherPerTrip = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'gatherPerTrip');
-            let builderDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'builderDps');
-            let healerDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'healerDps');
-            let researcherDps = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'researcherDps');
-            let transferCooldownSec = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'transferCooldown');
-            let astarCost = getUnitStatForOwner(unit.owner, unit.unitType, lvl, 'astarCost');
+            let maxEnergy = getUnitStatForOwner(owner, unitType, lvl, 'energy');
+            let attackDamage = getUnitStatForOwner(owner, unitType, lvl, 'atk');
+            let attackCooldownSec = getUnitStatForOwner(owner, unitType, lvl, 'atkCd');
+            let speed = getUnitStatForOwner(owner, unitType, lvl, 'speed');
+            let visionRange = getUnitStatForOwner(owner, unitType, lvl, 'visionRange');
+            let attackRangeTiles = getUnitStatForOwner(owner, unitType, lvl, 'attackRange');
+            let gatherPerTrip = getUnitStatForOwner(owner, unitType, lvl, 'gatherPerTrip');
+            let builderDps = getUnitStatForOwner(owner, unitType, lvl, 'builderDps');
+            let healerDps = getUnitStatForOwner(owner, unitType, lvl, 'healerDps');
+            let researcherDps = getUnitStatForOwner(owner, unitType, lvl, 'researcherDps');
+            let transferCooldownSec = getUnitStatForOwner(owner, unitType, lvl, 'transferCooldown');
+            let astarCost = getUnitStatForOwner(owner, unitType, lvl, 'astarCost');
 
-            if (!Number.isFinite(maxEnergy)) maxEnergy = Math.max(1, Math.floor(unit.baseEnergy || unit.maxEnergy || 1));
-            if (!Number.isFinite(attackDamage)) attackDamage = Math.max(0, Number(unit.baseAttackDamage || unit.attackDamage || 0));
-            if (!Number.isFinite(attackCooldownSec)) {
-                let fallbackTicks = Math.max(1, Number(unit.baseAttackCooldown || unit.attackCooldown || secondsToTicks(1.5)));
-                attackCooldownSec = fallbackTicks / TICK_RATE;
-            }
-            if (!Number.isFinite(speed)) speed = Math.max(0.1, Number(unit.baseSpeed || unit.speed || 1));
-            if (!Number.isFinite(visionRange)) visionRange = Math.max(0.25, Number(unit.baseVisionRange || unit.visionRange || 4));
-            if (!Number.isFinite(attackRangeTiles)) attackRangeTiles = Math.max(0, Number(unit.baseAttackRange || (unit.attackRange / TILE) || 0));
-
-            maxEnergy = Math.max(1, Math.floor(maxEnergy));
-            attackDamage = Math.max(0, Number(attackDamage) || 0);
             let attackCooldown = secondsToTicks(attackCooldownSec);
-            speed = Math.max(0.1, Number(speed) || 0.1);
-            visionRange = Math.max(0.25, Number(visionRange) || 0.25);
-            let attackRange = Math.max(0, Number(attackRangeTiles) || 0) * TILE;
-
-            if (!Number.isFinite(builderDps)) builderDps = 0;
-            if (!Number.isFinite(healerDps)) healerDps = 0;
-            if (!Number.isFinite(researcherDps)) researcherDps = 0;
-            if (!Number.isFinite(gatherPerTrip)) gatherPerTrip = 0;
-            if (!Number.isFinite(transferCooldownSec)) transferCooldownSec = Number((BASE_UNIT_STATS[unit.unitType] || {}).transferCooldown);
-            if (!Number.isFinite(astarCost)) astarCost = Number((BASE_UNIT_STATS[unit.unitType] || {}).astarCost);
-            if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') gatherPerTrip = Math.max(1, Number(gatherPerTrip) || 1);
-            if (unit.workerType === 'builder') builderDps = Math.max(1, Math.round(builderDps));
-            if (unit.workerType === 'healer') healerDps = Math.max(1, Math.round(healerDps));
-            if (unit.workerType === 'researcher') researcherDps = Math.max(1, Math.round(researcherDps));
-            if (unit.workerType) transferCooldownSec = Math.max(0.01, Number(transferCooldownSec) || 0.01);
-            astarCost = Math.max(0.1, Number(astarCost) || 1);
+            let attackRange = attackRangeTiles * TILE;
             let transferCooldownTicks = unit.workerType ? secondsToTicks(transferCooldownSec) : 0;
 
             return {
@@ -6238,6 +6262,7 @@
             let r = Math.max(0, Number(rangePx) || 0);
             let pad = (opts && Number.isFinite(opts.pad)) ? Math.max(0, opts.pad) : TILE;
             let scan = r + pad;
+            let chunkWorldSize = CHUNK_SIZE * TILE;
             let minCx = Math.floor((wx - scan) / (CHUNK_SIZE * TILE));
             let maxCx = Math.floor((wx + scan) / (CHUNK_SIZE * TILE));
             let minCy = Math.floor((wy - scan) / (CHUNK_SIZE * TILE));
@@ -6252,12 +6277,28 @@
             let chunkCols = CHUNKS_W;
             let chunks = spatialUnits;
 
+            function chunkCanIntersectCircle(cx, cy) {
+                if (!exact) return true;
+                let minX = cx * chunkWorldSize;
+                let minY = cy * chunkWorldSize;
+                let maxX = minX + chunkWorldSize;
+                let maxY = minY + chunkWorldSize;
+                let nearestX = wx < minX ? minX : (wx > maxX ? maxX : wx);
+                let nearestY = wy < minY ? minY : (wy > maxY ? maxY : wy);
+                let dx = wx - nearestX;
+                let dy = wy - nearestY;
+                return (dx * dx + dy * dy) <= radiusSq;
+            }
+
             // Fast path for the common case used by combat/vision scans.
             if (!includeDead && exact && !predicate) {
                 for (let cy = minCy; cy <= maxCy; cy++) {
                     let rowBase = cy * chunkCols;
                     for (let cx = minCx; cx <= maxCx; cx++) {
-                        for (let u of chunks[rowBase + cx]) {
+                        let chunk = chunks[rowBase + cx];
+                        if (!chunk || chunk.size <= 0) continue;
+                        if (!chunkCanIntersectCircle(cx, cy)) continue;
+                        for (let u of chunk) {
                             if (u.dead) continue;
                             let dx = u.x - wx, dy = u.y - wy;
                             let d2 = dx * dx + dy * dy;
@@ -6272,7 +6313,10 @@
             for (let cy = minCy; cy <= maxCy; cy++) {
                 let rowBase = cy * chunkCols;
                 for (let cx = minCx; cx <= maxCx; cx++) {
-                    for (let u of chunks[rowBase + cx]) {
+                    let chunk = chunks[rowBase + cx];
+                    if (!chunk || chunk.size <= 0) continue;
+                    if (!chunkCanIntersectCircle(cx, cy)) continue;
+                    for (let u of chunk) {
                         if (!includeDead && u.dead) continue;
                         let dx = u.x - wx, dy = u.y - wy;
                         let d2 = dx * dx + dy * dy;
