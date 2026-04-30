@@ -1444,11 +1444,11 @@
             <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
                 <div class="lobby-setting-row" style="margin:0;">
                     <label for="cfg-unit-eff-stats-ticks">Unit Stats Update Delay (ticks)</label>
-                    <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
+                    <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="10" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
                 </div>
                 <div class="lobby-setting-row" style="margin:0;">
                     <label for="cfg-unit-collision-ticks">Unit Collision Update Delay (ticks)</label>
-                    <input id="cfg-unit-collision-ticks" type="number" min="1" max="240" value="5" style="width:72px" title="How many ticks between unit-to-unit separation checks per unit">
+                    <input id="cfg-unit-collision-ticks" type="number" min="1" max="240" value="10" style="width:72px" title="How many ticks between unit-to-unit separation checks per unit">
                 </div>
                 <div class="lobby-setting-row" style="margin:0;">
                     <label for="cfg-astar-iter-budget-per-player">A* Iter Budget / Player / Tick</label>
@@ -1768,7 +1768,9 @@
         // ============================================================
         // UTILS
         // ============================================================
-        function formatBigNumber(n, d = 1) {
+        let activeFormatBigNumberSuffixStart = null;
+
+        function formatBigNumber(n, d = 1, suffixStart = undefined) {
             if (n == null) return "...";
             if (typeof n === 'string') return n;
             if (!Number.isFinite(n)) return '' + n;
@@ -1776,7 +1778,12 @@
             let decimals = Math.max(1, Math.floor(Number.isFinite(d) ? d : 1));
             let sign = n < 0 ? '-' : '';
             let abs = Math.abs(n);
-            if (abs < 1000000) return sign + abs.toFixed(decimals);
+            let suffixThresholdRaw = (suffixStart === undefined)
+                ? activeFormatBigNumberSuffixStart
+                : suffixStart;
+            let suffixThreshold = Number(suffixThresholdRaw);
+            if (!Number.isFinite(suffixThreshold) || suffixThreshold <= 0) suffixThreshold = 1000000;
+            if (abs < suffixThreshold) return sign + abs.toFixed(decimals);
 
             const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
             let tier = Math.floor(Math.log10(abs) / 3);
@@ -4913,7 +4920,7 @@
             unit.baseLevelAttackCooldown = scaled.attackCooldown;
             unit.baseLevelSpeed = scaled.speed;
             unit.baseLevelVisionRange = scaled.visionRange;
-            unit.baseLevelAttackRange = scaled.attackRange;
+            unit.baseLevelAttackRange = scaled.attackRange / TILE;
             unit.baseLevelAstarCost = scaled.astarCost;
             if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.baseLevelGatherPerTrip = scaled.gatherPerTrip;
             if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
@@ -6180,7 +6187,7 @@
         }
 
         // Spatial hash (10x10 tile chunks)
-        const CHUNK_SIZE = 10;
+        const CHUNK_SIZE = 1;
         let CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
         let CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
         let spatialUnits = []; // flat array of Sets
@@ -6472,6 +6479,7 @@
                 u.pathIndex = (path.length > 1 && path[0].x === ugx && path[0].y === ugy) ? 1 : 0;
                 u.pathIsFallbackAstar = false;
                 u.commandState = pt.cmd;
+                u._pendingPathTarget = null;
                 return;
             }
             if (_lastPathfindAbortedByBudget) _setUnitAstarBudgetBlockedIndicator(u);
@@ -7139,6 +7147,7 @@
             let astarIterations = 0;
             let abortedByBudget = false;
             let budgetOwner = Number.isFinite(pathOwner) ? pathOwner : _activePathfindOwner;
+            let partialResumeKey = -1;
 
             // Bump epoch; on overflow reset arrays
             if (++_astarEpoch > 2000000000) {
@@ -7214,12 +7223,14 @@
                 if (!_tryConsumeAstarNodeBudget(budgetOwner, 1)) {
                     abortedByBudget = true;
                     _lastPathfindAbortedByBudget = true;
+                    partialResumeKey = curKey;
                     break;
                 }
                 astarIterations++;
                 if (astarIterations > maxAstarIterations) {
                     abortedByBudget = true;
                     _lastPathfindAbortedByBudget = true;
+                    partialResumeKey = curKey;
                     break;
                 }
 
@@ -7268,7 +7279,7 @@
 
             if (abortedByBudget && movementProfile && cacheKey) {
                 let partialPath = [];
-                let pk = _astarHeapSz > 0 ? _astarHeapK[0] : -1;
+                let pk = partialResumeKey >= 0 ? partialResumeKey : (_astarHeapSz > 0 ? _astarHeapK[0] : -1);
                 if (!(pk >= 0)) {
                     // Fallback: at least keep current local start so next attempt can resume deterministically.
                     partialPath = [{ x: sx, y: sy }];
@@ -8556,6 +8567,59 @@
             return null;
         }
 
+        function getEntityStatsCalcType(e) {
+            if (!e) return '';
+            if (e.type === 'barrack' && e.unitType) return 'barrack_' + e.unitType;
+            return e.type || '';
+        }
+
+        function getEntityBaseVisibilityRangeTiles(e) {
+            if (!e) return null;
+            let statsType = getEntityStatsCalcType(e);
+            let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+            if (statsType) {
+                let s = calculateItemStats(statsType, baseLevel, e.owner);
+                if (s && Number.isFinite(s.visionRange)) return s.visionRange;
+            }
+            if (Number.isFinite(e.baseLevelVisionRange)) return e.baseLevelVisionRange;
+            return getEntityVisibilityRangeTiles(e);
+        }
+
+        function getEntityEffectiveVisibilityRangeTiles(e) {
+            if (!e) return null;
+            let statsType = getEntityStatsCalcType(e);
+            let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
+            if (statsType) {
+                let s = calculateItemStats(statsType, effLevel, e.owner);
+                if (s && Number.isFinite(s.visionRange)) return s.visionRange;
+            }
+            return getEntityVisibilityRangeTiles(e);
+        }
+
+        function getEntityBaseEnergyMax(e) {
+            if (!e) return 0;
+            let statsType = getEntityStatsCalcType(e);
+            let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+            if (statsType) {
+                let s = calculateItemStats(statsType, baseLevel, e.owner);
+                if (s && Number.isFinite(s.maxEnergy)) return Math.max(1, Math.floor(s.maxEnergy));
+            }
+            return getEntityEnergyDisplayMax(e);
+        }
+
+        function getEntityEffectiveEnergyMax(e) {
+            if (!e) return 0;
+            let statsType = getEntityStatsCalcType(e);
+            let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+            let effLevel = getThingEffectiveLevel(e, baseLevel);
+            if (statsType) {
+                let s = calculateItemStats(statsType, effLevel, e.owner);
+                if (s && Number.isFinite(s.maxEnergy)) return Math.max(1, Math.floor(s.maxEnergy));
+            }
+            return getEntityEnergyDisplayMax(e);
+        }
+
         function getUnitRenderActionRangePx(u) {
             if (!u) return 0;
             // Worker interaction checks use a fixed touch distance in AI logic.
@@ -8960,27 +9024,46 @@
         let _frameDrawImageQueue = [];
         let _frameDrawImageContexts = new Set();
         let _frameDrawImageCurrentZ = 0;
+        let _frameDrawImageFrameId = 0;
         let _frameDrawImageIdCounter = 1;
         const _frameDrawImageIdBySource = new WeakMap();
+        const _frameDrawImageCtxStateCache = new WeakMap();
+
+        function _setDrawImageTrackedTransform(ctx, a, b, c, d, e, f) {
+            ctx.setTransform(a, b, c, d, e, f);
+            let st = _frameDrawImageCtxStateCache.get(ctx);
+            if (!st) st = {};
+            st.frameId = _frameDrawImageFrameId;
+            st.ta = a; st.tb = b; st.tc = c; st.td = d; st.te = e; st.tf = f;
+            _frameDrawImageCtxStateCache.set(ctx, st);
+        }
 
         function _captureDrawImageCtxState(ctx) {
-            let t = ctx.getTransform();
-            return {
-                ta: t.a,
-                tb: t.b,
-                tc: t.c,
-                td: t.d,
-                te: t.e,
-                tf: t.f,
-                alpha: ctx.globalAlpha,
-                comp: ctx.globalCompositeOperation,
-                smooth: ctx.imageSmoothingEnabled,
-                filter: ctx.filter || 'none'
-            };
+            let st = _frameDrawImageCtxStateCache.get(ctx);
+            if (!st) st = {};
+            if (st.frameId !== _frameDrawImageFrameId ||
+                !Number.isFinite(st.ta) || !Number.isFinite(st.tb) || !Number.isFinite(st.tc) ||
+                !Number.isFinite(st.td) || !Number.isFinite(st.te) || !Number.isFinite(st.tf)) {
+                let t = ctx.getTransform();
+                st.frameId = _frameDrawImageFrameId;
+                st.ta = t.a;
+                st.tb = t.b;
+                st.tc = t.c;
+                st.td = t.d;
+                st.te = t.e;
+                st.tf = t.f;
+            }
+            st.alpha = ctx.globalAlpha;
+            st.comp = ctx.globalCompositeOperation;
+            st.smooth = ctx.imageSmoothingEnabled;
+            st.filter = ctx.filter || 'none';
+            _frameDrawImageCtxStateCache.set(ctx, st);
+            return st;
         }
 
         function beginFrameDrawImageQueue() {
             _frameDrawImageQueueActive = true;
+            _frameDrawImageFrameId++;
             _frameDrawImageQueue.length = 0;
             _frameDrawImageContexts.clear();
             _frameDrawImageCurrentZ = 0;
@@ -8990,11 +9073,15 @@
             _frameDrawImageCurrentZ = Number.isFinite(z) ? z : 0;
         }
 
-        function queueDrawImage(ctx, image, ...args) {
+        function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
             if (!ctx || !image) return;
+            let argc = arguments.length - 2;
 
             if (!_frameDrawImageQueueActive) {
-                ctx.drawImage(image, ...args);
+                if (argc === 2) ctx.drawImage(image, a0, a1);
+                else if (argc === 4) ctx.drawImage(image, a0, a1, a2, a3);
+                else if (argc === 8) ctx.drawImage(image, a0, a1, a2, a3, a4, a5, a6, a7);
+                else ctx.drawImage(image, a0, a1);
                 return;
             }
 
@@ -9010,7 +9097,15 @@
             _frameDrawImageQueue.push({
                 ctx,
                 image,
-                args,
+                argc,
+                a0,
+                a1,
+                a2,
+                a3,
+                a4,
+                a5,
+                a6,
+                a7,
                 z: _frameDrawImageCurrentZ,
                 imageId,
                 ta: st.ta,
@@ -9093,7 +9188,10 @@
                         }
                         liveStateByCtx.set(c, s);
 
-                        c.drawImage(cmd.image, ...cmd.args);
+                        if (cmd.argc === 2) c.drawImage(cmd.image, cmd.a0, cmd.a1);
+                        else if (cmd.argc === 4) c.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3);
+                        else if (cmd.argc === 8) c.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3, cmd.a4, cmd.a5, cmd.a6, cmd.a7);
+                        else c.drawImage(cmd.image, cmd.a0, cmd.a1);
                     }
                 }
             }
@@ -10045,6 +10143,7 @@
                     return;
                 }
                 if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
+                    if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
                     // Keep move command active while waiting for deferred pathfinding.
                     return;
                 }
@@ -10127,6 +10226,7 @@
                     return;
                 }
                 if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
+                    if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
                     // Keep attack-move active while waiting for deferred pathfinding.
                     return;
                 }
@@ -11507,12 +11607,11 @@
 
             if (u.workerState === 'MANUAL_MOVE') {
                 if ((!u.path || u.pathIndex >= u.path.length) && u._pendingPathTarget) {
-                    if (!u.pathIsFallbackAstar) {
-                        return;
+                    if (u.pathIsFallbackAstar) {
+                        _tryUpgradeAstarFallbackPath(u);
                     }
-                    // Fallback move got blocked and has no active path; hand control back to worker AI.
-                    u._pendingPathTarget = null;
-                    u.pathIsFallbackAstar = false;
+                    // Keep manual move active while deferred pathfinding catches up.
+                    return;
                 }
                 if (!u.path || u.pathIndex >= u.path.length) {
                     u._workerNextIdleRetargetTick = gameTime;
@@ -13726,8 +13825,6 @@
                 }
             }
 
-            towers.forEach(t => { t.effectiveStacks = t.stacks; });
-
             const areaSignatureCache = new Map();
             const getAreaSignatureKey = (aId) => {
                 if (areaSignatureCache.has(aId)) return areaSignatureCache.get(aId);
@@ -13819,23 +13916,32 @@
 
                 let groupSize = group.length;
                 for (let obj of group) {
-                    obj.stacks = getThingStackedStacks(obj);
-                    obj.manualStacks = getThingManualStacks(obj);
-                    let actualStacks = obj.stacks || 1;
-                    obj.effectiveStacks = actualStacks * groupSize * areaMult;
+                    let nextStacks = getThingStackedStacks(obj);
+                    let nextManualStacks = getThingManualStacks(obj);
+                    let actualStacks = nextStacks || 1;
+                    let nextEffectiveStacks = actualStacks * groupSize * areaMult;
+                    let nextPotentialLevel = stackCountToLevel(nextEffectiveStacks);
+                    let nextEffectiveLevel = (obj.effectiveLevel === undefined)
+                        ? 1
+                        : Math.max(1, Math.floor(obj.effectiveLevel));
+                    let nextIsUpgrading = !!obj.isUpgrading;
 
-                    let potentialLevel = stackCountToLevel(obj.effectiveStacks);
-                    obj.potentialEffectiveLevel = potentialLevel;
-                    if (obj.effectiveLevel === undefined) obj.effectiveLevel = 1;
-
-                    if (obj.potentialEffectiveLevel < obj.effectiveLevel) {
-                        obj.effectiveLevel = obj.potentialEffectiveLevel;
-                        obj.isUpgrading = false;
+                    if (nextPotentialLevel < nextEffectiveLevel) {
+                        nextEffectiveLevel = nextPotentialLevel;
+                        nextIsUpgrading = false;
                     }
 
-                    if (!isAutoUpgradeEnabled(obj) && obj.isUpgrading) {
-                        obj.isUpgrading = false;
+                    if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
+                        nextIsUpgrading = false;
                     }
+
+                    // Commit effective values only after deriving final state to avoid transient flicker.
+                    obj.stacks = nextStacks;
+                    obj.manualStacks = nextManualStacks;
+                    obj.effectiveStacks = nextEffectiveStacks;
+                    obj.potentialEffectiveLevel = nextPotentialLevel;
+                    obj.effectiveLevel = nextEffectiveLevel;
+                    obj.isUpgrading = nextIsUpgrading;
 
                     if (obj.potentialEffectiveLevel > obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
                         beginUpgradeProgress(obj, obj.effectiveLevel + 1);
@@ -13928,6 +14034,9 @@
                     || !Number.isFinite(u.baseLevelmaxEnergy)
                     || !Number.isFinite(u.effectiveLevel)
                     || !Number.isFinite(u.effectiveStacks);
+
+                // Keep selected units up-to-date in the stats panel despite staggered recalculation.
+                if (!needsImmediate && selectedUnits && selectedUnits.includes(u)) needsImmediate = true;
 
                 if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
                     dueUnits.push(u);
@@ -14331,18 +14440,24 @@
         // ============================================================
         const TOWER_ICON_SPRITE_CACHE = new Map();
         const TOWER_ICON_SPRITE_CACHE_MAX = 1024;
+        const TOWER_ICON_ANGLE_STEPS = 32;
+        const TOWER_ICON_ANGLE_TABLE = (() => {
+            let table = new Float32Array(TOWER_ICON_ANGLE_STEPS);
+            let tau = Math.PI * 2;
+            for (let i = 0; i < TOWER_ICON_ANGLE_STEPS; i++) table[i] = (i / TOWER_ICON_ANGLE_STEPS) * tau;
+            return table;
+        })();
 
-        function _quantizeTowerAngle(angle) {
+        function _quantizeTowerAngleIndex(angle) {
             let a = Number.isFinite(angle) ? angle : 0;
-            let steps = 32;
             let tau = Math.PI * 2;
             a = ((a % tau) + tau) % tau;
-            let idx = Math.round((a / tau) * steps) % steps;
-            return (idx / steps) * tau;
+            return Math.round((a / tau) * TOWER_ICON_ANGLE_STEPS) % TOWER_ICON_ANGLE_STEPS;
         }
 
         function _getTowerIconSprite(color, angle, type, active) {
-            let key = `${type || ''}|${String(color || '')}|${String(!!active)}|${_quantizeTowerAngle(angle).toFixed(3)}`;
+            let qIdx = _quantizeTowerAngleIndex(angle);
+            let key = (type || '') + '|' + String(color || '') + '|' + (active ? '1' : '0') + '|' + qIdx;
             let cached = TOWER_ICON_SPRITE_CACHE.get(key);
             if (cached) return cached;
 
@@ -14351,7 +14466,7 @@
             c.height = 32;
             let g = c.getContext('2d');
             let cx = 16, cy = 16;
-            let qa = _quantizeTowerAngle(angle);
+            let qa = TOWER_ICON_ANGLE_TABLE[qIdx];
 
             if (type === 'laser') {
                 g.fillStyle = '#222'; g.beginPath(); g.arc(cx, cy, 10, 0, 6.28); g.fill();
@@ -14390,12 +14505,24 @@
 
         const PROGRESS_BAR_SPRITE_CACHE = new Map();
         const PROGRESS_BAR_SPRITE_CACHE_MAX = 4096;
+        const PROGRESS_BAR_STYLE_ID = new Map();
+        let _progressBarStyleIdCounter = 1;
+
+        function _getProgressBarStyleId(bgColor, fillColor) {
+            let styleKey = String(bgColor) + '|' + String(fillColor);
+            let id = PROGRESS_BAR_STYLE_ID.get(styleKey);
+            if (id) return id;
+            id = _progressBarStyleIdCounter++;
+            PROGRESS_BAR_STYLE_ID.set(styleKey, id);
+            return id;
+        }
 
         function _getProgressBarSprite(width, height, bgColor, fillColor, pctInt) {
             let w = Math.max(1, Math.floor(width || 1));
             let h = Math.max(1, Math.floor(height || 1));
             let p = Math.max(0, Math.min(100, Math.floor(pctInt || 0)));
-            let key = w + 'x' + h + '|' + bgColor + '|' + fillColor + '|' + p;
+            let styleId = _getProgressBarStyleId(bgColor, fillColor);
+            let key = styleId + '|' + ((w << 8) | h) + '|' + p;
             let cached = PROGRESS_BAR_SPRITE_CACHE.get(key);
             if (cached) return cached;
 
@@ -14422,16 +14549,20 @@
             let sprite = _getProgressBarSprite(w, h, bgColor, fillColor, pctInt);
             let x = Math.round(centerX - w / 2);
             let py = Math.round(y);
-            queueDrawImage(ctx, sprite, x, py, w, h);
+            queueDrawImage(ctx, sprite, x, py);
         }
 
         function drawBuildingEnergyProgressBar(ctx, entity, centerX, y, width = 24, height = 3) {
-            let maxEnergy = entity && entity.maxEnergy ? entity.maxEnergy : 0;
+            let maxEnergy = Number(entity && entity.maxEnergy) || 0;
             if (maxEnergy <= 0) return false;
-            let energy = Math.max(0, Math.min(entity.energy || 0, maxEnergy));
+            let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
             let pct = energy / maxEnergy;
             let isProgress = !!(entity.underConstruction || entity.isUpgrading);
-            let hasStackQueue = !!entity && getThingManualStacks(entity) > getThingStackedStacks(entity);
+            let manualStacks = Number(entity && entity.manualStacks);
+            let stackedStacks = Number(entity && entity.stacks);
+            let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
+                ? (manualStacks > stackedStacks)
+                : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
             if (!isProgress && !hasStackQueue && energy >= maxEnergy) return false;
             if (hasStackQueue) {
                 let stackPct = getThingStackingProgressRatio(entity);
@@ -15314,9 +15445,9 @@
             ctx.save();
             let dpr = window.devicePixelRatio || 1;
             // Clear dynamic layer only; static world is drawn to bgCanvas
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            _setDrawImageTrackedTransform(ctx, dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, viewW, viewH);
-            ctx.setTransform(camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
+            _setDrawImageTrackedTransform(ctx, camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
 
             // Fallback (if bg layer context is unavailable)
             if (!bgCtx) {
@@ -16129,7 +16260,10 @@
                         let u = pending[i];
                         let pt = u && u._pendingPathTarget;
                         if (!u || u.dead || !pt) continue;
-                        if (u.pathIsFallbackAstar) continue;
+                        if (u.pathIsFallbackAstar) {
+                            _tryUpgradeAstarFallbackPath(u);
+                            continue;
+                        }
                         if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
                         if (!_canUsePathfindRequestBudget(u.owner)) {
                             _markUnitAstarBudgetBlocked(u);
@@ -17928,6 +18062,25 @@
             }
         }
 
+        function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {
+            if (!assigningUnit || !target || !assigningUnit.workerState) return;
+            for (let other of units) {
+                if (!other || other === assigningUnit || other.dead || !other.workerState) continue;
+                if (other.owner !== assigningUnit.owner) continue;
+                if (other.workerType !== assigningUnit.workerType) continue;
+                if (other.workerTarget !== target) continue;
+                if (other.workerTargetType !== targetType) continue;
+
+                _clearWorkerTarget(other);
+                clearWorkerTaskMemoryForFreeRetarget(other);
+                other.path = null;
+                other.pathIndex = 0;
+                other._pendingPathTarget = null;
+                other.commandState = CMD_IDLE;
+                other.workerState = 'IDLE';
+            }
+        }
+
         function getUnitStackCount(u) {
             if (!u) return 1;
             if (Number.isFinite(u.stackCount) && u.stackCount >= 1) return Math.floor(u.stackCount);
@@ -18346,6 +18499,7 @@
                             // Generic lookup: includes both under-construction and upgrading targets.
                             let target = _getBuilderWorkTargetAt(a.targetGx, a.targetGy, playerId, true);
                             if (target) {
+                                _releaseManualWorkerAssignmentConflicts(u, target, null);
                                 if (!_canAssignWorkerTargetExclusive(u, target, null)) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
@@ -18359,6 +18513,7 @@
                         } else if (u.workerType === 'collector' && (a.targetType === 'mine' || a.targetType === 'farm')) {
                             let gather = _getCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
                             if (gather && _isCollectorTargetValid(gather.target, gather.type, playerId)) {
+                                _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
                                 if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
@@ -18371,6 +18526,7 @@
                         } else if (u.workerType === 'astar_collector' && (a.targetType === 'astar_mine' || a.targetType === 'astar_farm')) {
                             let gather = _getAstarCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
                             if (gather && _isAstarCollectorTargetValid(gather.target, gather.type, playerId)) {
+                                _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
                                 if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
@@ -18384,6 +18540,7 @@
                             let qTarget = getTileEntityRef(a.targetGx, a.targetGy);
                             if (!(qTarget && qTarget.owner === playerId && ((qTarget instanceof Barrack) || isSpawnerEntity(qTarget)))) qTarget = null;
                             if (_isHealerQueueAnchorTarget(qTarget, playerId)) {
+                                _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
                                 if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
@@ -18398,6 +18555,7 @@
                             let rTarget = getTileEntityRef(a.targetGx, a.targetGy);
                             if (!_isResearcherTargetBuilding(rTarget, playerId)) rTarget = null;
                             if (rTarget) {
+                                _releaseManualWorkerAssignmentConflicts(u, rTarget, 'research');
                                 if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) {
                                     issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                                     continue;
@@ -19655,7 +19813,7 @@
                 let opts = matrixOpts || deriveInfoPanelMatrixOptsFromLabel(labelHtml);
                 if (opts) labelHtml = withInfoPanelStatMatrixButton(labelHtml, opts);
             }
-            if (effValue !== undefined && effValue !== value) {
+            if (effValue !== undefined) {
                 return `<div class="info-row"><span class="info-label">${labelHtml}</span><span class="info-base">${formatInfoRowValue(value)}</span><span class="info-eff">${formatInfoRowValue(effValue)}</span></div>`;
             }
             return `<div class="info-row"><span class="info-label">${labelHtml}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
@@ -20291,7 +20449,7 @@
             };
             if (!hasEff) return infoRow('Stacks', baseText, undefined, matrixOpts);
             let effText = getStackProgressText(effStacks, manualStacks);
-            return infoRow('Stacks', baseText, effText !== baseText ? effText : undefined, matrixOpts);
+            return infoRow('Stacks', baseText, effText, matrixOpts);
         }
 
         function renderBarrackInfo(e) {
@@ -20303,12 +20461,15 @@
             let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
             let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
             let upg = getNextLevelUpgradeInfo(e);
-            let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), getEntityEnergyDisplayMax(e)));
+            let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
+            let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+            let baseMaxEnergy = getEntityBaseEnergyMax(e);
+            let effMaxEnergy = getEntityEffectiveEnergyMax(e);
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
             html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
             // // html += infoRow('Upgrade', `${upg.goldCost}g, ENERGY ${upg.energyNow}->${upg.energyNext}`);
             html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
             html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
@@ -20352,16 +20513,27 @@
             let uAtk = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'atk');
             let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
             let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
-            let visTiles = getEntityVisibilityRangeTiles(e);
+            let totalBaseMaxEnergy = 0;
+            let totalEffMaxEnergy = 0;
+            let totalBaseVis = 0;
+            let totalEffVis = 0;
             let readyGroup = group.filter(b => !b.underConstruction);
-            let totalEnergy = 0, totalmaxEnergy = 0, totalQueue = 0;
-            for (let b of group) { totalEnergy += b.energy; totalmaxEnergy += getEntityEnergyDisplayMax(b); }
+            let totalEnergy = 0, totalQueue = 0;
+            for (let b of group) {
+                totalEnergy += b.energy;
+                totalBaseMaxEnergy += getEntityBaseEnergyMax(b);
+                totalEffMaxEnergy += getEntityEffectiveEnergyMax(b);
+                totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(b)) || 0;
+                totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(b)) || 0;
+            }
             for (let b of readyGroup) totalQueue += b.spawnQueue.length;
             html += infoRow('Count', group.length);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
+            let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+            html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
             html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
             html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
             html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
@@ -20412,22 +20584,26 @@
             let upg = getNextLevelUpgradeInfo(e);
             let dps = s.cd > 0 ? (s.damage / s.cd).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
-            let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
-            let effVis = Number(s.visionRange || 0);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), getEntityEnergyDisplayMax(e)));
+            let baseVis = Number(getEntityBaseVisibilityRangeTiles(e));
+            let effVis = Number(getEntityEffectiveVisibilityRangeTiles(e));
+            if (!Number.isFinite(baseVis)) baseVis = 0;
+            if (!Number.isFinite(effVis)) effVis = baseVis;
+            let baseMaxEnergy = getEntityBaseEnergyMax(e);
+            let effMaxEnergy = getEntityEffectiveEnergyMax(e);
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
             html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
+            html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
             if (e.type !== 'laser') {
-                html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${(s.cd || 0).toFixed(2)}s` : undefined);
-                html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
+                html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+                html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
+                html += infoRow('DPS', baseDps, dps);
             } else {
                 html += infoRow('DPS', `${(s.damage / 60 * TICK_RATE).toFixed(1)}/s`);
                 html += infoRow('Connections', e.connectedLasers.length);
-                html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
+                html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
             }
             if (e.type === 'fire') {
                 let burnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
@@ -20476,29 +20652,35 @@
         function renderTowerGroupInfo(group) {
             let html = '';
             let e = group[0];
-            let totalEnergy = 0, totalmaxEnergy = 0;
-            for (let t of group) { totalEnergy += t.energy; totalmaxEnergy += getEntityEnergyDisplayMax(t); }
+            let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
+            for (let t of group) {
+                totalEnergy += t.energy;
+                totalBaseMaxEnergy += getEntityBaseEnergyMax(t);
+                totalEffMaxEnergy += getEntityEffectiveEnergyMax(t);
+            }
             let s = e.currentStats || e.baseStats;
             let bs = e.baseStats;
             let baseLevel = stackCountToLevel(e.stacks || 1);
             let effLevel = getThingEffectiveLevel(e, baseLevel);
             let dps = s.cd > 0 ? (s.damage / s.cd).toFixed(1) : '0';
             let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
-            let baseVis = bs ? Number(bs.visionRange || 0) : Number(s.visionRange || 0);
-            let effVis = Number(s.visionRange || 0);
+            let baseVis = Number(getEntityBaseVisibilityRangeTiles(e));
+            let effVis = Number(getEntityEffectiveVisibilityRangeTiles(e));
+            if (!Number.isFinite(baseVis)) baseVis = 0;
+            if (!Number.isFinite(effVis)) effVis = baseVis;
             html += infoRow('Count', group.length);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), bs && s.damage !== bs.damage ? formatBigNumber(s.damage, 1) : undefined);
+            html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
             if (e.type !== 'laser') {
-                html += infoRow('Range', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
-                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, bs && s.cd !== bs.cd ? `${(s.cd || 0).toFixed(2)}s` : undefined);
-                html += infoRow('DPS', baseDps, dps !== baseDps ? dps : undefined);
+                html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+                html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
+                html += infoRow('Cooldown', bs ? `${(bs.cd || 0).toFixed(2)}s` : `${(s.cd || 0).toFixed(2)}s`, `${(s.cd || 0).toFixed(2)}s`);
+                html += infoRow('DPS', baseDps, dps);
             } else {
                 html += infoRow('DPS', `${(s.damage / 60 * TICK_RATE).toFixed(1)}/s`);
-                html += infoRow('Visibility', formatRangeStatTiles(baseVis), baseVis !== effVis ? formatRangeStatTiles(effVis) : undefined);
+                html += infoRow('Visibility', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
             }
             if (e.type === 'fire') {
                 let burnDps = getBuildingStatForOwner(e.owner, e.type, effLevel, 'burnDps');
@@ -20557,12 +20739,15 @@
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = getThingEffectiveLevel(e, sLevel);
             let upg = getNextLevelUpgradeInfo(e);
-            let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), getEntityEnergyDisplayMax(e)));
+            let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
+            let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+            let baseMaxEnergy = getEntityBaseEnergyMax(e);
+            let effMaxEnergy = getEntityEffectiveEnergyMax(e);
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
             html += infoRow('Status', getEntityStatusText(e));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
             // html += infoRow('Upgrade', `${upg.goldCost}g, ENERGY ${upg.energyNow}->${upg.energyNext}`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
@@ -20603,11 +20788,14 @@
             let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
             let effStats = calculateItemStats(e.type, effLevel, e.owner);
             let upg = getNextLevelUpgradeInfo(e);
-            let visTiles = getEntityVisibilityRangeTiles(e);
-            if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), getEntityEnergyDisplayMax(e)));
+            let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
+            let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+            let baseMaxEnergy = getEntityBaseEnergyMax(e);
+            let effMaxEnergy = getEntityEffectiveEnergyMax(e);
+            if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), effMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
                 if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);
@@ -20711,52 +20899,54 @@
             if (u.sandy > 0) slowMul *= 0.5;
             let baseSpd = (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
             let effSpd = (Number(u.speed) || 0) * slowMul;
-            let baseAttackRange = Math.max(0, Number(u.baseLevelAttackRange) || ((Number(u.attackRange) || 0) / TILE));
+            let baseAttackRangeRaw = Number(u.baseLevelAttackRange);
+            if (Number.isFinite(baseAttackRangeRaw) && baseAttackRangeRaw > 8) baseAttackRangeRaw = baseAttackRangeRaw / TILE;
+            let baseAttackRange = Math.max(0, Number.isFinite(baseAttackRangeRaw) ? baseAttackRangeRaw : ((Number(u.attackRange) || 0) / TILE));
             let effAttackRange = Math.max(0, (Number(u.attackRange) || 0) / TILE);
             let baseVisionRange = Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
             let effVisionRange = Math.max(0, Number(u.visionRange) || 0);
 
             html += infoRow(withInfoPanelStatMatrixButton('Energy', { title: `${u.unitType} / Energy`, kind: 'unit', key: u.unitType, statKey: 'energy' }), formatInfoFraction(baseEnergyNow, basemaxEnergy), formatInfoFraction(Math.floor(u.energy), u.maxEnergy));
-            html += infoRow('Level', `L${lvl}`, effLvl !== lvl ? `L${effLvl}` : undefined);
+            html += infoRow('Level', `L${lvl}`, `L${effLvl}`);
             html += infoRowStacks(stacks, lvl, effStacks, effLvl, stacks);
-            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), Math.abs(baseAttackRange - effAttackRange) > 0.001 ? formatRangeStatTiles(effAttackRange) : undefined);
-            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Vision`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatRangeStatTiles(baseVisionRange), Math.abs(baseVisionRange - effVisionRange) > 0.001 ? formatRangeStatTiles(effVisionRange) : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), formatRangeStatTiles(effAttackRange));
+            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Vision`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatRangeStatTiles(baseVisionRange), formatRangeStatTiles(effVisionRange));
             if (u.workerType === 'builder') {
                 let baseBuild = Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
                 let effBuild = Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
                 let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
                 let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u.unitType} / Build Speed`, kind: 'unit', key: u.unitType, statKey: 'builderDps' }), `${formatBigNumber(baseBuild, 1)}/trip`, baseBuild !== effBuild ? `${formatBigNumber(effBuild, 1)}/trip` : undefined);
-                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u.unitType} / Build Speed`, kind: 'unit', key: u.unitType, statKey: 'builderDps' }), `${formatBigNumber(baseBuild, 1)}/trip`, `${formatBigNumber(effBuild, 1)}/trip`);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
             } else if (u.workerType === 'healer') {
                 let baseHeal = Number(u.baseLevelhealerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0;
                 let effHeal = Number(u.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0;
                 let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
                 let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u.unitType} / Heal Speed`, kind: 'unit', key: u.unitType, statKey: 'healerDps' }), `${formatBigNumber(baseHeal, 1)}/trip`, baseHeal !== effHeal ? `${formatBigNumber(effHeal, 1)}/trip` : undefined);
-                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u.unitType} / Heal Speed`, kind: 'unit', key: u.unitType, statKey: 'healerDps' }), `${formatBigNumber(baseHeal, 1)}/trip`, `${formatBigNumber(effHeal, 1)}/trip`);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
             } else if (u.workerType === 'researcher') {
                 let baseResearch = Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
                 let effResearch = Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
                 let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
                 let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u.unitType} / Research Speed`, kind: 'unit', key: u.unitType, statKey: 'researcherDps' }), `${formatBigNumber(baseResearch, 1)}/trip`, baseResearch !== effResearch ? `${formatBigNumber(effResearch, 1)}/trip` : undefined);
-                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u.unitType} / Research Speed`, kind: 'unit', key: u.unitType, statKey: 'researcherDps' }), `${formatBigNumber(baseResearch, 1)}/trip`, `${formatBigNumber(effResearch, 1)}/trip`);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
             } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
                 let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
                 let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
                 let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
                 let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
                 let gatherLabel = (u.workerType === 'astar_collector') ? 'A* Gather' : 'Gather Speed';
-                html += infoRow(withInfoPanelStatMatrixButton(gatherLabel, { title: `${u.unitType} / Gather Speed`, kind: 'unit', key: u.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(baseGather, 1)}/trip`, baseGather !== effGather ? `${formatBigNumber(effGather, 1)}/trip` : undefined);
-                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton(gatherLabel, { title: `${u.unitType} / Gather Speed`, kind: 'unit', key: u.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(baseGather, 1)}/trip`, `${formatBigNumber(effGather, 1)}/trip`);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
             } else if (u.workerType === 'salvager') {
                 let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
                 let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-                html += infoRow('Salvage Yield', `10% x L${lvl}`, effLvl !== lvl ? `10% x L${effLvl}` : undefined);
-                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) && Math.abs(baseTransferCd - effTransferCd) > 1e-6 ? `${effTransferCd.toFixed(2)}s` : undefined);
+                html += infoRow('Salvage Yield', `10% x L${lvl}`, `10% x L${effLvl}`);
+                if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
             } else {
-                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u.unitType} / Attack`, kind: 'unit', key: u.unitType, statKey: 'atk' }), baseAtk, baseAtk !== effAtk ? effAtk : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u.unitType} / Attack`, kind: 'unit', key: u.unitType, statKey: 'atk' }), baseAtk, effAtk);
                 html += infoRow(withInfoPanelStatMatrixButton('DPS', {
                     title: `${u.unitType} / DPS`,
                     getValue: (thingLevel, researchLevel) => {
@@ -20765,12 +20955,12 @@
                         if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
                         return formatBigNumber(atk / cd * TICK_RATE, 1);
                     }
-                }), baseDps, baseDps !== effDps ? effDps : undefined);
+                }), baseDps, effDps);
             }
-            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, Math.abs(baseSpd - effSpd) > 0.001 ? `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u.unitType} / Speed`, kind: 'unit', key: u.unitType, statKey: 'speed' }), `${baseSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`, `${effSpd.toFixed(1)}${(u.frozen > 0 || u.sandy > 0) ? ' (slowed)' : ''}`);
             let baseAstarCost = Math.max(0.1, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
             let effAstarCost = Math.max(0.1, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
-            html += infoRow(withInfoPanelStatMatrixButton('A* / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), Math.abs(baseAstarCost - effAstarCost) > 1e-6 ? formatBigNumber(effAstarCost, 2) : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('A* / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), formatBigNumber(effAstarCost, 2));
             html += infoRow('State', ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][u.commandState]);
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -20849,7 +21039,9 @@
                 totalEffDps += effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0;
                 totalBaseSpeed += (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
                 totalEffSpeed += (Number(u.speed) || 0) * slowMul;
-                totalBaseRange += Math.max(0, Number(u.baseLevelAttackRange) || ((Number(u.attackRange) || 0) / TILE));
+                let baseAttackRangeRaw = Number(u.baseLevelAttackRange);
+                if (Number.isFinite(baseAttackRangeRaw) && baseAttackRangeRaw > 8) baseAttackRangeRaw = baseAttackRangeRaw / TILE;
+                totalBaseRange += Math.max(0, Number.isFinite(baseAttackRangeRaw) ? baseAttackRangeRaw : ((Number(u.attackRange) || 0) / TILE));
                 totalEffRange += Math.max(0, (Number(u.attackRange) || 0) / TILE);
                 totalBaseVision += Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
                 totalEffVision += Math.max(0, Number(u.visionRange) || 0);
@@ -20896,32 +21088,32 @@
 
             html += infoRow('Count', group.length);
             html += infoRow('Energy', formatInfoFraction(Math.floor(totalbaseEnergy), totalBasemaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
-            html += infoRow('Level', levelSummary, levelSummary !== effLevelSummary ? effLevelSummary : undefined);
-            html += infoRow('Stacks', `${formatBigNumber(totalStacks)}/${formatBigNumber(Math.max(totalStacks, totalBaseNextStacks))}`, totalStacks !== totalEffStacks ? `${formatBigNumber(totalEffStacks)}/${formatBigNumber(Math.max(totalEffStacks, totalEffNextStacks))}` : undefined);
+            html += infoRow('Level', levelSummary, effLevelSummary);
+            html += infoRow('Stacks', `${formatBigNumber(totalStacks)}/${formatBigNumber(Math.max(totalStacks, totalBaseNextStacks))}`, `${formatBigNumber(totalEffStacks)}/${formatBigNumber(Math.max(totalEffStacks, totalEffNextStacks))}`);
             let avgBaseRange = totalBaseRange / Math.max(1, group.length);
             let avgEffRange = totalEffRange / Math.max(1, group.length);
             let avgBaseVision = totalBaseVision / Math.max(1, group.length);
             let avgEffVision = totalEffVision / Math.max(1, group.length);
-            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, Math.abs(avgBaseRange - avgEffRange) > 0.001 ? `${formatRangeStatTiles(avgEffRange)} avg` : undefined);
-            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Vision`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, Math.abs(avgBaseVision - avgEffVision) > 0.001 ? `${formatRangeStatTiles(avgEffVision)} avg` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, `${formatRangeStatTiles(avgEffRange)} avg`);
+            html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Vision`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, `${formatRangeStatTiles(avgEffVision)} avg`);
             if (u0.workerType === 'builder') {
-                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u0.unitType} / Build Speed`, kind: 'unit', key: u0.unitType, statKey: 'builderDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
-                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u0.unitType} / Build Speed`, kind: 'unit', key: u0.unitType, statKey: 'builderDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, `${formatBigNumber(totalEffBuildSpeed, 1)}/trip`);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
             } else if (u0.workerType === 'healer') {
-                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u0.unitType} / Heal Speed`, kind: 'unit', key: u0.unitType, statKey: 'healerDps' }), `${formatBigNumber(totalHealSpeed, 1)}/trip`, totalHealSpeed !== totalEffHealSpeed ? `${formatBigNumber(totalEffHealSpeed, 1)}/trip` : undefined);
-                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u0.unitType} / Heal Speed`, kind: 'unit', key: u0.unitType, statKey: 'healerDps' }), `${formatBigNumber(totalHealSpeed, 1)}/trip`, `${formatBigNumber(totalEffHealSpeed, 1)}/trip`);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
             } else if (u0.workerType === 'researcher') {
-                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u0.unitType} / Research Speed`, kind: 'unit', key: u0.unitType, statKey: 'researcherDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, totalBuildSpeed !== totalEffBuildSpeed ? `${formatBigNumber(totalEffBuildSpeed, 1)}/trip` : undefined);
-                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u0.unitType} / Research Speed`, kind: 'unit', key: u0.unitType, statKey: 'researcherDps' }), `${formatBigNumber(totalBuildSpeed, 1)}/trip`, `${formatBigNumber(totalEffBuildSpeed, 1)}/trip`);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
             } else if (u0.workerType === 'collector' || u0.workerType === 'astar_collector') {
                 let gatherLabel = (u0.workerType === 'astar_collector') ? 'A* Gather' : 'Gather Speed';
-                html += infoRow(withInfoPanelStatMatrixButton(gatherLabel, { title: `${u0.unitType} / Gather Speed`, kind: 'unit', key: u0.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, totalCollectorPerTrip !== totalEffCollectorPerTrip ? `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip` : undefined);
-                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton(gatherLabel, { title: `${u0.unitType} / Gather Speed`, kind: 'unit', key: u0.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(totalCollectorPerTrip, 1)}/trip`, `${formatBigNumber(totalEffCollectorPerTrip, 1)}/trip`);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
             } else if (u0.workerType === 'salvager') {
-                html += infoRow('Salvage Yield', `10% x SumL${totalSalvagerLevel}`, totalSalvagerLevel !== totalEffSalvagerLevel ? `10% x SumL${totalEffSalvagerLevel}` : undefined);
-                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, Math.abs(totalTransferCd - totalEffTransferCd) > 1e-6 ? `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg` : undefined);
+                html += infoRow('Salvage Yield', `10% x SumL${totalSalvagerLevel}`, `10% x SumL${totalEffSalvagerLevel}`);
+                html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);
             } else {
-                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u0.unitType} / Attack`, kind: 'unit', key: u0.unitType, statKey: 'atk' }), formatBigNumber(totalBaseAttack, 1), totalBaseAttack !== totalEffAttack ? formatBigNumber(totalEffAttack, 1) : undefined);
+                html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u0.unitType} / Attack`, kind: 'unit', key: u0.unitType, statKey: 'atk' }), formatBigNumber(totalBaseAttack, 1), formatBigNumber(totalEffAttack, 1));
                 html += infoRow(withInfoPanelStatMatrixButton('DPS', {
                     title: `${u0.unitType} / DPS`,
                     getValue: (thingLevel, researchLevel) => {
@@ -20930,11 +21122,11 @@
                         if (!Number.isFinite(atk) || !Number.isFinite(cd) || cd <= 0) return '0';
                         return formatBigNumber(atk / cd * TICK_RATE, 1);
                     }
-                }), totalBaseDps.toFixed(1), Math.abs(totalBaseDps - totalEffDps) > 0.01 ? totalEffDps.toFixed(1) : undefined);
+                }), totalBaseDps.toFixed(1), totalEffDps.toFixed(1));
             }
             let avgBaseSpeed = totalBaseSpeed / Math.max(1, group.length);
             let avgEffSpeed = totalEffSpeed / Math.max(1, group.length);
-            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u0.unitType} / Speed`, kind: 'unit', key: u0.unitType, statKey: 'speed' }), `${avgBaseSpeed.toFixed(1)} avg`, Math.abs(avgBaseSpeed - avgEffSpeed) > 0.001 ? `${avgEffSpeed.toFixed(1)} avg` : undefined);
+            html += infoRow(withInfoPanelStatMatrixButton('Speed', { title: `${u0.unitType} / Speed`, kind: 'unit', key: u0.unitType, statKey: 'speed' }), `${avgBaseSpeed.toFixed(1)} avg`, `${avgEffSpeed.toFixed(1)} avg`);
             if (isEffectiveMixed) html += infoRow('Levels (Eff)', `Mixed (L${minEffLevel}-L${maxEffLevel})`);
             let immunes = [];
             if (s.fireResistant) immunes.push('Fire');
@@ -21016,16 +21208,27 @@
             let sLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = getThingEffectiveLevel(e, sLevel);
-            let visTiles = getEntityVisibilityRangeTiles(e);
+            let totalBaseMaxEnergy = 0;
+            let totalEffMaxEnergy = 0;
+            let totalBaseVis = 0;
+            let totalEffVis = 0;
             let readyGroup = group.filter(s => !s.underConstruction);
-            let totalEnergy = 0, totalmaxEnergy = 0, totalQueue = 0;
-            for (let s of group) { totalEnergy += s.energy; totalmaxEnergy += getEntityEnergyDisplayMax(s); }
+            let totalEnergy = 0, totalQueue = 0;
+            for (let s of group) {
+                totalEnergy += s.energy;
+                totalBaseMaxEnergy += getEntityBaseEnergyMax(s);
+                totalEffMaxEnergy += getEntityEffectiveEnergyMax(s);
+                totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(s)) || 0;
+                totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(s)) || 0;
+            }
             for (let s of readyGroup) totalQueue += (s.spawnQueue || []).length;
             html += infoRow('Count', group.length);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
+            let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+            html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
             html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
             html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
             if (e.owner === localPlayerId) {
@@ -21448,12 +21651,15 @@
             let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
             let queueLen = getResearchQueueTotalLength(e);
             let queueCap = getResearchQueueCapacityForPlayer(e.owner);
-            let visTiles = getEntityVisibilityRangeTiles(e);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), getEntityEnergyDisplayMax(e)));
+            let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
+            let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+            let baseMaxEnergy = getEntityBaseEnergyMax(e);
+            let effMaxEnergy = getEntityEffectiveEnergyMax(e);
+            html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
             html += infoRow('Status', getEntityStatusText(e, true));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
             if (e.owner === localPlayerId) {
                 html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
             }
@@ -21512,19 +21718,24 @@
             let e = group[0];
             let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
             let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
-            let totalEnergy = 0, totalmaxEnergy = 0;
+            let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
+            let totalBaseVis = 0, totalEffVis = 0;
             for (let r of group) {
                 totalEnergy += r.energy;
-                totalmaxEnergy += getEntityEnergyDisplayMax(r);
+                totalBaseMaxEnergy += getEntityBaseEnergyMax(r);
+                totalEffMaxEnergy += getEntityEffectiveEnergyMax(r);
+                totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(r)) || 0;
+                totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(r)) || 0;
             }
             let totalQueue = getResearchQueueTotalLength(e);
             let queueCap = getResearchQueueCapacityForPlayer(e.owner);
-            let visTiles = getEntityVisibilityRangeTiles(e);
             html += infoRow('Count', group.length);
-            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
+            html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
+            let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+            html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
             if (e.owner === localPlayerId) {
                 let rallyTokens = new Set(group.map(r => (r.rallyX !== null && r.rallyY !== null)
                     ? `${Math.floor(r.rallyX / TILE)},${Math.floor(r.rallyY / TILE)}`
@@ -21723,16 +21934,25 @@
             let baseLevel = stackCountToLevel(baseStacks);
             let effStacks = e.effectiveStacks || baseStacks;
             let effLevel = getThingEffectiveLevel(e, baseLevel);
-            let visTiles = getEntityVisibilityRangeTiles(e);
+            let totalBaseVis = 0;
+            let totalEffVis = 0;
             let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
             let effStats = calculateItemStats(e.type, effLevel, e.owner);
-            let totalEnergy = 0, totalmaxEnergy = 0;
-            for (let f of group) { totalEnergy += (f.energy || 0); totalmaxEnergy += getEntityEnergyDisplayMax(f); }
+            let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
+            for (let f of group) {
+                totalEnergy += (f.energy || 0);
+                totalBaseMaxEnergy += getEntityBaseEnergyMax(f);
+                totalEffMaxEnergy += getEntityEffectiveEnergyMax(f);
+                totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(f)) || 0;
+                totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(f)) || 0;
+            }
             html += infoRow('Count', group.length);
-            if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
+            if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
             html += infoRowLevel('Level', e);
             html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
-            html += infoRow('Visibility', formatRangeStatTiles(visTiles));
+            let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
+            let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+            html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
             if (effStats.damage > 0) {
                 let baseDmg = baseStats.damage, effDmg = effStats.damage;
                 if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);
@@ -21808,6 +22028,8 @@
         function updateInfoPanel(panelOverride = null, opts = {}) {
             let panel = panelOverride || document.getElementById('info-panel');
             if (!panel) return;
+            let prevFormatBigNumberSuffixStart = activeFormatBigNumberSuffixStart;
+            activeFormatBigNumberSuffixStart = panelOverride ? 1000000 : 1000;
             let skipGlobalSync = !!opts.skipGlobalSync;
             let subgroupState = (opts && opts.subgroupState && typeof opts.subgroupState === 'object') ? opts.subgroupState : activeSubGroups;
             let refreshThisPanel = () => {
@@ -21841,6 +22063,7 @@
                     panel.style.display = 'none';
                     panel.innerHTML = '';
                 }
+                activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
                 return;
             }
             panel.style.display = 'block';
@@ -22424,6 +22647,7 @@
                     renderResearchPopupContent();
                 }
             }
+            activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
         }
 
         function showGameOver() {
