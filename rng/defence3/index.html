@@ -25855,11 +25855,13 @@
             _tpsTickCount = 0;
             _tpsDisplay = 0;
             _tpsLastTime = _lastTickTime;
-            requestAnimationFrame(gameFrame);
+            startMainThreadLoops();
         }
 
         let _lastTickTime = 0;
         let _tickAccumulator = 0;
+    let _simulationFrameHandle = 0;
+    let _renderFrameHandle = 0;
     let _backgroundTickInterval = null;
     let _hiddenLastTickTime = 0;
     let _hiddenTickAccumulator = 0;
@@ -26693,6 +26695,21 @@
             return !!lockstepCommittedByTick[t] && !!lockstepBundleByTick[t];
         }
 
+        let _researchPopupRefreshRequested = false;
+
+        function requestResearchPopupRefresh() {
+            _researchPopupRefreshRequested = true;
+        }
+
+        function flushTickUiRequests() {
+            if (!_researchPopupRefreshRequested) return;
+            _researchPopupRefreshRequested = false;
+            let researchPopup = document.getElementById('research-popup');
+            if (researchPopup && !researchPopup.classList.contains('hidden') && !researchQueueDragInProgress) {
+                renderResearchPopupContent();
+            }
+        }
+
         function runOneTick() {
             // Reset pathfinding budget before processing actions
             pathfindBudget = 0;
@@ -26744,11 +26761,7 @@
             gameTick();
 
             if (currentTick % TICK_RATE === 0) sampleGameStats();
-
-            let researchPopup = document.getElementById('research-popup');
-            if (researchPopup && !researchPopup.classList.contains('hidden') && !researchQueueDragInProgress) {
-                renderResearchPopupContent();
-            }
+            requestResearchPopupRefresh();
 
             if (isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0) {
                 let stateDigest = computeLockstepStateDigest(processedTick);
@@ -26803,15 +26816,13 @@
         let _backgroundCacheRefreshCounter = 20;
     let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
     let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
-        function gameFrame(timestamp) {
-            // v2 unified rAF loop (no MessageChannel)
+        function processVisibleSimulationFrame(timestamp) {
             sendNetworkPings(timestamp);
-            if (!ctx || !canvas || !bgCtx || !minimapCtx) {
-                ensureRenderContextsInitialized();
-                requestAnimationFrame(gameFrame);
+            if (document.hidden) {
+                _lastTickTime = timestamp;
                 return;
             }
-            // --- Process ticks ---
+
             if (gameStarted && !gameOver) {
                 let dt = timestamp - _lastTickTime;
                 _lastTickTime = timestamp;
@@ -26834,13 +26845,20 @@
                     _tickAccumulator -= TICK_MS;
                 }
             }
+        }
 
-            // --- Render ---
+        function processRenderFrame(timestamp) {
+            if (!ctx || !canvas || !bgCtx || !minimapCtx) {
+                ensureRenderContextsInitialized();
+                return;
+            }
+
             tickAlpha = Math.min(_tickAccumulator / TICK_MS, 1);
             updateCamera();
             let dpr = window.devicePixelRatio || 1;
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             draw();
+            flushTickUiRequests();
             updateHUD();
             updateControlGroupBar();
 
@@ -26866,7 +26884,33 @@
                 _backgroundCacheRefreshCounter = 0;
                 commitStaticCaches(false, 'background');
             }
-            requestAnimationFrame(gameFrame);
+        }
+
+        function simulationFrame(timestamp) {
+            _simulationFrameHandle = 0;
+            processVisibleSimulationFrame(timestamp);
+            queueSimulationFrame();
+        }
+
+        function renderFrame(timestamp) {
+            _renderFrameHandle = 0;
+            processRenderFrame(timestamp);
+            queueRenderFrame();
+        }
+
+        function queueSimulationFrame() {
+            if (_simulationFrameHandle) return;
+            _simulationFrameHandle = requestAnimationFrame(simulationFrame);
+        }
+
+        function queueRenderFrame() {
+            if (_renderFrameHandle) return;
+            _renderFrameHandle = requestAnimationFrame(renderFrame);
+        }
+
+        function startMainThreadLoops() {
+            queueSimulationFrame();
+            queueRenderFrame();
         }
 
         function runHiddenTickPump() {
