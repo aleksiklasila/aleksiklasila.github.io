@@ -5111,6 +5111,13 @@
             if (prevRef) _activeTileEntities.delete(prevRef);
             tileEntityType[gy][gx] = TILE_ENTITY_NONE;
             tileEntityRef[gy][gx] = null;
+                let tileIndex = gy * GRID_W + gx;
+                let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
+                for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
+                    let reservedUnit = workerReservedTiles[baseIndex + i];
+                    if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
+                    workerReservedTiles[baseIndex + i] = null;
+                }
             _markAdjacencyDirtyAt(gx, gy, 1);
         }
 
@@ -5242,6 +5249,13 @@
             let gy = Math.floor(Number(drop.gy));
             if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
                 if (getDroppedItemAt(gx, gy) === drop) _setDroppedItemAt(gx, gy, null);
+                    let tileIndex = gy * GRID_W + gx;
+                    let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
+                    for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
+                        let reservedUnit = workerReservedTiles[baseIndex + i];
+                        if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
+                        workerReservedTiles[baseIndex + i] = null;
+                    }
             }
 
             let idx = Number.isFinite(drop._droppedIndex) ? Math.floor(drop._droppedIndex) : -1;
@@ -7949,6 +7963,7 @@
         function initGrid() {
             grid = [];
             initDroppedItemGrid();
+                workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
             for (let y = 0; y < GRID_H; y++) {
                 let row = [];
                 for (let x = 0; x < GRID_W; x++) {
@@ -8828,6 +8843,14 @@
 
             item.isStacking = hasPendingStacks && isAutoStackEnabled(item);
             if (!item.isStacking) item.stackingWorkDone = 0;
+            if (!item.underConstruction && !item.isUpgrading && !item.isStacking && Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
+                let builderTypeIndex = _workerTypeToLoadIndex('builder');
+                let tileIndex = Math.floor(item.gy) * GRID_W + Math.floor(item.gx);
+                let slotIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT + builderTypeIndex;
+                let reservedUnit = workerReservedTiles[slotIndex];
+                if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
+                workerReservedTiles[slotIndex] = null;
+            }
         }
 
         function addManualStackToThing(item, amount = 1) {
@@ -12139,12 +12162,15 @@
                 if (u.workerState === 'IDLE') {
                     if (!u._lastIdleStateTime || u.workerState !== 'IDLE') u._lastIdleStateTime = gameTime;
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-                    if (gameTime < (u._lastIdleTargetScanTime || 0) + secondsToTicks(0.1) + ((u.id % 10) / 10) * secondsToTicks(0.5)) return;
-                    u._lastIdleTargetScanTime = gameTime;
                     _collectorFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
                     u._lastIdleStateTime = 0;
-                    if (!u.workerTarget) { u.workerState = 'RETURNING'; _workerReturnPath(u); return; }
+                    if (!u.workerTarget || !_workerOwnsReservedTarget(u)) {
+                        _clearWorkerTarget(u, 'target_missing');
+                        _clearWorkerAutoRoute(u);
+                        _collectorFindTarget(u, myGx, myGy);
+                        return;
+                    }
                     if (u.workerTargetType === 'drop' && getDroppedItemAt(u.workerTarget.gx, u.workerTarget.gy) !== u.workerTarget) {
                         _clearWorkerTarget(u, 'target_missing'); _collectorFindTarget(u, myGx, myGy); return;
                     }
@@ -12155,6 +12181,7 @@
                         _clearWorkerTarget(u, 'target_no_work'); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
+                        if (_workerHasPendingAutoRouteToTarget(u)) return;
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
@@ -12246,10 +12273,14 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _astarCollectorFindTarget(u);
                 } else if (u.workerState === 'MOVING_TO_ASTAR') {
-                    if (!_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner)) {
-                        _clearWorkerTarget(u, 'target_no_work'); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u); return;
+                    if (!_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) || !_workerOwnsReservedTarget(u)) {
+                        _clearWorkerTarget(u, 'target_no_work');
+                        _clearWorkerAutoRoute(u);
+                        _astarCollectorFindTarget(u);
+                        return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
+                        if (_workerHasPendingAutoRouteToTarget(u)) return;
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
@@ -12332,10 +12363,14 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     _salvagerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
-                    if (!u.workerTarget || !u.workerTarget.markedForSalvage) {
-                        _clearWorkerTarget(u, 'target_no_work'); u.workerState = 'RETURNING'; _workerReturnPath(u); return;
+                    if (!u.workerTarget || !u.workerTarget.markedForSalvage || !_workerOwnsReservedTarget(u)) {
+                        _clearWorkerTarget(u, 'target_no_work');
+                        _clearWorkerAutoRoute(u);
+                        _salvagerFindTarget(u, myGx, myGy);
+                        return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
+                        if (_workerHasPendingAutoRouteToTarget(u)) return;
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
                         if (dist <= 24) {
                             if (u.workerTransferCooldown > 0) return;
@@ -12346,7 +12381,17 @@
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
                             _clearWorkerTarget(u, 'target_missing'); u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
-                            _workerReturnPath(u);
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let canWalk = (nx, ny) => nx === u.workerTarget.gx && ny === u.workerTarget.gy;
+                            u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, null, true);
+                            if (u.path) {
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                            } else {
+                                _clearWorkerTarget(u, 'target_missing');
+                                _clearWorkerAutoRoute(u);
+                                _salvagerFindTarget(u, myGx, myGy);
+                            }
                         }
                     }
                 } else if (u.workerState === 'RETURNING') {
@@ -13431,8 +13476,7 @@
         }
 
         // Per-target worker load counters (updated on target set/clear).
-        let _workerTargetLoadCache = new WeakMap();
-        let _workerTargetTileLoadCache = new Map();
+            let workerReservedTiles = [];
         const _WORKER_TARGET_LOAD_TYPE_COUNT = 6;
 
         function _workerTypeToLoadIndex(workerType) {
@@ -13447,118 +13491,36 @@
             return -1;
         }
 
-        function _getWorkerTargetTileKey(target) {
+        function _getWorkerTargetTileIndex(target) {
             if (!target) return null;
             let gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
             let gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
-            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
-            return String(gx) + ',' + String(gy);
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return -1;
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
+            return gy * GRID_W + gx;
         }
 
-        function _workerTargetTileBucketMapKey(ownerId, tileKey) {
-            return String(ownerId) + '|' + String(tileKey);
+        function _getWorkerReservationSlotIndex(target, workerType) {
+            let workerTypeIndex = _workerTypeToLoadIndex(workerType);
+            if (workerTypeIndex < 0) return -1;
+            let tileIndex = _getWorkerTargetTileIndex(target);
+            if (tileIndex < 0) return -1;
+            return tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT + workerTypeIndex;
         }
 
-        function _getWorkerTargetTileLoad(target, owner, workerType) {
-            if (!target || !Number.isFinite(owner) || !workerType) return 0;
-            let ownerId = Math.floor(owner);
-            if (ownerId < 0) return 0;
-            let idx = _workerTypeToLoadIndex(workerType);
-            if (idx < 0) return 0;
-            let tileKey = _getWorkerTargetTileKey(target);
-            if (!tileKey) return 0;
-            let arr = _workerTargetTileLoadCache.get(_workerTargetTileBucketMapKey(ownerId, tileKey));
-            if (!arr) return 0;
-            return arr[idx] | 0;
-        }
-
-        function _workerTargetTileLoadAdd(target, ownerId, workerTypeIndex, delta) {
-            let tileKey = _getWorkerTargetTileKey(target);
-            if (!tileKey) return;
-            let mapKey = _workerTargetTileBucketMapKey(ownerId, tileKey);
-            let arr = _workerTargetTileLoadCache.get(mapKey);
-            if (!arr) {
-                if (delta < 0) return;
-                arr = new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT);
-                _workerTargetTileLoadCache.set(mapKey, arr);
+        function _getReservedWorkerForTarget(target, workerType) {
+            let slotIndex = _getWorkerReservationSlotIndex(target, workerType);
+            if (slotIndex < 0) return null;
+            let reservedUnit = workerReservedTiles[slotIndex];
+            if (!reservedUnit || reservedUnit.dead) {
+                if (slotIndex >= 0) workerReservedTiles[slotIndex] = null;
+                return null;
             }
-            let next = arr[workerTypeIndex] + delta;
-            arr[workerTypeIndex] = next > 0 ? next : 0;
-        }
-
-        function _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, createIfMissing = false) {
-            let bucket = perTarget.get(ownerId);
-            if (!bucket && createIfMissing) {
-                bucket = {
-                    any: new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT),
-                    byType: new Map()
-                };
-                perTarget.set(ownerId, bucket);
-            }
-            return bucket;
+            return reservedUnit;
         }
 
         function _invalidateWorkerTargetLoadCache() {
-            _workerTargetLoadCache = new WeakMap();
-            _workerTargetTileLoadCache = new Map();
-        }
-
-        function _workerTargetLoadAdd(target, owner, workerType, targetType, delta = 1) {
-            if (!target || !workerType || !Number.isFinite(owner)) return;
-            let ownerId = Math.floor(owner);
-            if (ownerId < 0) return;
-            let workerTypeIndex = _workerTypeToLoadIndex(workerType);
-            if (workerTypeIndex < 0) return;
-
-            let d = Math.floor(Number(delta) || 0);
-            if (d === 0) return;
-
-            let perTarget = _workerTargetLoadCache.get(target);
-            if (!perTarget) {
-                if (d < 0) return;
-                perTarget = new Map();
-                _workerTargetLoadCache.set(target, perTarget);
-            }
-
-            let bucket = _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, d > 0);
-            if (!bucket) return;
-
-            let nextAny = bucket.any[workerTypeIndex] + d;
-            bucket.any[workerTypeIndex] = nextAny > 0 ? nextAny : 0;
-            _workerTargetTileLoadAdd(target, ownerId, workerTypeIndex, d);
-
-            if (targetType !== null && targetType !== undefined) {
-                let typed = bucket.byType.get(targetType);
-                if (!typed) {
-                    if (d < 0) return;
-                    typed = new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT);
-                    bucket.byType.set(targetType, typed);
-                }
-                let nextTyped = typed[workerTypeIndex] + d;
-                typed[workerTypeIndex] = nextTyped > 0 ? nextTyped : 0;
-            }
-        }
-
-        function _getWorkerTargetLoadCached(target, owner, workerType, targetType = null) {
-            if (!target || !workerType || !Number.isFinite(owner)) return 0;
-            let ownerId = Math.floor(owner);
-            if (ownerId < 0) return 0;
-            let workerTypeIndex = _workerTypeToLoadIndex(workerType);
-            if (workerTypeIndex < 0) return 0;
-
-            let perTarget = _workerTargetLoadCache.get(target);
-            if (!perTarget) return 0;
-
-            let bucket = _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, false);
-            if (!bucket) return 0;
-
-            if (targetType === null || targetType === undefined) {
-                return bucket.any[workerTypeIndex] | 0;
-            }
-
-            let typed = bucket.byType.get(targetType);
-            if (!typed) return 0;
-            return typed[workerTypeIndex] | 0;
+            workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
         }
 
         function _setWorkerTarget(unit, target, targetType = null) {
@@ -13566,26 +13528,24 @@
             let nextType = (targetType === undefined) ? null : targetType;
             if (unit.workerTarget === target && unit.workerTargetType === nextType) return true;
 
-            if (target && Number.isFinite(unit.owner) && unit.workerType) {
-                let tileKey = _getWorkerTargetTileKey(target);
-                if (tileKey) {
-                    let tileLoad = _getWorkerTargetTileLoad(target, unit.owner, unit.workerType);
-                    let prevTileKey = _getWorkerTargetTileKey(unit.workerTarget);
-                    if (prevTileKey && prevTileKey === tileKey && tileLoad > 0) tileLoad--;
-                    if (tileLoad > 0) return false;
-                }
+            let nextSlotIndex = target ? _getWorkerReservationSlotIndex(target, unit.workerType) : -1;
+            if (nextSlotIndex >= 0) {
+                let reservedUnit = workerReservedTiles[nextSlotIndex];
+                if (reservedUnit && reservedUnit !== unit && !reservedUnit.dead && reservedUnit.owner === unit.owner && reservedUnit.workerType === unit.workerType) return false;
             }
 
             let prevTarget = unit.workerTarget;
-            let prevType = (unit.workerTargetType === undefined) ? null : unit.workerTargetType;
             if (prevTarget) {
-                _workerTargetLoadAdd(prevTarget, unit.owner, unit.workerType, prevType, -1);
+                let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
+                if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedTiles[prevSlotIndex] = null;
             }
 
             unit.workerTarget = target;
             unit.workerTargetType = nextType;
-            if (target) {
-                _workerTargetLoadAdd(target, unit.owner, unit.workerType, nextType, 1);
+            unit._workerReservedTileIndex = -1;
+            if (target && nextSlotIndex >= 0) {
+                workerReservedTiles[nextSlotIndex] = unit;
+                unit._workerReservedTileIndex = nextSlotIndex;
             }
             return true;
         }
@@ -13602,36 +13562,14 @@
             if (unit.workerTarget === null && unit.workerTargetType === null) return;
 
             let prevTarget = unit.workerTarget;
-            let prevType = (unit.workerTargetType === undefined) ? null : unit.workerTargetType;
             if (prevTarget) {
-                _workerTargetLoadAdd(prevTarget, unit.owner, unit.workerType, prevType, -1);
+                let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
+                if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedTiles[prevSlotIndex] = null;
             }
 
             unit.workerTarget = null;
             unit.workerTargetType = null;
-        }
-
-        function _countWorkersTargetingTarget(target, owner, workerType, targetType = null, excludeUnit = null) {
-            if (!target) return 0;
-            let objectCount = _getWorkerTargetLoadCached(target, owner, workerType, targetType);
-            let tileCount = _getWorkerTargetTileLoad(target, owner, workerType);
-            if (!excludeUnit || excludeUnit.dead) return Math.max(objectCount, tileCount);
-            if (excludeUnit.owner !== owner || excludeUnit.workerType !== workerType) return Math.max(objectCount, tileCount);
-            if (excludeUnit.workerState === 'IDLE' || excludeUnit.workerState === 'MANUAL_MOVE') return Math.max(objectCount, tileCount);
-
-            if (excludeUnit.workerType === workerType && excludeUnit.workerTarget === target) {
-                if (targetType === null || targetType === undefined || excludeUnit.workerTargetType === targetType) {
-                    if (objectCount > 0) objectCount--;
-                }
-            }
-
-            let targetTileKey = _getWorkerTargetTileKey(target);
-            let unitTileKey = _getWorkerTargetTileKey(excludeUnit.workerTarget);
-            if (targetTileKey && unitTileKey && targetTileKey === unitTileKey) {
-                if (tileCount > 0) tileCount--;
-            }
-
-            return Math.max(objectCount, tileCount);
+            unit._workerReservedTileIndex = -1;
         }
 
         function _workerTargetTypeNeedsExclusive(workerType, targetType = null) {
@@ -13641,22 +13579,37 @@
         function _canAssignWorkerTargetExclusive(u, target, targetType = null) {
             if (!u || !target || !u.workerType) return false;
             if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
-            return _countWorkersTargetingTarget(target, u.owner, u.workerType, targetType, u) <= 0;
+            let reservedUnit = _getReservedWorkerForTarget(target, u.workerType);
+            if (!reservedUnit) return true;
+            if (reservedUnit === u) return true;
+            return reservedUnit.owner !== u.owner || reservedUnit.workerType !== u.workerType;
         }
 
-        function _scoreWorkerTaskCandidate(u, candidate, hasAlternatives) {
+        function _workerOwnsReservedTarget(u, target = null) {
+            if (!u || !u.workerType) return false;
+            let reservedTarget = target || u.workerTarget;
+            if (!reservedTarget) return false;
+            return _getReservedWorkerForTarget(reservedTarget, u.workerType) === u;
+        }
+
+        function _workerHasPendingAutoRouteToTarget(u, target = null) {
+            if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget) return false;
+            let routeTarget = target || u.workerTarget;
+            if (!routeTarget) return false;
+            return u._pendingPathTarget.gx === routeTarget.gx && u._pendingPathTarget.gy === routeTarget.gy;
+        }
+
+        function _clearWorkerAutoRoute(u) {
+            if (!u) return;
+            u.path = [];
+            u.pathIndex = 0;
+            u.commandState = CMD_IDLE;
+            u.pathIsFallbackAstar = false;
+            u._pendingPathTarget = null;
+        }
+
+        function _scoreWorkerTaskCandidate(u, candidate) {
             let score = Number(candidate.dist) || 0;
-            if (hasAlternatives) {
-                let cachedLoad = Number(candidate.cachedLoad);
-                let load = Number.isFinite(cachedLoad)
-                    ? Math.max(0, Math.floor(cachedLoad))
-                    : _countWorkersTargetingTarget(candidate.target, u.owner, u.workerType, candidate.targetType !== undefined ? candidate.targetType : null, u);
-                score += load * TILE * 1.5;
-                if (load > 3) score += (load - 3) * TILE * 8;
-                if (Number.isFinite(candidate.level)) score += candidate.level * TILE * 0.8;
-                if (candidate.isUpgrading) score -= TILE * 0.4;
-                if (candidate.isStacking) score += TILE * 0.4;
-            }
             if (u.workerTarget && u.workerTarget === candidate.target) score -= TILE * 0.75;
 
             let gx = Number.isFinite(candidate.target && candidate.target.gx) ? candidate.target.gx : Math.floor((candidate.target && candidate.target.x || 0) / TILE);
@@ -13669,31 +13622,13 @@
         function _pickDistributedWorkerCandidate(u, candidates) {
             if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
 
-            let visibilityPx = _getWorkerVisionRangePx(u);
-            let nearbyExclusive = [];
-            let globalExclusive = [];
-
+            let best = null;
+            let bestScore = Infinity;
             for (let c of candidates) {
                 if (!c || !c.target) continue;
                 let targetType = (c.targetType !== undefined) ? c.targetType : null;
-                let load = _countWorkersTargetingTarget(c.target, u.owner, u.workerType, targetType, u);
-                if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && load > 0) continue;
-
-                c.cachedLoad = load;
-
-                globalExclusive.push(c);
-                let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
-                if (Number.isFinite(d) && d <= visibilityPx) nearbyExclusive.push(c);
-            }
-
-            let pool = nearbyExclusive.length > 0 ? nearbyExclusive : globalExclusive;
-            if (pool.length <= 0) return null;
-            let hasAlternatives = pool.length > 1;
-
-            let best = null;
-            let bestScore = Infinity;
-            for (let c of pool) {
-                let score = _scoreWorkerTaskCandidate(u, c, hasAlternatives);
+                if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && !_canAssignWorkerTargetExclusive(u, c.target, targetType)) continue;
+                let score = _scoreWorkerTaskCandidate(u, c);
                 if (score < bestScore) {
                     bestScore = score;
                     best = c;
@@ -13784,7 +13719,11 @@
                 _collectorRememberGatherSite(u, target, targetType);
                 u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING;
             }
-            else { _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
+            else if (_workerHasPendingAutoRouteToTarget(u, target)) {
+                _collectorRememberGatherSite(u, target, targetType);
+                u.workerState = 'MOVING_TO';
+            }
+            else { _clearWorkerAutoRoute(u); _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
         }
 
         function _collectorAssignMine(u, mine, myGx, myGy) {
@@ -13828,7 +13767,11 @@
                 u.workerState = 'MOVING_TO_ASTAR';
                 u.pathIndex = 0;
                 u.commandState = CMD_MOVING;
+            } else if (_workerHasPendingAutoRouteToTarget(u, target)) {
+                _astarCollectorRememberGatherSite(u, target);
+                u.workerState = 'MOVING_TO_ASTAR';
             } else {
+                _clearWorkerAutoRoute(u);
                 _clearWorkerTarget(u);
                 u.workerState = 'IDLE';
                 u.commandState = CMD_IDLE;
@@ -13942,7 +13885,8 @@
                 let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                 u.path = _requestWorkerPath(u, startGx, startGy, bestItem.gx, bestItem.gy, canWalk, null, true);
                 if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
-                else { _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
+                else if (_workerHasPendingAutoRouteToTarget(u, bestItem)) { u.workerState = 'MOVING_TO'; }
+                else { _clearWorkerAutoRoute(u); _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
             } else {
                 u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
             }
@@ -13953,8 +13897,7 @@
             let target = null;
 
             if (_isBuilderWorkTarget(u.workerTarget, u.owner)) {
-                let currentLoad = _countWorkersTargetingTarget(u.workerTarget, u.owner, 'builder', null, u);
-                if (currentLoad <= 0) target = u.workerTarget;
+                if (_canAssignWorkerTargetExclusive(u, u.workerTarget, null)) target = u.workerTarget;
             }
             if (!target && Number.isFinite(u._builderLastWorkGx) && Number.isFinite(u._builderLastWorkGy)) {
                 let cand = _getBuilderWorkTargetAt(u._builderLastWorkGx, u._builderLastWorkGy, u.owner);
@@ -14504,6 +14447,12 @@
         }
 
         function _workerReturnPath(u) {
+            if (!u) return;
+            let needsReturnPayload = (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager');
+            if (needsReturnPayload && !(Number(u.carryingValue) > 0)) {
+                _clearWorkerAutoRoute(u);
+                return;
+            }
             let type = u.workerType === 'collector'
                 ? 'spawner'
                 : (u.workerType === 'astar_collector' ? 'astar_spawner' : 'salvager');
@@ -18981,14 +18930,14 @@
 
         function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {
             if (!assigningUnit || !target || !assigningUnit.workerState) return;
-            let targetTileKey = _getWorkerTargetTileKey(target);
+                let targetTileIndex = _getWorkerTargetTileIndex(target);
             for (let other of units) {
                 if (!other || other === assigningUnit || other.dead || !other.workerState) continue;
                 if (other.owner !== assigningUnit.owner) continue;
                 if (other.workerType !== assigningUnit.workerType) continue;
                 let sameTarget = other.workerTarget === target && other.workerTargetType === targetType;
-                let otherTileKey = _getWorkerTargetTileKey(other.workerTarget);
-                let sameTile = !!(targetTileKey && otherTileKey && targetTileKey === otherTileKey);
+                    let otherTileIndex = _getWorkerTargetTileIndex(other.workerTarget);
+                    let sameTile = targetTileIndex >= 0 && otherTileIndex >= 0 && targetTileIndex === otherTileIndex;
                 if (!sameTarget && !sameTile) continue;
 
                 _clearWorkerTarget(other, 'manual_rally_change');
