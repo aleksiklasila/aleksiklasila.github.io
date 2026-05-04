@@ -1454,6 +1454,10 @@
                     <label for="cfg-astar-iter-budget-per-player">A* Iter Budget / Player / Tick</label>
                     <input id="cfg-astar-iter-budget-per-player" type="number" min="256" max="1000000" value="20000" style="width:90px" title="Internal A* node-expansion budget available to each player every tick">
                 </div>
+                <div class="lobby-setting-row" style="margin:0;">
+                    <label for="cfg-worker-ai-tick-delay">Worker AI Tick Delay</label>
+                    <input id="cfg-worker-ai-tick-delay" type="number" min="1" max="60" value="3" style="width:72px" title="Runs heavy worker retarget and planning every N ticks">
+                </div>
             </div>
         </div>
     </div>
@@ -2689,12 +2693,19 @@
             let holder = document.getElementById('starting-resources-content');
             if (!holder) return;
             holder.innerHTML = `
+                <div style="font-size:10px;color:#8cf;margin-bottom:2px">Adjust Step</div>
+                <div id="starting-resources-multiplier-bar" class="mult-toggle-bar" style="margin-bottom:6px;border:1px solid #2f2f2f;border-radius:4px;"></div>
                 <div id="starting-resources-panel" style="display:block">${renderStartingResourcesThingRowsForPanel()}</div>
                 <div class="info-row" style="justify-content:flex-end;gap:8px;margin-top:6px;border-top:1px solid #2b2b2b;padding-top:6px;">
                     <button id="btn-startres-reset-selected" type="button" style="font-size:11px;padding:3px 8px;">Reset Selected Thing</button>
                     <button id="btn-startres-reset-all" type="button" style="font-size:11px;padding:3px 8px;">Reset All</button>
                 </div>
             `;
+
+            renderMultiplierBar('starting-resources-multiplier-bar', startingResourcesAdjustMultiplier, (val) => {
+                startingResourcesAdjustMultiplier = val;
+                renderStartingResourcesPopupContent();
+            });
 
             let resetSelected = document.getElementById('btn-startres-reset-selected');
             if (resetSelected) {
@@ -2740,7 +2751,7 @@
                 bindInstantPress(btn, () => {
                     let thingId = String(btn.dataset.thingId || '');
                     let statKey = String(btn.dataset.statKey || '');
-                    adjustStartingResearchLevelDelta(thingId, statKey, -1);
+                    adjustStartingResearchLevelDelta(thingId, statKey, -startingResourcesAdjustMultiplier);
                     renderStartingResourcesPopupContent();
                 });
             });
@@ -2749,7 +2760,7 @@
                 bindInstantPress(btn, () => {
                     let thingId = String(btn.dataset.thingId || '');
                     let statKey = String(btn.dataset.statKey || '');
-                    adjustStartingResearchLevelDelta(thingId, statKey, 1);
+                    adjustStartingResearchLevelDelta(thingId, statKey, startingResourcesAdjustMultiplier);
                     renderStartingResourcesPopupContent();
                 });
             });
@@ -2758,7 +2769,7 @@
                 bindInstantPress(btn, () => {
                     let thingId = String(btn.dataset.thingId || '');
                     let lvl = Number(btn.dataset.level || 1);
-                    adjustStartingSpawnCountDelta(thingId, lvl, -1);
+                    adjustStartingSpawnCountDelta(thingId, lvl, -startingResourcesAdjustMultiplier);
                     renderStartingResourcesPopupContent();
                 });
             });
@@ -2767,7 +2778,7 @@
                 bindInstantPress(btn, () => {
                     let thingId = String(btn.dataset.thingId || '');
                     let lvl = Number(btn.dataset.level || 1);
-                    adjustStartingSpawnCountDelta(thingId, lvl, 1);
+                    adjustStartingSpawnCountDelta(thingId, lvl, startingResourcesAdjustMultiplier);
                     renderStartingResourcesPopupContent();
                 });
             });
@@ -3016,6 +3027,7 @@
                     UNIT_COLLISION_RECALC_TICKS,
                     ASTAR_MAX_ITERS_LIMIT,
                     ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
+                    WORKER_AI_TICK_DELAY,
                 },
                 progression: {
                     RESEARCH_COST_EXP,
@@ -3091,6 +3103,7 @@
             setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
             setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
             setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
+            setValue('cfg-worker-ai-tick-delay', WORKER_AI_TICK_DELAY);
             setValue('cfg-max-thing-level', MAX_THING_LEVEL);
             setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
         }
@@ -3147,6 +3160,11 @@
             }
             if (Number.isFinite(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))) {
                 ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
+            }
+            let workerAiTickDelay = Number(cfg.WORKER_AI_TICK_DELAY);
+            if (!Number.isFinite(workerAiTickDelay)) workerAiTickDelay = Number(cfg.WORKER_HEAVY_AI_STRIDE);
+            if (Number.isFinite(workerAiTickDelay)) {
+                WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(workerAiTickDelay)));
             }
 
             if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
@@ -3298,6 +3316,7 @@
             cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
             cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
             cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
+            cfg.WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(getNumber('cfg-worker-ai-tick-delay', cfg.WORKER_AI_TICK_DELAY))));
 
             snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
             snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
@@ -3329,6 +3348,7 @@
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
             UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
             ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
+            WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
             applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
 
             let gameModeEl = document.getElementById('cfg-gamemode');
@@ -3341,7 +3361,7 @@
             let numberIds = [
                 'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
                 'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
-                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player'
+                'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
             ];
             let selectIds = ['cfg-gamemode', 'cfg-map-type'];
             let checkboxIds = ['cfg-full-vis'];
@@ -3510,6 +3530,7 @@
         let UNIT_COLLISION_RECALC_TICKS = 5;
         let ASTAR_MAX_ITERS_LIMIT = 18000;
         let ASTAR_ITER_BUDGET_PER_PLAYER_TICK = 9000;
+        let WORKER_AI_TICK_DELAY = 3;
         let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
     let LOCKSTEP_PIPELINE_MIN = 2;
     let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
@@ -3837,12 +3858,12 @@
             laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
             snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, astarCost: 1, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
             scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, astarCost: 1, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-            collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 23, transferCooldown: 2.0, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-            astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 230, transferCooldown: 2.0, color: '#bbb', r: 6, vis: 'star', isWorker: true },
-            salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, transferCooldown: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-            builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, builderDps: 25, transferCooldown: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-            healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, healerDps: 5, transferCooldown: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-            researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, researcherDps: 15, transferCooldown: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 23, transferCooldown: 2.0, workerSearchDistance: 10, color: '#aaa', r: 6, vis: 'star', isWorker: true },
+            astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 230, transferCooldown: 2.0, workerSearchDistance: 10, color: '#bbb', r: 6, vis: 'star', isWorker: true },
+            salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, transferCooldown: 2.0, workerSearchDistance: 10, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+            builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 10, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+            healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 10, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+            researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 10, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
             king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, astarCost: 1, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
         };
 
@@ -3900,6 +3921,7 @@
             atkCd: 'Atk Cooldown',
             astarCost: 'A* / Tile',
             transferCooldown: 'Transfer Cooldown',
+            workerSearchDistance: 'Work Search Distance',
             gatherPerTrip: 'Gather Speed',
             builderDps: 'Build Speed',
             healerDps: 'Heal Speed',
@@ -3909,16 +3931,16 @@
 
         const RESEARCHABLE_UNIT_STATS = {
             _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost'],
-            collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
-            astar_collector: ['energy', 'speed', 'visionRange', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
-            salvager_unit: ['energy', 'speed', 'visionRange', 'transferCooldown', 'astarCost'],
-            builder_unit: ['energy', 'speed', 'visionRange', 'builderDps', 'transferCooldown', 'astarCost'],
-            healer_unit: ['energy', 'speed', 'visionRange', 'healerDps', 'transferCooldown', 'astarCost'],
-            researcher_unit: ['energy', 'speed', 'visionRange', 'researcherDps', 'transferCooldown', 'astarCost'],
+            collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
+            astar_collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
+            salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost'],
+            builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost'],
+            healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost'],
+            researcher_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'researcherDps', 'transferCooldown', 'astarCost'],
             king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost']
         };
 
-        const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
+        const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
         const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
 
         function getSpawnedUnitTypeForBuildingKey(key) {
@@ -3956,6 +3978,7 @@
                 healerDps: Infinity,
                 researcherDps: Infinity,
                 transferCooldown: 0.3,
+                workerSearchDistance: 25,
                 astarCost: 0.1,
             },
             building: {
@@ -4070,6 +4093,7 @@
             if (statKey === 'speed') return Math.max(0.1, Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1));
             if (statKey === 'visionRange') return Math.max(0.25, Number(s.visionRange) || Math.max(0.25, Number(unitCfg.baseVisionFallback) || 4));
             if (statKey === 'attackRange') return Math.max(0, Number(s.attackRange) || 0);
+            if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(1, Number(s.workerSearchDistance) || 10) : 0;
             if (statKey === 'gatherPerTrip') return Math.max(0, Number(s.gatherPerTrip) || 0);
             if (statKey === 'builderDps') return Math.max(0, Number(s.builderDps) || 0);
             if (statKey === 'healerDps') return Math.max(0, Number(s.healerDps) || 0);
@@ -4088,6 +4112,7 @@
             if (statKey === 'speed') return Math.max(0.1, Number(v) || 0.1);
             if (statKey === 'visionRange') return Math.max(0.25, Number(v) || 0.25);
             if (statKey === 'attackRange') return Math.max(0, Number(v) || 0);
+            if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(1, Number(v) || 1) : 0;
             if (statKey === 'gatherPerTrip') {
                 if (unitType === 'collector' || unitType === 'astar_collector') return Math.max(1, Number(v) || 1);
                 return 0;
@@ -4138,6 +4163,7 @@
             let visionRange = Math.min(visionCap, baseVision * visionMult);
 
             let attackRange = Math.max(0, Number(s.attackRange) || 0);
+            let workerSearchDistance = s.isWorker ? Math.max(1, Number(s.workerSearchDistance) || 10) : 0;
             let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
             let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
             let gatherPerTrip = (unitType === 'collector' || unitType === 'astar_collector') ? Math.max(1, gatherBase * Math.pow(lvl, gatherLvlExp)) : 0;
@@ -4158,7 +4184,7 @@
                 transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
             }
 
-            return { energy, atk, atkCd, speed, visionRange, attackRange, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost };
+            return { energy, atk, atkCd, speed, visionRange, attackRange, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost };
         }
 
         function computeBaseBuildingStatsAtLevel(type, level) {
@@ -4596,6 +4622,7 @@
             if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
             if (statKey === 'blastDamage') return compact(value, 2);
             if (statKey === 'blastRadius') return `${compact(value, 2)} tiles`;
+            if (statKey === 'workerSearchDistance') return `${compact(value, 2)} tiles`;
             if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
             if (statKey === 'efficiency') return compact(value, 2);
             if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
@@ -5164,6 +5191,71 @@
         let collectorSpawners = [];
         let collectors = []; // deprecated - worker units now in units array
         let droppedItems = [];
+        let droppedItemGrid = [];
+
+        function initDroppedItemGrid() {
+            droppedItemGrid = [];
+            for (let y = 0; y < GRID_H; y++) {
+                droppedItemGrid.push(new Array(GRID_W).fill(null));
+            }
+        }
+
+        function getDroppedItemAt(gx, gy) {
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+            let x = Math.floor(gx), y = Math.floor(gy);
+            if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H) return null;
+            if (!droppedItemGrid[y]) return null;
+            return droppedItemGrid[y][x] || null;
+        }
+
+        function _setDroppedItemAt(gx, gy, drop) {
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+            let x = Math.floor(gx), y = Math.floor(gy);
+            if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H) return;
+            if (!droppedItemGrid[y]) return;
+            droppedItemGrid[y][x] = drop || null;
+            if (grid[y] && grid[y][x]) grid[y][x].droppedItem = drop || null;
+        }
+
+        function addDroppedItem(drop) {
+            if (!drop) return null;
+            let gx = Math.floor(Number(drop.gx));
+            let gy = Math.floor(Number(drop.gy));
+            if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return null;
+            if (getDroppedItemAt(gx, gy)) return null;
+
+            drop.gx = gx;
+            drop.gy = gy;
+            if (!Number.isFinite(drop.x)) drop.x = gx * TILE + 16;
+            if (!Number.isFinite(drop.y)) drop.y = gy * TILE + 16;
+            if (!Number.isFinite(drop.timer)) drop.timer = TICK_RATE * 120;
+
+            _setDroppedItemAt(gx, gy, drop);
+            drop._droppedIndex = droppedItems.length;
+            droppedItems.push(drop);
+            return drop;
+        }
+
+        function removeDroppedItem(drop) {
+            if (!drop) return false;
+            let gx = Math.floor(Number(drop.gx));
+            let gy = Math.floor(Number(drop.gy));
+            if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+                if (getDroppedItemAt(gx, gy) === drop) _setDroppedItemAt(gx, gy, null);
+            }
+
+            let idx = Number.isFinite(drop._droppedIndex) ? Math.floor(drop._droppedIndex) : -1;
+            if (idx < 0 || idx >= droppedItems.length || droppedItems[idx] !== drop) {
+                return false;
+            }
+            let lastIdx = droppedItems.length - 1;
+            let moved = droppedItems[lastIdx];
+            droppedItems[idx] = moved;
+            droppedItems.pop();
+            if (idx !== lastIdx && moved) moved._droppedIndex = idx;
+            delete drop._droppedIndex;
+            return true;
+        }
 
         const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
         let players = Array.from({ length: 8 }, () => ({ energy: 2000, astar: 9000, popCount: 0 }));
@@ -5219,6 +5311,7 @@
     let researchStatMatrixPopupPayload = null;
     let startingResourcesConfig = makeDefaultStartingResourcesConfig();
     let startingResourcesSelectedThingId = '';
+    let startingResourcesAdjustMultiplier = 1;
     let shopStatMatrixDescriptorById = {};
     let nextShopStatMatrixDescriptorId = 1;
     let infoPanelStatMatrixDescriptorById = {};
@@ -6232,12 +6325,85 @@
         let spatialUnitsComplexPlayerCount = 0;
         let spatialUnitsComplexStridePerPlayer = 0;
         let spatialUnitsComplexStridePerChunk = 0;
+        const ENABLE_SPATIAL_LOWEST_HEALTH_CACHE = false;
+        let spatialUnitsComplexLowestHealthUnit = []; // [chunk][player] => lowest damaged living unit
+        const CLOSEST_ENEMY_CHUNK_CACHE_MAX = 12000;
+        let closestEnemyChunkQueryCache = new Map();
+
+        function _spatialChunkPlayerFlatIndex(chunkKey, owner) {
+            if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return -1;
+            let ck = Math.floor(chunkKey);
+            let pid = Math.floor(owner);
+            if (ck < 0 || ck >= (CHUNKS_W * CHUNKS_H)) return -1;
+            if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return -1;
+            return ck * spatialUnitsComplexPlayerCount + pid;
+        }
+
+        function _isDamagedLivingUnitForOwner(u, owner) {
+            if (!u || u.dead) return false;
+            if (u.owner !== owner) return false;
+            if (!Number.isFinite(u.energy) || !Number.isFinite(u.maxEnergy)) return false;
+            return u.energy > 0 && u.energy < u.maxEnergy;
+        }
+
+        function _isUnitHealthLowerThan(a, b) {
+            if (!a || !b) return false;
+            let aE = Number(a.energy), aM = Number(a.maxEnergy);
+            let bE = Number(b.energy), bM = Number(b.maxEnergy);
+            if (!(aM > 0) || !(bM > 0)) return false;
+            return (aE * bM) < (bE * aM);
+        }
+
+        function _recomputeSpatialLowestHealthUnitForChunkPlayer(chunkKey, owner) {
+            if (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) return null;
+            if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return null;
+            let ck = Math.floor(chunkKey);
+            let pid = Math.floor(owner);
+            let idx = _spatialChunkPlayerFlatIndex(ck, pid);
+            if (idx < 0) return null;
+
+            let chunk = spatialUnits[ck];
+            let best = null;
+            if (chunk && chunk.size > 0) {
+                for (let u of chunk) {
+                    if (!_isDamagedLivingUnitForOwner(u, pid)) continue;
+                    if (!best || _isUnitHealthLowerThan(u, best)) best = u;
+                }
+            }
+            spatialUnitsComplexLowestHealthUnit[idx] = best;
+            return best;
+        }
+
+        function _updateSpatialLowestHealthForUnit(u, chunkKey) {
+            if (!ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) return;
+            if (!u || !Number.isFinite(chunkKey)) return;
+            let ck = Math.floor(chunkKey);
+            let owner = Math.floor(Number(u.owner));
+            let idx = _spatialChunkPlayerFlatIndex(ck, owner);
+            if (idx < 0) return;
+
+            let current = spatialUnitsComplexLowestHealthUnit[idx];
+            let currentValid = current
+                && current._spatialKey === ck
+                && _isDamagedLivingUnitForOwner(current, owner);
+
+            if (!_isDamagedLivingUnitForOwner(u, owner)) {
+                if (current === u) _recomputeSpatialLowestHealthUnitForChunkPlayer(ck, owner);
+                else if (!currentValid) _recomputeSpatialLowestHealthUnitForChunkPlayer(ck, owner);
+                return;
+            }
+
+            if (!currentValid || current === u || _isUnitHealthLowerThan(u, current)) {
+                spatialUnitsComplexLowestHealthUnit[idx] = u;
+            }
+        }
 
         function initSpatialHash() {
             CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
             CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
             spatialUnits = [];
             for (let i = 0; i < CHUNKS_W * CHUNKS_H; i++) spatialUnits.push(new Set());
+            closestEnemyChunkQueryCache.clear();
 
             spatialUnitTypeToIndex = Object.create(null);
             let unitKeys = Object.keys(BASE_UNIT_STATS || {});
@@ -6249,6 +6415,11 @@
             spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + each unit type
             spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
             spatialUnitsComplex = new Int32Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
+            if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
+                spatialUnitsComplexLowestHealthUnit = new Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexPlayerCount).fill(null);
+            } else {
+                spatialUnitsComplexLowestHealthUnit = [];
+            }
         }
         function getSpatialKey(wx, wy) {
             let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
@@ -6260,6 +6431,7 @@
         function updateUnitSpatial(u) {
             let newKey = getSpatialKey(u.x, u.y);
             if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
+                let oldKey = u._spatialKey;
                 if (spatialUnits[u._spatialKey].delete(u)) {
                     let owner = Math.floor(Number(u.owner));
                     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
@@ -6272,10 +6444,17 @@
                         spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                         spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
                     }
+                    if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
+                        let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
+                        if (oldIdx >= 0 && spatialUnitsComplexLowestHealthUnit[oldIdx] === u) {
+                            _recomputeSpatialLowestHealthUnitForChunkPlayer(oldKey, owner);
+                        }
+                    }
                 }
             }
             if (u._spatialKey === newKey) {
                 spatialUnits[newKey].add(u);
+                if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
                 return;
             }
             spatialUnits[newKey].add(u);
@@ -6291,9 +6470,11 @@
                 spatialUnitsComplex[typeCountIdx] += 1;
             }
             u._spatialKey = newKey;
+            if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
         }
         function removeUnitSpatial(u) {
             if (u._spatialKey !== undefined) {
+                let oldKey = u._spatialKey;
                 if (spatialUnits[u._spatialKey].delete(u)) {
                     let owner = Math.floor(Number(u.owner));
                     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
@@ -6305,6 +6486,12 @@
                         let typeCountIdx = playerBase + 1 + typeIdx;
                         spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                         spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
+                    }
+                    if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
+                        let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
+                        if (oldIdx >= 0 && spatialUnitsComplexLowestHealthUnit[oldIdx] === u) {
+                            _recomputeSpatialLowestHealthUnitForChunkPlayer(oldKey, owner);
+                        }
                     }
                 }
                 u._spatialKey = undefined;
@@ -6369,6 +6556,36 @@
             let useFilters = canCplx && (hasPlayerFilter || hasEnemyFilter || hasUnitTypeFilter);
             let typeOff = 1 + unitTypeFilterIdx; // only valid when hasUnitTypeFilter
             let chunks = spatialUnits, chunkCols = CHUNKS_W;
+
+            // Hot path: exact alive scan for one player (healer/ally scans).
+            if (!includeDead && exact && !predicate && hasPlayerFilter && !hasEnemyFilter && !hasUnitTypeFilter) {
+                for (let cy = minCy; cy <= maxCy; cy++) {
+                    let rowBase = cy * chunkCols;
+                    for (let cx = minCx; cx <= maxCx; cx++) {
+                        let ck = rowBase + cx;
+                        if (canCplx) {
+                            let cb = ck * cplxSC;
+                            let pb = cb + playerFilter * cplxSP;
+                            if (cplx[pb] <= 0) continue;
+                        }
+                        let chunk = chunks[ck];
+                        if (!chunk || chunk.size <= 0) continue;
+                        let minX = cx * cws, minY = cy * cws;
+                        let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
+                        let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
+                        let ddx = wx - nx, ddy = wy - ny;
+                        if (ddx * ddx + ddy * ddy > radiusSq) continue;
+                        for (let u of chunk) {
+                            if (u.owner !== playerFilter || u.dead) continue;
+                            let dx = u.x - wx, dy = u.y - wy;
+                            let d2 = dx * dx + dy * dy;
+                            if (d2 > radiusSq) continue;
+                            if (visitor(u, d2, dx, dy) === true) return true;
+                        }
+                    }
+                }
+                return false;
+            }
 
             // Hot path: no dead, exact, no predicate (all combat/vision/aggro scans)
             if (!includeDead && exact && !predicate) {
@@ -6470,6 +6687,130 @@
             return false;
         }
 
+        function _chunkHasEnemyForOwnerFast(chunkKey, ownerId) {
+            if (!(spatialUnitsComplex && spatialUnitsComplex.length > 0)) return true;
+            if (!(spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0)) return true;
+            if (!Number.isFinite(chunkKey) || !Number.isFinite(ownerId)) return true;
+            if (ownerId < 0 || ownerId >= spatialUnitsComplexPlayerCount) return true;
+
+            let cb = chunkKey * spatialUnitsComplexStridePerChunk;
+            for (let pid = 0; pid < spatialUnitsComplexPlayerCount; pid++) {
+                if (pid === ownerId) continue;
+                let pb = cb + pid * spatialUnitsComplexStridePerPlayer;
+                if ((spatialUnitsComplex[pb] | 0) > 0) return true;
+            }
+            return false;
+        }
+
+        function _isCachedEnemyTargetStillValid(target, ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
+            if (!target || target.dead || target.owner === ownerId) return false;
+            let ugx = Math.floor(target.x / TILE);
+            let ugy = Math.floor(target.y / TILE);
+            if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) return false;
+            let tcx = Math.floor(target.x / cws);
+            let tcy = Math.floor(target.y / cws);
+            if (tcx < minCx || tcx > maxCx || tcy < minCy || tcy > maxCy) return false;
+            let dx = target.x - wx;
+            let dy = target.y - wy;
+            return (dx * dx + dy * dy) <= rangeSq;
+        }
+
+        function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws) {
+            let bestChunkKey = -1;
+            let bestChunkD2 = Infinity;
+
+            for (let cy = minCy; cy <= maxCy; cy++) {
+                let rowBase = cy * CHUNKS_W;
+                for (let cx = minCx; cx <= maxCx; cx++) {
+                    let ck = rowBase + cx;
+                    if (!_chunkHasEnemyForOwnerFast(ck, ownerId)) continue;
+
+                    let chunkMinX = cx * cws;
+                    let chunkMinY = cy * cws;
+                    let nx = wx < chunkMinX ? chunkMinX : (wx > chunkMinX + cws ? chunkMinX + cws : wx);
+                    let ny = wy < chunkMinY ? chunkMinY : (wy > chunkMinY + cws ? chunkMinY + cws : wy);
+                    let ddx = wx - nx;
+                    let ddy = wy - ny;
+                    let chunkD2 = ddx * ddx + ddy * ddy;
+                    if (chunkD2 > rangeSq) continue;
+                    if (chunkD2 < bestChunkD2) {
+                        bestChunkD2 = chunkD2;
+                        bestChunkKey = ck;
+                    }
+                }
+            }
+
+            if (bestChunkKey < 0) return null;
+            let chunk = spatialUnits[bestChunkKey];
+            if (!chunk || chunk.size <= 0) return null;
+
+            let best = null;
+            let bestD2 = Infinity;
+            for (let u of chunk) {
+                if (!u || u.dead || u.owner === ownerId) continue;
+                let ugx = Math.floor(u.x / TILE);
+                let ugy = Math.floor(u.y / TILE);
+                if (!isGameplayTargetVisibleToPlayer(ownerId, ugx, ugy)) continue;
+                let dx = u.x - wx;
+                let dy = u.y - wy;
+                let d2 = dx * dx + dy * dy;
+                if (d2 > rangeSq) continue;
+                if (d2 < bestD2) {
+                    best = u;
+                    bestD2 = d2;
+                }
+            }
+            return best;
+        }
+
+        function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
+            let ownerId = Math.floor(Number(owner));
+            if (ownerId < 0 || ownerId >= spatialUnitsComplexPlayerCount) return null;
+            if (!(spatialUnits && spatialUnits.length > 0)) return null;
+
+            let cws = CHUNK_SIZE * TILE;
+            let r = Math.max(0, Number(rangePx) || 0);
+            let rangeSq = r * r;
+            let scan = r + TILE;
+            let minCx = Math.max(0, Math.floor((wx - scan) / cws));
+            let maxCx = Math.min(CHUNKS_W - 1, Math.floor((wx + scan) / cws));
+            let minCy = Math.max(0, Math.floor((wy - scan) / cws));
+            let maxCy = Math.min(CHUNKS_H - 1, Math.floor((wy + scan) / cws));
+
+            let centerCx = Math.max(0, Math.min(CHUNKS_W - 1, Math.floor(wx / cws)));
+            let centerCy = Math.max(0, Math.min(CHUNKS_H - 1, Math.floor(wy / cws)));
+            let centerChunkId = centerCy * CHUNKS_W + centerCx;
+
+            let tps = Math.max(1, Math.floor(Number(TICK_RATE) || 1));
+            let rangeKey = Math.max(0, Math.floor(r));
+            let cacheKey = ownerId + '|' + minCx + '|' + minCy + '|' + maxCx + '|' + maxCy + '|' + rangeKey;
+            let cacheEntry = closestEnemyChunkQueryCache.get(cacheKey);
+
+            if (cacheEntry) {
+                if (_isCachedEnemyTargetStillValid(cacheEntry.target, ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws)) {
+                    return cacheEntry.target;
+                }
+                if (cacheEntry.target === null && (gameTime - cacheEntry.updatedAt) < tps) {
+                    if (((gameTime + centerChunkId) % tps) !== 0) return null;
+                }
+                if ((gameTime - cacheEntry.updatedAt) < tps && ((gameTime + centerChunkId) % tps) !== 0) {
+                    return null;
+                }
+            } else if (((gameTime + centerChunkId) % tps) !== 0) {
+                return null;
+            }
+
+            let best = _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy, maxCx, maxCy, cws);
+            closestEnemyChunkQueryCache.set(cacheKey, {
+                updatedAt: gameTime,
+                target: best
+            });
+            if (closestEnemyChunkQueryCache.size > CLOSEST_ENEMY_CHUNK_CACHE_MAX) {
+                closestEnemyChunkQueryCache.clear();
+            }
+            return best;
+        }
+
         // ============================================================
         // A* PATHFINDING
         // ============================================================
@@ -6493,7 +6834,6 @@
         const ASTAR_NODE_BUDGET_PER_PATH = 360;
         const ASTAR_NODE_BUDGET_MIN_PER_TICK = 2400;
         const ASTAR_NODE_BUDGET_MAX_PER_TICK = 22000;
-        const WORKER_HEAVY_AI_STRIDE = 3;
         let astarNodeBudgetPerTick = 9000; // fallback for non-player-owned path requests
         let astarNodeBudgetRemaining = 9000; // fallback for non-player-owned path requests
         let pathfindBudgetByPlayer = new Int32Array(0);
@@ -7608,6 +7948,7 @@
         // ============================================================
         function initGrid() {
             grid = [];
+            initDroppedItemGrid();
             for (let y = 0; y < GRID_H; y++) {
                 let row = [];
                 for (let x = 0; x < GRID_W; x++) {
@@ -10235,13 +10576,7 @@
                 }
                 // Auto-aggro nearby enemies
                 let aggroRange = this.visionRange * TILE;
-                let closest = null, closestD = aggroRange;
-                forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
-                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                    if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
-                    let d = Math.sqrt(d2);
-                    if (d < closestD) { closestD = d; closest = u; }
-                }, { enemyOfPlayer: this.owner });
+                let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
                 if (closest) {
                     this.targetUnit = closest;
                     this.forcedAttackTarget = false;
@@ -10342,13 +10677,7 @@
             doAttackMoving(spd) {
                 // Check for nearby enemies first
                 let aggroRange = this.visionRange * TILE;
-                let closest = null, closestD = aggroRange;
-                forEachUnitInRange(this.x, this.y, aggroRange, (u, d2) => {
-                    let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                    if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
-                    let d = Math.sqrt(d2);
-                    if (d < closestD) { closestD = d; closest = u; }
-                }, { enemyOfPlayer: this.owner });
+                let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
                 if (closest) {
                     this.targetUnit = closest;
                     this.forcedAttackTarget = false;
@@ -11769,7 +12098,8 @@
         // Worker AI logic - runs inside Unit.update() for collector/salvager/builder/healer types
         function updateWorkerAI(u) {
             if (!u.workerState) return;
-            let canRunHeavyAi = ((gameTime + u.id) % WORKER_HEAVY_AI_STRIDE) === 0;
+            let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
+            let canRunHeavyAi = ((gameTime + u.id) % workerAiTickDelay) === 0;
             let getSpawnerRoute = (type, canWalk = null) => _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: !canRunHeavyAi });
             if (u.commandState === CMD_HOLDING) {
                 _clearWorkerTarget(u);
@@ -11783,6 +12113,11 @@
             }
             let owner = u.owner;
             let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
+            let runHealerRetargetIfDue = () => {
+                if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return false;
+                _healerFindTarget(u, myGx, myGy);
+                return true;
+            };
             if (u.workerTransferCooldown > 0) u.workerTransferCooldown--;
 
             if (u.workerState === 'MANUAL_MOVE') {
@@ -11802,18 +12137,22 @@
 
             if (u.workerType === 'collector') {
                 if (u.workerState === 'IDLE') {
+                    if (!u._lastIdleStateTime || u.workerState !== 'IDLE') u._lastIdleStateTime = gameTime;
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
+                    if (gameTime < (u._lastIdleTargetScanTime || 0) + secondsToTicks(0.1) + ((u.id % 10) / 10) * secondsToTicks(0.5)) return;
+                    u._lastIdleTargetScanTime = gameTime;
                     _collectorFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
+                    u._lastIdleStateTime = 0;
                     if (!u.workerTarget) { u.workerState = 'RETURNING'; _workerReturnPath(u); return; }
-                    if (u.workerTargetType === 'drop' && !droppedItems.includes(u.workerTarget)) {
-                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
+                    if (u.workerTargetType === 'drop' && getDroppedItemAt(u.workerTarget.gx, u.workerTarget.gy) !== u.workerTarget) {
+                        _clearWorkerTarget(u, 'target_missing'); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (u.workerTargetType === 'mine' && u.workerTarget.gold <= 0) {
-                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
+                        _clearWorkerTarget(u, 'target_no_work'); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (u.workerTargetType === 'farm' && (!u.workerTarget || u.workerTarget.type !== 'farm' || u.workerTarget.owner !== owner || u.workerTarget.underConstruction || u.workerTarget.energy <= 0)) {
-                        _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy); return;
+                        _clearWorkerTarget(u, 'target_no_work'); _collectorFindTarget(u, myGx, myGy); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
@@ -11821,12 +12160,7 @@
                             if (u.workerTransferCooldown > 0) return;
                             if (u.workerTargetType === 'drop') {
                                 u.carryingValue = u.workerTarget.value;
-                                let idx = droppedItems.indexOf(u.workerTarget);
-                                if (idx !== -1) {
-                                    if (grid[u.workerTarget.gy][u.workerTarget.gx].droppedItem === u.workerTarget)
-                                        grid[u.workerTarget.gy][u.workerTarget.gx].droppedItem = null;
-                                    droppedItems.splice(idx, 1);
-                                }
+                                removeDroppedItem(u.workerTarget);
                             } else if (u.workerTargetType === 'farm') {
                                 let gatherPerTrip = Number(u.gatherPerTrip);
                                 if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
@@ -11863,9 +12197,18 @@
                             _collectorRememberGatherSite(u, u.workerTarget, u.workerTargetType);
                             // Remember the mine we just used for re-targeting after return
                             u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
-                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            if (u.workerTargetType === 'drop') _clearWorkerTarget(u, 'target_missing');
+                            u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
-                            _clearWorkerTarget(u); _collectorFindTarget(u, myGx, myGy);
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let canWalk = u.workerTargetType === 'mine' ? _collectorCanWalk : null;
+                            u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, null, true);
+                            if (u.path) {
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                            } else {
+                                _collectorFindTarget(u, myGx, myGy);
+                            }
                         }
                     }
                 } else if (u.workerState === 'RETURNING') {
@@ -11888,13 +12231,12 @@
                             if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
                         }
                         u.carryingValue = 0;
-                        // Immediately find next target (prefer the mine we were just at if it still has gold)
-                        let preferMine = u._lastMineTarget;
-                        u._lastMineTarget = null;
                         if (!canRunHeavyAi) return;
-                        if (preferMine && preferMine.gold > 0 && _canAssignWorkerTargetExclusive(u, preferMine, 'mine')) {
-                            _collectorAssignMine(u, preferMine, myGx, myGy);
+                        if (_isCollectorTargetValid(u.workerTarget, u.workerTargetType, owner)) {
+                            _collectorAssignTarget(u, u.workerTarget, u.workerTargetType, myGx, myGy);
                         } else {
+                            u._lastMineTarget = null;
+                            _clearWorkerTarget(u, 'target_no_work');
                             _collectorFindTarget(u, myGx, myGy);
                         }
                     }
@@ -11905,7 +12247,7 @@
                     _astarCollectorFindTarget(u);
                 } else if (u.workerState === 'MOVING_TO_ASTAR') {
                     if (!_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner)) {
-                        _clearWorkerTarget(u); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u); return;
+                        _clearWorkerTarget(u, 'target_no_work'); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
@@ -11941,9 +12283,17 @@
                             _astarCollectorRememberGatherSite(u, u.workerTarget);
                             u._astarLastMineTarget = u.workerTarget;
                             u._astarLastMineTargetType = u.workerTargetType;
-                            _clearWorkerTarget(u); u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u);
+                            u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u);
                         } else {
-                            _clearWorkerTarget(u); _astarCollectorFindTarget(u);
+                            let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                            let canWalk = u.workerTargetType === 'astar_mine' ? _astarCollectorCanWalk : null;
+                            u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'astar_collector', true);
+                            if (u.path) {
+                                u.pathIndex = 0;
+                                u.commandState = CMD_MOVING;
+                            } else {
+                                _astarCollectorFindTarget(u);
+                            }
                         }
                     }
                 } else if (u.workerState === 'RETURNING_ASTAR') {
@@ -11966,15 +12316,13 @@
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
                         }
                         u.carryingValue = 0;
-                        let preferMine = u._astarLastMineTarget;
-                        let preferMineType = u._astarLastMineTargetType;
-                        u._astarLastMineTarget = null;
-                        u._astarLastMineTargetType = null;
                         if (!canRunHeavyAi) return;
-                        if (_isAstarCollectorTargetValid(preferMine, preferMineType, owner)
-                            && _canAssignWorkerTargetExclusive(u, preferMine, preferMineType)) {
-                            _astarCollectorAssignTarget(u, preferMine, preferMineType);
+                        if (_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner)) {
+                            _astarCollectorAssignTarget(u, u.workerTarget, u.workerTargetType);
                         } else {
+                            u._astarLastMineTarget = null;
+                            u._astarLastMineTargetType = null;
+                            _clearWorkerTarget(u, 'target_no_work');
                             _astarCollectorFindTarget(u);
                         }
                     }
@@ -11985,7 +12333,7 @@
                     _salvagerFindTarget(u, myGx, myGy);
                 } else if (u.workerState === 'MOVING_TO') {
                     if (!u.workerTarget || !u.workerTarget.markedForSalvage) {
-                        _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u); return;
+                        _clearWorkerTarget(u, 'target_no_work'); u.workerState = 'RETURNING'; _workerReturnPath(u); return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
                         let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
@@ -11996,9 +12344,9 @@
                             u.carryingValue = refund * getUnitBaseLevel(u);
                             destroyBuilding(u.workerTarget);
                             u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
-                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            _clearWorkerTarget(u, 'target_missing'); u.workerState = 'RETURNING'; _workerReturnPath(u);
                         } else {
-                            _clearWorkerTarget(u); u.workerState = 'RETURNING'; _workerReturnPath(u);
+                            _workerReturnPath(u);
                         }
                     }
                 } else if (u.workerState === 'RETURNING') {
@@ -12332,14 +12680,16 @@
                 }
             } else if (u.workerType === 'healer') {
                 if (u.workerState === 'IDLE') {
-                    if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-                    _healerFindTarget(u, myGx, myGy);
+                    if (!runHealerRetargetIfDue()) return;
                 } else if (u.workerState === 'MOVING_TO_HEAL') {
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         if (targetIsQueue) _clearHealerQueueCommit(u);
-                        _clearWorkerTarget(u);
-                        _healerFindTarget(u, myGx, myGy);
+                        _clearWorkerTarget(u, 'target_no_work');
+                        if (!runHealerRetargetIfDue()) {
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                        }
                         return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
@@ -12396,8 +12746,11 @@
                             }
 
                             if (!_isHealerQueueTarget(sp, owner)) {
-                                _clearWorkerTarget(u);
-                                _healerFindTarget(u, myGx, myGy);
+                                _clearWorkerTarget(u, 'target_no_work');
+                                if (!runHealerRetargetIfDue()) {
+                                    u.workerState = 'IDLE';
+                                    u.commandState = CMD_IDLE;
+                                }
                                 return;
                             }
 
@@ -12425,8 +12778,11 @@
                         u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
 
                         if (!_isHealerTargetUnit(u.workerTarget, owner)) {
-                            _clearWorkerTarget(u);
-                            _healerFindTarget(u, myGx, myGy);
+                            _clearWorkerTarget(u, 'target_no_work');
+                            if (!runHealerRetargetIfDue()) {
+                                u.workerState = 'IDLE';
+                                u.commandState = CMD_IDLE;
+                            }
                             return;
                         }
 
@@ -12446,9 +12802,12 @@
                     let targetIsQueue = (u.workerTargetType === 'queue');
                     if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                         if (targetIsQueue) _clearHealerQueueCommit(u);
-                        _clearWorkerTarget(u);
+                        _clearWorkerTarget(u, 'target_no_work');
                         u._healerQueueTripCost = 0;
-                        _healerFindTarget(u, myGx, myGy);
+                        if (!runHealerRetargetIfDue()) {
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                        }
                         return;
                     }
                     if (!u.path || u.pathIndex >= u.path.length) {
@@ -12494,7 +12853,11 @@
                     if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
                     let target = _findNearestResearchBuildingNeedingWork(u);
                     if (target) {
-                        _setWorkerTarget(u, target, 'research');
+                        if (!_setWorkerTarget(u, target, 'research')) {
+                            u.workerState = 'IDLE';
+                            u.commandState = CMD_IDLE;
+                            return;
+                        }
                         u.workerState = 'MOVING_TO_RESEARCH';
                         let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                         u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, null, null);
@@ -12505,7 +12868,7 @@
                     }
                 } else if (u.workerState === 'MOVING_TO_RESEARCH') {
                     if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
-                        _clearWorkerTarget(u);
+                        _clearWorkerTarget(u, 'target_no_work');
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                         return;
@@ -12550,7 +12913,7 @@
                         u.workerState = 'RESEARCHING';
                         let task = target.researchTask;
                         if (!task) {
-                            _clearWorkerTarget(u);
+                            _clearWorkerTarget(u, 'target_no_work');
                             u.workerState = 'IDLE';
                             u.commandState = CMD_IDLE;
                             return;
@@ -12576,7 +12939,7 @@
                         }
 
                         if (!_isResearcherTargetBuilding(target, owner)) {
-                            _clearWorkerTarget(u);
+                            _clearWorkerTarget(u, 'target_no_work');
                             u.workerState = 'IDLE';
                             u.commandState = CMD_IDLE;
                             return;
@@ -12588,7 +12951,7 @@
                     }
                 } else if (u.workerState === 'RETURNING_FOR_GOLD') {
                     if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
-                        _clearWorkerTarget(u);
+                        _clearWorkerTarget(u, 'target_no_work');
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                         return;
@@ -12635,7 +12998,7 @@
                 return target.type === 'farm' && target.owner === owner && !target.underConstruction && target.energy > 0;
             }
             if (targetType === 'drop') {
-                return droppedItems.includes(target);
+                return getDroppedItemAt(target.gx, target.gy) === target;
             }
             return false;
         }
@@ -12662,6 +13025,9 @@
         }
 
         function _collectorGetSearchOrigin(u) {
+            if (u && u.workerState === 'IDLE' && (gameTime - (u._lastIdleStateTime || 0)) < secondsToTicks(5)) {
+                return { x: u.x, y: u.y };
+            }
             if (u && Number.isFinite(u._collectorLastGatherX) && Number.isFinite(u._collectorLastGatherY)) {
                 return { x: u._collectorLastGatherX, y: u._collectorLastGatherY };
             }
@@ -12803,6 +13169,7 @@
             u._collectorPinnedTargetType = null;
 
             let origin = _collectorGetSearchOrigin(u);
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             let anchorSpawner = null;
             if (_isCollectorSpawnerValidForUnit(u, u._collectorNextSpawner)) {
                 anchorSpawner = u._collectorNextSpawner;
@@ -12812,78 +13179,80 @@
                 anchorSpawner = _findClosestSpawner(u, 'spawner');
             }
 
+            let originGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.x / TILE)));
+            let originGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.y / TILE)));
+            let tileRadius = Math.max(0, Math.ceil(maxSearch / TILE));
+
+            let minX = Math.max(0, originGx - tileRadius);
+            let maxX = Math.min(GRID_W - 1, originGx + tileRadius);
+            let minY = Math.max(0, originGy - tileRadius);
+            let maxY = Math.min(GRID_H - 1, originGy + tileRadius);
+            let maxSearchSq = maxSearch * maxSearch;
+
             let candidates = [];
-            let bestOriginDist = Infinity;
-            let pushCandidate = (target, type) => {
-                if (!target) return;
-                let originDist = Math.hypot(target.x - origin.x, target.y - origin.y);
-                let spawnerDist = anchorSpawner
-                    ? Math.hypot(target.x - anchorSpawner.x, target.y - anchorSpawner.y)
-                    : Math.hypot(target.x - u.x, target.y - u.y);
-                candidates.push({ target, type, originDist, spawnerDist });
-                if (originDist < bestOriginDist) bestOriginDist = originDist;
-            };
 
-            // Check tileEntity arrays first (indexed, fast)
-            for (let drop of droppedItems) {
-                pushCandidate(drop, 'drop');
-            }
-            for (let mine of goldMines) {
-                if (mine.gold <= 0) continue;
-                pushCandidate(mine, 'mine');
-            }
+            for (let y = minY; y <= maxY; y++) {
+                for (let x = minX; x <= maxX; x++) {
+                    let worldX = x * TILE + TILE * 0.5;
+                    let worldY = y * TILE + TILE * 0.5;
+                    let dx = worldX - origin.x;
+                    let dy = worldY - origin.y;
+                    let originDistSq = dx * dx + dy * dy;
+                    if (originDistSq > maxSearchSq) continue;
 
-            // Spiral search for farms from collector position (bounded, not full grid)
-            let originGx = Math.floor(origin.x / TILE);
-            let originGy = Math.floor(origin.y / TILE);
-            let searchRadius = Math.min(Math.max(GRID_W, GRID_H), Math.max(6, Math.floor(Math.min(GRID_W, GRID_H) * 0.4)));
-            let minGx = Math.max(0, originGx - searchRadius);
-            let maxGx = Math.min(GRID_W - 1, originGx + searchRadius);
-            let minGy = Math.max(0, originGy - searchRadius);
-            let maxGy = Math.min(GRID_H - 1, originGy + searchRadius);
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
+                    let drop = getDroppedItemAt(x, y);
+                    let mine = getGoldMineAt(x, y);
                     let cell = grid[y][x];
                     let item = cell && cell.item;
-                    if (!item || item.type !== 'farm') continue;
-                    if (item.owner !== u.owner) continue;
-                    if (item.underConstruction || item.energy <= 0) continue;
-                    pushCandidate(item, 'farm');
+
+                    let candidate = null;
+                    let candidateType = null;
+                    let dropPenalty = 0;
+
+                    if (drop) {
+                        candidate = drop;
+                        candidateType = 'drop';
+                        dropPenalty = TILE * 0.5;
+                    } else if (mine && mine.gold > 0) {
+                        candidate = mine;
+                        candidateType = 'mine';
+                    } else if (item && item.type === 'farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
+                        candidate = item;
+                        candidateType = 'farm';
+                    }
+
+                    if (!candidate) continue;
+                    if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) continue;
+
+                    let originDist = Math.sqrt(originDistSq);
+                    let spawnerDist = anchorSpawner
+                        ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+                        : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+
+                    candidates.push({
+                        target: candidate,
+                        targetType: candidateType,
+                        dist: spawnerDist + originDist * 0.22 + dropPenalty,
+                        worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+                    });
                 }
             }
 
-            if (candidates.length > 0) {
-                let nearRadius = Math.max(TILE * 4, bestOriginDist + TILE * 3);
-
-                let best = null;
-                let bestScore = Infinity;
-                let fallbackBest = null;
-                let fallbackScore = Infinity;
-                for (let c of candidates) {
-                    if (!_canAssignWorkerTargetExclusive(u, c.target, c.type)) continue;
-                    let score = c.spawnerDist + c.originDist * 0.22;
-                    if (c.type === 'drop') score += TILE * 0.5;
-                    if (u.workerTarget && u.workerTarget === c.target) score -= TILE * 0.75;
-
-                    if (score < fallbackScore) {
-                        fallbackScore = score;
-                        fallbackBest = c;
-                    }
-                    if (c.originDist <= nearRadius && score < bestScore) {
-                        bestScore = score;
-                        best = c;
-                    }
-                }
-
-                if (!best) best = fallbackBest;
-                if (best) {
-                    _collectorAssignTarget(u, best.target, best.type, myGx, myGy);
-                    return;
-                }
+            let picked = _pickDistributedWorkerCandidate(u, candidates);
+            if (picked && picked.target) {
+                _collectorAssignTarget(
+                    u,
+                    picked.target,
+                    picked.targetType !== undefined ? picked.targetType : null,
+                    myGx,
+                    myGy
+                );
+                return;
             }
 
             if (anchorSpawner) {
-                u._collectorNextSpawner = anchorSpawner;
+                // Do not set next spawner if no work was found.
+                // u._collectorNextSpawner = anchorSpawner;
             }
             u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
         }
@@ -13044,6 +13413,14 @@
             return Math.max(TILE, visTiles * TILE);
         }
 
+        function _getWorkerAutoSearchDistancePx(u) {
+            if (!u) return TILE * 10;
+            let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
+            let distTiles = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
+            if (!Number.isFinite(distTiles) || distTiles <= 0) distTiles = 10;
+            return Math.max(TILE, distTiles * TILE);
+        }
+
         function _getTargetPriorityLevel(target) {
             if (!target) return 1;
             if (target.workerType) return getUnitEffectiveLevel(target, getUnitBaseLevel(target));
@@ -13053,89 +13430,212 @@
             return 1;
         }
 
-        // Per-tick cache for worker target load lookups to avoid repeated O(units) scans.
-        let _workerTargetLoadCacheTick = -1;
-        let _workerTargetLoadCacheDirty = true;
-        let _workerTargetLoadCacheUnitCount = -1;
-        let _workerTargetLoadCache = new Map();
+        // Per-target worker load counters (updated on target set/clear).
+        let _workerTargetLoadCache = new WeakMap();
+        let _workerTargetTileLoadCache = new Map();
+        const _WORKER_TARGET_LOAD_TYPE_COUNT = 6;
+
+        function _workerTypeToLoadIndex(workerType) {
+            switch (workerType) {
+                case 'collector': return 0;
+                case 'astar_collector': return 1;
+                case 'salvager': return 2;
+                case 'builder': return 3;
+                case 'healer': return 4;
+                case 'researcher': return 5;
+            }
+            return -1;
+        }
+
+        function _getWorkerTargetTileKey(target) {
+            if (!target) return null;
+            let gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
+            let gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
+            if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+            return String(gx) + ',' + String(gy);
+        }
+
+        function _workerTargetTileBucketMapKey(ownerId, tileKey) {
+            return String(ownerId) + '|' + String(tileKey);
+        }
+
+        function _getWorkerTargetTileLoad(target, owner, workerType) {
+            if (!target || !Number.isFinite(owner) || !workerType) return 0;
+            let ownerId = Math.floor(owner);
+            if (ownerId < 0) return 0;
+            let idx = _workerTypeToLoadIndex(workerType);
+            if (idx < 0) return 0;
+            let tileKey = _getWorkerTargetTileKey(target);
+            if (!tileKey) return 0;
+            let arr = _workerTargetTileLoadCache.get(_workerTargetTileBucketMapKey(ownerId, tileKey));
+            if (!arr) return 0;
+            return arr[idx] | 0;
+        }
+
+        function _workerTargetTileLoadAdd(target, ownerId, workerTypeIndex, delta) {
+            let tileKey = _getWorkerTargetTileKey(target);
+            if (!tileKey) return;
+            let mapKey = _workerTargetTileBucketMapKey(ownerId, tileKey);
+            let arr = _workerTargetTileLoadCache.get(mapKey);
+            if (!arr) {
+                if (delta < 0) return;
+                arr = new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT);
+                _workerTargetTileLoadCache.set(mapKey, arr);
+            }
+            let next = arr[workerTypeIndex] + delta;
+            arr[workerTypeIndex] = next > 0 ? next : 0;
+        }
+
+        function _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, createIfMissing = false) {
+            let bucket = perTarget.get(ownerId);
+            if (!bucket && createIfMissing) {
+                bucket = {
+                    any: new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT),
+                    byType: new Map()
+                };
+                perTarget.set(ownerId, bucket);
+            }
+            return bucket;
+        }
 
         function _invalidateWorkerTargetLoadCache() {
-            _workerTargetLoadCacheDirty = true;
+            _workerTargetLoadCache = new WeakMap();
+            _workerTargetTileLoadCache = new Map();
         }
 
-        function _workerTargetLoadKey(owner, workerType, targetType = null) {
-            let t = targetType === null ? '*' : String(targetType);
-            return `${owner}|${workerType}|${t}`;
-        }
+        function _workerTargetLoadAdd(target, owner, workerType, targetType, delta = 1) {
+            if (!target || !workerType || !Number.isFinite(owner)) return;
+            let ownerId = Math.floor(owner);
+            if (ownerId < 0) return;
+            let workerTypeIndex = _workerTypeToLoadIndex(workerType);
+            if (workerTypeIndex < 0) return;
 
-        function _workerTargetLoadAdd(target, owner, workerType, targetType) {
-            if (!target) return;
+            let d = Math.floor(Number(delta) || 0);
+            if (d === 0) return;
+
             let perTarget = _workerTargetLoadCache.get(target);
             if (!perTarget) {
+                if (d < 0) return;
                 perTarget = new Map();
                 _workerTargetLoadCache.set(target, perTarget);
             }
-            let kAny = _workerTargetLoadKey(owner, workerType, null);
-            perTarget.set(kAny, (perTarget.get(kAny) || 0) + 1);
-            if (targetType !== null) {
-                let kTyped = _workerTargetLoadKey(owner, workerType, targetType);
-                perTarget.set(kTyped, (perTarget.get(kTyped) || 0) + 1);
-            }
-        }
 
-        function _rebuildWorkerTargetLoadCache() {
-            _workerTargetLoadCache = new Map();
-            for (let wu of units) {
-                if (!wu || wu.dead) continue;
-                if (!wu.workerType || !wu.workerTarget) continue;
-                if (wu.workerState === 'IDLE' || wu.workerState === 'MANUAL_MOVE') continue;
-                _workerTargetLoadAdd(wu.workerTarget, wu.owner, wu.workerType, wu.workerTargetType !== undefined ? wu.workerTargetType : null);
+            let bucket = _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, d > 0);
+            if (!bucket) return;
+
+            let nextAny = bucket.any[workerTypeIndex] + d;
+            bucket.any[workerTypeIndex] = nextAny > 0 ? nextAny : 0;
+            _workerTargetTileLoadAdd(target, ownerId, workerTypeIndex, d);
+
+            if (targetType !== null && targetType !== undefined) {
+                let typed = bucket.byType.get(targetType);
+                if (!typed) {
+                    if (d < 0) return;
+                    typed = new Int32Array(_WORKER_TARGET_LOAD_TYPE_COUNT);
+                    bucket.byType.set(targetType, typed);
+                }
+                let nextTyped = typed[workerTypeIndex] + d;
+                typed[workerTypeIndex] = nextTyped > 0 ? nextTyped : 0;
             }
-            _workerTargetLoadCacheTick = gameTime;
-            _workerTargetLoadCacheDirty = false;
-            _workerTargetLoadCacheUnitCount = units.length;
         }
 
         function _getWorkerTargetLoadCached(target, owner, workerType, targetType = null) {
-            if (!target) return 0;
-            if (_workerTargetLoadCacheDirty || _workerTargetLoadCacheTick !== gameTime || _workerTargetLoadCacheUnitCount !== units.length) {
-                _rebuildWorkerTargetLoadCache();
-            }
+            if (!target || !workerType || !Number.isFinite(owner)) return 0;
+            let ownerId = Math.floor(owner);
+            if (ownerId < 0) return 0;
+            let workerTypeIndex = _workerTypeToLoadIndex(workerType);
+            if (workerTypeIndex < 0) return 0;
+
             let perTarget = _workerTargetLoadCache.get(target);
             if (!perTarget) return 0;
-            return perTarget.get(_workerTargetLoadKey(owner, workerType, targetType)) || 0;
+
+            let bucket = _getWorkerTargetLoadOwnerBucket(perTarget, ownerId, false);
+            if (!bucket) return 0;
+
+            if (targetType === null || targetType === undefined) {
+                return bucket.any[workerTypeIndex] | 0;
+            }
+
+            let typed = bucket.byType.get(targetType);
+            if (!typed) return 0;
+            return typed[workerTypeIndex] | 0;
         }
 
         function _setWorkerTarget(unit, target, targetType = null) {
-            if (!unit) return;
+            if (!unit) return false;
             let nextType = (targetType === undefined) ? null : targetType;
-            if (unit.workerTarget === target && unit.workerTargetType === nextType) return;
+            if (unit.workerTarget === target && unit.workerTargetType === nextType) return true;
+
+            if (target && Number.isFinite(unit.owner) && unit.workerType) {
+                let tileKey = _getWorkerTargetTileKey(target);
+                if (tileKey) {
+                    let tileLoad = _getWorkerTargetTileLoad(target, unit.owner, unit.workerType);
+                    let prevTileKey = _getWorkerTargetTileKey(unit.workerTarget);
+                    if (prevTileKey && prevTileKey === tileKey && tileLoad > 0) tileLoad--;
+                    if (tileLoad > 0) return false;
+                }
+            }
+
+            let prevTarget = unit.workerTarget;
+            let prevType = (unit.workerTargetType === undefined) ? null : unit.workerTargetType;
+            if (prevTarget) {
+                _workerTargetLoadAdd(prevTarget, unit.owner, unit.workerType, prevType, -1);
+            }
+
             unit.workerTarget = target;
             unit.workerTargetType = nextType;
-            _invalidateWorkerTargetLoadCache();
+            if (target) {
+                _workerTargetLoadAdd(target, unit.owner, unit.workerType, nextType, 1);
+            }
+            return true;
         }
 
-        function _clearWorkerTarget(unit) {
+        function _clearWorkerTarget(unit, reason = null) {
             if (!unit) return;
+            if (unit.workerState === 'RETURNING' || unit.workerState === 'RETURNING_ASTAR' || unit.workerState === 'RETURNING_FOR_GOLD') {
+                let allowed = reason === 'manual_rally_change'
+                    || reason === 'target_missing'
+                    || reason === 'target_no_work'
+                    || reason === 'worker_removed';
+                if (!allowed) return;
+            }
             if (unit.workerTarget === null && unit.workerTargetType === null) return;
+
+            let prevTarget = unit.workerTarget;
+            let prevType = (unit.workerTargetType === undefined) ? null : unit.workerTargetType;
+            if (prevTarget) {
+                _workerTargetLoadAdd(prevTarget, unit.owner, unit.workerType, prevType, -1);
+            }
+
             unit.workerTarget = null;
             unit.workerTargetType = null;
-            _invalidateWorkerTargetLoadCache();
         }
 
         function _countWorkersTargetingTarget(target, owner, workerType, targetType = null, excludeUnit = null) {
             if (!target) return 0;
-            let count = _getWorkerTargetLoadCached(target, owner, workerType, targetType);
-            if (excludeUnit && !excludeUnit.dead) {
-                let excludeMatches = excludeUnit.owner === owner
-                    && excludeUnit.workerType === workerType
-                    && excludeUnit.workerState !== 'IDLE'
-                    && excludeUnit.workerState !== 'MANUAL_MOVE'
-                    && excludeUnit.workerTarget === target
-                    && (targetType === null || excludeUnit.workerTargetType === targetType);
-                if (excludeMatches) count = Math.max(0, count - 1);
+            let objectCount = _getWorkerTargetLoadCached(target, owner, workerType, targetType);
+            let tileCount = _getWorkerTargetTileLoad(target, owner, workerType);
+            if (!excludeUnit || excludeUnit.dead) return Math.max(objectCount, tileCount);
+            if (excludeUnit.owner !== owner || excludeUnit.workerType !== workerType) return Math.max(objectCount, tileCount);
+            if (excludeUnit.workerState === 'IDLE' || excludeUnit.workerState === 'MANUAL_MOVE') return Math.max(objectCount, tileCount);
+
+            if (excludeUnit.workerType === workerType && excludeUnit.workerTarget === target) {
+                if (targetType === null || targetType === undefined || excludeUnit.workerTargetType === targetType) {
+                    if (objectCount > 0) objectCount--;
+                }
             }
-            return count;
+
+            let targetTileKey = _getWorkerTargetTileKey(target);
+            let unitTileKey = _getWorkerTargetTileKey(excludeUnit.workerTarget);
+            if (targetTileKey && unitTileKey && targetTileKey === unitTileKey) {
+                if (tileCount > 0) tileCount--;
+            }
+
+            return Math.max(objectCount, tileCount);
+        }
+
+        function _workerTargetTypeNeedsExclusive(workerType, targetType = null) {
+            return true;
         }
 
         function _canAssignWorkerTargetExclusive(u, target, targetType = null) {
@@ -13147,7 +13647,10 @@
         function _scoreWorkerTaskCandidate(u, candidate, hasAlternatives) {
             let score = Number(candidate.dist) || 0;
             if (hasAlternatives) {
-                let load = _countWorkersTargetingTarget(candidate.target, u.owner, u.workerType, candidate.targetType !== undefined ? candidate.targetType : null, u);
+                let cachedLoad = Number(candidate.cachedLoad);
+                let load = Number.isFinite(cachedLoad)
+                    ? Math.max(0, Math.floor(cachedLoad))
+                    : _countWorkersTargetingTarget(candidate.target, u.owner, u.workerType, candidate.targetType !== undefined ? candidate.targetType : null, u);
                 score += load * TILE * 1.5;
                 if (load > 3) score += (load - 3) * TILE * 8;
                 if (Number.isFinite(candidate.level)) score += candidate.level * TILE * 0.8;
@@ -13163,7 +13666,7 @@
             return score;
         }
 
-        function _pickDistributedWorkerTarget(u, candidates) {
+        function _pickDistributedWorkerCandidate(u, candidates) {
             if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
 
             let visibilityPx = _getWorkerVisionRangePx(u);
@@ -13173,7 +13676,10 @@
             for (let c of candidates) {
                 if (!c || !c.target) continue;
                 let targetType = (c.targetType !== undefined) ? c.targetType : null;
-                if (!_canAssignWorkerTargetExclusive(u, c.target, targetType)) continue;
+                let load = _countWorkersTargetingTarget(c.target, u.owner, u.workerType, targetType, u);
+                if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && load > 0) continue;
+
+                c.cachedLoad = load;
 
                 globalExclusive.push(c);
                 let d = Number.isFinite(c.worldDist) ? c.worldDist : c.dist;
@@ -13193,7 +13699,12 @@
                     best = c;
                 }
             }
-            return best ? best.target : null;
+            return best || null;
+        }
+
+        function _pickDistributedWorkerTarget(u, candidates) {
+            let picked = _pickDistributedWorkerCandidate(u, candidates);
+            return picked ? picked.target : null;
         }
 
         function getPathCanWalkForUnit(unit) {
@@ -13261,7 +13772,11 @@
         }
 
         function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
-            _setWorkerTarget(u, target, targetType);
+            if (!_setWorkerTarget(u, target, targetType)) {
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
             let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, null, true);
@@ -13300,7 +13815,11 @@
         }
 
         function _astarCollectorAssignTarget(u, target, targetType) {
-            _setWorkerTarget(u, target, targetType);
+            if (!_setWorkerTarget(u, target, targetType)) {
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
             let canWalk = targetType === 'astar_mine' ? _astarCollectorCanWalk : null;
             u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, 'astar_collector', true);
@@ -13330,55 +13849,75 @@
             u._astarPinnedTargetType = null;
 
             let origin = _astarCollectorGetSearchOrigin(u);
-            let bestTarget = null;
-            let bestTargetType = null;
-            let bestScore = Infinity;
-            let anchorSpawner = _findClosestSpawner(u, 'astar_spawner');
-            for (let mine of astarMines) {
-                if (!mine || mine.astar <= 0) continue;
-                if (!_canAssignWorkerTargetExclusive(u, mine, 'astar_mine')) continue;
-                let originDist = Math.hypot(mine.x - origin.x, mine.y - origin.y);
-                let spawnerDist = anchorSpawner ? Math.hypot(mine.x - anchorSpawner.x, mine.y - anchorSpawner.y) : Math.hypot(mine.x - u.x, mine.y - u.y);
-                let score = spawnerDist + originDist * 0.25;
-                if (u.workerTarget === mine) score -= TILE * 0.75;
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestTarget = mine;
-                    bestTargetType = 'astar_mine';
-                }
-            }
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
+            let anchorSpawner =
+                (u._astarNextSpawner
+                    && u._astarNextSpawner.type === 'astar_spawner'
+                    && u._astarNextSpawner.owner === u.owner
+                    && u._astarNextSpawner.energy > 0
+                    && !u._astarNextSpawner.underConstruction)
+                    ? u._astarNextSpawner
+                    : _findClosestSpawner(u, 'astar_spawner');
 
-            let originGx = Math.floor(origin.x / TILE);
-            let originGy = Math.floor(origin.y / TILE);
-            let searchRadius = Math.min(Math.max(GRID_W, GRID_H), Math.max(6, Math.floor(Math.min(GRID_W, GRID_H) * 0.4)));
-            let minGx = Math.max(0, originGx - searchRadius);
-            let maxGx = Math.min(GRID_W - 1, originGx + searchRadius);
-            let minGy = Math.max(0, originGy - searchRadius);
-            let maxGy = Math.min(GRID_H - 1, originGy + searchRadius);
-            for (let y = minGy; y <= maxGy; y++) {
-                for (let x = minGx; x <= maxGx; x++) {
+            let originGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.x / TILE)));
+            let originGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.y / TILE)));
+            let tileRadius = Math.max(0, Math.ceil(maxSearch / TILE));
+            let minX = Math.max(0, originGx - tileRadius);
+            let maxX = Math.min(GRID_W - 1, originGx + tileRadius);
+            let minY = Math.max(0, originGy - tileRadius);
+            let maxY = Math.min(GRID_H - 1, originGy + tileRadius);
+            let maxSearchSq = maxSearch * maxSearch;
+
+            let candidates = [];
+
+            for (let y = minY; y <= maxY; y++) {
+                for (let x = minX; x <= maxX; x++) {
+                    let worldX = x * TILE + TILE * 0.5;
+                    let worldY = y * TILE + TILE * 0.5;
+                    let dx = worldX - origin.x;
+                    let dy = worldY - origin.y;
+                    let originDistSq = dx * dx + dy * dy;
+                    if (originDistSq > maxSearchSq) continue;
+
+                    let mine = getAstarMineAt(x, y);
                     let cell = grid[y][x];
                     let item = cell && cell.item;
-                    if (!item || item.type !== 'astar_farm') continue;
-                    if (item.owner !== u.owner) continue;
-                    if (item.underConstruction || item.energy <= 0) continue;
-                    if (!_canAssignWorkerTargetExclusive(u, item, 'astar_farm')) continue;
-                    let originDist = Math.hypot(item.x - origin.x, item.y - origin.y);
-                    let spawnerDist = anchorSpawner ? Math.hypot(item.x - anchorSpawner.x, item.y - anchorSpawner.y) : Math.hypot(item.x - u.x, item.y - u.y);
-                    let score = spawnerDist + originDist * 0.25;
-                    if (u.workerTarget === item) score -= TILE * 0.75;
-                    if (score < bestScore) {
-                        bestScore = score;
-                        bestTarget = item;
-                        bestTargetType = 'astar_farm';
+
+                    let candidate = null;
+                    let candidateType = null;
+
+                    if (mine && mine.astar > 0) {
+                        candidate = mine;
+                        candidateType = 'astar_mine';
+                    } else if (item && item.type === 'astar_farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
+                        candidate = item;
+                        candidateType = 'astar_farm';
                     }
+
+                    if (!candidate) continue;
+                    if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) continue;
+
+                    let originDist = Math.sqrt(originDistSq);
+                    let spawnerDist = anchorSpawner
+                        ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+                        : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+
+                    candidates.push({
+                        target: candidate,
+                        targetType: candidateType,
+                        dist: spawnerDist + originDist * 0.22,
+                        worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+                    });
                 }
             }
 
-            if (bestTarget) {
-                _astarCollectorAssignTarget(u, bestTarget, bestTargetType);
+            let picked = _pickDistributedWorkerCandidate(u, candidates);
+            if (picked && picked.target) {
+                _astarCollectorAssignTarget(u, picked.target, picked.targetType !== undefined ? picked.targetType : null);
                 return;
             }
+
+            if (anchorSpawner) u._astarNextSpawner = anchorSpawner;
             u.workerState = 'IDLE';
             u.commandState = CMD_IDLE;
         }
@@ -13386,14 +13925,19 @@
         // Salvager: find nearest marked building
         function _salvagerFindTarget(u, myGx, myGy) {
             let owner = u.owner;
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             let bestDist = 99999, bestItem = null;
             let spawnerSet = new Set(collectorSpawners);
-            for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d < bestDist) { bestDist = d; bestItem = t; } } }
-            for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d < bestDist) { bestDist = d; bestItem = b; } } }
-            for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d < bestDist) { bestDist = d; bestItem = s; } } }
-            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !spawnerSet.has(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
+            for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
+            for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
+            for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+            for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !spawnerSet.has(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
             if (bestItem) {
-                _setWorkerTarget(u, bestItem, null);
+                if (!_setWorkerTarget(u, bestItem, null)) {
+                    u.workerState = 'IDLE';
+                    u.commandState = CMD_IDLE;
+                    return;
+                }
                 let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
                 let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                 u.path = _requestWorkerPath(u, startGx, startGy, bestItem.gx, bestItem.gy, canWalk, null, true);
@@ -13436,6 +13980,7 @@
             if (!target || target.markedForSalvage) {
                 _clearWorkerTarget(u);
                 u.workerState = 'IDLE';
+                _clearWorkerTarget(u);
                 u.commandState = CMD_IDLE;
                 return;
             }
@@ -13445,7 +13990,11 @@
                 u.commandState = CMD_IDLE;
                 return;
             }
-            _setWorkerTarget(u, target, null);
+            if (!_setWorkerTarget(u, target, null)) {
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+                return;
+            }
             _builderRememberWorkSite(u, target);
             let canWalk = _builderCanWalk(u.owner);
             let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -13664,9 +14213,11 @@
 
         function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
             let candidates = [];
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             let consider = (s) => {
                 if (!_isHealerQueueTarget(s, u.owner)) return;
                 let d = Math.hypot(s.x - originX, s.y - originY);
+                if (d > maxSearch) return;
                 let worldDist = Math.hypot(s.x - u.x, s.y - u.y);
                 candidates.push({
                     target: s,
@@ -13701,9 +14252,11 @@
 
         function _findNearestResearchBuildingNeedingWork(u) {
             let candidates = [];
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             for (let s of collectorSpawners) {
                 if (!_isResearcherTargetBuilding(s, u.owner)) continue;
                 let d = Math.hypot(s.x - u.x, s.y - u.y);
+                if (d > maxSearch) continue;
                 candidates.push({
                     target: s,
                     targetType: 'research',
@@ -13716,55 +14269,133 @@
             return _pickDistributedWorkerTarget(u, candidates);
         }
 
-        function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
-            let nearCandidates = [];
-            let visibilityPx = _getWorkerVisionRangePx(u);
-            forEachUnitInRange(originX, originY, visibilityPx, (target) => {
-                if (!_isHealerTargetUnit(target, u.owner)) return;
-                let d = Math.hypot(target.x - originX, target.y - originY);
-                let worldDist = Math.hypot(target.x - u.x, target.y - u.y);
-                nearCandidates.push({
-                    target: target,
-                    targetType: 'unit',
-                    dist: d,
-                    worldDist: worldDist,
-                    level: _getTargetPriorityLevel(target),
-                    isUpgrading: false
-                });
-            }, { includeDead: false, player: u.owner });
+        let _healerDamagedCandidatesTick = -1;
+        let _healerDamagedCandidatesByOwner = [];
+        const HEALER_DAMAGED_CANDIDATE_LIMIT = 12;
 
-            if (nearCandidates.length > 0) {
-                let nearPick = _pickDistributedWorkerTarget(u, nearCandidates);
-                if (nearPick) return nearPick;
-            }
+        function _ensureHealerDamagedCandidatesCacheCurrent() {
+            let ownerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
+            if (_healerDamagedCandidatesTick === gameTime && _healerDamagedCandidatesByOwner.length === ownerCount) return;
 
-            let candidates = [];
+            _healerDamagedCandidatesByOwner = Array.from({ length: ownerCount }, () => []);
+            _healerDamagedCandidatesTick = gameTime;
+
+            let cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0);
             for (let target of units) {
-                if (!_isHealerTargetUnit(target, u.owner)) continue;
-                let d = Math.hypot(target.x - originX, target.y - originY);
-                let worldDist = Math.hypot(target.x - u.x, target.y - u.y);
-                candidates.push({
-                    target: target,
-                    targetType: 'unit',
-                    dist: d,
-                    worldDist: worldDist,
-                    level: _getTargetPriorityLevel(target),
-                    isUpgrading: false
-                });
+                if (!target || target.dead) continue;
+                let owner = Math.floor(Number(target.owner));
+                if (owner < 0 || owner >= ownerCount) continue;
+                let energy = Number(target.energy);
+                let maxEnergy = Number(target.maxEnergy);
+                if (!(maxEnergy > 0) || !(energy > 0) || !(energy < maxEnergy)) continue;
+
+                let ratio = energy / maxEnergy;
+                let arr = _healerDamagedCandidatesByOwner[owner];
+                if (!arr) continue;
+
+                if (arr.length < cap) {
+                    arr.push({ u: target, ratio: ratio });
+                    continue;
+                }
+
+                let worstIdx = -1;
+                let worstRatio = -1;
+                for (let i = 0; i < arr.length; i++) {
+                    let r = arr[i].ratio;
+                    if (r > worstRatio) {
+                        worstRatio = r;
+                        worstIdx = i;
+                    }
+                }
+                if (worstIdx >= 0 && ratio < worstRatio) {
+                    arr[worstIdx] = { u: target, ratio: ratio };
+                }
             }
-            return _pickDistributedWorkerTarget(u, candidates);
+        }
+
+        function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
+            if (!(maxSearch > 0)) return null;
+            let owner = Math.floor(Number(u.owner));
+            _ensureHealerDamagedCandidatesCacheCurrent();
+            if (owner < 0 || owner >= _healerDamagedCandidatesByOwner.length) return null;
+
+            let healerX = Number(u.x) || 0;
+            let healerY = Number(u.y) || 0;
+            let originIsHealer = (originX === healerX && originY === healerY);
+            let maxSearchSq = maxSearch * maxSearch;
+
+            let bestA = null, bestAScore = Infinity;
+            let bestB = null, bestBScore = Infinity;
+            let bestC = null, bestCScore = Infinity;
+
+            let tryAdd = (target, score) => {
+                if (!target) return;
+                if (target === bestA || target === bestB || target === bestC) return;
+                if (score < bestAScore) {
+                    bestC = bestB; bestCScore = bestBScore;
+                    bestB = bestA; bestBScore = bestAScore;
+                    bestA = target; bestAScore = score;
+                } else if (score < bestBScore) {
+                    bestC = bestB; bestCScore = bestBScore;
+                    bestB = target; bestBScore = score;
+                } else if (score < bestCScore) {
+                    bestC = target; bestCScore = score;
+                }
+            };
+
+            let candidates = _healerDamagedCandidatesByOwner[owner];
+            if (!candidates || candidates.length <= 0) return null;
+
+            for (let entry of candidates) {
+                let target = entry && entry.u;
+                if (!_isHealerTargetUnit(target, owner)) continue;
+
+                let dx = target.x - originX;
+                let dy = target.y - originY;
+                let distSq = dx * dx + dy * dy;
+                if (distSq > maxSearchSq) continue;
+
+                let worldDistSq = distSq;
+                if (!originIsHealer) {
+                    let wdx = target.x - healerX;
+                    let wdy = target.y - healerY;
+                    worldDistSq = wdx * wdx + wdy * wdy;
+                }
+
+                let score = distSq + worldDistSq * 0.08;
+                if (u.workerTarget === target) score -= TILE * TILE * 0.75;
+                tryAdd(target, score);
+            }
+
+            if (bestA && _canAssignWorkerTargetExclusive(u, bestA, 'unit')) return bestA;
+            if (bestB && _canAssignWorkerTargetExclusive(u, bestB, 'unit')) return bestB;
+            if (bestC && _canAssignWorkerTargetExclusive(u, bestC, 'unit')) return bestC;
+            return null;
         }
 
         function _healerFindTarget(u, myGx, myGy) {
             let origin = _healerGetSearchOrigin(u);
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             let queueTarget = _getHealerCommittedQueueTarget(u);
             if (!queueTarget && _isHealerQueueTarget(u._healerPinnedQueueTarget, u.owner)) {
                 queueTarget = u._healerPinnedQueueTarget;
             }
             if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
+            if (queueTarget) {
+                let qd = Math.hypot(queueTarget.x - origin.x, queueTarget.y - origin.y);
+                if (qd > maxSearch) {
+                    queueTarget = null;
+                    _clearHealerQueueCommit(u);
+                }
+            }
             if (queueTarget && !_canAssignWorkerTargetExclusive(u, queueTarget, 'queue')) queueTarget = null;
             if (queueTarget) {
-                _setWorkerTarget(u, queueTarget, 'queue');
+                if (!_setWorkerTarget(u, queueTarget, 'queue')) {
+                    u.workerState = 'IDLE';
+                    u.commandState = CMD_IDLE;
+                    return;
+                }
                 _healerRememberWorkSite(u, queueTarget);
                 if (queueTarget !== u._healerQueueCommitTarget) _setHealerQueueCommit(u, queueTarget);
                 if (u.healerHasMaterial) {
@@ -13800,7 +14431,11 @@
             if (target && !_canAssignWorkerTargetExclusive(u, target, 'unit')) target = null;
             if (target) {
                 _clearHealerQueueCommit(u);
-                _setWorkerTarget(u, target, 'unit');
+                if (!_setWorkerTarget(u, target, 'unit')) {
+                    u.workerState = 'IDLE';
+                    u.commandState = CMD_IDLE;
+                    return;
+                }
                 _healerRememberWorkSite(u, target);
                 if (u.healerHasMaterial) {
                     u.workerState = 'MOVING_TO_HEAL';
@@ -13823,6 +14458,7 @@
                 }
 
                 u.workerState = 'IDLE';
+                _clearWorkerTarget(u);
                 u.commandState = CMD_IDLE;
             } else {
                 _clearHealerQueueCommit(u);
@@ -13838,9 +14474,11 @@
             let ownedTargets = _activeBuilderWorkTargetsByOwner.get(owner);
             if (!ownedTargets || ownedTargets.length <= 0) return null;
             let candidates = [];
+            let maxSearch = _getWorkerAutoSearchDistancePx(u);
             for (let b of ownedTargets) {
                 if (!_isBuilderWorkTarget(b, owner)) continue;
                 let d = Math.hypot(b.x - originX, b.y - originY);
+                if (d > maxSearch) continue;
                 let worldDist = Math.hypot(b.x - u.x, b.y - u.y);
                 candidates.push({
                     target: b,
@@ -13872,7 +14510,10 @@
             let canWalk = u.workerType === 'collector'
                 ? _collectorCanWalk
                 : (u.workerType === 'astar_collector' ? _astarCollectorCanWalk : null);
-            let cacheOnly = ((gameTime + u.id) % WORKER_HEAVY_AI_STRIDE) !== 0;
+            let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
+            let forceImmediateRoute = (u.workerType === 'collector' || u.workerType === 'astar_collector')
+                && (Number(u.carryingValue) > 0);
+            let cacheOnly = !forceImmediateRoute && (((gameTime + u.id) % workerAiTickDelay) !== 0);
             let route = _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: cacheOnly });
             if (route) {
                 if (u.workerType === 'collector' && route.spawner) {
@@ -14198,6 +14839,8 @@
         function recalculateUnitEffectiveStats() {
             let intervalTicks = getUnitEffectiveStatsRecalcTicks();
             let dueUnits = [];
+            let selectedSet = null;
+            if (selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
 
             for (let u of units) {
                 if (!u || u.dead) continue;
@@ -14216,7 +14859,7 @@
                     || !Number.isFinite(u.effectiveStacks);
 
                 // Keep selected units up-to-date in the stats panel despite staggered recalculation.
-                if (!needsImmediate && selectedUnits && selectedUnits.includes(u)) needsImmediate = true;
+                if (!needsImmediate && selectedSet && selectedSet.has(u)) needsImmediate = true;
 
                 if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
                     dueUnits.push(u);
@@ -14227,6 +14870,76 @@
             }
 
             if (dueUnits.length <= 0) return;
+
+            let canUseSpatialCounts = spatialUnitsComplexStridePerChunk > 0
+                && spatialUnitsComplexStridePerPlayer > 0
+                && spatialUnitsComplex.length > 0
+                && CHUNKS_W > 0
+                && CHUNKS_H > 0;
+            let unitTypeToSpatialIdx = new Map();
+            let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
+
+            // Prefix sums per owner+unitType allow O(1) rectangular count queries per unit.
+            let spatialPrefixByOwner = new Map();
+            let prefixStride = CHUNKS_W + 1;
+            let prefixCellCount = (CHUNKS_H + 1) * prefixStride;
+
+            let getTypeIndexCached = (unitType) => {
+                if (unitTypeToSpatialIdx.has(unitType)) return unitTypeToSpatialIdx.get(unitType);
+                let idx = spatialUnitTypeToIndex[unitType];
+                let valid = Number.isFinite(idx) ? idx : -1;
+                unitTypeToSpatialIdx.set(unitType, valid);
+                return valid;
+            };
+
+            let getSpatialPrefix = (owner, typeIdx) => {
+                let byType = spatialPrefixByOwner.get(owner);
+                if (!byType) {
+                    byType = new Map();
+                    spatialPrefixByOwner.set(owner, byType);
+                }
+
+                let prefix = byType.get(typeIdx);
+                if (prefix) return prefix;
+
+                prefix = new Int32Array(prefixCellCount);
+                for (let cy = 1; cy <= CHUNKS_H; cy++) {
+                    let rowAccum = 0;
+                    let chunkRow = (cy - 1) * CHUNKS_W;
+                    let outRow = cy * prefixStride;
+                    let outPrevRow = (cy - 1) * prefixStride;
+                    for (let cx = 1; cx <= CHUNKS_W; cx++) {
+                        let chunkKey = chunkRow + (cx - 1);
+                        let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
+                        let v = spatialUnitsComplex[playerBase + 1 + typeIdx] | 0;
+                        rowAccum += v;
+                        let outIdx = outRow + cx;
+                        prefix[outIdx] = prefix[outPrevRow + cx] + rowAccum;
+                    }
+                }
+
+                byType.set(typeIdx, prefix);
+                return prefix;
+            };
+
+            let querySpatialCountRect = (prefix, minCx, minCy, maxCx, maxCy) => {
+                if (!prefix) return 0;
+                let x1 = Math.max(0, Math.min(CHUNKS_W - 1, minCx));
+                let y1 = Math.max(0, Math.min(CHUNKS_H - 1, minCy));
+                let x2 = Math.max(0, Math.min(CHUNKS_W - 1, maxCx));
+                let y2 = Math.max(0, Math.min(CHUNKS_H - 1, maxCy));
+                if (x2 < x1 || y2 < y1) return 0;
+
+                let xa = x1;
+                let ya = y1;
+                let xb = x2 + 1;
+                let yb = y2 + 1;
+
+                return (prefix[yb * prefixStride + xb]
+                    - prefix[ya * prefixStride + xb]
+                    - prefix[yb * prefixStride + xa]
+                    + prefix[ya * prefixStride + xa]) | 0;
+            };
 
             let dueInfo = [];
             for (let u of dueUnits) {
@@ -14251,22 +14964,22 @@
 
                 u.effectiveStacks = baseStacks;
                 u.effectiveLevel = baseLevel;
-                dueInfo.push({ u, baseStacks });
+                dueInfo.push({ u, baseStacks, needsRefresh });
             }
 
             for (let info of dueInfo) {
                 let u = info.u;
                 let radiusPx = Math.max(0.5, Number(u.baseLevelVisionRange) || Number(u.visionRange) || 0.5) * TILE;
                 let similarCount = 0;
-                if (CHUNK_SIZE === 1 && radiusPx <= (TILE * 0.51) && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplex.length > 0) {
+                if (canUseSpatialCounts) {
                     let owner = Math.floor(Number(u.owner));
-                    let typeIdx = spatialUnitTypeToIndex[u.unitType];
-                    let gx = Math.floor(u.x / TILE);
-                    let gy = Math.floor(u.y / TILE);
-                    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && Number.isFinite(typeIdx) && gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-                        let chunkKey = gy * CHUNKS_W + gx;
-                        let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-                        similarCount = spatialUnitsComplex[playerBase + 1 + typeIdx] || 0;
+                    let typeIdx = getTypeIndexCached(u.unitType);
+                    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && typeIdx >= 0) {
+                        let cx = Math.floor(u.x / chunkPx);
+                        let cy = Math.floor(u.y / chunkPx);
+                        let chunkRadius = Math.max(0, Math.ceil(radiusPx / chunkPx));
+                        let prefix = getSpatialPrefix(owner, typeIdx);
+                        similarCount = querySpatialCountRect(prefix, cx - chunkRadius, cy - chunkRadius, cx + chunkRadius, cy + chunkRadius);
                     }
                 }
                 if (similarCount <= 0) {
@@ -14282,7 +14995,12 @@
             }
 
             for (let info of dueInfo) {
-                applyUnitEffectiveScaling(info.u, getUnitEffectiveLevel(info.u));
+                let u = info.u;
+                let nextEffLevel = getUnitEffectiveLevel(u);
+                if (info.needsRefresh || u._lastAppliedEffectiveLevel !== nextEffLevel) {
+                    applyUnitEffectiveScaling(u, nextEffLevel);
+                    u._lastAppliedEffectiveLevel = nextEffLevel;
+                }
             }
         }
 
@@ -16511,13 +17229,13 @@
                     let bounty = Math.floor(cost * 0.1);
                     if (bounty > 0) {
                         let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-                        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && !grid[gy][gx].droppedItem) {
+                        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && !getDroppedItemAt(gx, gy)) {
                             let drop = { type: 'energy', value: bounty, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, timer: TICK_RATE * 120 };
-                            grid[gy][gx].droppedItem = drop;
-                            droppedItems.push(drop);
+                            addDroppedItem(drop);
                         }
                     }
                     // Release worker lock on target
+                    _clearWorkerTarget(u);
                     if (u.workerTarget && u.workerTarget.lockedBy === u) {
                         u.workerTarget.lockedBy = null;
                     }
@@ -16550,9 +17268,7 @@
             for (let i = droppedItems.length - 1; i >= 0; i--) {
                 droppedItems[i].timer--;
                 if (droppedItems[i].timer <= 0) {
-                    let d = droppedItems[i];
-                    if (grid[d.gy][d.gx].droppedItem === d) grid[d.gy][d.gx].droppedItem = null;
-                    droppedItems.splice(i, 1);
+                    removeDroppedItem(droppedItems[i]);
                 }
             }
 
@@ -17157,9 +17873,17 @@
                     // Set rally for active selected barracks and spawners
                     let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
                     if (selSpawners.length > 0) {
+                        let gatherTarget = clickedEnemyUnit
+                            ? null
+                            : (_getCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22)
+                                || _getAstarCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22));
                         let rallyAnchor = clickedEnemyUnit ? null : findOwnRallyAnchorNear(world.x, world.y);
-                        let rallyX = clickedEnemyUnit ? clickedEnemyUnit.x : (rallyAnchor ? rallyAnchor.x : world.x);
-                        let rallyY = clickedEnemyUnit ? clickedEnemyUnit.y : (rallyAnchor ? rallyAnchor.y : world.y);
+                        let rallyX = clickedEnemyUnit
+                            ? clickedEnemyUnit.x
+                            : (gatherTarget ? gatherTarget.target.x : (rallyAnchor ? rallyAnchor.x : world.x));
+                        let rallyY = clickedEnemyUnit
+                            ? clickedEnemyUnit.y
+                            : (gatherTarget ? gatherTarget.target.y : (rallyAnchor ? rallyAnchor.y : world.y));
                         applyRallyTargets(selSpawners, rallyX, rallyY, isCtrlMulti, clickedEnemyUnit ? clickedEnemyUnit.id : null);
                         issuedStructureCommand = true;
                     } else if (!isCtrlMulti) {
@@ -18233,7 +18957,8 @@
             u._forcedTargetLastSeenX = null;
             u._forcedTargetLastSeenY = null;
             u.commandState = CMD_MOVING;
-            Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
+            _clearWorkerTarget(u);
+            Object.assign(u, { workerState: 'MANUAL_MOVE' });
             clearWorkerTaskMemoryForFreeRetarget(u);
 
             if (_canUsePathfindRequestBudget(u.owner)) {
@@ -18256,14 +18981,17 @@
 
         function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {
             if (!assigningUnit || !target || !assigningUnit.workerState) return;
+            let targetTileKey = _getWorkerTargetTileKey(target);
             for (let other of units) {
                 if (!other || other === assigningUnit || other.dead || !other.workerState) continue;
                 if (other.owner !== assigningUnit.owner) continue;
                 if (other.workerType !== assigningUnit.workerType) continue;
-                if (other.workerTarget !== target) continue;
-                if (other.workerTargetType !== targetType) continue;
+                let sameTarget = other.workerTarget === target && other.workerTargetType === targetType;
+                let otherTileKey = _getWorkerTargetTileKey(other.workerTarget);
+                let sameTile = !!(targetTileKey && otherTileKey && targetTileKey === otherTileKey);
+                if (!sameTarget && !sameTile) continue;
 
-                _clearWorkerTarget(other);
+                _clearWorkerTarget(other, 'manual_rally_change');
                 clearWorkerTaskMemoryForFreeRetarget(other);
                 other.path = null;
                 other.pathIndex = 0;
@@ -18707,7 +19435,10 @@
                             if (gather && _isCollectorTargetValid(gather.target, gather.type, playerId)) {
                                 _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
                                 if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
-                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    _clearWorkerTarget(u);
+                                    u.workerState = 'IDLE';
+                                    u.commandState = CMD_IDLE;
+                                    _collectorFindTarget(u, myGx, myGy);
                                     continue;
                                 }
                                 _clearWorkerTarget(u);
@@ -18720,7 +19451,10 @@
                             if (gather && _isAstarCollectorTargetValid(gather.target, gather.type, playerId)) {
                                 _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
                                 if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
-                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    _clearWorkerTarget(u);
+                                    u.workerState = 'IDLE';
+                                    u.commandState = CMD_IDLE;
+                                    _astarCollectorFindTarget(u);
                                     continue;
                                 }
                                 _clearWorkerTarget(u);
@@ -18753,7 +19487,10 @@
                                     continue;
                                 }
                                 _clearWorkerTarget(u);
-                                _setWorkerTarget(u, rTarget, 'research');
+                                if (!_setWorkerTarget(u, rTarget, 'research')) {
+                                    issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
+                                    continue;
+                                }
                                 u.workerState = 'MOVING_TO_RESEARCH';
                                 u._workerNextIdleRetargetTick = gameTime;
                                 u._researchSpawnerTarget = null;
@@ -23386,6 +24123,7 @@
             projectiles = [];
             particles = [];
             droppedItems = [];
+            droppedItemGrid = [];
 
             for (let gy = 0; gy < GRID_H; gy++) {
                 for (let gx = 0; gx < GRID_W; gx++) {
@@ -23395,6 +24133,7 @@
                     grid[gy][gx].droppedItem = null;
                 }
             }
+            initDroppedItemGrid();
             initTileEntityLookup();
 
             players = Array.isArray(snapshot.players) ? cloneSnapshotValue(snapshot.players) : players;
@@ -23525,14 +24264,12 @@
                 let gy = Math.floor(Number(m.gy));
                 setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m);
             }
-            droppedItems = Array.isArray(snapshot.droppedItems) ? cloneSnapshotValue(snapshot.droppedItems) : [];
-            for (let d of droppedItems) {
+            droppedItems = [];
+            initDroppedItemGrid();
+            let snapshotDroppedItems = Array.isArray(snapshot.droppedItems) ? cloneSnapshotValue(snapshot.droppedItems) : [];
+            for (let d of snapshotDroppedItems) {
                 if (!d) continue;
-                let gx = Math.floor(Number(d.gx));
-                let gy = Math.floor(Number(d.gy));
-                if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-                    if (grid[gy] && grid[gy][gx]) grid[gy][gx].droppedItem = d;
-                }
+                addDroppedItem(d);
             }
 
             let floorItems = Array.isArray(snapshot.floorItems) ? snapshot.floorItems : [];
@@ -23638,6 +24375,7 @@
                 MAP_TYPE = data.cfg.mapType || 'random';
                 UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(data.cfg.unitEffectiveStatsRecalcTicks) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
                 ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(data.cfg.astarIterBudgetPerPlayerTick) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
+                WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(data.cfg.workerAiTickDelay) || WORKER_AI_TICK_DELAY)));
                 applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
 
                 RESEARCH_COST_EXP = Math.max(1, Number(data.cfg.researchCostExp) || 1.85);
@@ -24433,6 +25171,7 @@
             collectorSpawners = [];
             collectors = [];
             droppedItems = [];
+            droppedItemGrid = [];
             goldMines = [];
             astarMines = [];
             initTileEntityLookup();
@@ -24492,8 +25231,6 @@
             sharedPathCache.clear();
             sharedSpawnerRouteCache.clear();
             _invalidateWorkerTargetLoadCache();
-            _workerTargetLoadCacheTick = -1;
-            _workerTargetLoadCacheUnitCount = -1;
             resetEnergyDeltaTracking();
 
             initSpatialHash();
@@ -24616,6 +25353,7 @@
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
                 unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
                 astarIterBudgetPerPlayerTick: ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
+                workerAiTickDelay: WORKER_AI_TICK_DELAY,
                 researchCostExp: RESEARCH_COST_EXP,
                 researchWorkExp: RESEARCH_WORK_EXP,
                 researchWorkBase: RESEARCH_WORK_BASE,
@@ -24714,6 +25452,7 @@
             UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(document.getElementById('cfg-unit-eff-stats-ticks').value) || 5)));
             UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number((document.getElementById('cfg-unit-collision-ticks') || {}).value) || 5)));
             ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number((document.getElementById('cfg-astar-iter-budget-per-player') || {}).value) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
+            WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number((document.getElementById('cfg-worker-ai-tick-delay') || {}).value) || WORKER_AI_TICK_DELAY)));
 
             let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
             let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);
