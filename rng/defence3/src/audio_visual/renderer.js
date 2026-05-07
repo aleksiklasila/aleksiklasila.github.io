@@ -1417,3 +1417,646 @@ function ensureRenderContextsInitialized() {
 
     return true;
 }
+
+function updateDefaultToggleButtons() {
+    let btnBuild = document.getElementById('btn-default-build');
+    if (btnBuild) {
+        btnBuild.textContent = `\uD83D\uDD28 New: ${defaultAutoBuildEnabled ? 'ON' : 'OFF'}`;
+        btnBuild.style.borderColor = defaultAutoBuildEnabled ? '#6f6' : '#555';
+        btnBuild.style.color = defaultAutoBuildEnabled ? '#9f9' : '#888';
+        btnBuild.style.background = defaultAutoBuildEnabled ? 'rgba(40,90,40,0.25)' : 'transparent';
+    }
+    let btnAuto = document.getElementById('btn-default-auto-upgrade');
+    if (btnAuto) {
+        btnAuto.textContent = `L+New: ${defaultAutoUpgradeEnabled ? 'ON' : 'OFF'}`;
+        btnAuto.style.borderColor = defaultAutoUpgradeEnabled ? '#4af' : '#555';
+        btnAuto.style.color = defaultAutoUpgradeEnabled ? '#8cf' : '#888';
+        btnAuto.style.background = defaultAutoUpgradeEnabled ? 'rgba(40,70,110,0.25)' : 'transparent';
+    }
+}
+
+function updateIgnoreLevelButton() {
+    let buttons = [
+        document.getElementById('btn-ignore-level'),
+        document.getElementById('btn-ignore-level-popup')
+    ].filter(Boolean);
+    if (buttons.length <= 0) return;
+    for (let btn of buttons) {
+        btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
+        btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
+        btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
+        btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
+    }
+}
+
+function renderMultiplierBar(containerId, currentValue, onChange, label) {
+    let bar = document.getElementById(containerId);
+    if (!bar) return;
+    let html = '';
+    for (let mult of PURCHASE_MULTIPLIERS) {
+        let activeCls = mult === currentValue ? ' active' : '';
+        html += `<button class="mult-toggle-btn${activeCls}" data-mult="${mult}">x${mult}</button>`;
+    }
+    bar.innerHTML = html;
+    bar.querySelectorAll('.mult-toggle-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let val = parseInt(btn.dataset.mult);
+            if (!Number.isFinite(val) || val < 1) return;
+            onChange(val);
+        });
+    });
+}
+
+function updatePurchaseMultiplierBars() {
+    renderMultiplierBar('build-multiplier-bar', buildPurchaseMultiplier, (val) => {
+        buildPurchaseMultiplier = val;
+        updatePurchaseMultiplierBars();
+        updateBuildMenu();
+    }, 'Buy');
+    renderMultiplierBar('queue-multiplier-bar', queuePurchaseMultiplier, (val) => {
+        queuePurchaseMultiplier = val;
+        updatePurchaseMultiplierBars();
+        updateInfoPanel();
+    }, 'Queue');
+    renderMultiplierBar('queue-multiplier-bar-popup', queuePurchaseMultiplier, (val) => {
+        queuePurchaseMultiplier = val;
+        updatePurchaseMultiplierBars();
+        updateInfoPanel();
+        renderResearchPopupContent();
+    }, 'Queue');
+}
+
+function queueResizeForEachActiveUnitSubgroup(mode) {
+    let activeUnits = getActiveUnits();
+    if (!activeUnits || activeUnits.length === 0) return;
+    let groups = new Map();
+    for (let u of activeUnits) {
+        let key = getUnitGroupKey(u);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(u);
+    }
+    for (let group of groups.values()) {
+        if (!group || group.length === 0) continue;
+        if (mode === 'd2' && group.length < 2) continue;
+        let u0 = group[0];
+        let unitType = u0.unitType;
+        let unitLevel = ignoreLevelSubgroups ? null : getUnitBaseLevel(u0);
+        let ids = group.map(u => u.id);
+        queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
+    }
+    setTimeout(updateInfoPanel, 50);
+}
+
+function getNextLevelUpgradeInfo(item) {
+    let stacks = Math.max(1, item.stacks || 1);
+    let level = stackCountToLevel(stacks);
+    let nextLevel = Math.max(1, level + 1);
+    let nextStacksNeeded = getRequiredStacksForLevel(nextLevel);
+    let missingStacks = Math.max(0, nextStacksNeeded - stacks);
+    let key = item instanceof Tower ? item.type : (item.type === 'barrack' ? 'barrack_' + item.unitType : item.type);
+    let def = BASE_CARD_TYPES[key] || { price: 0 };
+    let goldCost = missingStacks * (def.price || 0);
+    let energyNow = item.maxEnergy || 0;
+    let energyNext = item instanceof Tower ? getUpgrademaxEnergy(item, nextLevel) : (calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxEnergy || energyNow);
+    return { nextLevel, missingStacks, goldCost, energyNow, energyNext };
+}
+
+function normalizeBuildingResearchKey(type) {
+    if (!type) return 'farm';
+    if (type === 'barrack') return 'barrack_norm';
+    if (type.startsWith('barrack_')) return type;
+    return type;
+}
+
+function calculateItemStats(type, level, owner = null) {
+    let stats = { maxEnergy: 0, damage: 0, blastDamage: NaN, blastRadius: NaN, multiplier: NaN };
+    let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+    let bKey = normalizeBuildingResearchKey(type);
+    let lvl = Math.max(1, clampThingLevel(level));
+    let maxEnergy = getBuildingStatForOwner(ownerId, bKey, lvl, 'maxEnergy');
+    let damage = getBuildingStatForOwner(ownerId, bKey, lvl, 'damage');
+    let blastDamage = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastDamage');
+    let blastRadius = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastRadius');
+    let multiplier = getBuildingStatForOwner(ownerId, bKey, lvl, 'multiplier');
+    if (Number.isFinite(maxEnergy)) stats.maxEnergy = Math.max(1, Math.floor(maxEnergy));
+    if (Number.isFinite(damage)) stats.damage = damage;
+    if (Number.isFinite(blastDamage)) stats.blastDamage = blastDamage;
+    if (Number.isFinite(blastRadius)) stats.blastRadius = Math.max(0, blastRadius);
+    if (Number.isFinite(multiplier)) stats.multiplier = multiplier;
+    return stats;
+}
+
+function ensureStatusState(target) {
+    if (!target) return;
+    if (target.burning === undefined) target.burning = 0;
+    if (target.burnTickDamage === undefined) target.burnTickDamage = 0;
+    if (target.poisoned === undefined) target.poisoned = 0;
+    if (target.poisonTickDamage === undefined) target.poisonTickDamage = 0;
+    if (target.frozen === undefined) target.frozen = 0;
+    if (target.iceTickDamage === undefined) target.iceTickDamage = 0;
+    if (target.wet === undefined) target.wet = 0;
+    if (target.sandy === undefined) target.sandy = 0;
+    if (target.watched === undefined) target.watched = 0;
+}
+
+function isEffectImmune(target, effect) {
+    if (!target) return false;
+    if (effect === 'fire' && target.fireResistant) return true;
+    if (effect === 'poison' && target.poisonResistant) return true;
+    if (effect === 'water' && target.waterResistant) return true;
+    if (effect === 'ice' && target.iceResistant) return true;
+    if (effect === 'sand' && target.sandResistant) return true;
+
+    let tType = target.type || '';
+    if (tType === 'fire' && effect === 'fire') return true;
+    if (tType === 'poison' && effect === 'poison') return true;
+    if (tType === 'water' && effect === 'water') return true;
+    if (tType === 'ice' && effect === 'ice') return true;
+    if (tType === 'sand_gun' && effect === 'sand') return true;
+    if (tType === 'watch_tower' && effect === 'watch') return true;
+    if (tType === 'elements' && ['fire', 'poison', 'water', 'ice', 'sand'].includes(effect)) return true;
+    return false;
+}
+
+function _getEffectStatKey(effect, statKind) {
+    if (effect === 'fire') return statKind === 'dps' ? 'burnDps' : 'burnDuration';
+    if (effect === 'poison') return statKind === 'dps' ? 'poisonDps' : 'poisonDuration';
+    if (effect === 'ice') return statKind === 'dps' ? 'freezeDps' : 'freezeDuration';
+    if (effect === 'water') return statKind === 'duration' ? 'wetDuration' : '';
+    if (effect === 'sand') return statKind === 'duration' ? 'sandDuration' : '';
+    if (effect === 'watch') return statKind === 'duration' ? 'watchDuration' : '';
+    return '';
+}
+
+function _getBuildingEffectStat(owner, sourceType, level, effect, statKind) {
+    let statKey = _getEffectStatKey(effect, statKind);
+    if (!statKey || !sourceType) return NaN;
+    let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    return getBuildingStatForOwner(ownerId, sourceType, lvl, statKey);
+}
+
+function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = null, sourceType = '') {
+    if (!target) return false;
+    ensureStatusState(target);
+    if (isEffectImmune(target, effect)) return false;
+
+    let lvl = Math.max(1, level || 1);
+    let mappedDuration = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');
+    let mappedDps = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'dps');
+    if (effect === 'fire') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+        let dur = secondsToTicks(durSec);
+        target.burning = Math.max(target.burning, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+        target.burnTickDamage = Math.max(target.burnTickDamage, d);
+    } else if (effect === 'poison') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (5 + lvl);
+        let dur = secondsToTicks(durSec);
+        target.poisoned = Math.max(target.poisoned, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.1, baseDamage > 0 ? baseDamage : 0.5);
+        target.poisonTickDamage = Math.max(target.poisonTickDamage, d);
+    } else if (effect === 'ice') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
+        let dur = secondsToTicks(durSec);
+        target.frozen = Math.max(target.frozen, dur);
+        let d = Number.isFinite(mappedDps) ? mappedDps : Math.max(0.2, baseDamage > 0 ? baseDamage : 0.5);
+        target.iceTickDamage = Math.max(target.iceTickDamage, d);
+    } else if (effect === 'water') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (6 + lvl);
+        let dur = secondsToTicks(durSec);
+        target.wet = Math.max(target.wet, dur);
+    } else if (effect === 'sand') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : 9;
+        let dur = secondsToTicks(durSec);
+        target.sandy = Math.max(target.sandy, dur);
+    } else if (effect === 'watch') {
+        let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (4 + lvl);
+        let dur = secondsToTicks(durSec);
+        target.watched = Math.max(target.watched, dur);
+    }
+    return true;
+}
+
+function tickStatusEffects(target) {
+    if (!target) return false;
+    ensureStatusState(target);
+
+    if (target.burning > 0) {
+        target.burning--;
+        if (target.burnTickDamage > 0) target.energy -= target.burnTickDamage;
+    }
+    if (target.poisoned > 0) {
+        target.poisoned--;
+        if (target.poisonTickDamage > 0) target.energy -= target.poisonTickDamage;
+    }
+    if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
+        target.energy -= target.iceTickDamage;
+    }
+    if (target.frozen > 0) target.frozen--;
+    if (target.wet > 0) target.wet--;
+    if (target.sandy > 0) target.sandy--;
+    if (target.watched > 0) target.watched--;
+
+    if (target.energy !== undefined && target.energy <= 0) {
+        target.energy = 0;
+        return true;
+    }
+    return false;
+}
+
+function ensureLevelTextCanvas(target) {
+    let scale = 2;
+    if (!target.textCanvas || !target.textCtx || target._textCanvasScale !== scale) {
+        target.textCanvas = document.createElement('canvas');
+        target.textCanvas.width = 32 * scale;
+        target.textCanvas.height = 48 * scale;
+        target.textCtx = target.textCanvas.getContext('2d');
+        target._textCanvasScale = scale;
+    }
+    return target.textCtx;
+}
+
+const LEVEL_TEXT_SPRITE_CACHE = new Map();
+const LEVEL_TEXT_SPRITE_CACHE_MAX = 512;
+const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
+const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
+
+function _getUiSpriteScale() {
+    // Render tiny text/glyph sprites at higher internal resolution to reduce color interpolation.
+    let dpr = Number(window.devicePixelRatio) || 1;
+    return Math.max(1, Math.min(3, Math.round(dpr * 2)));
+}
+
+function _trimSpriteCache(cache, maxEntries) {
+    if (cache.size <= maxEntries) return;
+    let removeCount = cache.size - maxEntries;
+    for (let key of cache.keys()) {
+        cache.delete(key);
+        removeCount--;
+        if (removeCount <= 0) break;
+    }
+}
+
+function _getBuildingLevelTextSprite(label) {
+    let txt = String(label || '');
+    let scale = _getUiSpriteScale();
+    let key = txt + '|' + scale;
+    let cached = LEVEL_TEXT_SPRITE_CACHE.get(key);
+    if (cached) return cached;
+
+    let width = 32;
+    let height = 48;
+    let canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    let c = canvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    c.clearRect(0, 0, width, height);
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.font = '700 8px Segoe UI, Arial, sans-serif';
+    c.lineJoin = 'round';
+    c.strokeStyle = 'rgba(0,0,0,0.95)';
+    c.lineWidth = 2;
+    c.strokeText(txt, 16, 11);
+    c.fillStyle = '#eee';
+    c.fillText(txt, 16, 11);
+
+    cached = { canvas, scale };
+    LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
+    _trimSpriteCache(LEVEL_TEXT_SPRITE_CACHE, LEVEL_TEXT_SPRITE_CACHE_MAX);
+    return cached;
+}
+
+function _bindBuildingLevelTextSprite(target, label) {
+    if (!target) return;
+    let sprite = _getBuildingLevelTextSprite(label);
+    target.textCanvas = sprite.canvas;
+    target.textCtx = null;
+    target._textCanvasScale = sprite.scale;
+}
+
+function _getUnitLevelTextSprite(label) {
+    let txt = String(label || '');
+    let scale = _getUiSpriteScale();
+    let key = txt + '|' + scale;
+    let cached = UNIT_LEVEL_TEXT_SPRITE_CACHE.get(key);
+    if (cached) return cached;
+
+    let width = 28;
+    let height = 14;
+    let canvas = document.createElement('canvas');
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    let c = canvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.setTransform(scale, 0, 0, scale, 0, 0);
+    c.clearRect(0, 0, width, height);
+    c.font = '700 7px Segoe UI, Arial, sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'bottom';
+    c.fillStyle = '#ddd';
+    c.strokeStyle = 'rgba(0,0,0,0.95)';
+    c.lineJoin = 'round';
+    c.lineWidth = 1.5;
+    c.strokeText(txt, width * 0.5, height - 1);
+    c.fillText(txt, width * 0.5, height - 1);
+
+    cached = { canvas, width, height };
+    UNIT_LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
+    _trimSpriteCache(UNIT_LEVEL_TEXT_SPRITE_CACHE, UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX);
+    return cached;
+}
+
+// Frame-local drawImage queue: batches by source image to improve sprite cache locality.
+let _frameDrawImageQueueActive = false;
+let _frameDrawImageQueue = [];
+let _frameDrawImageContexts = new Set();
+let _frameDrawImageCurrentZ = 0;
+let _frameDrawImageFrameId = 0;
+let _frameDrawImageIdCounter = 1;
+const _frameDrawImageIdBySource = new WeakMap();
+const _frameDrawImageCtxStateCache = new WeakMap();
+
+function _setDrawImageTrackedTransform(ctx, a, b, c, d, e, f) {
+    ctx.setTransform(a, b, c, d, e, f);
+    let st = _frameDrawImageCtxStateCache.get(ctx);
+    if (!st) st = {};
+    st.frameId = _frameDrawImageFrameId;
+    st.ta = a; st.tb = b; st.tc = c; st.td = d; st.te = e; st.tf = f;
+    _frameDrawImageCtxStateCache.set(ctx, st);
+}
+
+function _captureDrawImageCtxState(ctx) {
+    let st = _frameDrawImageCtxStateCache.get(ctx);
+    if (!st) st = {};
+    if (st.frameId !== _frameDrawImageFrameId ||
+        !Number.isFinite(st.ta) || !Number.isFinite(st.tb) || !Number.isFinite(st.tc) ||
+        !Number.isFinite(st.td) || !Number.isFinite(st.te) || !Number.isFinite(st.tf)) {
+        let t = ctx.getTransform();
+        st.frameId = _frameDrawImageFrameId;
+        st.ta = t.a;
+        st.tb = t.b;
+        st.tc = t.c;
+        st.td = t.d;
+        st.te = t.e;
+        st.tf = t.f;
+    }
+    st.alpha = ctx.globalAlpha;
+    st.comp = ctx.globalCompositeOperation;
+    st.smooth = ctx.imageSmoothingEnabled;
+    st.filter = ctx.filter || 'none';
+    _frameDrawImageCtxStateCache.set(ctx, st);
+    return st;
+}
+
+function beginFrameDrawImageQueue() {
+    _frameDrawImageQueueActive = true;
+    _frameDrawImageFrameId++;
+    _frameDrawImageQueue.length = 0;
+    _frameDrawImageContexts.clear();
+    _frameDrawImageCurrentZ = 0;
+}
+
+function setFrameDrawImageDepth(z) {
+    _frameDrawImageCurrentZ = Number.isFinite(z) ? z : 0;
+}
+
+function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
+    if (!ctx || !image) return;
+    let argc = arguments.length - 2;
+
+    if (!_frameDrawImageQueueActive) {
+        if (argc === 2) ctx.drawImage(image, a0, a1);
+        else if (argc === 4) ctx.drawImage(image, a0, a1, a2, a3);
+        else if (argc === 8) ctx.drawImage(image, a0, a1, a2, a3, a4, a5, a6, a7);
+        else ctx.drawImage(image, a0, a1);
+        return;
+    }
+
+    _frameDrawImageContexts.add(ctx);
+
+    let imageId = _frameDrawImageIdBySource.get(image);
+    if (!imageId) {
+        imageId = _frameDrawImageIdCounter++;
+        _frameDrawImageIdBySource.set(image, imageId);
+    }
+
+    let st = _captureDrawImageCtxState(ctx);
+    _frameDrawImageQueue.push({
+        ctx,
+        image,
+        argc,
+        a0,
+        a1,
+        a2,
+        a3,
+        a4,
+        a5,
+        a6,
+        a7,
+        z: _frameDrawImageCurrentZ,
+        imageId,
+        ta: st.ta,
+        tb: st.tb,
+        tc: st.tc,
+        td: st.td,
+        te: st.te,
+        tf: st.tf,
+        alpha: st.alpha,
+        comp: st.comp,
+        smooth: st.smooth,
+        filter: st.filter
+    });
+}
+
+function flushFrameDrawImageQueue() {
+    if (!_frameDrawImageQueueActive) return;
+    if (_frameDrawImageQueue.length <= 0) {
+        _frameDrawImageQueueActive = false;
+        return;
+    }
+
+    let bucketsByZ = new Map();
+    let zOrder = [];
+    for (let cmd of _frameDrawImageQueue) {
+        let zKey = cmd.z;
+        if (!bucketsByZ.has(zKey)) {
+            bucketsByZ.set(zKey, []);
+            zOrder.push(zKey);
+        }
+        bucketsByZ.get(zKey).push(cmd);
+    }
+    zOrder.sort((a, b) => b - a); // Furthest/highest z first, closest last.
+
+    let liveStateByCtx = new Map();
+    let layerStateByCtx = new Map();
+    for (let c of _frameDrawImageContexts) c.save();
+    let layerContextsToRestore = [];
+    for (let z of zOrder) {
+        let layerCtx = renderer3dLayerContexts.get(z);
+        if (layerCtx) {
+            layerCtx.save();
+            layerContextsToRestore.push(layerCtx);
+        }
+        let imageBuckets = new Map();
+        let imageOrder = [];
+        let zCmds = bucketsByZ.get(z);
+        for (let cmd of zCmds) {
+            let id = cmd.imageId;
+            if (!imageBuckets.has(id)) {
+                imageBuckets.set(id, []);
+                imageOrder.push(id);
+            }
+            imageBuckets.get(id).push(cmd);
+        }
+
+        for (let id of imageOrder) {
+            let cmds = imageBuckets.get(id);
+            for (let cmd of cmds) {
+                let replayToContext = (targetCtx, stateMap) => {
+                    if (!targetCtx) return;
+                    let s = stateMap.get(targetCtx);
+                    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
+                        targetCtx.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
+                        if (!s) s = {};
+                        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
+                    }
+                    if (!s || s.alpha !== cmd.alpha) {
+                        targetCtx.globalAlpha = cmd.alpha;
+                        if (!s) s = {};
+                        s.alpha = cmd.alpha;
+                    }
+                    if (!s || s.comp !== cmd.comp) {
+                        targetCtx.globalCompositeOperation = cmd.comp;
+                        if (!s) s = {};
+                        s.comp = cmd.comp;
+                    }
+                    if (!s || s.smooth !== cmd.smooth) {
+                        targetCtx.imageSmoothingEnabled = cmd.smooth;
+                        if (!s) s = {};
+                        s.smooth = cmd.smooth;
+                    }
+                    if (!s || s.filter !== cmd.filter) {
+                        targetCtx.filter = cmd.filter;
+                        if (!s) s = {};
+                        s.filter = cmd.filter;
+                    }
+                    stateMap.set(targetCtx, s);
+
+                    if (cmd.argc === 2) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+                    else if (cmd.argc === 4) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3);
+                    else if (cmd.argc === 8) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3, cmd.a4, cmd.a5, cmd.a6, cmd.a7);
+                    else targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+                };
+
+                replayToContext(cmd.ctx, liveStateByCtx);
+                if (layerCtx) {
+                    replayToContext(layerCtx, layerStateByCtx);
+                    let stats = renderer3dLayerStats.get(z);
+                    if (stats) stats.commandCount++;
+                }
+            }
+        }
+    }
+
+    for (let c of _frameDrawImageContexts) c.restore();
+    for (let c of layerContextsToRestore) c.restore();
+
+    _frameDrawImageQueue.length = 0;
+    _frameDrawImageContexts.clear();
+    _frameDrawImageQueueActive = false;
+}
+
+function ensureRenderer3DLayerCanvas(z) {
+    let dpr = window.devicePixelRatio || 1;
+    let width = Math.max(1, Math.floor(viewW * dpr));
+    let height = Math.max(1, Math.floor(viewH * dpr));
+    let layerCanvas = renderer3dLayerCanvases.get(z);
+    let layerCtx = renderer3dLayerContexts.get(z);
+    if (!layerCanvas || layerCanvas.width !== width || layerCanvas.height !== height) {
+        layerCanvas = document.createElement('canvas');
+        layerCanvas.width = width;
+        layerCanvas.height = height;
+        layerCtx = layerCanvas.getContext('2d');
+        layerCtx.imageSmoothingEnabled = false;
+        renderer3dLayerCanvases.set(z, layerCanvas);
+        renderer3dLayerContexts.set(z, layerCtx);
+    }
+    return { canvas: layerCanvas, ctx: layerCtx };
+}
+
+function beginRenderer3DLayerCapture() {
+    for (let config of renderer3dLayerConfigs) {
+        let layer = ensureRenderer3DLayerCanvas(config.z);
+        layer.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+        layer.ctx.globalAlpha = 1;
+        layer.ctx.globalCompositeOperation = 'source-over';
+        layer.ctx.filter = 'none';
+        layer.ctx.imageSmoothingEnabled = false;
+        renderer3dLayerStats.set(config.z, { commandCount: 0 });
+    }
+}
+
+function build3DLayerFrameData() {
+    let layers = [];
+    if (bgCanvas) {
+        layers.push({
+            key: 'background',
+            canvas: bgCanvas,
+            slices: 1,
+            thickness: 0.02,
+            opacity: 1
+        });
+    } else {
+        let fallbackBackground = renderer3dLayerCanvases.get(DRAW_Z_BACKGROUND);
+        if (fallbackBackground) {
+            layers.push({
+                key: 'background',
+                canvas: fallbackBackground,
+                slices: 1,
+                thickness: 0.02,
+                opacity: 1
+            });
+        }
+    }
+
+    for (let config of renderer3dLayerConfigs) {
+        if (config.z === DRAW_Z_BACKGROUND && bgCanvas) continue;
+        let stats = renderer3dLayerStats.get(config.z);
+        let canvasForLayer = renderer3dLayerCanvases.get(config.z);
+        if (!canvasForLayer || !stats || stats.commandCount <= 0) continue;
+        layers.push({
+            key: config.key,
+            canvas: canvasForLayer,
+            slices: config.slices,
+            thickness: config.thickness,
+            opacity: config.opacity
+        });
+    }
+
+    if (layers.length <= 0) return null;
+    return {
+        layers,
+        viewportWidth: viewW,
+        viewportHeight: viewH,
+        camera: {
+            zoom: camera.zoom
+        }
+    };
+}
+
+function drawLevelTextCache(ctx, target, x, y) {
+    if (!target || !target.textCanvas || !target._textCanvasScale) return;
+    let dx = Math.round(x - 16);
+    let dy = Math.round(y - 24);
+    queueDrawImage(ctx, target.textCanvas, dx, dy, 32, 48);
+}
+
+function updateItemTextCache(item) {
+    let label = getLevelLabelText(item);
+    _bindBuildingLevelTextSprite(item, label);
+}

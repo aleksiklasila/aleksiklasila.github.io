@@ -3885,4 +3885,559 @@ function showGameOver() {
     playSound(winner === localPlayerId ? 'victory' : 'defeat');
 }
 
-// ============================================================
+function setHelpPopupOpen(open) {
+    let popup = document.getElementById('help-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    if (open) {
+        let modeEl = document.getElementById('help-game-mode');
+        if (modeEl) modeEl.textContent = getGameModeLabel(gameMode);
+        setHelpTab('keybinds');
+    }
+    popup.classList.toggle('hidden', !open);
+    return wasOpen !== open;
+}
+
+function setResearchPopupOpen(open) {
+    let popup = document.getElementById('research-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    if (open) renderResearchPopupContent();
+    popup.classList.toggle('hidden', !open);
+    if (!open) {
+        activePopupControlGroupKey = '';
+        setResearchQueueDragGuard(false, false);
+    }
+    return wasOpen !== open;
+}
+
+
+function refreshStatsMapPopupText() {
+    ensurePrecomputedStatsMap();
+    let ta = document.getElementById('statsmap-json');
+    if (!ta) return;
+    try {
+        ta.value = JSON.stringify(PRECOMPUTED_STATS_MAP, null, 2);
+    } catch {
+        ta.value = '{"error":"Unable to serialize PRECOMPUTED_STATS_MAP"}';
+    }
+    ta.scrollTop = 0;
+}
+
+function setStatsMapPopupOpen(open) {
+    let popup = document.getElementById('statsmap-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    popup.classList.toggle('hidden', !open);
+    if (open) refreshStatsMapPopupText();
+    return wasOpen !== open;
+}
+
+function buildResearchStatMatrixGrid(kind, key, statKey) {
+    let grid = [];
+    let header = [''];
+    for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
+    grid.push(header);
+
+    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
+        let row = [`L${tl}`];
+        for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
+            let v = getResearchStatValueAtLevel(kind, key, statKey, rl, tl);
+            row.push(formatResearchStatValue(statKey, v));
+        }
+        grid.push(row);
+    }
+
+    return grid;
+}
+
+function formatShopStatMatrixCellValue(value, statKey = '') {
+    if (Number.isFinite(value)) {
+        if (statKey) return formatResearchStatValue(statKey, value);
+        return formatBigNumber(value, 2);
+    }
+    if (value === null || value === undefined) return '-';
+    return String(value);
+}
+
+function buildStatMatrixGridFromDescriptor(d) {
+    if (!d) return null;
+
+    let grid = [];
+    let header = [''];
+    for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) header.push(`R${rl}`);
+    grid.push(header);
+
+    for (let tl = 1; tl <= MAX_THING_LEVEL; tl++) {
+        let row = [`L${tl}`];
+        for (let rl = 0; rl <= MAX_RESEARCH_LEVEL; rl++) {
+            let raw = null;
+            if (typeof d.getValue === 'function') {
+                raw = d.getValue(tl, rl);
+            } else if (d.kind && d.key && d.statKey) {
+                let hasResearchEntry = !!getResearchStatEntry(d.kind, d.key, d.statKey);
+                let useRl = hasResearchEntry ? rl : 0;
+                raw = d.kind === 'unit'
+                    ? getUnitStatFromMap(d.key, tl, d.statKey, useRl)
+                    : getBuildingStatFromMap(d.key, tl, d.statKey, useRl);
+            } else {
+                raw = d.fixedValue;
+            }
+            row.push(formatShopStatMatrixCellValue(raw, d.statKey || ''));
+        }
+        grid.push(row);
+    }
+
+    return grid;
+}
+
+function buildShopStatMatrixGrid(matrixId) {
+    let d = shopStatMatrixDescriptorById[matrixId];
+    return buildStatMatrixGridFromDescriptor(d);
+}
+
+function buildInfoPanelStatMatrixGrid(matrixId) {
+    let d = infoPanelStatMatrixDescriptorById[matrixId];
+    return buildStatMatrixGridFromDescriptor(d);
+}
+
+function renderMatrixGridToPopup(grid, emptyText = 'No matrix data.') {
+    let container = document.getElementById('research-matrix-json');
+    if (!container) return;
+    if (!Array.isArray(grid) || grid.length === 0 || !Array.isArray(grid[0]) || grid[0].length === 0) {
+        container.innerHTML = `<div class="matrix-empty">${_escapeHtml(emptyText)}</div>`;
+        return;
+    }
+
+    let html = '<table class="matrix-table"><thead><tr>';
+    let head = grid[0];
+    for (let i = 0; i < head.length; i++) {
+        if (i === 0) html += `<th class="matrix-row-head">${_escapeHtml(head[i])}</th>`;
+        else html += `<th>${_escapeHtml(head[i])}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    for (let r = 1; r < grid.length; r++) {
+        let row = grid[r] || [];
+        html += '<tr>';
+        for (let c = 0; c < row.length; c++) {
+            if (c === 0) html += `<th class="matrix-row-head">${_escapeHtml(row[c])}</th>`;
+            else html += `<td>${_escapeHtml(row[c])}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+    container.scrollTop = 0;
+    container.scrollLeft = 0;
+}
+
+function refreshResearchStatMatrixPopupText() {
+    let ta = document.getElementById('research-matrix-json');
+    let title = document.getElementById('research-matrix-title');
+    if (!ta) return;
+    let p = researchStatMatrixPopupPayload;
+    if (!p) {
+        renderMatrixGridToPopup(null, '{"error":"No stat selected"}');
+        if (title) title.textContent = 'Research Stat Matrix';
+        return;
+    }
+    try {
+        if (Number.isFinite(Number(p.shopMatrixId))) {
+            let d = shopStatMatrixDescriptorById[p.shopMatrixId];
+            if (title) title.textContent = d && d.title ? `Research Stat Matrix: ${d.title}` : 'Research Stat Matrix';
+            renderMatrixGridToPopup(buildShopStatMatrixGrid(Number(p.shopMatrixId)), 'No stat descriptor found.');
+        } else if (Number.isFinite(Number(p.infoPanelMatrixId))) {
+            let d = infoPanelStatMatrixDescriptorById[p.infoPanelMatrixId];
+            if (title) title.textContent = d && d.title ? `Research Stat Matrix: ${d.title}` : 'Research Stat Matrix';
+            renderMatrixGridToPopup(buildInfoPanelStatMatrixGrid(Number(p.infoPanelMatrixId)), 'No stat descriptor found.');
+        } else {
+            if (title) title.textContent = `Research Stat Matrix: ${p.kind}:${p.key}:${p.statKey}`;
+            renderMatrixGridToPopup(buildResearchStatMatrixGrid(p.kind, p.key, p.statKey));
+        }
+    } catch {
+        renderMatrixGridToPopup(null, 'Unable to build matrix');
+    }
+}
+
+function setResearchStatMatrixPopupOpen(open) {
+    let popup = document.getElementById('research-matrix-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    popup.classList.toggle('hidden', !open);
+    if (open) refreshResearchStatMatrixPopupText();
+    return wasOpen !== open;
+}
+
+
+function setResearchQueueDragGuard(active, rerenderPopup = false) {
+    let wasActive = researchQueueDragInProgress;
+    researchQueueDragInProgress = !!active;
+    if (wasActive && !researchQueueDragInProgress && rerenderPopup) {
+        let researchPopup = document.getElementById('research-popup');
+        if (researchPopup && !researchPopup.classList.contains('hidden')) {
+            renderResearchPopupContent();
+        }
+    }
+}
+
+function ensureResearchQueueDragReleaseHooks() {
+    if (researchQueueDragReleaseHooksBound) return;
+    researchQueueDragReleaseHooksBound = true;
+    window.addEventListener('mouseup', () => setResearchQueueDragGuard(false, true), true);
+    window.addEventListener('dragend', () => setResearchQueueDragGuard(false, true), true);
+    window.addEventListener('blur', () => setResearchQueueDragGuard(false, false), true);
+}
+
+function renderResearchPopupContent() {
+    let holder = document.getElementById('research-popup-content');
+    if (!holder) return;
+    let popupSnapshot = null;
+    if (activePopupControlGroupKey) {
+        normalizePopupControlGroup(activePopupControlGroupKey);
+        popupSnapshot = getPopupControlGroupSnapshot(activePopupControlGroupKey);
+        if (!popupSnapshot) activePopupControlGroupKey = '';
+    }
+
+    let unitsSnapshot = popupSnapshot
+        ? (popupSnapshot.units || []).filter(u => u && !u.dead)
+        : selectedUnits.filter(u => u && !u.dead);
+    let entitiesSnapshot = popupSnapshot
+        ? (popupSnapshot.entities || []).filter(e => e && !(e.energy !== undefined && e.energy <= 0))
+        : selectedEntities.filter(e => e && !(e.energy !== undefined && e.energy <= 0));
+    let subgroupSnapshot = popupSnapshot
+        ? { ...(popupSnapshot.activeSubGroups || {}) }
+        : { ...activeSubGroups };
+
+    let infoPanel = holder.querySelector('#research-popup-info-panel');
+    if (!infoPanel) {
+        holder.innerHTML = `
+        <div id="queue-multiplier-bar-popup" class="mult-toggle-bar" style="padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;"></div>
+        <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
+            <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
+        </div>
+        <div id="research-popup-info-panel"></div>
+    `;
+        infoPanel = holder.querySelector('#research-popup-info-panel');
+        updatePurchaseMultiplierBars();
+    }
+
+    let popupIgnoreBtn = holder.querySelector('#btn-ignore-level-popup');
+    if (popupIgnoreBtn && popupIgnoreBtn.dataset.bound !== '1') {
+        popupIgnoreBtn.dataset.bound = '1';
+        bindInstantPress(popupIgnoreBtn, () => {
+            ignoreLevelSubgroups = !ignoreLevelSubgroups;
+            updateIgnoreLevelButton();
+            if (activePopupControlGroupKey) {
+                normalizePopupControlGroup(activePopupControlGroupKey);
+                let snap = getPopupControlGroupSnapshot(activePopupControlGroupKey);
+                if (snap) snap.activeSubGroups = {};
+            }
+            renderResearchPopupContent();
+            updateInfoPanel();
+        });
+    }
+
+    let prevUnits = selectedUnits;
+    let prevEntities = selectedEntities;
+
+    selectedUnits = unitsSnapshot;
+    selectedEntities = entitiesSnapshot;
+    updateInfoPanel(infoPanel, {
+        skipGlobalSync: true,
+        subgroupState: subgroupSnapshot,
+        onRefresh: () => {
+            if (!researchQueueDragInProgress) renderResearchPopupContent();
+        },
+        onSubgroupStateChange: (nextState) => {
+            subgroupSnapshot = { ...(nextState || {}) };
+            if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
+        }
+    });
+
+    selectedUnits = prevUnits;
+    selectedEntities = prevEntities;
+    updateIgnoreLevelButton();
+}
+
+
+function renderStartingResourcesThingRowsForPanel() {
+    ensureStartingResourcesSelectedThing();
+    let selectedThing = RESEARCH_THINGS_BY_ID[startingResourcesSelectedThingId];
+    if (!selectedThing) return '<div style="font-size:11px;color:#777">No thing selected.</div>';
+
+    let owner = localPlayerId;
+    let thingId = getStartingThingId(selectedThing.kind, selectedThing.key);
+    let html = '';
+
+    html += `<div class="info-row" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">`;
+    for (let thing of RESEARCH_THINGS) {
+        let id = `${thing.kind}:${thing.key}`;
+        let isSelected = id === thingId;
+        let borderRadius = thing.kind === 'unit' ? '50%' : '4px';
+        html += `<button class="info-research-thing-btn info-startres-thing-btn" data-thing-id="${id}" title="${thing.label}" style="width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center">`;
+        html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}">`;
+        html += `</button>`;
+    }
+    html += `</div>`;
+
+    html += `<div style="margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212">`;
+    html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
+
+    for (let stat of (selectedThing.stats || [])) {
+        let curLevel = 0;
+        if (startingResourcesConfig.researchLevels[thingId] && Number.isFinite(startingResourcesConfig.researchLevels[thingId][stat.statKey])) {
+            curLevel = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(startingResourcesConfig.researchLevels[thingId][stat.statKey]) || 0)));
+        }
+        let nextLevel = Math.min(MAX_RESEARCH_LEVEL, curLevel + 1);
+
+        let selectedThingLevel = getResearchPreviewThingLevel();
+        let currentValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, curLevel, selectedThingLevel);
+        let projectedValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextLevel, selectedThingLevel);
+        if (!Number.isFinite(projectedValue)) projectedValue = currentValue;
+
+        html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
+        html += `<div style="display:flex;align-items:center;gap:8px;white-space:nowrap">`;
+        html += `<span style="color:#bbb;flex:1 1 0;min-width:0">${stat.label}</span><span class="info-research-level-preview-btn info-startres-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${curLevel}" data-to-level="${nextLevel}" style="color:#8fc;background:#000;cursor:pointer;flex:0 0 180px;text-align:center;display:inline-block;">${formatResearchStatValue(stat.statKey, currentValue)}->${formatResearchStatValue(stat.statKey, projectedValue)}</span>`;
+        html += `<span style="color:#9cf;flex:1 1 0;text-align:right">R${curLevel}/${MAX_RESEARCH_LEVEL}</span>`;
+        html += `</div>`;
+        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px">`;
+        html += `<span class="info-startres-stat-dec" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel > 0 ? 'pointer' : 'default'};color:${curLevel > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
+        html += `<span class="info-startres-stat-inc" data-thing-id="${thingId}" data-stat-key="${stat.statKey}" style="cursor:${curLevel < MAX_RESEARCH_LEVEL ? 'pointer' : 'default'};color:${curLevel < MAX_RESEARCH_LEVEL ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+        html += `</div>`;
+        html += `</div>`;
+    }
+
+    html += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #2c2c2c">`;
+    html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Starting Spawn Counts (Per Level)</div>`;
+    for (let lvl = 1; lvl <= MAX_THING_LEVEL; lvl++) {
+        let cur = getStartingSpawnCount(thingId, lvl);
+        let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
+        html += `<div class="info-row" style="align-items:center;gap:8px;margin:1px 0;">`;
+        html += `<span style="color:#bbb;flex:1 1 0">L${lvl}</span>`;
+        html += `<span style="color:#fff;flex:0 0 180px;text-align:center">${cur}/${maxRow}</span>`;
+        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 0">`;
+        html += `<span class="info-startres-spawn-dec" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur > 0 ? 'pointer' : 'default'};color:${cur > 0 ? '#f66' : '#444'};font-weight:bold;">[-]</span>`;
+        html += `<span class="info-startres-spawn-inc" data-thing-id="${thingId}" data-level="${lvl}" style="cursor:${cur < maxRow ? 'pointer' : 'default'};color:${cur < maxRow ? '#4f4' : '#444'};font-weight:bold;">[+]</span>`;
+        html += `</div>`;
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    html += `</div>`;
+    return html;
+}
+
+function renderStartingResourcesPopupContent() {
+    let holder = document.getElementById('starting-resources-content');
+    if (!holder) return;
+    holder.innerHTML = `
+        <div style="font-size:10px;color:#8cf;margin-bottom:2px">Adjust Step</div>
+        <div id="starting-resources-multiplier-bar" class="mult-toggle-bar" style="margin-bottom:6px;border:1px solid #2f2f2f;border-radius:4px;"></div>
+        <div id="starting-resources-panel" style="display:block">${renderStartingResourcesThingRowsForPanel()}</div>
+        <div class="info-row" style="justify-content:flex-end;gap:8px;margin-top:6px;border-top:1px solid #2b2b2b;padding-top:6px;">
+            <button id="btn-startres-reset-selected" type="button" style="font-size:11px;padding:3px 8px;">Reset Selected Thing</button>
+            <button id="btn-startres-reset-all" type="button" style="font-size:11px;padding:3px 8px;">Reset All</button>
+        </div>
+    `;
+
+    renderMultiplierBar('starting-resources-multiplier-bar', startingResourcesAdjustMultiplier, (val) => {
+        startingResourcesAdjustMultiplier = val;
+        renderStartingResourcesPopupContent();
+    });
+
+    let resetSelected = document.getElementById('btn-startres-reset-selected');
+    if (resetSelected) {
+        bindInstantPress(resetSelected, () => {
+            let selectedThingId = startingResourcesSelectedThingId;
+            if (!selectedThingId) return;
+            delete startingResourcesConfig.researchLevels[selectedThingId];
+            delete startingResourcesConfig.spawnCounts[selectedThingId];
+            renderStartingResourcesPopupContent();
+        });
+    }
+
+    let resetAll = document.getElementById('btn-startres-reset-all');
+    if (resetAll) {
+        bindInstantPress(resetAll, () => {
+            if (!confirm('Reset all starting resources and research presets?')) return;
+            resetStartingResourcesConfig();
+            renderStartingResourcesPopupContent();
+        });
+    }
+
+    holder.querySelectorAll('.info-startres-thing-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let thingId = String(btn.dataset.thingId || '');
+            if (!thingId) return;
+            startingResourcesSelectedThingId = thingId;
+            renderStartingResourcesPopupContent();
+        });
+    });
+
+    holder.querySelectorAll('.info-startres-level-preview-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let kind = btn.dataset.kind;
+            let key = btn.dataset.key;
+            let statKey = btn.dataset.statKey;
+            let fromLevel = Number.parseInt(btn.dataset.fromLevel, 10);
+            let toLevel = Number.parseInt(btn.dataset.toLevel, 10);
+            openResearchThingLevelDropdown(btn, { kind, key, statKey, fromLevel, toLevel });
+        });
+    });
+
+    holder.querySelectorAll('.info-startres-stat-dec').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let thingId = String(btn.dataset.thingId || '');
+            let statKey = String(btn.dataset.statKey || '');
+            adjustStartingResearchLevelDelta(thingId, statKey, -startingResourcesAdjustMultiplier);
+            renderStartingResourcesPopupContent();
+        });
+    });
+
+    holder.querySelectorAll('.info-startres-stat-inc').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let thingId = String(btn.dataset.thingId || '');
+            let statKey = String(btn.dataset.statKey || '');
+            adjustStartingResearchLevelDelta(thingId, statKey, startingResourcesAdjustMultiplier);
+            renderStartingResourcesPopupContent();
+        });
+    });
+
+    holder.querySelectorAll('.info-startres-spawn-dec').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let thingId = String(btn.dataset.thingId || '');
+            let lvl = Number(btn.dataset.level || 1);
+            adjustStartingSpawnCountDelta(thingId, lvl, -startingResourcesAdjustMultiplier);
+            renderStartingResourcesPopupContent();
+        });
+    });
+
+    holder.querySelectorAll('.info-startres-spawn-inc').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let thingId = String(btn.dataset.thingId || '');
+            let lvl = Number(btn.dataset.level || 1);
+            adjustStartingSpawnCountDelta(thingId, lvl, startingResourcesAdjustMultiplier);
+            renderStartingResourcesPopupContent();
+        });
+    });
+}
+
+function setStartingResourcesPopupOpen(open) {
+    let popup = document.getElementById('starting-resources-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    popup.classList.toggle('hidden', !open);
+    if (open) renderStartingResourcesPopupContent();
+    return wasOpen !== open;
+}
+
+let uiBannerHideTimer = null;
+
+function showUiBanner(message, kind = 'info', timeoutMs = 2400) {
+    let text = String(message || '').trim();
+    if (!text) return;
+
+    let el = document.getElementById('ui-banner');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'ui-banner';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        el.style.position = 'fixed';
+        el.style.left = '50%';
+        el.style.bottom = '14px';
+        el.style.transform = 'translateX(-50%) translateY(12px)';
+        el.style.padding = '8px 12px';
+        el.style.borderRadius = '6px';
+        el.style.fontSize = '12px';
+        el.style.border = '1px solid #444';
+        el.style.background = '#141414';
+        el.style.color = '#ddd';
+        el.style.boxShadow = '0 6px 20px rgba(0,0,0,0.35)';
+        el.style.zIndex = '99999';
+        el.style.opacity = '0';
+        el.style.pointerEvents = 'none';
+        el.style.transition = 'opacity 140ms ease, transform 140ms ease';
+        document.body.appendChild(el);
+    }
+
+    if (kind === 'error') {
+        el.style.background = '#2a1010';
+        el.style.borderColor = '#8a3232';
+        el.style.color = '#ffd6d6';
+    } else if (kind === 'success') {
+        el.style.background = '#102514';
+        el.style.borderColor = '#2f7a3f';
+        el.style.color = '#d8ffe0';
+    } else {
+        el.style.background = '#141414';
+        el.style.borderColor = '#444';
+        el.style.color = '#ddd';
+    }
+
+    el.textContent = text;
+    el.style.opacity = '1';
+    el.style.transform = 'translateX(-50%) translateY(0)';
+
+    if (uiBannerHideTimer) clearTimeout(uiBannerHideTimer);
+    uiBannerHideTimer = setTimeout(() => {
+        let bannerEl = document.getElementById('ui-banner');
+        if (!bannerEl) return;
+        bannerEl.style.opacity = '0';
+        bannerEl.style.transform = 'translateX(-50%) translateY(12px)';
+    }, Math.max(800, Math.floor(Number(timeoutMs) || 2400)));
+}
+
+function renderGameGraph(metric = graphMetric) {
+    graphMetric = 'units';
+    metric = 'units';
+    let plotEl = document.getElementById('go-graph-plot');
+    if (!plotEl || typeof Plotly === 'undefined') return;
+    let samples = gameStatsHistory;
+    if (!samples || samples.length === 0) {
+        Plotly.react(plotEl, [], {
+            paper_bgcolor: '#0d0d0d',
+            plot_bgcolor: '#0d0d0d',
+            xaxis: { visible: false },
+            yaxis: { visible: false },
+            annotations: [{ text: 'No graph data recorded.', x: 0.5, y: 0.5, showarrow: false, font: { color: '#999', size: 14 } }],
+            margin: { l: 24, r: 24, t: 20, b: 20 }
+        }, { displayModeBar: false, responsive: true });
+        return;
+    }
+
+    let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+
+    let traces = teams.map(pid => ({
+        x: samples.map(s => (s.tick || 0) / TICK_RATE),
+        y: samples.map(s => (s[metric] && s[metric][pid]) || 0),
+        mode: 'lines',
+        name: `P${pid + 1}`,
+        line: { color: getTeamDisplayColor(pid), width: 2 }
+    }));
+
+    let maxSeconds = (samples[samples.length - 1].tick || 0) / TICK_RATE;
+    Plotly.react(plotEl, traces, {
+        paper_bgcolor: '#0d0d0d',
+        plot_bgcolor: '#0d0d0d',
+        font: { color: '#cfd8dc', family: 'monospace', size: 11 },
+        margin: { l: 48, r: 12, t: 26, b: 36 },
+        legend: { orientation: 'h', x: 0, y: 1.15 },
+        xaxis: {
+            title: 'Time (s)',
+            range: [0, Math.max(10, maxSeconds)],
+            gridcolor: '#2a2a2a',
+            zerolinecolor: '#333'
+        },
+        yaxis: {
+            title: 'UNITS',
+            rangemode: 'tozero',
+            gridcolor: '#2a2a2a',
+            zerolinecolor: '#333'
+        }
+    }, {
+        displayModeBar: false,
+        responsive: true
+    });
+}
