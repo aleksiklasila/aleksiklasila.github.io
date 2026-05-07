@@ -1,5 +1,7 @@
 "use strict";
 
+const MAX_CAMERA_ZOOM = 15;
+
 // ============================================================
 function _buildDeterministicUnitUpdateOrderForTick() {
     let order = units.slice();
@@ -1162,13 +1164,29 @@ function initInput() {
         let rect = gameArea.getBoundingClientRect();
         let screenX = e.clientX - rect.left;
         let screenY = e.clientY - rect.top;
-        let oldZoom = camera.zoom;
+        let worldBefore3D = null;
+        if (renderDimensionMode === '3d' && renderer3dInstance && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function') {
+            renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
+            let pickedBefore = renderer3dInstance.screenToGround(e.clientX, e.clientY, rect);
+            if (pickedBefore && Number.isFinite(pickedBefore.x) && Number.isFinite(pickedBefore.y)) {
+                worldBefore3D = { x: pickedBefore.x * TILE, y: pickedBefore.y * TILE };
+            }
+        }
         let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
-        if (e.deltaY < 0) camera.zoom = Math.min(2, camera.zoom * 1.2);
+        if (e.deltaY < 0) camera.zoom = Math.min(MAX_CAMERA_ZOOM, camera.zoom * 1.2);
         else camera.zoom = Math.max(minZoom, camera.zoom / 1.2);
-        // Adjust camera so world point under cursor stays under cursor
-        camera.x = worldBeforeX - screenX / camera.zoom;
-        camera.y = worldBeforeY - screenY / camera.zoom;
+        if (renderDimensionMode !== '3d') {
+            // Keep 2D zoom centered on the cursor.
+            camera.x = worldBeforeX - screenX / camera.zoom;
+            camera.y = worldBeforeY - screenY / camera.zoom;
+        } else if (worldBefore3D && renderer3dInstance && typeof renderer3dInstance.buildViewProjection === 'function' && typeof renderer3dInstance.screenToGround === 'function') {
+            renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
+            let pickedAfter = renderer3dInstance.screenToGround(e.clientX, e.clientY, rect);
+            if (pickedAfter && Number.isFinite(pickedAfter.x) && Number.isFinite(pickedAfter.y)) {
+                camera.x += worldBefore3D.x - pickedAfter.x * TILE;
+                camera.y += worldBefore3D.y - pickedAfter.y * TILE;
+            }
+        }
         clampCamera();
     });
 
@@ -1763,15 +1781,17 @@ function initInput() {
             // Zoom
             let zoomRatio = dist / touchDistInitial;
             let minZoom = Math.max(viewW / WORLD_W, viewH / WORLD_H, 0.4);
-            camera.zoom = Math.max(minZoom, Math.min(2, cameraZoomInitial * zoomRatio));
+            camera.zoom = Math.max(minZoom, Math.min(MAX_CAMERA_ZOOM, cameraZoomInitial * zoomRatio));
 
-            // Pan (keeping center stable)
-            let rect = gameArea.getBoundingClientRect();
-            let worldBeforeX = cameraXInitial + (touchCenterInitial.x - rect.left) / cameraZoomInitial;
-            let worldBeforeY = cameraYInitial + (touchCenterInitial.y - rect.top) / cameraZoomInitial;
+            if (renderDimensionMode !== '3d') {
+                // Keep 2D pinch zoom centered on the gesture focus.
+                let rect = gameArea.getBoundingClientRect();
+                let worldBeforeX = cameraXInitial + (touchCenterInitial.x - rect.left) / cameraZoomInitial;
+                let worldBeforeY = cameraYInitial + (touchCenterInitial.y - rect.top) / cameraZoomInitial;
 
-            camera.x = worldBeforeX - (cx - rect.left) / camera.zoom;
-            camera.y = worldBeforeY - (cy - rect.top) / camera.zoom;
+                camera.x = worldBeforeX - (cx - rect.left) / camera.zoom;
+                camera.y = worldBeforeY - (cy - rect.top) / camera.zoom;
+            }
 
             clampCamera();
         }

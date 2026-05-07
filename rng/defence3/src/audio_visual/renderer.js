@@ -125,12 +125,43 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '', bars);
 }
 
+function get3DUnitStatusGlyph(unit) {
+    if (!unit) return null;
+    let energyBlocked = Number.isFinite(unit._energyBlockedUntil) && gameTime < unit._energyBlockedUntil;
+    if (unit.workerType === 'astar_collector') {
+        return { symbol: unit.carryingValue > 0 ? '★' : '☆', color: unit.carryingValue > 0 ? '#ddd' : '#888' };
+    }
+    if (unit.carryingValue > 0) {
+        return { symbol: '⚡', color: '#fd0' };
+    }
+    if (unit.workerType === 'builder' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD') return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_BUILD' || unit.workerState === 'BUILDING_IN_PLACE') return { symbol: '🔨', color: '#fa0' };
+    }
+    if (unit.workerType === 'healer' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD') return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_HEAL' || unit.workerState === 'HEALING') return { symbol: '+', color: '#fff' };
+    }
+    if (unit.workerType === 'researcher' && unit.workerState) {
+        if (unit.workerState === 'RETURNING_FOR_GOLD' || !unit.researcherHasMaterial) return { symbol: '⚡', color: energyBlocked ? '#f55' : '#fd0' };
+        if (unit.workerState === 'MOVING_TO_RESEARCH' || unit.workerState === 'RESEARCHING') return { symbol: 'R', color: '#7bf' };
+    }
+    return null;
+}
+
 function get3DUnitTextureStatus(unit) {
     let bars = [];
     if (unit && unit.energy < unit.maxEnergy) {
         bars.push({ pct: Math.max(0, unit.energy / Math.max(1, unit.maxEnergy)), bgColor: '#600', fillColor: '#0f0' });
     }
-    return build3DStatusTextureOptions(shouldShowUnitLevels() ? getUnitLevelLabelText(unit) : '', bars);
+    let status = build3DStatusTextureOptions(shouldShowUnitLevels() ? getUnitLevelLabelText(unit) : '', bars);
+    let glyph = get3DUnitStatusGlyph(unit);
+    if (glyph) {
+        status.glyphSymbol = glyph.symbol;
+        status.glyphColor = glyph.color;
+        status.keySuffix = status.keySuffix ? `${status.keySuffix}|glyph:${glyph.symbol}:${glyph.color}` : `glyph:${glyph.symbol}:${glyph.color}`;
+    }
+    return status;
 }
 
 function get3DTopTextureCanvas(key, drawFn) {
@@ -155,7 +186,8 @@ function draw3DSpriteIntoTopTexture(g, sprite, inset = 8) {
     g.drawImage(sprite, inset, inset, size, size);
 }
 
-function get3DUnitTopTexture(unitType, owner, statusOptions = null) {
+function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
+    let unitType = typeof unitOrType === 'string' ? unitOrType : (unitOrType && unitOrType.unitType);
     let stats = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
     let color = stats.color || '#fff';
     let vis = stats.vis || 'circle';
@@ -180,6 +212,31 @@ function get3DUnitTopTexture(unitType, owner, statusOptions = null) {
             g.lineTo(size * 0.72, size * 0.7);
             g.closePath();
             g.fill();
+            g.stroke();
+        } else if (vis === 'snake') {
+            g.fillStyle = color;
+            g.beginPath();
+            g.ellipse(size * 0.5, size * 0.48, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = '#111';
+            g.lineWidth = 2;
+            g.beginPath();
+            g.ellipse(size * 0.5, size * 0.48, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+            g.stroke();
+            g.fillStyle = '#111';
+            g.beginPath();
+            g.arc(size * 0.46, size * 0.42, Math.max(1.5, size * 0.018), 0, Math.PI * 2);
+            g.fill();
+            g.beginPath();
+            g.arc(size * 0.54, size * 0.42, Math.max(1.5, size * 0.018), 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = '#f66';
+            g.lineWidth = Math.max(1, Math.round(size * 0.015));
+            g.beginPath();
+            g.moveTo(size * 0.5, size * 0.62);
+            g.lineTo(size * 0.47, size * 0.69);
+            g.moveTo(size * 0.5, size * 0.62);
+            g.lineTo(size * 0.53, size * 0.69);
             g.stroke();
         } else if (vis === 'star') {
             if (unitType === 'collector' || unitType === 'astar_collector') {
@@ -229,7 +286,36 @@ function get3DUnitTopTexture(unitType, owner, statusOptions = null) {
         g.beginPath();
         g.arc(size * 0.5, size * 0.14, Math.max(4, Math.round(size * 0.05)), 0, Math.PI * 2);
         g.fill();
+        if (statusOptions && statusOptions.glyphSymbol) {
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.font = `700 ${Math.max(11, Math.round(size * 0.2))}px Segoe UI Emoji, Segoe UI Symbol, Segoe UI, Arial, sans-serif`;
+            g.fillStyle = statusOptions.glyphColor || '#fff';
+            g.fillText(String(statusOptions.glyphSymbol), size * 0.5, size * 0.26);
+        }
         draw3DTopTextureStatus(g, statusOptions);
+    });
+}
+
+function get3DSnakeBodyTopTexture(owner, segmentIndex = 0) {
+    let ownerColor = get3DRenderOwnerColor(owner);
+    let shade = Math.max(0, Math.min(255, 120 - segmentIndex * 8));
+    let stripe = `rgb(${shade},${Math.max(40, shade - 30)},${Math.max(20, shade - 60)})`;
+    let key = `snake_body:${owner}:${segmentIndex}`;
+    return get3DTopTextureCanvas(key, (g) => {
+        let size = g.canvas.width;
+        let inset = Math.round(size * 0.12);
+        let innerSize = size - inset * 2;
+        g.fillStyle = 'rgba(0,0,0,0.45)';
+        g.fillRect(inset, inset, innerSize, innerSize);
+        g.strokeStyle = ownerColor;
+        g.lineWidth = 3;
+        g.strokeRect(inset + 0.5, inset + 0.5, innerSize - 1, innerSize - 1);
+        g.fillStyle = '#0f0';
+        g.fillRect(size * 0.28, size * 0.28, size * 0.44, size * 0.44);
+        g.fillStyle = stripe;
+        g.fillRect(size * 0.28, size * 0.34, size * 0.44, size * 0.1);
+        g.fillRect(size * 0.28, size * 0.56, size * 0.44, size * 0.08);
     });
 }
 
@@ -311,7 +397,7 @@ function build3DOverlayData(bounds, alpha) {
     let bakeHudIntoTopTexture = true;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
     let pushMarker = (x, y, kind, color) => overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
-    let pushRing = (x, y, radiusPx, strokeColor, fillColor = null, dashed = false) => overlays.rings.push({ x: x / TILE, z: y / TILE, radius: radiusPx / TILE, strokeColor, fillColor: null, dashed });
+    let pushRing = (x, y, radiusPx, strokeColor, fillColor = null, dashed = false) => overlays.rings.push({ x: x / TILE, z: y / TILE, radius: radiusPx / TILE, strokeColor, fillColor, dashed });
     let pushRect = (x, y, halfWpx, halfHpx, color, dashed = false) => overlays.rects.push({ x: x / TILE, z: y / TILE, halfWidth: halfWpx / TILE, halfHeight: halfHpx / TILE, color, dashed });
     let pushBar = (x, y, lift, offsetY, width, height, pct, bgColor, fillColor) => {
         if (bakeHudIntoTopTexture) return;
@@ -345,12 +431,16 @@ function build3DOverlayData(bounds, alpha) {
             pushText(worldX, worldY, levelLift, levelOffsetY, getLevelLabelText(entity));
         }
     };
-
+    let pushSalvageCross = (worldX, worldY) => {
+        let span = TILE * 0.34;
+        pushLine(worldX - span, worldY - span, worldX + span, worldY + span, '#f44');
+        pushLine(worldX + span, worldY - span, worldX - span, worldY + span, '#f44');
+    };
     for (let ent of activeSelectedEntities) {
         if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
         let ey = ent.y || (ent.gy * TILE + TILE * 0.5);
-        if (showSelectionOutlinesForBuildings()) pushRect(ex, ey, 18, 18, '#9aa', selectionOutlineType === OVERLAY_LINE_DOTTED);
+        if (showSelectionOutlinesForBuildings()) pushRect(ex, ey, 18, 18, get3DRenderOwnerColor(ent.owner), selectionOutlineType === OVERLAY_LINE_DOTTED);
 
         if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type)) {
             let rallyTarget = getSpawnerRallyTargetWorld(ent);
@@ -380,7 +470,7 @@ function build3DOverlayData(bounds, alpha) {
             if (!u || u.dead) continue;
             let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
             let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-            pushRing(ux, uy, (Number(u.r) || 8) + 4, '#9aa', null, selectionOutlineType === OVERLAY_LINE_DOTTED);
+            pushRing(ux, uy, (Number(u.r) || 8) + 4, get3DRenderOwnerColor(u.owner), null, selectionOutlineType === OVERLAY_LINE_DOTTED);
         }
     }
 
@@ -419,6 +509,36 @@ function build3DOverlayData(bounds, alpha) {
             pushLine(ux, uy, u.targetUnit.x, u.targetUnit.y, 'rgba(255,0,0,0.6)');
         } else if (u.targetBuilding && u.targetBuilding.energy > 0 && u.commandState === CMD_ATTACKING) {
             pushLine(ux, uy, u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)');
+        }
+    }
+
+    for (let t of towers) {
+        if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
+        if (t.markedForSalvage) pushSalvageCross(t.x, t.y);
+    }
+
+    for (let b of barracks) {
+        if (b.gx < bounds.minGx || b.gx > bounds.maxGx || b.gy < bounds.minGy || b.gy > bounds.maxGy) continue;
+        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
+        if (b.markedForSalvage) pushSalvageCross(b.x, b.y);
+    }
+
+    for (let s of collectorSpawners) {
+        if (s.gx < bounds.minGx || s.gx > bounds.maxGx || s.gy < bounds.minGy || s.gy > bounds.maxGy) continue;
+        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
+        if (s.markedForSalvage) pushSalvageCross(s.x, s.y);
+    }
+
+    for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
+        let gridRow = grid[y];
+        let visRow = visibilityGrid[y];
+        if (!gridRow) continue;
+        for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
+            let cell = gridRow[x];
+            if (!cell || !cell.item) continue;
+            if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+            if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
         }
     }
 
@@ -497,6 +617,7 @@ function push3DRenderObject(target, object) {
         rotationY: Number(object.rotationY) || 0,
         tint: object.tint || '#c8ced8',
         alpha: Math.max(0.05, Math.min(1, Number(object.alpha) || 1)),
+        renderShape: object.renderShape === 'cylinder' ? 'cylinder' : 'box',
         topTextureKey: object.topTextureKey || '',
         topTextureCanvas: object.topTextureCanvas || null
     });
@@ -638,6 +759,64 @@ function build3DFrameData() {
         let id = Number(unit && unit.id) || 0;
         let bucket = ((id * 1103515245) >>> 0) % 7;
         return 0.012 + bucket * 0.003;
+    };
+    let getSnakePathPoints = (unit, headX, headY) => {
+        let points = [{ x: headX, y: headY }];
+        if (!unit || !Array.isArray(unit.snakeHistory) || unit.snakeHistory.length <= 0) return points;
+        let lastX = headX;
+        let lastY = headY;
+        let minSpacing = Math.max(6, (Number(unit.r) || 7) * 1.1);
+        for (let point of unit.snakeHistory) {
+            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+            if (Math.hypot(point.x - lastX, point.y - lastY) < minSpacing) continue;
+            points.push({ x: point.x, y: point.y });
+            lastX = point.x;
+            lastY = point.y;
+            if (points.length >= 7) break;
+        }
+        return points;
+    };
+    let pushSnakeRenderObjects = (target, unit, headX, headY, footprint, unitStatus) => {
+        let points = getSnakePathPoints(unit, headX, headY);
+        let ownerTint = get3DRenderOwnerColor(unit.owner);
+        for (let i = points.length - 1; i >= 1; i--) {
+            let point = points[i];
+            let prev = points[i - 1];
+            let age = i / Math.max(1, points.length - 1);
+            let dx = prev.x - point.x;
+            let dy = prev.y - point.y;
+            let segmentLen = Math.max(0.18, Math.min(0.55, Math.hypot(dx, dy) / TILE * 0.9));
+            let width = Math.max(0.14, footprint * (0.55 - age * 0.2));
+            push3DRenderObject(target, {
+                modelKey: 'snake_segment',
+                x: point.x / TILE,
+                y: getUnitHeightOffset(unit) * (0.6 - age * 0.12),
+                z: point.y / TILE,
+                scaleX: width,
+                scaleY: Math.max(0.12, width * 0.42),
+                scaleZ: Math.max(width * 0.9, segmentLen),
+                rotationY: Math.atan2(dx, dy),
+                tint: ownerTint,
+                alpha: Math.max(0.35, 0.78 - age * 0.18),
+                renderShape: 'cylinder',
+                topTextureKey: `snake_body:${unit.owner}:${i}`,
+                topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i)
+            });
+        }
+        push3DRenderObject(target, {
+            modelKey: `unit_${unit.unitType || 'snake'}`,
+            x: headX / TILE,
+            y: getUnitHeightOffset(unit),
+            z: headY / TILE,
+            scaleX: footprint,
+            scaleY: Math.max(0.24, footprint * 0.52),
+            scaleZ: Math.max(0.34, footprint * 1.3),
+            rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
+            tint: ownerTint,
+            renderShape: 'cylinder',
+            topTextureKey: `unit:${unit.unitType}:${unit.owner}:${unitStatus.keySuffix}`,
+            topTextureCanvas: get3DUnitTopTexture(unit, unit.owner, unitStatus)
+        });
     };
 
     for (let u of units) {
@@ -818,18 +997,75 @@ function build3DFrameData() {
         if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         let unitStatus = get3DUnitTextureStatus(u);
+        if (u.isSnake) {
+            pushSnakeRenderObjects(objects, u, ux, uy, footprint, unitStatus);
+        } else {
+            push3DRenderObject(objects, {
+                modelKey: `unit_${u.unitType || 'norm'}`,
+                x: ux / TILE,
+                y: getUnitHeightOffset(u),
+                z: uy / TILE,
+                scaleX: footprint,
+                scaleY: Math.max(0.32, footprint * 0.9),
+                scaleZ: footprint,
+                rotationY: Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1),
+                tint: get3DRenderOwnerColor(u.owner),
+                renderShape: 'cylinder',
+                topTextureKey: `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
+                topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus)
+            });
+        }
+    }
+
+    for (let p of projectiles) {
+        let px = Number.isFinite(p.prevX) ? (p.prevX + (p.x - p.prevX) * alpha) : p.x;
+        let py = Number.isFinite(p.prevY) ? (p.prevY + (p.y - p.prevY) * alpha) : p.y;
+        let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
+        if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
+        let projectileColor = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
+        let projectileKey = `projectile:${p.type}:${projectileColor}`;
         push3DRenderObject(objects, {
-            modelKey: `unit_${u.unitType || 'norm'}`,
-            x: ux / TILE,
-            y: getUnitHeightOffset(u),
-            z: uy / TILE,
-            scaleX: footprint,
-            scaleY: Math.max(0.32, footprint * 0.9),
-            scaleZ: footprint,
-            rotationY: Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1),
-            tint: get3DRenderOwnerColor(u.owner),
-            topTextureKey: `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
-            topTextureCanvas: get3DUnitTopTexture(u.unitType, u.owner, unitStatus)
+            modelKey: `projectile_${p.type || 'default'}`,
+            x: px / TILE,
+            y: 0.18,
+            z: py / TILE,
+            scaleX: 0.12,
+            scaleY: 0.12,
+            scaleZ: 0.2,
+            rotationY: Math.atan2(Number(p.vx) || 0, Number(p.vy) || 1),
+            tint: projectileColor,
+            alpha: 0.95,
+            topTextureKey: projectileKey,
+            topTextureCanvas: get3DTopTextureCanvas(projectileKey, (g) => {
+                let size = g.canvas.width;
+                g.fillStyle = projectileColor;
+                g.beginPath();
+                g.arc(size * 0.5, size * 0.5, size * 0.18, 0, Math.PI * 2);
+                g.fill();
+                g.strokeStyle = '#fff';
+                g.lineWidth = Math.max(2, Math.round(size * 0.035));
+                g.stroke();
+            })
+        });
+    }
+
+    for (let p of particles) {
+        let px = Number.isFinite(p.prevX) ? (p.prevX + (p.x - p.prevX) * alpha) : p.x;
+        let py = Number.isFinite(p.prevY) ? (p.prevY + (p.y - p.prevY) * alpha) : p.y;
+        let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
+        if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
+        if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
+        push3DRenderObject(objects, {
+            modelKey: 'particle',
+            x: px / TILE,
+            y: 0.08,
+            z: py / TILE,
+            scaleX: 0.06,
+            scaleY: 0.06,
+            scaleZ: 0.06,
+            tint: p.color || '#fff',
+            alpha: Math.max(0.1, Math.min(1, (Number(p.life) || 0) / 35))
         });
     }
 

@@ -20,6 +20,13 @@ function _quantizeTowerAngleIndex(angle) {
     return Math.round((a / tau) * TOWER_ICON_ANGLE_STEPS) % TOWER_ICON_ANGLE_STEPS;
 }
 
+function get2DRenderOwnerColor(owner) {
+    if (Number.isFinite(owner) && owner >= 0) {
+        return teamColorById[owner] || PLAYER_COLORS[owner] || '#c8ced8';
+    }
+    return '#c8ced8';
+}
+
 function _getTowerIconSprite(color, angle, type, active) {
     let qIdx = _quantizeTowerAngleIndex(angle);
     let key = (type || '') + '|' + String(color || '') + '|' + (active ? '1' : '0') + '|' + qIdx;
@@ -1267,7 +1274,7 @@ function draw() {
         let entVisible = _overlayBoundsVisible(ex, ey, ex, ey, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 64);
 
         if (entVisible && showSelectionOutlinesForBuildings()) {
-            selectedEntityRects.push([ex - 18, ey - 18, 36, 36]);
+            selectedEntityRects.push([ex - 18, ey - 18, 36, 36, get2DRenderOwnerColor(ent.owner)]);
         }
 
         if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
@@ -1312,8 +1319,8 @@ function draw() {
     }
 
     if (selectedEntityRects.length > 0) {
-        let rectSprite = _getOverlayRectOutlineSprite(36, 36, selectionOutlineType, '#9aa', 1);
         for (let rect of selectedEntityRects) {
+            let rectSprite = _getOverlayRectOutlineSprite(36, 36, selectionOutlineType, rect[4] || '#9aa', 1);
             ctx.drawImage(rectSprite.canvas, Math.round(rect[0] - rectSprite.offsetX), Math.round(rect[1] - rectSprite.offsetY), rectSprite.drawW, rectSprite.drawH);
         }
     }
@@ -1398,10 +1405,12 @@ function draw() {
             let rr = (Number(u.r) || 8) + 4;
             if (!_overlayBoundsVisible(ux - rr, uy - rr, ux + rr, uy + rr, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 6)) continue;
             let rKey = Math.max(2, Math.round(rr));
-            let ring = spriteByRadius.get(rKey);
+            let ringColor = get2DRenderOwnerColor(u.owner);
+            let spriteKey = `${rKey}|${ringColor}`;
+            let ring = spriteByRadius.get(spriteKey);
             if (!ring) {
-                ring = _getUnitSelectionRingSprite(rKey, selectionOutlineType, '#9aa');
-                spriteByRadius.set(rKey, ring);
+                ring = _getUnitSelectionRingSprite(rKey, selectionOutlineType, ringColor);
+                spriteByRadius.set(spriteKey, ring);
             }
             let dx = Math.round(ux - ring.half);
             let dy = Math.round(uy - ring.half);

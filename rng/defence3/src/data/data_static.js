@@ -219,6 +219,22 @@ const BASE_CARD_DEFAULT_ENERGY = {
     area_upgrader: 1,
 };
 
+const DEFAULT_BARRACK_BUILDING_ENERGY = 60;
+
+for (let [key, def] of Object.entries(BASE_CARD_TYPES)) {
+    if (!def || typeof def !== 'object') continue;
+    let fallbackEnergy = Number.isFinite(def.energy) && def.energy > 0
+        ? def.energy
+        : (Number.isFinite(def.towerEnergy) && def.towerEnergy > 0
+            ? def.towerEnergy
+            : (key.startsWith('barrack_')
+                ? DEFAULT_BARRACK_BUILDING_ENERGY
+                : BASE_CARD_DEFAULT_ENERGY[key]));
+    if (!(Number.isFinite(fallbackEnergy) && fallbackEnergy > 0)) continue;
+    def.energy = fallbackEnergy;
+    if (def.target === 'wall' || Number.isFinite(def.towerEnergy)) def.towerEnergy = fallbackEnergy;
+}
+
 // Descriptions
 const DESCRIPTIONS = {
     // Towers
