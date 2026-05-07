@@ -306,23 +306,6 @@ function handleControlGroupKey(num, assignMode) {
     updateControlGroupBar();
 }
 
-function getResearchLabsFromPopupGroup(grp) {
-    if (!grp) return [];
-    let out = [];
-    let seen = new Set();
-    let subSnap = grp.activeSubGroups || {};
-    for (let e of (grp.entities || [])) {
-        if (!e || e.type !== 'research' || e.owner !== localPlayerId || e.energy <= 0 || e.underConstruction) continue;
-        let gk = getEntityGroupKey(e);
-        if (subSnap[gk] === false) continue;
-        let id = `${e.gx},${e.gy}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        out.push(e);
-    }
-    return out;
-}
-
 function handlePopupControlGroupKey(key, assignMode) {
     key = String(key || '').toLowerCase();
     if (!POPUP_CONTROL_GROUP_KEYS.includes(key)) return;

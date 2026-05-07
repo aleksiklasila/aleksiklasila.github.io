@@ -1,45 +1,652 @@
 "use strict";
 
-// ============================================================
-// UTILS
-// ============================================================
-let activeFormatBigNumberSuffixStart = null;
+function makeDefaultStartingResourcesConfig() {
+    return {
+        researchLevels: {},
+        spawnCounts: {
+            'building:astar_spawner': { 1: 1 },
+            'unit:astar_collector': { 1: 1 },
+        }
+    };
+}
 
-function formatBigNumber(n, d = 1, suffixStart = undefined) {
-    if (n == null) return "...";
-    if (typeof n === 'string') return n;
-    if (!Number.isFinite(n)) return '' + n;
+function parseStartingThingId(id) {
+    let text = String(id || '');
+    let sep = text.indexOf(':');
+    if (sep < 1) return null;
+    let kind = text.slice(0, sep);
+    let key = text.slice(sep + 1);
+    if ((kind !== 'unit' && kind !== 'building') || !key) return null;
+    return { kind, key };
+}
 
-    let decimals = Math.max(1, Math.floor(Number.isFinite(d) ? d : 1));
-    let sign = n < 0 ? '-' : '';
-    let abs = Math.abs(n);
-    let suffixThresholdRaw = (suffixStart === undefined)
-        ? activeFormatBigNumberSuffixStart
-        : suffixStart;
-    let suffixThreshold = Number(suffixThresholdRaw);
-    if (!Number.isFinite(suffixThreshold) || suffixThreshold <= 0) suffixThreshold = 1000000;
-    if (abs < suffixThreshold) return sign + abs.toFixed(decimals);
+function getStartingThingId(kind, key) {
+    return `${kind}:${key}`;
+}
 
-    const suffixes = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc'];
-    let tier = Math.floor(Math.log10(abs) / 3);
+function normalizeStartingResourcesConfig(rawCfg) {
+    let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
+    let out = makeDefaultStartingResourcesConfig();
 
-    if (tier >= suffixes.length) {
-        let e = Math.floor(Math.log10(abs));
-        return sign + 'e' + e;
+    if (raw.researchLevels && typeof raw.researchLevels === 'object') {
+        for (let id in raw.researchLevels) {
+            let parsed = parseStartingThingId(id);
+            if (!parsed) continue;
+            let thing = getResearchThing(parsed.kind, parsed.key);
+            if (!thing) continue;
+            let levelMap = raw.researchLevels[id];
+            if (typeof levelMap === 'object' && levelMap !== null) {
+                for (let statKey in levelMap) {
+                    if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) continue;
+                    let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(levelMap[statKey]) || 0)));
+                    if (!out.researchLevels[id]) out.researchLevels[id] = {};
+                    if (lvl > 0) out.researchLevels[id][statKey] = lvl;
+                }
+                if (out.researchLevels[id] && Object.keys(out.researchLevels[id]).length === 0) delete out.researchLevels[id];
+            }
+        }
     }
 
-    let scaled = abs / Math.pow(1000, tier);
-
-    // Handle boundary rollover (e.g. 999.995K -> 1.00M)
-    let rounded = Number(scaled.toFixed(decimals));
-    if (rounded >= 1000 && tier < suffixes.length - 1) {
-        tier++;
-        scaled = rounded / 1000;
-        rounded = Number(scaled.toFixed(decimals));
+    if (raw.spawnCounts && typeof raw.spawnCounts === 'object') {
+        for (let id in raw.spawnCounts) {
+            let parsed = parseStartingThingId(id);
+            if (!parsed) continue;
+            let thing = getResearchThing(parsed.kind, parsed.key);
+            if (!thing) continue;
+            let countMap = raw.spawnCounts[id];
+            if (typeof countMap === 'object' && countMap !== null) {
+                for (let levelText in countMap) {
+                    let level = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 0)));
+                    let count = Math.max(0, Math.min(1000, Math.floor(Number(countMap[levelText]) || 0)));
+                    if (!out.spawnCounts[id]) out.spawnCounts[id] = {};
+                    if (count > 0) out.spawnCounts[id][level] = count;
+                }
+                if (out.spawnCounts[id] && Object.keys(out.spawnCounts[id]).length === 0) delete out.spawnCounts[id];
+            }
+        }
     }
 
-    let text = rounded.toFixed(decimals);
-    return sign + text + suffixes[tier];
+    return out;
+}
+
+function resetStartingResourcesConfig() {
+    startingResourcesConfig = normalizeStartingResourcesConfig(makeDefaultStartingResourcesConfig());
+}
+
+function ensureStartingResourcesSelectedThing() {
+    let parsed = parseStartingThingId(startingResourcesSelectedThingId);
+    if (parsed && getResearchThing(parsed.kind, parsed.key)) return;
+    let first = RESEARCH_THINGS[0];
+    if (!first) {
+        startingResourcesSelectedThingId = '';
+        return;
+    }
+    startingResourcesSelectedThingId = getStartingThingId(first.kind, first.key);
+}
+
+function setStartingResearchLevel(thingId, statKey, value) {
+    let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(value) || 0)));
+    if (!startingResourcesConfig.researchLevels[thingId]) startingResourcesConfig.researchLevels[thingId] = {};
+    if (lvl <= 0) {
+        delete startingResourcesConfig.researchLevels[thingId][statKey];
+        if (Object.keys(startingResourcesConfig.researchLevels[thingId]).length <= 0) {
+            delete startingResourcesConfig.researchLevels[thingId];
+        }
+        return;
+    }
+    startingResourcesConfig.researchLevels[thingId][statKey] = lvl;
+}
+
+function setStartingSpawnCount(thingId, level, value) {
+    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+    let count = Math.max(0, Math.min(1000, Math.floor(Number(value) || 0)));
+    if (!startingResourcesConfig.spawnCounts[thingId]) startingResourcesConfig.spawnCounts[thingId] = {};
+    if (count <= 0) {
+        delete startingResourcesConfig.spawnCounts[thingId][lvl];
+        if (Object.keys(startingResourcesConfig.spawnCounts[thingId]).length <= 0) {
+            delete startingResourcesConfig.spawnCounts[thingId];
+        }
+        return;
+    }
+    startingResourcesConfig.spawnCounts[thingId][lvl] = count;
+}
+
+function getStartingResourcesMaxPopulation() {
+    let el = document.getElementById('cfg-max-pop');
+    if (el) return Math.max(1, Math.floor(Number(el.value) || 200));
+    return Math.max(1, Math.floor(Number(CONFIG_MAX_POP) || 200));
+}
+
+function getStartingResourcesTotalSpawnCount() {
+    let total = 0;
+    let map = (startingResourcesConfig && startingResourcesConfig.spawnCounts) || {};
+    for (let thingId in map) {
+        let parsed = parseStartingThingId(thingId);
+        if (!parsed || parsed.kind !== 'unit') continue;
+        let lvlMap = map[thingId] || {};
+        for (let lvl in lvlMap) total += Math.max(0, Math.floor(Number(lvlMap[lvl]) || 0));
+    }
+    return total;
+}
+
+function getStartingSpawnCount(thingId, level) {
+    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+    let map = (startingResourcesConfig.spawnCounts && startingResourcesConfig.spawnCounts[thingId]) || {};
+    return Math.max(0, Math.floor(Number(map[lvl]) || 0));
+}
+
+function getStartingSpawnMaxForRow(thingId, level) {
+    let parsed = parseStartingThingId(thingId);
+    if (!parsed || parsed.kind !== 'unit') return 1000;
+    let maxPop = getStartingResourcesMaxPopulation();
+    let current = getStartingSpawnCount(thingId, level);
+    let total = getStartingResourcesTotalSpawnCount();
+    return Math.max(0, maxPop - Math.max(0, total - current));
+}
+
+function adjustStartingResearchLevelDelta(thingId, statKey, delta) {
+    let parsed = parseStartingThingId(thingId);
+    if (!parsed) return;
+    if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) return;
+    let cur = 0;
+    if (startingResourcesConfig.researchLevels[thingId] && Number.isFinite(startingResourcesConfig.researchLevels[thingId][statKey])) {
+        cur = Math.floor(startingResourcesConfig.researchLevels[thingId][statKey]);
+    }
+    let next = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, cur + Math.floor(Number(delta) || 0)));
+    setStartingResearchLevel(thingId, statKey, next);
+}
+
+function adjustStartingSpawnCountDelta(thingId, level, delta) {
+    let lvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 1)));
+    let cur = getStartingSpawnCount(thingId, lvl);
+    let maxRow = getStartingSpawnMaxForRow(thingId, lvl);
+    let next = Math.max(0, Math.min(maxRow, cur + Math.floor(Number(delta) || 0)));
+    setStartingSpawnCount(thingId, lvl, next);
+}
+
+
+function parseConfigEditorObject(text) {
+    let src = String(text || '').trim();
+    if (!src) throw new Error('Config editor is empty.');
+    let obj = (new Function('"use strict"; return (' + src + ');'))();
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+        throw new Error('Config must evaluate to an object literal.');
+    }
+    return obj;
+}
+
+
+function createEditableRuntimeConfigSnapshot() {
+    return {
+        version: 1,
+        config: {
+            MINIMAP_SIZE,
+            TILE,
+            GRID_W,
+            GRID_H,
+            GOLD_MINE_COUNT,
+            GOLD_MINE_MIN,
+            GOLD_MINE_MAX,
+            GOLD_MINE_AREA,
+            ASTAR_MINE_COUNT,
+            ASTAR_MINE_MIN,
+            ASTAR_MINE_MAX,
+            STARTING_MONEY,
+            STARTING_ASTAR,
+            MAP_TYPE,
+            TYPE_FLOOR,
+            TYPE_WALL,
+            CONFIG_MAX_POP,
+            TICK_RATE,
+            LOCKSTEP_PIPELINE_MIN,
+            UNIT_EFFECTIVE_STATS_RECALC_TICKS,
+            UNIT_COLLISION_RECALC_TICKS,
+            ASTAR_MAX_ITERS_LIMIT,
+            ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
+            WORKER_AI_TICK_DELAY,
+        },
+        progression: {
+            RESEARCH_COST_EXP,
+            RESEARCH_WORK_EXP,
+            RESEARCH_WORK_BASE,
+            RESEARCH_BONUS_EXP_UNITS,
+            RESEARCH_BONUS_EXP_OTHER,
+            RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
+            MAX_THING_LEVEL,
+            MAX_RESEARCH_LEVEL,
+            BUILDING_ENERGY_LEVEL_EXP: BUILDING_ENERGY_LEVEL_EXP,
+            BUILDING_LEVEL_MULT_EXP,
+            BUILDING_DAMAGE_LEVEL_EXP,
+            BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL,
+            BUILDING_LINEAR_VISION_BONUS_PER_LEVEL,
+            SAND_GUN_CD_LEVEL_EXP,
+            RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP,
+            RESEARCH_BUILDING_EFFICIENCY_CAP,
+            UNIT_COLLECTOR_GATHER_LEVEL_EXP,
+            UNIT_WORKER_SPECIALIST_BASE_RATE,
+            UNIT_WORKER_SPECIALIST_LEVEL_EXP,
+        },
+        tables: {
+            BASE_CARD_TYPES: makeEditorCardTypesTable(),
+            BASE_CARD_DEFAULT_ENERGY: cloneJsValue(BASE_CARD_DEFAULT_ENERGY),
+            DESCRIPTIONS: cloneJsValue(DESCRIPTIONS),
+            BUILD_CATEGORIES: cloneJsValue(BUILD_CATEGORIES),
+            BARRACK_SPAWN_CONFIG: cloneJsValue(BARRACK_SPAWN_CONFIG),
+            BASE_UNIT_STATS: makeEditorUnitStatsTable(),
+            UNIT_LEVEL_SCALING: cloneJsValue(UNIT_LEVEL_SCALING),
+            BUILDING_FORMULA_CONFIG: cloneJsValue(BUILDING_FORMULA_CONFIG),
+            UNIT_FORMULA_CONFIG: cloneJsValue(UNIT_FORMULA_CONFIG),
+            RESEARCH_FORMULA_CONFIG: cloneJsValue(RESEARCH_FORMULA_CONFIG),
+            PRECOMPUTED_SOFT_CAP_MAP: cloneJsValue(PRECOMPUTED_SOFT_CAP_MAP),
+            RESEARCH_STAT_LABELS: cloneJsValue(RESEARCH_STAT_LABELS),
+            RESEARCHABLE_UNIT_STATS: cloneJsValue(RESEARCHABLE_UNIT_STATS),
+            PRECOMPUTED_UNIT_STAT_KEYS: cloneJsValue(PRECOMPUTED_UNIT_STAT_KEYS),
+            PRECOMPUTED_BUILDING_STAT_KEYS: cloneJsValue(PRECOMPUTED_BUILDING_STAT_KEYS),
+            RESEARCH_DECREASE_STATS: cloneJsValue(RESEARCH_DECREASE_STATS),
+        }
+    };
+}
+
+function serializeEditableRuntimeConfigForTransport() {
+    return encodeFunctionsForTransport(createEditableRuntimeConfigSnapshot());
+}
+
+function ensureDefaultEditableRuntimeConfigSnapshot() {
+    if (defaultEditableRuntimeConfigSnapshot) return;
+    defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
+}
+
+function syncMainMenuFromRuntimeConfig() {
+    let setValue = (id, value) => {
+        let el = document.getElementById(id);
+        if (!el) return;
+        el.value = String(value);
+    };
+
+    setValue('cfg-mapsize', GRID_W);
+    setValue('cfg-gold-count', GOLD_MINE_COUNT);
+    setValue('cfg-gold-min', GOLD_MINE_MIN);
+    setValue('cfg-gold-max', GOLD_MINE_MAX);
+    setValue('cfg-astar-mine-count', ASTAR_MINE_COUNT);
+    setValue('cfg-astar-mine-min', ASTAR_MINE_MIN);
+    setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
+    setValue('cfg-max-pop', CONFIG_MAX_POP);
+    setValue('cfg-starting-energy', STARTING_MONEY);
+    setValue('cfg-starting-astar', STARTING_ASTAR);
+    setValue('cfg-map-type', MAP_TYPE);
+    setValue('cfg-tick-rate', TICK_RATE);
+    setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
+    setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
+    setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
+    setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
+    setValue('cfg-worker-ai-tick-delay', WORKER_AI_TICK_DELAY);
+    setValue('cfg-max-thing-level', MAX_THING_LEVEL);
+    setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
+}
+
+function applyEditableRuntimeConfigObject(rawConfig, options = null) {
+    let opts = options && typeof options === 'object' ? options : {};
+    let cfgObject = rawConfig;
+    if (opts.fromTransport) cfgObject = decodeFunctionsFromTransport(cfgObject);
+
+    if (!cfgObject || typeof cfgObject !== 'object' || Array.isArray(cfgObject)) {
+        throw new Error('Runtime config must be an object.');
+    }
+
+    let cfg = (cfgObject.config && typeof cfgObject.config === 'object') ? cfgObject.config : {};
+    let prog = (cfgObject.progression && typeof cfgObject.progression === 'object') ? cfgObject.progression : {};
+    let tables = (cfgObject.tables && typeof cfgObject.tables === 'object') ? cfgObject.tables : {};
+
+    if (Number.isFinite(Number(cfg.MINIMAP_SIZE))) MINIMAP_SIZE = Math.max(32, Math.floor(Number(cfg.MINIMAP_SIZE)));
+    if (Number.isFinite(Number(cfg.TILE))) TILE = Math.max(8, Math.floor(Number(cfg.TILE)));
+    if (Number.isFinite(Number(cfg.TYPE_FLOOR))) TYPE_FLOOR = Math.floor(Number(cfg.TYPE_FLOOR));
+    if (Number.isFinite(Number(cfg.TYPE_WALL))) TYPE_WALL = Math.floor(Number(cfg.TYPE_WALL));
+
+    let nextGridW = Number(cfg.GRID_W);
+    let nextGridH = Number(cfg.GRID_H);
+    if (Number.isFinite(nextGridW)) GRID_W = Math.max(8, Math.floor(nextGridW));
+    if (Number.isFinite(nextGridH)) GRID_H = Math.max(8, Math.floor(nextGridH));
+    else GRID_H = GRID_W;
+    WORLD_W = GRID_W * TILE;
+    WORLD_H = GRID_H * TILE;
+
+    if (Number.isFinite(Number(cfg.GOLD_MINE_COUNT))) GOLD_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_COUNT)));
+    if (Number.isFinite(Number(cfg.GOLD_MINE_MIN))) GOLD_MINE_MIN = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MIN)));
+    if (Number.isFinite(Number(cfg.GOLD_MINE_MAX))) GOLD_MINE_MAX = Math.max(0, Math.floor(Number(cfg.GOLD_MINE_MAX)));
+    if (Number.isFinite(Number(cfg.GOLD_MINE_AREA))) GOLD_MINE_AREA = Math.max(1, Math.floor(Number(cfg.GOLD_MINE_AREA)));
+    if (Number.isFinite(Number(cfg.ASTAR_MINE_COUNT))) ASTAR_MINE_COUNT = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_COUNT)));
+    if (Number.isFinite(Number(cfg.ASTAR_MINE_MIN))) ASTAR_MINE_MIN = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MIN)));
+    if (Number.isFinite(Number(cfg.ASTAR_MINE_MAX))) ASTAR_MINE_MAX = Math.max(0, Math.floor(Number(cfg.ASTAR_MINE_MAX)));
+    if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
+    if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
+    if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
+    if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
+
+    let nextTickRate = Number(cfg.TICK_RATE);
+    let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
+    applyTimingConfig(nextTickRate, nextPipelineDelay);
+    if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
+        UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+    }
+    if (Number.isFinite(Number(cfg.UNIT_COLLISION_RECALC_TICKS))) {
+        UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS))));
+    }
+    if (Number.isFinite(Number(cfg.ASTAR_MAX_ITERS_LIMIT))) {
+        ASTAR_MAX_ITERS_LIMIT = Math.max(256, Math.min(18000, Math.floor(Number(cfg.ASTAR_MAX_ITERS_LIMIT))));
+    }
+    if (Number.isFinite(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))) {
+        ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
+    }
+    let workerAiTickDelay = Number(cfg.WORKER_AI_TICK_DELAY);
+    if (!Number.isFinite(workerAiTickDelay)) workerAiTickDelay = Number(cfg.WORKER_HEAVY_AI_STRIDE);
+    if (Number.isFinite(workerAiTickDelay)) {
+        WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(workerAiTickDelay)));
+    }
+
+    if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
+    if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
+    if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
+    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_UNITS))) RESEARCH_BONUS_EXP_UNITS = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_UNITS));
+    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER))) RESEARCH_BONUS_EXP_OTHER = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER));
+    if (Number.isFinite(Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP))) RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = Math.max(1, Number(prog.RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP));
+    if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
+    if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
+    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.BUILDING_ENERGY_LEVEL_EXP))) BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_ENERGY_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.BUILDING_LEVEL_MULT_EXP))) BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(prog.BUILDING_LEVEL_MULT_EXP));
+    if (Number.isFinite(Number(prog.BUILDING_DAMAGE_LEVEL_EXP))) BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(prog.BUILDING_DAMAGE_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL))) BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(prog.BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL)));
+    if (Number.isFinite(Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL))) BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(prog.BUILDING_LINEAR_VISION_BONUS_PER_LEVEL));
+    if (Number.isFinite(Number(prog.SAND_GUN_CD_LEVEL_EXP))) SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(prog.SAND_GUN_CD_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP))) RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(prog.RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP))) RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(prog.RESEARCH_BUILDING_EFFICIENCY_CAP));
+    if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
+    if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
+
+    BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
+    BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
+    BUILDING_FORMULA_CONFIG.damageLevelExp = BUILDING_DAMAGE_LEVEL_EXP;
+    BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel = BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL;
+    BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel = BUILDING_LINEAR_VISION_BONUS_PER_LEVEL;
+    BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
+    BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
+    BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
+    UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
+    UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
+    UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
+
+    if (tables.BASE_CARD_TYPES) replaceObjectContents(BASE_CARD_TYPES, makeRuntimeCardTypesTableFromEditor(tables.BASE_CARD_TYPES));
+    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
+    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
+    if (tables.DESCRIPTIONS) replaceObjectContents(DESCRIPTIONS, tables.DESCRIPTIONS);
+    if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
+    if (tables.BARRACK_SPAWN_CONFIG) replaceObjectContents(BARRACK_SPAWN_CONFIG, tables.BARRACK_SPAWN_CONFIG);
+    if (tables.BASE_UNIT_STATS) replaceObjectContents(BASE_UNIT_STATS, makeRuntimeUnitStatsTableFromEditor(tables.BASE_UNIT_STATS));
+    if (tables.UNIT_LEVEL_SCALING) replaceObjectContents(UNIT_LEVEL_SCALING, tables.UNIT_LEVEL_SCALING);
+    if (tables.BUILDING_FORMULA_CONFIG) replaceObjectContents(BUILDING_FORMULA_CONFIG, tables.BUILDING_FORMULA_CONFIG);
+    if (tables.UNIT_FORMULA_CONFIG) replaceObjectContents(UNIT_FORMULA_CONFIG, tables.UNIT_FORMULA_CONFIG);
+    if (tables.RESEARCH_FORMULA_CONFIG) replaceObjectContents(RESEARCH_FORMULA_CONFIG, tables.RESEARCH_FORMULA_CONFIG);
+    if (tables.PRECOMPUTED_SOFT_CAP_MAP) replaceObjectContents(PRECOMPUTED_SOFT_CAP_MAP, tables.PRECOMPUTED_SOFT_CAP_MAP);
+    if (tables.RESEARCH_STAT_LABELS) replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS);
+    if (tables.RESEARCHABLE_UNIT_STATS) replaceObjectContents(RESEARCHABLE_UNIT_STATS, tables.RESEARCHABLE_UNIT_STATS);
+    if (tables.RESEARCH_DECREASE_STATS) replaceObjectContents(RESEARCH_DECREASE_STATS, tables.RESEARCH_DECREASE_STATS);
+    if (tables.PRECOMPUTED_UNIT_STAT_KEYS) replaceArrayContents(PRECOMPUTED_UNIT_STAT_KEYS, tables.PRECOMPUTED_UNIT_STAT_KEYS);
+    if (tables.PRECOMPUTED_BUILDING_STAT_KEYS) replaceArrayContents(PRECOMPUTED_BUILDING_STAT_KEYS, tables.PRECOMPUTED_BUILDING_STAT_KEYS);
+
+    BUILDING_ENERGY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.energyLevelExp ?? BUILDING_FORMULA_CONFIG.energyLevelExp) || 1);
+    BUILDING_LEVEL_MULT_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.levelMultExp) || 1);
+    BUILDING_DAMAGE_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.damageLevelExp) || 1);
+    BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = Math.max(0, Math.min(0.95, Number(BUILDING_FORMULA_CONFIG.linearCdReductionPerLevel) || 0));
+    BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = Math.max(0, Number(BUILDING_FORMULA_CONFIG.linearVisionBonusPerLevel) || 0);
+    SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
+    RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
+    RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
+    UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
+    UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
+    UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
+
+    normalizeBaseCardDefinitions();
+    PRECOMPUTED_STATS_READY = false;
+    if (!opts.deferPrecompute) rebuildPrecomputedStatsMap();
+    startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
+    syncMainMenuFromRuntimeConfig();
+}
+
+function makeConfigEditorTextFromCurrentConfig() {
+    return stringifyJsLike(createEditableRuntimeConfigSnapshot());
+}
+
+function setConfigPopupOpen(open) {
+    let popup = document.getElementById('config-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    popup.classList.toggle('hidden', !open);
+    if (open) {
+        ensureDefaultEditableRuntimeConfigSnapshot();
+        let ta = document.getElementById('config-editor-text');
+        if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
+    }
+    return wasOpen !== open;
+}
+
+function setOptimizationPopupOpen(open) {
+    let popup = document.getElementById('optimization-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    popup.classList.toggle('hidden', !open);
+    return wasOpen !== open;
+}
+
+function applyConfigEditorChanges() {
+    let ta = document.getElementById('config-editor-text');
+    if (!ta) return;
+    try {
+        let parsed = parseConfigEditorObject(ta.value);
+        applyEditableRuntimeConfigObject(parsed);
+        ta.value = makeConfigEditorTextFromCurrentConfig();
+        showUiBanner('Runtime config applied.', 'success');
+    } catch (err) {
+        showUiBanner(`Config parse/apply error: ${err && err.message ? err.message : 'Unknown error'}`, 'error', 3600);
+    }
+}
+
+function resetConfigEditorToDefaults() {
+    ensureDefaultEditableRuntimeConfigSnapshot();
+    if (!confirm('Reset runtime config to startup defaults?')) return;
+    applyEditableRuntimeConfigObject(cloneJsValue(defaultEditableRuntimeConfigSnapshot));
+    let ta = document.getElementById('config-editor-text');
+    if (ta) ta.value = makeConfigEditorTextFromCurrentConfig();
+}
+
+function createEditableRuntimeConfigSnapshotFromMainMenu() {
+    let snapshot = createEditableRuntimeConfigSnapshot();
+    let cfg = snapshot.config;
+    let getNumber = (id, fallback) => {
+        let el = document.getElementById(id);
+        if (!el) return fallback;
+        let value = Number(el.value);
+        return Number.isFinite(value) ? value : fallback;
+    };
+    let getString = (id, fallback) => {
+        let el = document.getElementById(id);
+        if (!el) return fallback;
+        let value = String(el.value || '').trim();
+        return value || fallback;
+    };
+
+    cfg.GRID_W = Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W)));
+    cfg.GRID_H = cfg.GRID_W;
+    cfg.GOLD_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-gold-count', cfg.GOLD_MINE_COUNT)));
+    cfg.GOLD_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-gold-min', cfg.GOLD_MINE_MIN)));
+    cfg.GOLD_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-gold-max', cfg.GOLD_MINE_MAX)));
+    cfg.ASTAR_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-astar-mine-count', cfg.ASTAR_MINE_COUNT)));
+    cfg.ASTAR_MINE_MIN = Math.max(0, Math.floor(getNumber('cfg-astar-mine-min', cfg.ASTAR_MINE_MIN)));
+    cfg.ASTAR_MINE_MAX = Math.max(0, Math.floor(getNumber('cfg-astar-mine-max', cfg.ASTAR_MINE_MAX)));
+    cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
+    cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
+    cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
+    cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
+    cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
+    cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
+    cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
+    cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
+    cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
+    cfg.WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(getNumber('cfg-worker-ai-tick-delay', cfg.WORKER_AI_TICK_DELAY))));
+
+    snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
+    snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
+
+    return snapshot;
+}
+
+function applyMainMenuControlsToRuntimeState() {
+    let snapshot = createEditableRuntimeConfigSnapshotFromMainMenu();
+    let cfg = snapshot.config;
+    let prog = snapshot.progression;
+
+    GRID_W = cfg.GRID_W;
+    GRID_H = cfg.GRID_H;
+    WORLD_W = GRID_W * TILE;
+    WORLD_H = GRID_H * TILE;
+    GOLD_MINE_COUNT = cfg.GOLD_MINE_COUNT;
+    GOLD_MINE_MIN = cfg.GOLD_MINE_MIN;
+    GOLD_MINE_MAX = cfg.GOLD_MINE_MAX;
+    ASTAR_MINE_COUNT = cfg.ASTAR_MINE_COUNT;
+    ASTAR_MINE_MIN = cfg.ASTAR_MINE_MIN;
+    ASTAR_MINE_MAX = cfg.ASTAR_MINE_MAX;
+    STARTING_MONEY = cfg.STARTING_MONEY;
+    STARTING_ASTAR = cfg.STARTING_ASTAR;
+    MAP_TYPE = cfg.MAP_TYPE;
+    CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
+    MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
+    MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
+    UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
+    UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
+    ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
+    WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
+    applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
+
+    let gameModeEl = document.getElementById('cfg-gamemode');
+    if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
+    let fullVisEl = document.getElementById('cfg-full-vis');
+    if (fullVisEl) fullVisibility = !!fullVisEl.checked;
+}
+
+function createMainMenuSettingsSnapshot() {
+    let numberIds = [
+        'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
+        'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
+        'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
+    ];
+    let selectIds = ['cfg-gamemode', 'cfg-map-type'];
+    let checkboxIds = ['cfg-full-vis'];
+
+    let out = {
+        version: 2,
+        createdAt: Date.now(),
+        lobby: {
+            numbers: {},
+            selects: {},
+            checks: {}
+        },
+        startingResources: cloneStartingResourcesConfig(),
+        editableConfig: encodeFunctionsForTransport(createEditableRuntimeConfigSnapshotFromMainMenu())
+    };
+
+    for (let id of numberIds) {
+        let el = document.getElementById(id);
+        if (el) out.lobby.numbers[id] = Number(el.value);
+    }
+    for (let id of selectIds) {
+        let el = document.getElementById(id);
+        if (el) out.lobby.selects[id] = String(el.value);
+    }
+    for (let id of checkboxIds) {
+        let el = document.getElementById(id);
+        if (el) out.lobby.checks[id] = !!el.checked;
+    }
+
+    return out;
+}
+
+function applyMainMenuSettingsSnapshot(rawData) {
+    let data = (rawData && typeof rawData === 'object') ? rawData : {};
+    let lobby = (data.lobby && typeof data.lobby === 'object') ? data.lobby : {};
+    let numbers = (lobby.numbers && typeof lobby.numbers === 'object') ? lobby.numbers : {};
+    let selects = (lobby.selects && typeof lobby.selects === 'object') ? lobby.selects : {};
+    let checks = (lobby.checks && typeof lobby.checks === 'object') ? lobby.checks : {};
+
+    for (let id in numbers) {
+        let el = document.getElementById(id);
+        if (!el) continue;
+        if (el.type === 'number') el.value = String(numbers[id]);
+    }
+    for (let id in selects) {
+        let el = document.getElementById(id);
+        if (!el) continue;
+        el.value = String(selects[id]);
+    }
+    for (let id in checks) {
+        let el = document.getElementById(id);
+        if (!el) continue;
+        el.checked = !!checks[id];
+    }
+
+    let importedMaxThingLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-thing-level') || {}).value) || MAX_THING_LEVEL));
+    let importedMaxResearchLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-research-level') || {}).value) || MAX_RESEARCH_LEVEL));
+    MAX_THING_LEVEL = importedMaxThingLevel;
+    MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
+    startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+    applyMainMenuControlsToRuntimeState();
+    let appliedAdvancedConfig = false;
+    if (data.editableConfig && typeof data.editableConfig === 'object') {
+        try {
+            applyEditableRuntimeConfigObject(data.editableConfig, { fromTransport: true });
+            appliedAdvancedConfig = true;
+        } catch {
+            // Keep imported non-advanced settings even if advanced config payload is invalid.
+        }
+    }
+    if (appliedAdvancedConfig) {
+        syncMainMenuFromRuntimeConfig();
+        let gameModeEl = document.getElementById('cfg-gamemode');
+        if (gameModeEl) gameModeEl.value = gameMode;
+        let fullVisEl = document.getElementById('cfg-full-vis');
+        if (fullVisEl) fullVisEl.checked = fullVisibility;
+    }
+
+    let popup = document.getElementById('starting-resources-popup');
+    if (popup && !popup.classList.contains('hidden')) renderStartingResourcesPopupContent();
+}
+
+function downloadMainMenuSettings() {
+    let data = createMainMenuSettingsSnapshot();
+    let blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    let url = URL.createObjectURL(blob);
+    let a = document.createElement('a');
+    let stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    a.href = url;
+    a.download = `defence3-settings-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function importMainMenuSettingsFromFile(file) {
+    if (!file) return;
+    let reader = new FileReader();
+    reader.onload = () => {
+        try {
+            let parsed = JSON.parse(String(reader.result || '{}'));
+            applyMainMenuSettingsSnapshot(parsed);
+            showUiBanner('Settings imported.', 'success');
+        } catch {
+            showUiBanner('Invalid settings JSON.', 'error', 3600);
+        }
+    };
+    reader.readAsText(file);
 }
 
 function getGameModeLabel(mode = gameMode) {
@@ -396,19 +1003,6 @@ function setHelpTab(tabId) {
     });
 }
 
-function setHelpPopupOpen(open) {
-    let popup = document.getElementById('help-popup');
-    if (!popup) return false;
-    let wasOpen = !popup.classList.contains('hidden');
-    if (open) {
-        let modeEl = document.getElementById('help-game-mode');
-        if (modeEl) modeEl.textContent = getGameModeLabel(gameMode);
-        setHelpTab('keybinds');
-    }
-    popup.classList.toggle('hidden', !open);
-    return wasOpen !== open;
-}
-
 function getOwnedActiveResearchLabs(owner) {
     return collectorSpawners.filter(s => s && s.type === 'research' && s.owner === owner && s.energy > 0 && !s.underConstruction);
 }
@@ -713,51 +1307,6 @@ function getStartingThingId(kind, key) {
     return `${kind}:${key}`;
 }
 
-function normalizeStartingResourcesConfig(rawCfg) {
-    let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
-    let out = makeDefaultStartingResourcesConfig();
-
-    if (raw.researchLevels && typeof raw.researchLevels === 'object') {
-        for (let id in raw.researchLevels) {
-            let parsed = parseStartingThingId(id);
-            if (!parsed) continue;
-            let thing = getResearchThing(parsed.kind, parsed.key);
-            if (!thing) continue;
-            let levelMap = raw.researchLevels[id];
-            if (typeof levelMap === 'object' && levelMap !== null) {
-                for (let statKey in levelMap) {
-                    if (!getResearchStatEntry(parsed.kind, parsed.key, statKey)) continue;
-                    let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(levelMap[statKey]) || 0)));
-                    if (!out.researchLevels[id]) out.researchLevels[id] = {};
-                    if (lvl > 0) out.researchLevels[id][statKey] = lvl;
-                }
-                if (out.researchLevels[id] && Object.keys(out.researchLevels[id]).length === 0) delete out.researchLevels[id];
-            }
-        }
-    }
-
-    if (raw.spawnCounts && typeof raw.spawnCounts === 'object') {
-        for (let id in raw.spawnCounts) {
-            let parsed = parseStartingThingId(id);
-            if (!parsed) continue;
-            let thing = getResearchThing(parsed.kind, parsed.key);
-            if (!thing) continue;
-            let countMap = raw.spawnCounts[id];
-            if (typeof countMap === 'object' && countMap !== null) {
-                for (let levelText in countMap) {
-                    let level = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(levelText) || 0)));
-                    let count = Math.max(0, Math.min(1000, Math.floor(Number(countMap[levelText]) || 0)));
-                    if (!out.spawnCounts[id]) out.spawnCounts[id] = {};
-                    if (count > 0) out.spawnCounts[id][level] = count;
-                }
-                if (out.spawnCounts[id] && Object.keys(out.spawnCounts[id]).length === 0) delete out.spawnCounts[id];
-            }
-        }
-    }
-
-    return out;
-}
-
 function resetStartingResourcesConfig() {
     startingResourcesConfig = normalizeStartingResourcesConfig(makeDefaultStartingResourcesConfig());
 }
@@ -1025,62 +1574,6 @@ function setStartingResourcesPopupOpen(open) {
 }
 
 let defaultEditableRuntimeConfigSnapshot = null;
-let uiBannerHideTimer = null;
-
-function showUiBanner(message, kind = 'info', timeoutMs = 2400) {
-    let text = String(message || '').trim();
-    if (!text) return;
-
-    let el = document.getElementById('ui-banner');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'ui-banner';
-        el.setAttribute('role', 'status');
-        el.setAttribute('aria-live', 'polite');
-        el.style.position = 'fixed';
-        el.style.left = '50%';
-        el.style.bottom = '14px';
-        el.style.transform = 'translateX(-50%) translateY(12px)';
-        el.style.padding = '8px 12px';
-        el.style.borderRadius = '6px';
-        el.style.fontSize = '12px';
-        el.style.border = '1px solid #444';
-        el.style.background = '#141414';
-        el.style.color = '#ddd';
-        el.style.boxShadow = '0 6px 20px rgba(0,0,0,0.35)';
-        el.style.zIndex = '99999';
-        el.style.opacity = '0';
-        el.style.pointerEvents = 'none';
-        el.style.transition = 'opacity 140ms ease, transform 140ms ease';
-        document.body.appendChild(el);
-    }
-
-    if (kind === 'error') {
-        el.style.background = '#2a1010';
-        el.style.borderColor = '#8a3232';
-        el.style.color = '#ffd6d6';
-    } else if (kind === 'success') {
-        el.style.background = '#102514';
-        el.style.borderColor = '#2f7a3f';
-        el.style.color = '#d8ffe0';
-    } else {
-        el.style.background = '#141414';
-        el.style.borderColor = '#444';
-        el.style.color = '#ddd';
-    }
-
-    el.textContent = text;
-    el.style.opacity = '1';
-    el.style.transform = 'translateX(-50%) translateY(0)';
-
-    if (uiBannerHideTimer) clearTimeout(uiBannerHideTimer);
-    uiBannerHideTimer = setTimeout(() => {
-        let bannerEl = document.getElementById('ui-banner');
-        if (!bannerEl) return;
-        bannerEl.style.opacity = '0';
-        bannerEl.style.transform = 'translateX(-50%) translateY(12px)';
-    }, Math.max(800, Math.floor(Number(timeoutMs) || 2400)));
-}
 
 function cloneJsValue(value) {
     if (Array.isArray(value)) return value.map(v => cloneJsValue(v));
@@ -1733,512 +2226,6 @@ function mulberry32(seed) {
     fn.setState = (nextState) => { s = (Number(nextState) | 0); };
     return fn;
 }
-
-// ============================================================
-// CONFIG
-// ============================================================
-let MINIMAP_SIZE = 160;
-let TILE = 32;
-let GRID_W = 80, GRID_H = 80;
-let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
-
-// Gold mine config (adjustable from menu)
-let GOLD_MINE_COUNT = 18;  // total mine tiles distributed across veins
-let GOLD_MINE_MIN = 500;
-let GOLD_MINE_MAX = 1500;
-let GOLD_MINE_AREA = 70;   // area within which mines spawn (centered)
-let ASTAR_MINE_COUNT = 12;
-let ASTAR_MINE_MIN = 500;
-let ASTAR_MINE_MAX = 1500;
-let STARTING_MONEY = 2000;
-let STARTING_ASTAR = 9000;
-let MAP_TYPE = 'random';
-let TYPE_FLOOR = 0, TYPE_WALL = 1;
-let CONFIG_MAX_POP = 200;
-let TICK_RATE = 20; // ticks per second (menu configurable)
-let TICK_MS = 1000 / TICK_RATE;
-let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
-let UNIT_COLLISION_RECALC_TICKS = 5;
-let ASTAR_MAX_ITERS_LIMIT = 18000;
-let ASTAR_ITER_BUDGET_PER_PLAYER_TICK = 9000;
-let WORKER_AI_TICK_DELAY = 3;
-let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
-let LOCKSTEP_PIPELINE_MIN = 2;
-let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
-let LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
-let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
-let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
-let LOCKSTEP_HARD_RESYNC_MS = Math.max(3000, Math.floor(TICK_MS * 60));
-let LOCKSTEP_STATE_CHECK_INTERVAL = 10;
-let LOCKSTEP_DEBUG_HASH_DETAILS = true;
-let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
-
-function secondsToTicks(seconds) {
-    let sec = Math.max(0, Number(seconds) || 0);
-    return Math.max(1, Math.round(sec * TICK_RATE));
-}
-
-const C_BG = '#111', C_WALL = '#3a3a3a', C_FLOOR = '#161616';
-
-const PLAYER_COLORS = ['#4488ff', '#ff4444'];
-const PLAYER_COLORS_DIM = ['rgba(68,136,255,0.3)', 'rgba(255,68,68,0.3)'];
-
-
-
-// ============================================================
-// CARD/BUILDING TYPES
-// ============================================================
-const BASE_CARD_TYPES = {
-    // Towers (target: wall)
-    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 3, cd: 2.0, damage: 8, target: 'wall', towerEnergy: 30 },
-    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 3, cd: 1.25, damage: 5, target: 'wall', towerEnergy: 25 },
-    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 3, cd: 1.75, damage: 10, wetDuration: 7, target: 'wall', towerEnergy: 95 },
-    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 3, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, target: 'wall', towerEnergy: 200 },
-    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", visionRange: 3, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.30, target: 'wall', towerEnergy: 350 },
-    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 4, cd: 7.5, damage: 5, sandDuration: 9, target: 'wall', towerEnergy: 180 },
-    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", visionRange: 3, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, target: 'wall', towerEnergy: 400 },
-    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 8, cd: 12.0, damage: 170, target: 'wall', towerEnergy: 1500 },
-    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 3, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, target: 'wall', towerEnergy: 150 },
-    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerEnergy: 300 },
-    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 10, cd: 1.4, damage: 1, watchDuration: 5, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 24 },
-
-    // Floor items
-    sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", sandDuration: 0.5, target: 'floor' },
-    lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", burnDps: 1, burnDuration: 1.5, target: 'floor' },
-    poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", poisonDps: 1, poisonDuration: 1.5, target: 'floor' },
-    ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
-    water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", wetDuration: 3, target: 'floor' },
-    mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", blastDamage: 135, blastRadius: 0.42, target: 'floor' },
-    farm: { name: "Energy Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", multiplier: 0.02, target: 'floor' },
-    astar_farm: { name: "A* Farm", price: 50, icon: "\u2605", color: "#9aa", multiplier: 0.02, target: 'floor' },
-
-    // Special
-    spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", energy: 60, target: 'floor' },
-    astar_spawner: { name: "A*", price: 170, icon: "\u2605", color: "#555", energy: 60, target: 'floor' },
-    salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", energy: 60, target: 'floor' },
-    builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", energy: 60, target: 'floor' },
-    healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", energy: 60, target: 'floor' },
-    research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", energy: 70, efficiency: 1, target: 'floor' },
-    house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", energy: 30, target: 'floor' },
-    area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", target: 'area_upgrade' },
-
-    // Clouds
-    cloud_0a: { name: "Cloud R1", price: 100, icon: "\u2601\uFE0F", color: "#f66", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_0b: { name: "Cloud R2", price: 100, icon: "\u2601\uFE0F", color: "#f66", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_1a: { name: "Cloud B1", price: 100, icon: "\u2601\uFE0F", color: "#66f", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_1b: { name: "Cloud B2", price: 100, icon: "\u2601\uFE0F", color: "#66f", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_2a: { name: "Cloud G1", price: 100, icon: "\u2601\uFE0F", color: "#6f6", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_2b: { name: "Cloud G2", price: 100, icon: "\u2601\uFE0F", color: "#6f6", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_3a: { name: "Cloud Y1", price: 100, icon: "\u2601\uFE0F", color: "#ff6", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
-    cloud_3b: { name: "Cloud Y2", price: 100, icon: "\u2601\uFE0F", color: "#ff6", target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
-
-    // Barracks (one per unit type)
-    barrack_norm: { name: "Barrack", price: 100, icon: "\u26FA", color: "#686", target: 'floor', unitType: 'norm' },
-    barrack_fast: { name: "Fast Brk", price: 80, icon: "\u26FA", color: "#eee", target: 'floor', unitType: 'fast' },
-    barrack_tank: { name: "Tank Brk", price: 200, icon: "\u26FA", color: "#555", target: 'floor', unitType: 'tank' },
-    barrack_boss: { name: "Boss Brk", price: 500, icon: "\u26FA", color: "#222", target: 'floor', unitType: 'boss' },
-    barrack_flying: { name: "Flying Brk", price: 150, icon: "\u26FA", color: "#dd0", target: 'floor', unitType: 'flying' },
-    barrack_mole: { name: "Mole Brk", price: 120, icon: "\u26FA", color: "#543", target: 'floor', unitType: 'mole' },
-    barrack_poison_resistant: { name: "Psn Res Brk", price: 160, icon: "\u26FA", color: "#2d2", target: 'floor', unitType: 'poison_resistant' },
-    barrack_fire_resistant: { name: "Fire Res Brk", price: 160, icon: "\u26FA", color: "#f50", target: 'floor', unitType: 'fire_resistant' },
-    barrack_water_resistant: { name: "Wtr Res Brk", price: 160, icon: "\u26FA", color: "#4af", target: 'floor', unitType: 'water_resistant' },
-    barrack_ice_resistant: { name: "Ice Res Brk", price: 160, icon: "\u26FA", color: "#afe", target: 'floor', unitType: 'ice_resistant' },
-    barrack_laser_resistant: { name: "Lsr Res Brk", price: 160, icon: "\u26FA", color: "#d0f", target: 'floor', unitType: 'laser_resistant' },
-    barrack_snake: { name: "Snake Brk", price: 400, icon: "\u26FA", color: "#0f0", target: 'floor', unitType: 'snake' },
-    barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", target: 'floor', unitType: 'scout' },
-};
-
-// Single place for building Energy scaling across all building/card types.
-let BUILDING_ENERGY_LEVEL_EXP = 2;
-let BUILDING_LEVEL_MULT_EXP = 1.6;
-let BUILDING_DAMAGE_LEVEL_EXP = 1.4;
-let BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = 0.10;
-let BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = 0.10;
-let SAND_GUN_CD_LEVEL_EXP = 0.9;
-let RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = 1.05;
-let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
-let UNIT_COLLECTOR_GATHER_LEVEL_EXP = 1;
-let UNIT_WORKER_SPECIALIST_BASE_RATE = 5;
-let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.22;
-
-const BUILDING_FORMULA_CONFIG = {
-    levelMultExp: 1.6,
-    energyLevelExp: 2,
-    damageLevelExp: 1.4,
-    linearCdReductionPerLevel: 0.10,
-    linearVisionBonusPerLevel: 0.10,
-    sandGunCdLevelExp: 0.9,
-    researchEfficiencyLevelExp: 1.05,
-    researchEfficiencyCap: 3,
-    spawnCdFloor: 0.05,
-    spawnedUnitPriceLevelExp: 2,
-    farmBaseMultiplierFallback: 1,
-    farmLevelPolyCoeff: 1,
-    farmLevelPowerExp: 3,
-    sandFloorDamageBase: 0.05,
-    lavaFloorDamageBase: 1,
-    mineFloorDamageBase: 135,
-    poisonPuddleFloorDamageBase: 1,
-    icePatchFloorDamageBase: 1,
-    directTowerCdFloor: 0.25,
-    fireBurnDpsMin: 0.1,
-    fireBurnDpsFromDamageMul: 0.05,
-    fireBurnDurationLevelAdd: 0.5,
-    fireBurnDurationFallbackBase: 3,
-    fireBurnDurationFallbackLevelAdd: 0.5,
-    poisonDpsMin: 0.1,
-    poisonDpsFromDamageMul: 0.10,
-    poisonDurationLevelAdd: 2.5,
-    poisonDurationFallbackBase: 7.5,
-    poisonDurationFallbackLevelAdd: 2.5,
-    iceFreezeDpsMin: 0.2,
-    iceFreezeDpsFromDamageMul: 0.20,
-    iceFreezeDurationLevelAdd: 0.5,
-    iceFreezeDurationFallbackBase: 3,
-    iceFreezeDurationFallbackLevelAdd: 0.5,
-    elementsDotMin: 0.1,
-    elementsDotFromDamageMul: 0.20,
-    elementsDurationLevelAdd: 1,
-    elementsDurationFallbackBase: 5,
-    lavaBurnDpsMin: 0.1,
-    lavaBurnDurationFallback: 1.5,
-    poisonPuddleDpsMin: 0.1,
-    poisonPuddleDurationFallback: 1.5,
-    icePatchDpsMin: 0.2,
-    icePatchDurationFallback: 1.5,
-    waterWetDurationFallbackBase: 6,
-    waterWetDurationFallbackLevelAdd: 1,
-    waterPuddleWetDurationFallback: 3,
-    waterWetDurationLevelAdd: 1,
-    sandGunDurationFallback: 9,
-    sandDurationFallback: 0.5,
-    watchDurationLevelAdd: 1,
-    watchDurationFallbackBase: 4,
-};
-
-const UNIT_FORMULA_CONFIG = {
-    collectorGatherLevelExp: 1,
-    workerSpecialistBaseRate: 5,
-    workerSpecialistLevelExp: 1.46,
-    workerTransferCooldownLevelExp: 0.9,
-    baseAttackCooldownFallback: 1.5,
-    baseSpeedFallback: 1,
-    baseVisionMin: 0.25,
-    baseVisionFallback: 4,
-};
-
-const RESEARCH_FORMULA_CONFIG = {
-    unitPriceBonusExp: 1.8,
-};
-
-// Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
-// Keep towerEnergy mirrored for compatibility with existing checks/UI code paths.
-const BASE_CARD_DEFAULT_ENERGY = {
-    farm: 1000,
-    astar_farm: 1000,
-    sand: 30,
-    lava: 30,
-    poison_puddle: 30,
-    ice_patch: 30,
-    water_puddle: 30,
-    mine: 30,
-    spawner: 60,
-    astar_spawner: 60,
-    salvager: 60,
-    builder_spawner: 60,
-    healer_spawner: 60,
-    research: 70,
-    house: 120,
-    area_upgrader: 1,
-};
-
-function normalizeBaseCardDefinitions() {
-    for (let cardKey in BASE_CARD_TYPES) {
-        let def = BASE_CARD_TYPES[cardKey];
-        if (!def || typeof def !== 'object') continue;
-
-        if (!Number.isFinite(def.energy)) {
-            if (Number.isFinite(def.towerEnergy)) def.energy = def.towerEnergy;
-            else if (Number.isFinite(BASE_CARD_DEFAULT_ENERGY[cardKey])) def.energy = BASE_CARD_DEFAULT_ENERGY[cardKey];
-            else if (cardKey.startsWith('barrack_')) def.energy = 100;
-            else def.energy = 100;
-        }
-
-        if (def.target === 'wall' && !Number.isFinite(def.towerEnergy)) {
-            def.towerEnergy = def.energy;
-        }
-    }
-}
-
-normalizeBaseCardDefinitions();
-
-// Descriptions
-const DESCRIPTIONS = {
-    // Towers
-    pistol: "Basic single-shot tower. Reliable damage, decent range.",
-    smg: "Rapid-fire tower. Low damage per hit but high fire rate.",
-    water: "Soaks enemies, making them vulnerable to freeze DPS.",
-    poison: "Applies stacking poison DoT. Low base damage.",
-    fire: "Splash damage and burn DoT. Strong vs groups.",
-    sand_gun: "Slows enemies drastically. Low damage.",
-    ice: "Freezes enemies. Combo with water for freeze DPS.",
-    sniper: "Long-range precision tower with very high single-shot damage.",
-    elements: "Applies all status effects. Jack of all trades.",
-    laser: "Beam between aligned laser towers. Constant very high DPS. Difficult to use effectively.",
-    watch_tower: "Marks enemies with Watch and grants shared sight around marked targets. Low Energy, large vision.",
-    // Floor
-    sand: "Slows enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    lava: "Burns enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    poison_puddle: "Poisons enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
-    mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-    farm: "Energy collectors can harvest here; farm level multiplies energy gather speed.",
-    astar_farm: "A* collectors can harvest here; farm level multiplies A* gather speed.",
-    // Special
-    spawner: "Spawns collectors that gather energy from mines.",
-    astar_spawner: "Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.",
-    salvager: "Spawns salvagers that recycle marked buildings.",
-    builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1 energy and need builders to become functional.",
-    healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
-    research: "Runs queued research projects and spawns researchers that complete research tasks.",
-    house: "Raises max population by 1.6^{level} while operational.",
-    cloud_0a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_0b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_1a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_1b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_2a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_2b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_3a: "Cloud bridge endpoint. Connects areas for adjacency.",
-    cloud_3b: "Cloud bridge endpoint. Connects areas for adjacency.",
-    area_upgrader: "Upgrade a fully-filled area's multiplier level. Exponential cost.",
-    // Barracks
-    barrack_norm: "Trains basic infantry. Balanced stats.",
-    barrack_fast: "Trains fast scouts. Fragile but quick.",
-    barrack_tank: "Trains heavy units. Slow but tough.",
-    barrack_boss: "Trains super-heavy units. Expensive powerhouse.",
-    barrack_flying: "Trains flying units. Ignores walls, ranged attack.",
-    barrack_mole: "Trains moles. Immune to towers, very fragile.",
-    barrack_poison_resistant: "Trains poison-immune units.",
-    barrack_fire_resistant: "Trains fire-immune units.",
-    barrack_water_resistant: "Trains water-immune units.",
-    barrack_ice_resistant: "Trains ice-immune units.",
-    barrack_laser_resistant: "Trains laser-immune units.",
-    barrack_snake: "Trains snakes. Massive Energy, leaves a trail.",
-    barrack_scout: "Trains scouts. Fast flying recon units that roam the map.",
-    // Units
-    norm: "Basic infantry. Balanced stats, cheap to produce.",
-    fast: "Fast scout. Low Energy but high speed.",
-    tank: "Heavy infantry. High Energy and damage, slow.",
-    boss: "Super-heavy unit. Extremely tough and powerful.",
-    flying: "Air unit. Ignores walls, has ranged attack.",
-    mole: "Stealth unit. Immune to tower fire, very fragile.",
-    poison_resistant: "Poison-immune. Attacks with toxic clouds.",
-    fire_resistant: "Fire-immune. Attacks with flame bursts.",
-    water_resistant: "Water-immune. Attacks with water jets.",
-    ice_resistant: "Ice-immune. Attacks with frost shards.",
-    laser_resistant: "Laser-immune. Shoots laser beams from range.",
-    snake: "Massive serpent. Rams targets, takes self-damage.",
-    scout: "Fast flying recon. Very high vision, low Energy, low attack. Patrols random points continuously.",
-    healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
-    researcher_unit: "Research worker. Fetches supplies from research labs and converts them into research progress.",
-    astar_collector: "Resource worker. Mines gray A* tiles and refills the shared A* stockpile used by pathfinding.",
-};
-
-// Build menu categories
-const BUILD_CATEGORIES = {
-    barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
-    towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower'],
-    floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm', 'astar_farm'],
-    special: ['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
-};
-
-// Spawn timing config for non-barrack producers and barrack level-reduction rules.
-const BARRACK_SPAWN_CONFIG = {
-    norm: { baseTime: 40, reduction: 0.10 },
-    fast: { baseTime: 20, reduction: 0.10 },
-    tank: { baseTime: 80, reduction: 0.08 },
-    boss: { baseTime: 400, reduction: 0.06 },
-    mole: { baseTime: 10, reduction: 0.12 },
-    snake: { baseTime: 800, reduction: 0.05 },
-    flying: { baseTime: 45, reduction: 0.09 },
-    poison_resistant: { baseTime: 60, reduction: 0.08 },
-    fire_resistant: { baseTime: 70, reduction: 0.08 },
-    water_resistant: { baseTime: 50, reduction: 0.09 },
-    ice_resistant: { baseTime: 65, reduction: 0.08 },
-    laser_resistant: { baseTime: 55, reduction: 0.08 },
-    scout: { baseTime: 14, reduction: 0.11 },
-    collector: { baseTime: 15, reduction: 0.10 },
-    astar_collector: { baseTime: 15, reduction: 0.10 },
-    salvager_unit: { baseTime: 20, reduction: 0.10 },
-    builder_unit: { baseTime: 25, reduction: 0.10 },
-    healer_unit: { baseTime: 25, reduction: 0.10 },
-    researcher_unit: { baseTime: 25, reduction: 0.10 },
-};
-
-// Unit combat stats
-const BASE_UNIT_STATS = {
-    norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.5, visionRange: 4, atkCd: 1.5, astarCost: 1, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-    fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.5, visionRange: 5, atkCd: 1.0, astarCost: 1, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-    tank: { energy: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.5, visionRange: 3, atkCd: 2.25, astarCost: 1, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-    boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.5, visionRange: 4, atkCd: 3.0, astarCost: 1, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-    flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 1.5, visionRange: 5, atkCd: 1.75, astarCost: 1, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    mole: { energy: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.5, visionRange: 4, atkCd: 1.25, astarCost: 1, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-    poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-    fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 1.0, visionRange: 4, atkCd: 2.0, astarCost: 1, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-    water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 1.0, visionRange: 5, atkCd: 1.5, astarCost: 1, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-    ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 1.0, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-    laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 2.5, visionRange: 4, atkCd: 1.75, astarCost: 1, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-    snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.5, visionRange: 4, atkCd: 1.5, astarCost: 1, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-    scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.5, visionRange: 9, atkCd: 1.6, astarCost: 1, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 23, transferCooldown: 2.0, workerSearchDistance: 10, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-    astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, gatherPerTrip: 230, transferCooldown: 2.0, workerSearchDistance: 10, color: '#bbb', r: 6, vis: 'star', isWorker: true },
-    salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, transferCooldown: 2.0, workerSearchDistance: 10, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-    builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 10, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-    healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 10, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 3, atkCd: 49.95, astarCost: 1, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 10, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.5, visionRange: 5, atkCd: 2.0, astarCost: 1, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
-};
-
-const UNIT_LEVEL_SCALING = {
-    _default: { energyExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.02, visionCapBonus: 1.2 },
-    boss: { energyExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.015, visionCapBonus: 1.0 },
-    flying: { energyExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.03, visionCapBonus: 1.8 },
-    snake: { energyExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.02, visionCapBonus: 1.3 },
-    tank: { energyExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.0 },
-    scout: { energyExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 3.2 },
-    collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    astar_collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    salvager_unit: { energyExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    builder_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    healer_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    researcher_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    king: { energyExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.2 },
-};
-
-let RESEARCH_COST_EXP = 3;
-let RESEARCH_WORK_EXP = 3;
-let RESEARCH_WORK_BASE = 110;
-let RESEARCH_BONUS_EXP_UNITS = 2.0;
-let RESEARCH_BONUS_EXP_OTHER = 1.25;
-let RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = 1.5;
-
-let MAX_THING_LEVEL = 20;
-let MAX_RESEARCH_LEVEL = 10;
-
-const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true };
-const RESEARCH_STAT_LABELS = {
-    maxEnergy: 'Max Energy',
-    popCap: 'Pop Cap',
-    damage: 'Damage',
-    blastDamage: 'Blast Damage',
-    blastRadius: 'Blast Radius',
-    cd: 'Cooldown',
-    spawnCd: 'Spawn CD',
-    visionRange: 'Vision',
-    multiplier: 'Multiplier',
-    burnDps: 'Burn DPS',
-    burnDuration: 'Burn Duration',
-    poisonDps: 'Poison DPS',
-    poisonDuration: 'Poison Duration',
-    freezeDps: 'Freeze DPS',
-    freezeDuration: 'Freeze Duration',
-    wetDuration: 'Wet Duration',
-    sandDuration: 'Slow Duration',
-    watchDuration: 'Watch Duration',
-    efficiency: 'Efficiency',
-    energy: 'Energy',
-    speed: 'Speed',
-    atk: 'Attack',
-    attackRange: 'Range',
-    atkCd: 'Atk Cooldown',
-    astarCost: 'A* / Tile',
-    transferCooldown: 'Transfer Cooldown',
-    workerSearchDistance: 'Work Search Distance',
-    gatherPerTrip: 'Gather Speed',
-    builderDps: 'Build Speed',
-    healerDps: 'Heal Speed',
-    researcherDps: 'Research Speed',
-    unitPrice: 'Unit Energy'
-};
-
-const RESEARCHABLE_UNIT_STATS = {
-    _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost'],
-    collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
-    astar_collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
-    salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost'],
-    builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost'],
-    healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost'],
-    researcher_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'researcherDps', 'transferCooldown', 'astarCost'],
-    king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost']
-};
-
-const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
-const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
-
-function getSpawnedUnitTypeForBuildingKey(key) {
-    if (!key) return null;
-    if (key.startsWith('barrack_')) return (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
-    if (key === 'spawner') return 'collector';
-    if (key === 'salvager') return 'salvager_unit';
-    if (key === 'builder_spawner') return 'builder_unit';
-    if (key === 'healer_spawner') return 'healer_unit';
-    if (key === 'research') return 'researcher_unit';
-    return null;
-}
-
-// Soft caps for precomputed stats. Infinity means "no soft cap".
-const PRECOMPUTED_SOFT_CAP_MAP = {
-    unit: {
-        energy: Infinity,
-        atk: Infinity,
-        atkCd: 0.025,
-        speed: ({ baseAtLevel1 }) => {
-            let baseSpeed = Number(baseAtLevel1 && baseAtLevel1.speed);
-            if (!Number.isFinite(baseSpeed) || baseSpeed <= 0) return 8.5;
-            return Math.min(baseSpeed * 3, 8 + baseSpeed / 10);
-        },
-        visionRange: ({ baseAtLevel1 }) => {
-            let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 2) : 10;
-        },
-        attackRange: ({ baseAtLevel1 }) => {
-            let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
-            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 2) : 7;
-        },
-        gatherPerTrip: Infinity,
-        builderDps: Infinity,
-        healerDps: Infinity,
-        researcherDps: Infinity,
-        transferCooldown: 0.3,
-        workerSearchDistance: 25,
-        astarCost: 0.1,
-    },
-    building: {
-        maxEnergy: Infinity,
-        popCap: ({ key }) => key === 'house' ? getConfiguredMaxPop() : Infinity,
-        damage: Infinity,
-        cd: ({ baseAtLevel1 }) => {
-            let baseCd = Number(baseAtLevel1 && baseAtLevel1.cd);
-            if (!Number.isFinite(baseCd) || baseCd <= 0) return 0.5;
-            return Math.log(baseCd) / Math.log(3);
-        },
-        spawnCd: ({ baseAtLevel1 }) => {
-            let baseSpawnCd = Number(baseAtLevel1 && baseAtLevel1.spawnCd);
-            if (!Number.isFinite(baseSpawnCd) || baseSpawnCd <= 0) return 0.5;
-            return Math.log(baseSpawnCd) / Math.log(15);
-        },
-        visionRange: ({ baseAtLevel1 }) => {
-            let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
-        },
-        multiplier: ({ key }) => (key === 'farm' || key === 'astar_farm') ? 10 : Infinity,
-        efficiency: 3,
-    }
-};
-
-let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
-let PRECOMPUTED_STATS_READY = false;
 
 function clampThingLevel(level) {
     return Math.max(0, Math.min(MAX_THING_LEVEL, Math.floor(Number(level) || 0)));
