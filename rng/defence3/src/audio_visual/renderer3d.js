@@ -1228,7 +1228,15 @@
             ctx.lineJoin = 'round';
 
             let projectGround = (x, z) => this.projectWorldToScreen(x, 0.05, z);
+            let getPathGroup = (groups, key, init) => {
+                let group = groups.get(key);
+                if (group) return group;
+                group = init();
+                groups.set(key, group);
+                return group;
+            };
 
+            let rectGroups = new Map();
             for (let rect of overlays.rects || []) {
                 let corners = [
                     projectGround(rect.x - rect.halfWidth, rect.z - rect.halfHeight),
@@ -1237,78 +1245,114 @@
                     projectGround(rect.x - rect.halfWidth, rect.z + rect.halfHeight)
                 ];
                 if (corners.some(p => !p)) continue;
-                ctx.strokeStyle = rect.color;
+                let group = getPathGroup(rectGroups, `${rect.color}|${rect.dashed ? 1 : 0}`, () => ({
+                    color: rect.color,
+                    dashed: !!rect.dashed,
+                    path: new Path2D()
+                }));
+                group.path.moveTo(corners[0].x, corners[0].y);
+                for (let i = 1; i < corners.length; i++) group.path.lineTo(corners[i].x, corners[i].y);
+                group.path.closePath();
+            }
+            for (let group of rectGroups.values()) {
+                ctx.strokeStyle = group.color;
                 ctx.lineWidth = 1.5;
-                ctx.setLineDash(rect.dashed ? [5, 4] : []);
-                ctx.beginPath();
-                ctx.moveTo(corners[0].x, corners[0].y);
-                for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
-                ctx.closePath();
-                ctx.stroke();
+                ctx.setLineDash(group.dashed ? [5, 4] : []);
+                ctx.stroke(group.path);
             }
 
+            let ringGroups = new Map();
             for (let ring of overlays.rings || []) {
                 let steps = 40;
                 let first = null;
-                ctx.strokeStyle = ring.strokeColor;
-                ctx.fillStyle = ring.fillColor || 'transparent';
-                ctx.lineWidth = 1.25;
-                ctx.setLineDash(ring.dashed ? [5, 4] : []);
-                ctx.beginPath();
+                let path = new Path2D();
                 for (let i = 0; i <= steps; i++) {
                     let a = (i / steps) * Math.PI * 2;
                     let p = projectGround(ring.x + Math.cos(a) * ring.radius, ring.z + Math.sin(a) * ring.radius);
                     if (!p) continue;
                     if (!first) {
                         first = p;
-                        ctx.moveTo(p.x, p.y);
+                        path.moveTo(p.x, p.y);
                     } else {
-                        ctx.lineTo(p.x, p.y);
+                        path.lineTo(p.x, p.y);
                     }
                 }
                 if (!first) continue;
-                if (ring.fillColor) ctx.fill();
-                ctx.stroke();
+                let key = `${ring.strokeColor}|${ring.fillColor || ''}|${ring.dashed ? 1 : 0}`;
+                let group = getPathGroup(ringGroups, key, () => ({
+                    strokeColor: ring.strokeColor,
+                    fillColor: ring.fillColor || null,
+                    dashed: !!ring.dashed,
+                    path: new Path2D()
+                }));
+                group.path.addPath(path);
+            }
+            for (let group of ringGroups.values()) {
+                ctx.strokeStyle = group.strokeColor;
+                ctx.fillStyle = group.fillColor || 'transparent';
+                ctx.lineWidth = 1.25;
+                ctx.setLineDash(group.dashed ? [5, 4] : []);
+                if (group.fillColor) ctx.fill(group.path);
+                ctx.stroke(group.path);
             }
 
-            ctx.setLineDash([]);
+            let lineGroups = new Map();
             for (let line of overlays.lines || []) {
                 let p1 = projectGround(line.x1, line.z1);
                 let p2 = projectGround(line.x2, line.z2);
                 if (!p1 || !p2) continue;
-                ctx.strokeStyle = line.color;
+                let group = getPathGroup(lineGroups, `${line.color}|${line.dashed ? 1 : 0}`, () => ({
+                    color: line.color,
+                    dashed: !!line.dashed,
+                    path: new Path2D()
+                }));
+                group.path.moveTo(p1.x, p1.y);
+                group.path.lineTo(p2.x, p2.y);
+            }
+            for (let group of lineGroups.values()) {
+                ctx.strokeStyle = group.color;
                 ctx.lineWidth = 1.5;
-                ctx.setLineDash(line.dashed ? [5, 4] : []);
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y);
-                ctx.lineTo(p2.x, p2.y);
-                ctx.stroke();
+                ctx.setLineDash(group.dashed ? [5, 4] : []);
+                ctx.stroke(group.path);
             }
 
             ctx.setLineDash([]);
+            let plusMarkerGroups = new Map();
+            let arrowMarkerGroups = new Map();
+            let dotMarkerGroups = new Map();
             for (let marker of overlays.markers || []) {
                 let p = projectGround(marker.x, marker.z);
                 if (!p) continue;
-                ctx.strokeStyle = marker.color;
-                ctx.fillStyle = marker.color;
                 if (marker.kind === 'plus') {
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    ctx.moveTo(p.x - 5, p.y); ctx.lineTo(p.x + 5, p.y);
-                    ctx.moveTo(p.x, p.y - 5); ctx.lineTo(p.x, p.y + 5);
-                    ctx.stroke();
+                    let group = getPathGroup(plusMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
+                    group.path.moveTo(p.x - 5, p.y);
+                    group.path.lineTo(p.x + 5, p.y);
+                    group.path.moveTo(p.x, p.y - 5);
+                    group.path.lineTo(p.x, p.y + 5);
                 } else if (marker.kind === 'arrow') {
-                    ctx.beginPath();
-                    ctx.moveTo(p.x, p.y - 6);
-                    ctx.lineTo(p.x - 5, p.y + 4);
-                    ctx.lineTo(p.x + 5, p.y + 4);
-                    ctx.closePath();
-                    ctx.fill();
+                    let group = getPathGroup(arrowMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
+                    group.path.moveTo(p.x, p.y - 6);
+                    group.path.lineTo(p.x - 5, p.y + 4);
+                    group.path.lineTo(p.x + 5, p.y + 4);
+                    group.path.closePath();
                 } else {
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-                    ctx.fill();
+                    let group = getPathGroup(dotMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
+                    group.path.moveTo(p.x + 3.5, p.y);
+                    group.path.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
                 }
+            }
+            ctx.lineWidth = 1.5;
+            for (let group of plusMarkerGroups.values()) {
+                ctx.strokeStyle = group.color;
+                ctx.stroke(group.path);
+            }
+            for (let group of arrowMarkerGroups.values()) {
+                ctx.fillStyle = group.color;
+                ctx.fill(group.path);
+            }
+            for (let group of dotMarkerGroups.values()) {
+                ctx.fillStyle = group.color;
+                ctx.fill(group.path);
             }
 
             for (let bar of overlays.bars || []) {
