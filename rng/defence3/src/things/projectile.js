@@ -16,6 +16,15 @@ class Projectile {
         this.sx = source ? source.gx : -1;
         this.sy = source ? source.gy : -1;
     }
+
+    getSourceAttacker() {
+        if (!Number.isFinite(this.sx) || !Number.isFinite(this.sy)) return null;
+        let source = getTileEntityRef(this.sx, this.sy);
+        if (!source) return null;
+        if (Number.isFinite(source.owner) && source.owner !== this.sourceOwner) return null;
+        return source;
+    }
+
     update() {
         this.x += this.vx; this.y += this.vy;
         this.life--;
@@ -43,6 +52,7 @@ class Projectile {
         return true;
     }
     hit(t) {
+        let sourceAttacker = this.getSourceAttacker();
         if (t.turretImmune) { createExplosion(t.x, t.y, "#888", 3); return; }
         let targetEnergyBefore = t.energy;
         let baseDmg = this.dmg;
@@ -86,6 +96,8 @@ class Projectile {
         }
 
         pushHostileDamageAlert(t, targetEnergyBefore - t.energy, this.sourceOwner);
+    recordDamageVisual(t, targetEnergyBefore - t.energy, this.sourceOwner);
+        tryAutoRetaliateOnHostileDamage(t, sourceAttacker, Number.isFinite(this.sx) ? this.sx * TILE + 16 : null, Number.isFinite(this.sy) ? this.sy * TILE + 16 : null);
 
         if (hasBlast) {
             forEachUnitInRange(this.x, this.y, splashRadiusPx, (e) => {
@@ -93,6 +105,8 @@ class Projectile {
                 let prevEnergy = e.energy;
                 e.energy -= splashDmg;
                 pushHostileDamageAlert(e, prevEnergy - e.energy, this.sourceOwner);
+        recordDamageVisual(e, prevEnergy - e.energy, this.sourceOwner);
+                tryAutoRetaliateOnHostileDamage(e, sourceAttacker, Number.isFinite(this.sx) ? this.sx * TILE + 16 : null, Number.isFinite(this.sy) ? this.sy * TILE + 16 : null);
                 if (this.type === 'fire') applyStatusEffect(e, 'fire', this.level || 1, splashDmg * 0.05, this.sourceOwner, this.type);
                 if (e.energy <= 0 && !e.dead) e.dead = true;
             }, { enemyOfPlayer: this.sourceOwner });
@@ -137,6 +151,7 @@ class Projectile {
         }
 
         pushHostileDamageAlert(b, buildingEnergyBefore - b.energy, this.sourceOwner);
+    recordDamageVisual(b, buildingEnergyBefore - b.energy, this.sourceOwner);
 
         createExplosion(this.x, this.y, "#f84", 4);
         if (b.energy <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }

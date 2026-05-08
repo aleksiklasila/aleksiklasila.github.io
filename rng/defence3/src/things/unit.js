@@ -125,14 +125,21 @@ class Unit {
         // Status effects tick
         if (this.burning > 0) {
             this.burning--;
-            if (this.burnTickDamage > 0) this.energy -= this.burnTickDamage;
+            if (this.burnTickDamage > 0) {
+                this.energy -= this.burnTickDamage;
+                recordDamageVisual(this, this.burnTickDamage);
+            }
         }
         if (this.poisoned > 0) {
             this.poisoned--;
-            if (this.poisonTickDamage > 0) this.energy -= this.poisonTickDamage;
+            if (this.poisonTickDamage > 0) {
+                this.energy -= this.poisonTickDamage;
+                recordDamageVisual(this, this.poisonTickDamage);
+            }
         }
         if (this.frozen > 0 && this.wet > 0 && this.iceTickDamage > 0) {
             this.energy -= this.iceTickDamage * 1.5;
+            recordDamageVisual(this, this.iceTickDamage * 1.5);
         }
         if (this.frozen > 0) this.frozen--;
         if (this.wet > 0) this.wet--;
@@ -175,6 +182,7 @@ class Unit {
                         let prevEnergy = u.energy;
                         u.energy -= blastDamage;
                         pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
+                        recordDamageVisual(u, prevEnergy - u.energy, item.owner);
                         if (u.energy <= 0 && !u.dead) u.dead = true;
                     }, { enemyOfPlayer: item.owner });
 
@@ -464,6 +472,9 @@ class Unit {
         let targetEnergyBefore = target.energy;
         target.energy -= this.attackDamage;
         pushHostileDamageAlert(target, targetEnergyBefore - target.energy, this.owner);
+        recordDamageVisual(target, targetEnergyBefore - target.energy, this.owner);
+        if (targetEnergyBefore > target.energy) playSound('melee_hit', target.x, target.y);
+        tryAutoRetaliateOnHostileDamage(target, this, this.x, this.y);
         this.attackTimer = this.attackCooldown;
         this.attackTarget = target;
         this.attackFlash = 8;
@@ -538,6 +549,8 @@ class Unit {
             tb.energy -= this.attackDamage;
         }
         pushHostileDamageAlert(tb, buildingEnergyBefore - tb.energy, this.owner);
+        recordDamageVisual(tb, buildingEnergyBefore - tb.energy, this.owner);
+        if (buildingEnergyBefore > tb.energy) playSound('melee_hit', tb.x, tb.y);
         if (tb.energy <= 0) { destroyBuilding(tb); return true; }
         return false;
     }
@@ -1044,6 +1057,79 @@ class Unit {
             }
         }
     }
+}
+
+function canUnitAutoRetaliate(unit) {
+    return !!(
+        unit &&
+        !unit.dead &&
+        !unit.workerState &&
+        (unit.commandState === CMD_IDLE || unit.commandState === CMD_HOLDING) &&
+        Number(unit.attackDamage) > 0 &&
+        Number(unit.attackRange) > 0
+    );
+}
+
+function _issueRetaliationPath(unit, targetGx, targetGy, forcedAttackTarget) {
+    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
+    let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, unit);
+    let canWalk = (typeof getPathCanWalkForUnit === 'function') ? getPathCanWalkForUnit(unit) : null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._pendingPathTarget = null;
+    if (_canUsePathfindRequestBudget(unit.owner)) {
+        _consumePathfindRequestBudget(unit.owner);
+        unit.path = _findPathForUnitTagged('ai_combat', unit, ugx, ugy, dest.x, dest.y, unit.isFlying, canWalk, unit.owner);
+        if (unit.path && unit.path.length > 0) {
+            unit.pathIndex = (unit.path.length > 1 && unit.path[0].x === ugx && unit.path[0].y === ugy) ? 1 : 0;
+            return;
+        }
+    } else {
+        unit.path = _makeFallbackPathForUnit(unit, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'ai_combat');
+        unit.pathIndex = (unit.path && unit.path.length > 1 && unit.path[0].x === ugx && unit.path[0].y === ugy) ? 1 : 0;
+        return;
+    }
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: forcedAttackTarget ? 'retaliate_unit' : 'retaliate_building' };
+}
+
+function tryAutoRetaliateOnHostileDamage(unit, attacker, lastKnownX = null, lastKnownY = null) {
+    if (!canUnitAutoRetaliate(unit)) return false;
+    if (!attacker) return false;
+    if (attacker === unit) return false;
+    if (Number.isFinite(attacker.owner) && attacker.owner === unit.owner) return false;
+
+    let attackerIsUnit = attacker instanceof Unit;
+    if (attackerIsUnit) {
+        if (attacker.dead) return false;
+        unit.targetUnit = attacker;
+        unit.targetBuilding = null;
+        unit.targetPos = null;
+        unit.attackTarget = null;
+        unit.forcedAttackTarget = true;
+        unit._forcedTargetLastSeenX = Number.isFinite(attacker.x) ? attacker.x : lastKnownX;
+        unit._forcedTargetLastSeenY = Number.isFinite(attacker.y) ? attacker.y : lastKnownY;
+        unit.commandState = CMD_ATTACKING;
+        _issueRetaliationPath(unit, Math.floor((unit._forcedTargetLastSeenX || attacker.x) / TILE), Math.floor((unit._forcedTargetLastSeenY || attacker.y) / TILE), true);
+        return true;
+    }
+
+    if ('energy' in attacker && Number(attacker.energy) <= 0) return false;
+    if (!Number.isFinite(attacker.x) || !Number.isFinite(attacker.y)) return false;
+
+    unit.targetUnit = null;
+    unit.targetBuilding = attacker;
+    unit.targetPos = null;
+    unit.attackTarget = null;
+    unit.forcedAttackTarget = false;
+    unit._forcedTargetLastSeenX = null;
+    unit._forcedTargetLastSeenY = null;
+    unit.commandState = CMD_ATTACKING;
+    let targetGx = Number.isFinite(attacker.gx) ? attacker.gx : Math.floor(attacker.x / TILE);
+    let targetGy = Number.isFinite(attacker.gy) ? attacker.gy : Math.floor(attacker.y / TILE);
+    _issueRetaliationPath(unit, targetGx, targetGy, false);
+    return true;
 }
 
 

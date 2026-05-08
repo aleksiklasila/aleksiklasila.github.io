@@ -337,6 +337,8 @@ const RENDER_RANGE_TURRETS_AND_UNITS = 1;
 const RENDER_RANGE_NONE = 2;
 let renderRangeMode = RENDER_RANGE_TURRETS;
 let showGoldMineAmountText = false;
+let audioVolume = 1;
+let audioBackgroundVolume = 1;
 
 const OVERLAY_LINE_DOTTED = 'dotted';
 const OVERLAY_LINE_SOLID = 'solid';

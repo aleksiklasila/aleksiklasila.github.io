@@ -314,6 +314,7 @@ function updateWorkerAI(u) {
                     let nextValue = curAstar + Math.max(0, Number(u.carryingValue) || 0);
                     _setPlayerAstarBudget(owner, nextValue);
                     u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
+                    if (owner === localPlayerId) playSound('astar_collected', u.x, u.y);
                 }
                 u.carryingValue = 0;
                 if (!canRunHeavyAi) return;
@@ -418,7 +419,7 @@ function updateWorkerAI(u) {
             if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
             _builderFindTarget(u, myGx, myGy);
         } else if (u.workerState === 'MOVING_TO_BUILD') {
-            if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
                 // Building finished (maybe by another builder), find next
                 _builderRememberWorkSite(u);
                 _clearWorkerTarget(u);
@@ -523,11 +524,20 @@ function updateWorkerAI(u) {
                             _clearWorkerTarget(u);
                             _builderFindTarget(u, myGx, myGy);
                         }
+                    } else if (_isBuilderRepairTarget(t)) {
+                        t.energy = Math.min(t.maxEnergy, t.energy + dps);
+                        didWork = true;
+                        if (!_isBuilderRepairTarget(t)) {
+                            _builderRememberWorkSite(u, t);
+                            _clearWorkerTarget(u);
+                            _builderFindTarget(u, myGx, myGy);
+                        }
                     }
 
                     if (didWork) {
                         u.builderHasMaterial = false;
                         u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
+                        if (t.owner === localPlayerId && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y);
                     }
 
                     if (u.workerTarget) {
@@ -548,7 +558,7 @@ function updateWorkerAI(u) {
                 }
             }
         } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-            if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
                 _builderRememberWorkSite(u);
                 _clearWorkerTarget(u);
                 _builderFindTarget(u, myGx, myGy);
@@ -591,7 +601,7 @@ function updateWorkerAI(u) {
             }
         } else if (u.workerState === 'BUILDING_IN_PLACE') {
             // Build in place. Prefer full builder throughput when enough energy is available.
-            if (!u.workerTarget || u.workerTarget.markedForSalvage || (!u.workerTarget.underConstruction && !u.workerTarget.isUpgrading && !u.workerTarget.isStacking) || (u.workerTarget.underConstruction && !isBuildEnabled(u.workerTarget))) {
+            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
                 _builderRememberWorkSite(u);
                 _clearWorkerTarget(u);
                 _builderFindTarget(u, myGx, myGy);
@@ -677,8 +687,16 @@ function updateWorkerAI(u) {
                         _clearWorkerTarget(u);
                         _builderFindTarget(u, myGx, myGy);
                     }
+                } else if (_isBuilderRepairTarget(t)) {
+                    t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
+                    if (!_isBuilderRepairTarget(t)) {
+                        _builderRememberWorkSite(u, t);
+                        _clearWorkerTarget(u);
+                        _builderFindTarget(u, myGx, myGy);
+                    }
                 }
                 if (u.builderHasMaterial) u.builderHasMaterial = false;
+                if (t.owner === localPlayerId && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y);
             }
             // Check if energy became available - switch back to gold trips
             let route = getSpawnerRoute('builder_spawner', null);
@@ -752,6 +770,7 @@ function updateWorkerAI(u) {
                         u.healerHasMaterial = false;
                         u._healerQueueTripCost = 0;
                         u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
+                        if (sp.owner === localPlayerId && _noteAmbientSoundTick(sp, 'heal_tick', 12)) playSound('heal_tick', sp.x, sp.y);
                     }
 
                     let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
@@ -790,6 +809,7 @@ function updateWorkerAI(u) {
                 u.workerTarget.energy = Math.min(u.workerTarget.maxEnergy, u.workerTarget.energy + dps);
                 u.healerHasMaterial = false;
                 u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
+                if (u.workerTarget.owner === localPlayerId && _noteAmbientSoundTick(u.workerTarget, 'heal_tick', 12)) playSound('heal_tick', u.workerTarget.x, u.workerTarget.y);
 
                 if (!_isHealerTargetUnit(u.workerTarget, owner)) {
                     _clearWorkerTarget(u, 'target_no_work');
@@ -944,6 +964,7 @@ function updateWorkerAI(u) {
                 u._researcherTripCost = 0;
                 u._researcherMaterialReadyTick = 0;
                 u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('researcher', u);
+                if (appliedWork > 0 && target.owner === localPlayerId && _noteAmbientSoundTick(target, 'research_tick', 12)) playSound('research_tick', target.x, target.y);
 
                 if (task.workDone >= task.workRequired) {
                     completeActiveResearchTaskForPlayer(target.owner, task);
@@ -1619,11 +1640,25 @@ function getPathCanWalkForUnit(unit) {
     return null;
 }
 
+function _isBuilderRepairTarget(target) {
+    if (!target) return false;
+    let energy = Number(target.energy);
+    let maxEnergy = Number(target.maxEnergy);
+    return Number.isFinite(energy)
+        && Number.isFinite(maxEnergy)
+        && maxEnergy > 0
+        && energy > 0
+        && energy < maxEnergy
+        && !target.underConstruction
+        && !target.isUpgrading
+        && !target.isStacking;
+}
+
 function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
     if (!target) return false;
     if (target.owner !== owner) return false;
     if (target.markedForSalvage) return false;
-    if (!target.underConstruction && !target.isUpgrading && !target.isStacking) return false;
+    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target)) return false;
     if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
     return true;
 }

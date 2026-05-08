@@ -6,6 +6,8 @@ function saveUiSettingsToStorage() {
             levelVisibilityMode,
             renderRangeMode,
             audioEnabled,
+            audioVolume,
+            audioBackgroundVolume,
             showGoldMineAmountText,
             rallyLineType,
             rallyLineScope,
@@ -31,6 +33,12 @@ function loadUiSettingsFromStorage() {
         }
         if (typeof s.audioEnabled === 'boolean') {
             audioEnabled = s.audioEnabled;
+        }
+        if (Number.isFinite(s.audioVolume)) {
+            audioVolume = Math.max(0, Math.min(1, Number(s.audioVolume)));
+        }
+        if (Number.isFinite(s.audioBackgroundVolume)) {
+            audioBackgroundVolume = Math.max(0, Math.min(1, Number(s.audioBackgroundVolume)));
         }
         if (typeof s.showGoldMineAmountText === 'boolean') {
             showGoldMineAmountText = s.showGoldMineAmountText;

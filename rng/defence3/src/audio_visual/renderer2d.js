@@ -27,6 +27,37 @@ function get2DRenderOwnerColor(owner) {
     return '#c8ced8';
 }
 
+function draw2DDamageFlashOverlay(ctx, target, x, y, radiusOrHalfSize, isRect = false) {
+    if (!ctx || !target) return;
+    let flash = typeof getDamageFlashState === 'function' ? getDamageFlashState(target) : null;
+    if (!flash || flash.alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    if (isRect) {
+        let halfSize = Math.max(10, Number(radiusOrHalfSize) || 14);
+        ctx.fillStyle = _hexToRgba(flash.color, flash.alpha * 0.55);
+        ctx.fillRect(x - halfSize, y - halfSize, halfSize * 2, halfSize * 2);
+        ctx.strokeStyle = _hexToRgba(flash.color, Math.min(1, flash.alpha * 1.1));
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - halfSize - 0.5, y - halfSize - 0.5, halfSize * 2 + 1, halfSize * 2 + 1);
+    } else {
+        let radius = Math.max(6, Number(radiusOrHalfSize) || 10);
+        let grad = ctx.createRadialGradient(x, y, Math.max(1, radius * 0.2), x, y, radius * 1.5);
+        grad.addColorStop(0, _hexToRgba(flash.color, flash.alpha * 0.75));
+        grad.addColorStop(1, _hexToRgba(flash.color, 0));
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = _hexToRgba(flash.color, flash.alpha * 0.9);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 1.1, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 function _getTowerIconSprite(color, angle, type, active) {
     let qIdx = _quantizeTowerAngleIndex(angle);
     let key = (type || '') + '|' + String(color || '') + '|' + (active ? '1' : '0') + '|' + qIdx;
@@ -1072,6 +1103,9 @@ function draw() {
     let maxGx = Math.min(GRID_W - 1, Math.ceil((camera.x + vw) / TILE) + 1);
     let maxGy = Math.min(GRID_H - 1, Math.ceil((camera.y + vh) / TILE) + 1);
     let staticBounds = getBackgroundWorldBoundsForRenderMode();
+    let bgSoundGrid = audioSpatialGridBackground;
+    let fxSoundGrid = audioSpatialGridEffects;
+    let getTileReactiveScale = (bgLevel, fxLevel) => 1 + bgLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_SFX;
 
     renderStaticLayer(staticBounds.minGx, staticBounds.minGy, staticBounds.maxGx, staticBounds.maxGy);
     beginFrameDrawImageQueue();
@@ -1103,7 +1137,14 @@ function draw() {
     let depletedMineSprite = _getGoldMineTileSprite(false);
     for (let m of visibleGoldMines) {
         let mineSprite = m.gold > 0 ? activeMineSprite : depletedMineSprite;
-        queueDrawImage(ctx, mineSprite, m.gx * TILE, m.gy * TILE, TILE, TILE);
+        let bgSoundRow = bgSoundGrid[m.gy];
+        let fxSoundRow = fxSoundGrid[m.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
+        let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+        drawWithTrackedContextTransform(ctx, m.gx * TILE + TILE * 0.5, m.gy * TILE + TILE * 0.5, 0, 0, drawScale, () => {
+            queueDrawImage(ctx, mineSprite, m.gx * TILE, m.gy * TILE, TILE, TILE);
+        });
     }
 
     let visibleAstarMines = [];
@@ -1117,7 +1158,14 @@ function draw() {
     let depletedAstarMineSprite = _getAstarMineTileSprite(false);
     for (let m of visibleAstarMines) {
         let mineSprite = m.astar > 0 ? activeAstarMineSprite : depletedAstarMineSprite;
-        queueDrawImage(ctx, mineSprite, m.gx * TILE, m.gy * TILE, TILE, TILE);
+        let bgSoundRow = bgSoundGrid[m.gy];
+        let fxSoundRow = fxSoundGrid[m.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
+        let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+        drawWithTrackedContextTransform(ctx, m.gx * TILE + TILE * 0.5, m.gy * TILE + TILE * 0.5, 0, 0, drawScale, () => {
+            queueDrawImage(ctx, mineSprite, m.gx * TILE, m.gy * TILE, TILE, TILE);
+        });
     }
 
     // Gold mine amount labels (re-enabled for FPS comparison testing).
@@ -1163,7 +1211,16 @@ function draw() {
     setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) drawFloorItem(ctx, grid[y][x], x * TILE, y * TILE);
+            if (grid[y][x].item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
+                let bgSoundRow = bgSoundGrid[y];
+                let fxSoundRow = fxSoundGrid[y];
+                let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
+                let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
+                let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+                drawWithTrackedContextTransform(ctx, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0, 0, drawScale, () => {
+                    drawFloorItem(ctx, grid[y][x], x * TILE, y * TILE);
+                });
+            }
         }
     }
 
@@ -1171,8 +1228,15 @@ function draw() {
     for (let d of droppedItems) {
         if (d.gx < minGx || d.gx > maxGx || d.gy < minGy || d.gy > maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
-        ctx.fillStyle = '#fd0'; ctx.font = "900 20px Arial"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('⚡', d.x, d.y);
+        let bgSoundRow = bgSoundGrid[d.gy];
+        let fxSoundRow = fxSoundGrid[d.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[d.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[d.gx] || 0 : 0;
+        let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+        drawWithTrackedContextTransform(ctx, d.x, d.y, 0, 0, drawScale, () => {
+            ctx.fillStyle = '#fd0'; ctx.font = "900 20px Arial"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('⚡', d.x, d.y);
+        });
     }
 
     // Towers
@@ -1180,14 +1244,30 @@ function draw() {
     for (let t of towers) {
         if (t.gx < minGx - 2 || t.gx > maxGx + 2 || t.gy < minGy - 2 || t.gy > maxGy + 2) continue;
         if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
-        t.draw(ctx);
+        let bgSoundRow = bgSoundGrid[t.gy];
+        let fxSoundRow = fxSoundGrid[t.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[t.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
+        let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+        drawWithTrackedContextTransform(ctx, t.x, t.y, 0, 0, drawScale, () => {
+            t.draw(ctx);
+        });
     }
 
     // Collector/Salvager spawners
     setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
     collectorSpawners.forEach(s => {
         if (s.gx >= minGx && s.gx <= maxGx && s.gy >= minGy && s.gy <= maxGy) {
-            if (fullVisibility || (visibilityGrid[s.gy] && visibilityGrid[s.gy][s.gx] > 0)) s.draw(ctx);
+            if (fullVisibility || (visibilityGrid[s.gy] && visibilityGrid[s.gy][s.gx] > 0)) {
+                let bgSoundRow = bgSoundGrid[s.gy];
+                let fxSoundRow = fxSoundGrid[s.gy];
+                let bgLevel = bgSoundRow ? bgSoundRow[s.gx] || 0 : 0;
+                let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
+                let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+                drawWithTrackedContextTransform(ctx, s.x, s.y, 0, 0, drawScale, () => {
+                    s.draw(ctx);
+                });
+            }
         }
     });
 
@@ -1195,7 +1275,16 @@ function draw() {
     setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
     barracks.forEach(b => {
         if (b.gx >= minGx && b.gx <= maxGx && b.gy >= minGy && b.gy <= maxGy) {
-            if (fullVisibility || (visibilityGrid[b.gy] && visibilityGrid[b.gy][b.gx] > 0)) b.draw(ctx);
+            if (fullVisibility || (visibilityGrid[b.gy] && visibilityGrid[b.gy][b.gx] > 0)) {
+                let bgSoundRow = bgSoundGrid[b.gy];
+                let fxSoundRow = fxSoundGrid[b.gy];
+                let bgLevel = bgSoundRow ? bgSoundRow[b.gx] || 0 : 0;
+                let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
+                let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+                drawWithTrackedContextTransform(ctx, b.x, b.y, 0, 0, drawScale, () => {
+                    b.draw(ctx);
+                });
+            }
         }
     });
 
@@ -1213,7 +1302,16 @@ function draw() {
         u.y = u.prevY + (u.y - u.prevY) * alpha;
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         if (ugx < minGx - 2 || ugx > maxGx + 2 || ugy < minGy - 2 || ugy > maxGy + 2) { u.x = rx; u.y = ry; continue; }
-        if (fullVisibility || (visibilityGrid[ugy] && visibilityGrid[ugy][ugx] > 0)) u.draw(ctx);
+        if (fullVisibility || (visibilityGrid[ugy] && visibilityGrid[ugy][ugx] > 0)) {
+            let bgSoundRow = bgSoundGrid[ugy];
+            let fxSoundRow = fxSoundGrid[ugy];
+            let bgLevel = bgSoundRow ? bgSoundRow[ugx] || 0 : 0;
+            let fxLevel = fxSoundRow ? fxSoundRow[ugx] || 0 : 0;
+            let drawScale = getTileReactiveScale(bgLevel, fxLevel);
+            drawWithTrackedContextTransform(ctx, u.x, u.y, 0, 0, drawScale, () => {
+                u.draw(ctx);
+            });
+        }
         u.x = rx; u.y = ry;
     }
 
@@ -1234,6 +1332,65 @@ function draw() {
         let cgy = Math.floor(p.y / TILE), cgx = Math.floor(p.x / TILE);
         if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
         p.x = rx; p.y = ry;
+    }
+
+    for (let t of towers) {
+        if (t.gx < minGx - 2 || t.gx > maxGx + 2 || t.gy < minGy - 2 || t.gy > maxGy + 2) continue;
+        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[t.gy];
+        let fxSoundRow = fxSoundGrid[t.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[t.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
+        let scaleAmount = getTileReactiveScale(bgLevel, fxLevel);
+        draw2DDamageFlashOverlay(ctx, t, t.x, t.y, 16 * scaleAmount, true);
+    }
+    for (let s of collectorSpawners) {
+        if (s.gx < minGx || s.gx > maxGx || s.gy < minGy || s.gy > maxGy) continue;
+        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[s.gy];
+        let fxSoundRow = fxSoundGrid[s.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[s.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
+        let scaleAmount = getTileReactiveScale(bgLevel, fxLevel);
+        draw2DDamageFlashOverlay(ctx, s, s.x, s.y, 15 * scaleAmount, true);
+    }
+    for (let b of barracks) {
+        if (b.gx < minGx || b.gx > maxGx || b.gy < minGy || b.gy > maxGy) continue;
+        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[b.gy];
+        let fxSoundRow = fxSoundGrid[b.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[b.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
+        let scaleAmount = getTileReactiveScale(bgLevel, fxLevel);
+        draw2DDamageFlashOverlay(ctx, b, b.x, b.y, 15 * scaleAmount, true);
+    }
+    for (let y = minGy; y <= maxGy; y++) {
+        let visRow = visibilityGrid[y];
+        for (let x = minGx; x <= maxGx; x++) {
+            if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+            let cell = grid[y][x];
+            if (!cell || !cell.item) continue;
+            let bgSoundRow = bgSoundGrid[y];
+            let fxSoundRow = fxSoundGrid[y];
+            let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
+            let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
+            let scaleAmount = getTileReactiveScale(bgLevel, fxLevel);
+            draw2DDamageFlashOverlay(ctx, cell.item, x * TILE + 16, y * TILE + 16, 16 * scaleAmount, true);
+        }
+    }
+    for (let u of units) {
+        if (!u || u.dead) continue;
+        let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
+        let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
+        let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
+        if (ugx < minGx - 2 || ugx > maxGx + 2 || ugy < minGy - 2 || ugy > maxGy + 2) continue;
+        if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[ugy];
+        let fxSoundRow = fxSoundGrid[ugy];
+        let bgLevel = bgSoundRow ? bgSoundRow[ugx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[ugx] || 0 : 0;
+        let scaleAmount = getTileReactiveScale(bgLevel, fxLevel);
+        draw2DDamageFlashOverlay(ctx, u, ux, uy, ((Number(u.r) || 8) + 3) * scaleAmount, false);
     }
 
     // Salvage marks (red X on marked buildings)

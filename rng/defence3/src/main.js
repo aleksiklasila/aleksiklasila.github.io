@@ -181,9 +181,25 @@ function gameTick() {
 
     // Laser buzzer sound control
     let anyLaserActive = false;
-    for (let t of towers) { if (t.type === 'laser' && t.laserState === 1 && !t.underConstruction) { anyLaserActive = true; break; } }
-    if (anyLaserActive) startLaserSound();
+    let laserSoundX = 0, laserSoundY = 0;
+    let cameraCx = camera.x + viewW / camera.zoom / 2;
+    let cameraCy = camera.y + viewH / camera.zoom / 2;
+    let bestLaserDist2 = Infinity;
+    for (let t of towers) {
+        if (t.type !== 'laser' || t.laserState !== 1 || t.underConstruction) continue;
+        anyLaserActive = true;
+        let dx = t.x - cameraCx;
+        let dy = t.y - cameraCy;
+        let dist2 = dx * dx + dy * dy;
+        if (dist2 < bestLaserDist2) {
+            bestLaserDist2 = dist2;
+            laserSoundX = t.x;
+            laserSoundY = t.y;
+        }
+    }
+    if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
     else stopLaserSound();
+    updateAudioReactiveState();
 
     if (_adjacencyNeedsRecalc && _adjacencyLastRecalcTick !== gameTime) {
         _runAdjacencyRecalculation();
@@ -1309,15 +1325,30 @@ function initInput() {
 
     // HUD Settings
     const audioToggle = document.getElementById('setting-audio');
+    const audioVolumeSlider = document.getElementById('setting-audio-volume');
+    const audioVolumeValue = document.getElementById('setting-audio-volume-value');
+    const backgroundAudioVolumeSlider = document.getElementById('setting-background-audio-volume');
+    const backgroundAudioVolumeValue = document.getElementById('setting-background-audio-volume-value');
     const goldMineTextToggle = document.getElementById('setting-gold-mine-text');
     const rallyLineTypeSelect = document.getElementById('setting-rally-line-type');
     const rallyLineScopeSelect = document.getElementById('setting-show-rally-lines');
     const selectionOutlineScopeSelect = document.getElementById('setting-show-selection-outlines');
     const selectionOutlineTypeSelect = document.getElementById('setting-selection-outline-type');
+    function syncAudioVolumeUi() {
+        let sliderValue = Math.round(Math.max(0, Math.min(1, Number(audioVolume) || 0)) * 100);
+        if (audioVolumeSlider) audioVolumeSlider.value = String(sliderValue);
+        if (audioVolumeValue) audioVolumeValue.textContent = `${sliderValue}%`;
+    }
+    function syncBackgroundAudioVolumeUi() {
+        let sliderValue = Math.round(Math.max(0, Math.min(1, Number(audioBackgroundVolume) || 0)) * 100);
+        if (backgroundAudioVolumeSlider) backgroundAudioVolumeSlider.value = String(sliderValue);
+        if (backgroundAudioVolumeValue) backgroundAudioVolumeValue.textContent = `${sliderValue}%`;
+    }
     if (audioToggle) {
         audioToggle.checked = !!audioEnabled;
         audioToggle.addEventListener('change', () => {
             audioEnabled = audioToggle.checked;
+            applyAudioSettings();
             saveUiSettingsToStorage();
             if (!audioEnabled) {
                 stopLaserSound();
@@ -1326,6 +1357,28 @@ function initInput() {
                 startBackgroundMusic();
             }
         });
+    }
+    if (audioVolumeSlider) {
+        syncAudioVolumeUi();
+        audioVolumeSlider.addEventListener('input', () => {
+            audioVolume = Math.max(0, Math.min(1, (Number(audioVolumeSlider.value) || 0) / 100));
+            syncAudioVolumeUi();
+            applyAudioSettings();
+            saveUiSettingsToStorage();
+        });
+    } else {
+        syncAudioVolumeUi();
+    }
+    if (backgroundAudioVolumeSlider) {
+        syncBackgroundAudioVolumeUi();
+        backgroundAudioVolumeSlider.addEventListener('input', () => {
+            audioBackgroundVolume = Math.max(0, Math.min(1, (Number(backgroundAudioVolumeSlider.value) || 0) / 100));
+            syncBackgroundAudioVolumeUi();
+            applyAudioSettings();
+            saveUiSettingsToStorage();
+        });
+    } else {
+        syncBackgroundAudioVolumeUi();
     }
     if (goldMineTextToggle) {
         goldMineTextToggle.checked = !!showGoldMineAmountText;
