@@ -111,6 +111,8 @@ class Tower {
                                 let prevEnergy = u.energy;
                                 u.energy -= dmg / 60;
                                 pushHostileDamageAlert(u, prevEnergy - u.energy, this.owner);
+                                recordDamageVisual(u, prevEnergy - u.energy, this.owner);
+                                tryAutoRetaliateOnHostileDamage(u, this, this.x, this.y);
                                 if (gameTime % 10 === 0) createExplosion(u.x, u.y, "#f00", 1);
                                 if (u.energy <= 0 && !u.dead) { u.dead = true; }
                             }
@@ -128,6 +130,7 @@ class Tower {
                                 let prevEnergy = b.energy;
                                 b.energy -= dmg / 60;
                                 pushHostileDamageAlert(b, prevEnergy - b.energy, this.owner);
+                                recordDamageVisual(b, prevEnergy - b.energy, this.owner);
                                 if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
                                 if (b.energy <= 0) destroyBuilding(b);
                             }

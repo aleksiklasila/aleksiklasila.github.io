@@ -38,6 +38,88 @@ function get3DRenderOwnerColor(owner) {
     return '#c8ced8';
 }
 
+const DAMAGE_FLASH_TICKS = 10;
+
+function _parseHexColor(color) {
+    let normalized = String(color || '').trim();
+    let match = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!match) return null;
+    let hex = match[1];
+    if (hex.length === 3) hex = hex.split('').map(ch => ch + ch).join('');
+    return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16)
+    };
+}
+
+function _rgbToHex(rgb) {
+    if (!rgb) return '#ffffff';
+    let toHex = (value) => Math.max(0, Math.min(255, Math.round(value || 0))).toString(16).padStart(2, '0');
+    return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`;
+}
+
+function _mixHexColors(colorA, colorB, mix) {
+    let a = _parseHexColor(colorA) || { r: 200, g: 206, b: 216 };
+    let b = _parseHexColor(colorB) || { r: 255, g: 255, b: 255 };
+    let t = Math.max(0, Math.min(1, Number(mix) || 0));
+    return _rgbToHex({
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t
+    });
+}
+
+function _hexToRgba(color, alpha = 1) {
+    let rgb = _parseHexColor(color) || { r: 255, g: 255, b: 255 };
+    return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, Number(alpha) || 0))})`;
+}
+
+function getDamageFlashColor(target, sourceOwner = null) {
+    if (Number.isFinite(sourceOwner) && sourceOwner >= 0 && sourceOwner < PLAYER_COLORS.length) {
+        return PLAYER_COLORS[sourceOwner];
+    }
+    let base = get3DRenderOwnerColor(target && target.owner);
+    let rgb = _parseHexColor(base);
+    if (!rgb) return '#ffffff';
+    return _rgbToHex({ r: 255 - rgb.r, g: 255 - rgb.g, b: 255 - rgb.b });
+}
+
+function recordDamageVisual(target, amount, sourceOwner = null) {
+    if (!target) return;
+    let dmg = Math.max(0, Number(amount) || 0);
+    if (dmg <= 0.01) return;
+    let maxEnergy = Math.max(1, Number(target.maxEnergy) || 0);
+    let scaledStrength = Math.min(1, 0.28 + (dmg / maxEnergy) * 3.5);
+    target._damageFlashStart = gameTime;
+    target._damageFlashUntil = Math.max(Number(target._damageFlashUntil) || 0, gameTime + DAMAGE_FLASH_TICKS);
+    target._damageFlashStrength = Math.max(Number(target._damageFlashStrength) || 0, scaledStrength);
+    target._damageFlashColor = getDamageFlashColor(target, sourceOwner);
+}
+
+function getDamageFlashState(target) {
+    if (!target) return null;
+    let until = Number(target._damageFlashUntil) || 0;
+    let strength = Number(target._damageFlashStrength) || 0;
+    if (until <= 0 || strength <= 0) return null;
+    let now = gameTime + tickAlpha;
+    if (now >= until) return null;
+    let remaining = Math.max(0, until - now);
+    let fade = Math.max(0, Math.min(1, remaining / DAMAGE_FLASH_TICKS));
+    let eased = Math.pow(fade, 0.65);
+    return {
+        color: target._damageFlashColor || getDamageFlashColor(target),
+        alpha: Math.max(0, Math.min(0.85, strength * eased * 0.7)),
+        tintMix: Math.max(0, Math.min(0.8, strength * eased))
+    };
+}
+
+function get3DDamageFlashTint(target, baseColor) {
+    let flash = getDamageFlashState(target);
+    if (!flash) return baseColor;
+    return _mixHexColors(baseColor, flash.color, flash.tintMix);
+}
+
 const RENDERER3D_TOP_TEXTURE_SIZE = 96;
 
 function quantize3DStatusRatio(value, steps = 10) {
@@ -123,6 +205,18 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     }
     for (let bar of extraBars) bars.push(bar);
     return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '', bars);
+}
+
+function get3DConstructionAlpha(entity) {
+    if (!entity) return 1;
+    if (entity.underConstruction) return 0.25;
+    return 1;
+}
+
+function get3DConstructionLift(entity) {
+    if (!entity) return 0;
+    if (entity.underConstruction) return 0.03;
+    return 0;
 }
 
 function get3DUnitStatusGlyph(unit) {
@@ -623,6 +717,28 @@ function push3DRenderObject(target, object) {
     });
 }
 
+function drawWithTrackedContextTransform(ctx, centerX, centerY, offsetX, offsetY, scale, drawFn) {
+    if (!ctx || typeof drawFn !== 'function') return;
+    let drawScale = Number.isFinite(scale) ? scale : 1;
+    let dx = Number.isFinite(offsetX) ? offsetX : 0;
+    let dy = Number.isFinite(offsetY) ? offsetY : 0;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(drawScale - 1) < 0.0001) {
+        drawFn();
+        return;
+    }
+
+    let st = _captureDrawImageCtxState(ctx);
+    ctx.save();
+    ctx.translate(centerX + dx, centerY + dy);
+    ctx.scale(drawScale, drawScale);
+    ctx.translate(-centerX, -centerY);
+    let nextTransform = ctx.getTransform();
+    _setDrawImageTrackedTransform(ctx, nextTransform.a, nextTransform.b, nextTransform.c, nextTransform.d, nextTransform.e, nextTransform.f);
+    drawFn();
+    ctx.restore();
+    _setDrawImageTrackedTransform(ctx, st.ta, st.tb, st.tc, st.td, st.te, st.tf);
+}
+
 function get3DProjectionSnapshot() {
     let vw = viewW / camera.zoom;
     let vh = viewH / camera.zoom;
@@ -734,6 +850,11 @@ function build3DFrameData() {
     let backgroundMaxX = (bounds.maxGx + 1) * TILE;
     let backgroundMaxY = (bounds.maxGy + 1) * TILE;
     let overlays = build3DOverlayData(bounds, alpha);
+    let soundGrid = audioSpatialGrid;
+    let bgSoundGrid = audioSpatialGridBackground;
+    let fxSoundGrid = audioSpatialGridEffects;
+    let reactiveOffsetX = Number(audioReactiveGlobalOffsetX) || 0;
+    let reactiveOffsetY = Number(audioReactiveGlobalOffsetY) || 0;
     let unitOccupiedTileKeys = new Set();
     let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     let activeOverlapFadeKeys = new Set();
@@ -778,7 +899,7 @@ function build3DFrameData() {
     };
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint, unitStatus) => {
         let points = getSnakePathPoints(unit, headX, headY);
-        let ownerTint = get3DRenderOwnerColor(unit.owner);
+        let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
         for (let i = points.length - 1; i >= 1; i--) {
             let point = points[i];
             let prev = points[i - 1];
@@ -832,10 +953,17 @@ function build3DFrameData() {
     for (let m of goldMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[m.gy];
+        let fxSoundRow = fxSoundGrid[m.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         push3DRenderObject(objects, {
             modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
-            x: m.gx + 0.5,
-            z: m.gy + 0.5,
+            x: m.gx + 0.5 + reactiveOffsetX * audioMove,
+            z: m.gy + 0.5 + reactiveOffsetY * audioMove,
+            y: audioHeight,
             scaleX: 0.9,
             scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy),
             scaleZ: 0.9,
@@ -851,10 +979,17 @@ function build3DFrameData() {
     for (let m of astarMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[m.gy];
+        let fxSoundRow = fxSoundGrid[m.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         push3DRenderObject(objects, {
             modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
-            x: m.gx + 0.5,
-            z: m.gy + 0.5,
+            x: m.gx + 0.5 + reactiveOffsetX * audioMove,
+            z: m.gy + 0.5 + reactiveOffsetY * audioMove,
+            y: audioHeight,
             scaleX: 0.9,
             scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy),
             scaleZ: 0.9,
@@ -876,17 +1011,24 @@ function build3DFrameData() {
             let cell = gridRow[x];
             if (!cell || !cell.item) continue;
             if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+            let bgSoundRow = bgSoundGrid[y];
+            let fxSoundRow = fxSoundGrid[y];
+            let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
+            let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
+            let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+            let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
             let itemStatus = get3DBuildingTextureStatus(cell.item);
             push3DRenderObject(objects, {
                 modelKey: `item_${cell.item.type || 'floor'}`,
-                x: x + 0.5,
-                z: y + 0.5,
+                x: x + 0.5 + reactiveOffsetX * audioMove,
+                y: get3DConstructionLift(cell.item) + audioHeight,
+                z: y + 0.5 + reactiveOffsetY * audioMove,
                 scaleX: 0.84,
                 scaleY: 0.14 * getOverlapFlattenScaleForTile(x, y),
                 scaleZ: 0.84,
                 rotationY: -(Number(cell.item.angle) || 0),
-                tint: get3DRenderOwnerColor(cell.owner),
-                alpha: 1,
+                tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
+                alpha: get3DConstructionAlpha(cell.item),
                 topTextureKey: `item:${cell.item.type}:${cell.owner}:${_getFloorItemEnergyBucket(cell.item)}:${itemStatus.keySuffix}`,
                 topTextureCanvas: get3DTopTextureForFloorItem(cell.item, itemStatus)
             });
@@ -896,17 +1038,24 @@ function build3DFrameData() {
     for (let t of towers) {
         if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[t.gy];
+        let fxSoundRow = fxSoundGrid[t.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[t.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let towerStatus = get3DBuildingTextureStatus(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
-            x: t.x / TILE,
-            z: t.y / TILE,
+            x: t.x / TILE + reactiveOffsetX * audioMove,
+            y: get3DConstructionLift(t) + audioHeight,
+            z: t.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.82,
             scaleY: 1.05 * getOverlapFlattenScaleForTile(t.gx, t.gy),
             scaleZ: 0.82,
-            rotationY: -(Number(t.angle) || 0),
-            tint: get3DRenderOwnerColor(t.owner),
-            alpha: 1,
+            rotationY: Math.PI * 0.5 - (Number(t.angle) || 0),
+            tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
+            alpha: get3DConstructionAlpha(t),
             topTextureKey: `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
             topTextureCanvas: get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix })
         });
@@ -915,6 +1064,12 @@ function build3DFrameData() {
     for (let s of collectorSpawners) {
         if (s.gx < bounds.minGx || s.gx > bounds.maxGx || s.gy < bounds.minGy || s.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[s.gy];
+        let fxSoundRow = fxSoundGrid[s.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[s.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let spawnerExtraBars = [];
         if (!s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
             spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: '#333', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
@@ -926,13 +1081,14 @@ function build3DFrameData() {
         let spawnerStatus = get3DBuildingTextureStatus(s, spawnerExtraBars);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
-            x: s.x / TILE,
-            z: s.y / TILE,
+            x: s.x / TILE + reactiveOffsetX * audioMove,
+            y: get3DConstructionLift(s) + audioHeight,
+            z: s.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.95,
             scaleY: 0.9 * getOverlapFlattenScaleForTile(s.gx, s.gy),
             scaleZ: 0.95,
-            tint: get3DRenderOwnerColor(s.owner),
-            alpha: 1,
+            tint: get3DDamageFlashTint(s, get3DRenderOwnerColor(s.owner)),
+            alpha: get3DConstructionAlpha(s),
             topTextureKey: `spawner:${s.type}:${s.owner}:${spawnerStatus.keySuffix}`,
             topTextureCanvas: get3DBuildingTopTexture(
                 s.type === 'astar_spawner' ? 'spawner_astar' :
@@ -950,6 +1106,12 @@ function build3DFrameData() {
     for (let b of barracks) {
         if (b.gx < bounds.minGx || b.gx > bounds.maxGx || b.gy < bounds.minGy || b.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[b.gy];
+        let fxSoundRow = fxSoundGrid[b.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[b.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let barrackExtraBars = [];
         if (!b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
@@ -957,13 +1119,14 @@ function build3DFrameData() {
         let barrackStatus = get3DBuildingTextureStatus(b, barrackExtraBars);
         push3DRenderObject(objects, {
             modelKey: `barrack_${b.unitType || 'norm'}`,
-            x: b.x / TILE,
-            z: b.y / TILE,
+            x: b.x / TILE + reactiveOffsetX * audioMove,
+            y: get3DConstructionLift(b) + audioHeight,
+            z: b.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.98,
             scaleY: 0.86 * getOverlapFlattenScaleForTile(b.gx, b.gy),
             scaleZ: 0.98,
-            tint: get3DRenderOwnerColor(b.owner),
-            alpha: 1,
+            tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
+            alpha: get3DConstructionAlpha(b),
             topTextureKey: `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
             topTextureCanvas: get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix })
         });
@@ -972,10 +1135,17 @@ function build3DFrameData() {
     for (let d of droppedItems) {
         if (d.gx < bounds.minGx || d.gx > bounds.maxGx || d.gy < bounds.minGy || d.gy > bounds.maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[d.gy];
+        let fxSoundRow = fxSoundGrid[d.gy];
+        let bgLevel = bgSoundRow ? bgSoundRow[d.gx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[d.gx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         push3DRenderObject(objects, {
             modelKey: 'dropped_energy',
-            x: d.x / TILE,
-            z: d.y / TILE,
+            x: d.x / TILE + reactiveOffsetX * audioMove,
+            y: audioHeight,
+            z: d.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.22,
             scaleY: 0.22,
             scaleZ: 0.22,
@@ -995,21 +1165,27 @@ function build3DFrameData() {
         let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
         if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[ugy];
+        let fxSoundRow = fxSoundGrid[ugy];
+        let bgLevel = bgSoundRow ? bgSoundRow[ugx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[ugx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         let unitStatus = get3DUnitTextureStatus(u);
         if (u.isSnake) {
-            pushSnakeRenderObjects(objects, u, ux, uy, footprint, unitStatus);
+            pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
-                x: ux / TILE,
-                y: getUnitHeightOffset(u),
-                z: uy / TILE,
+                x: ux / TILE + reactiveOffsetX * audioMove,
+                y: getUnitHeightOffset(u) + audioHeight,
+                z: uy / TILE + reactiveOffsetY * audioMove,
                 scaleX: footprint,
                 scaleY: Math.max(0.32, footprint * 0.9),
                 scaleZ: footprint,
                 rotationY: Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1),
-                tint: get3DRenderOwnerColor(u.owner),
+                tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
                 renderShape: 'cylinder',
                 topTextureKey: `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
                 topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus)
@@ -1023,13 +1199,19 @@ function build3DFrameData() {
         let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
         if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[pgy];
+        let fxSoundRow = fxSoundGrid[pgy];
+        let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let projectileColor = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
         let projectileKey = `projectile:${p.type}:${projectileColor}`;
         push3DRenderObject(objects, {
             modelKey: `projectile_${p.type || 'default'}`,
-            x: px / TILE,
-            y: 0.18,
-            z: py / TILE,
+            x: px / TILE + reactiveOffsetX * audioMove,
+            y: 0.18 + audioHeight,
+            z: py / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.12,
             scaleY: 0.12,
             scaleZ: 0.2,
@@ -1056,11 +1238,17 @@ function build3DFrameData() {
         let pgx = Math.floor(px / TILE), pgy = Math.floor(py / TILE);
         if (pgx < bounds.minGx - 1 || pgx > bounds.maxGx + 1 || pgy < bounds.minGy - 1 || pgy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[pgy] || visibilityGrid[pgy][pgx] === 0)) continue;
+        let bgSoundRow = bgSoundGrid[pgy];
+        let fxSoundRow = fxSoundGrid[pgy];
+        let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
+        let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
+        let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         push3DRenderObject(objects, {
             modelKey: 'particle',
-            x: px / TILE,
-            y: 0.08,
-            z: py / TILE,
+            x: px / TILE + reactiveOffsetX * audioMove,
+            y: 0.08 + audioHeight,
+            z: py / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.06,
             scaleY: 0.06,
             scaleZ: 0.06,
@@ -1880,14 +2068,21 @@ function tickStatusEffects(target) {
 
     if (target.burning > 0) {
         target.burning--;
-        if (target.burnTickDamage > 0) target.energy -= target.burnTickDamage;
+        if (target.burnTickDamage > 0) {
+            target.energy -= target.burnTickDamage;
+            recordDamageVisual(target, target.burnTickDamage);
+        }
     }
     if (target.poisoned > 0) {
         target.poisoned--;
-        if (target.poisonTickDamage > 0) target.energy -= target.poisonTickDamage;
+        if (target.poisonTickDamage > 0) {
+            target.energy -= target.poisonTickDamage;
+            recordDamageVisual(target, target.poisonTickDamage);
+        }
     }
     if (target.frozen > 0 && target.wet > 0 && target.iceTickDamage > 0) {
         target.energy -= target.iceTickDamage;
+        recordDamageVisual(target, target.iceTickDamage);
     }
     if (target.frozen > 0) target.frozen--;
     if (target.wet > 0) target.wet--;
