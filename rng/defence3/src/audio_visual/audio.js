@@ -11,6 +11,10 @@ let _kingHurtTimer = 0;
 let _damageAlertTimer = 0;
 let _kingDamageAlertTimer = 0;
 let _bgMusicNodes = null;
+let _bgMusicAnalyser = null;
+let _bgMusicAnalyserData = null;
+let _bgMusicReactiveSmoothedLevel = 0;
+let _bgMusicReactiveLevelHistory = [];
 const _audioAssetCache = new Map();
 const _audioAssetPending = new Map();
 const _audioAssetMissing = new Set();
@@ -26,9 +30,9 @@ let audioReactiveGlobalOffsetY = 0;
 let audioReactiveBackgroundLevel = 0;
 let audioReactiveEffectsLevel = 0;
 
-let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG = 0.012;
-let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX = 0.024;
-let AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG = 0.05;
+let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG = 0;
+let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX = 0;
+let AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG = 0.64;
 let AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX = 0.11;
 let AUDIO_REACTIVE_RENDER_2D_POSITION_FROM_BG = 0;
 let AUDIO_REACTIVE_RENDER_2D_POSITION_FROM_SFX = 0;
@@ -40,15 +44,26 @@ const AUDIO_MASTER_GAIN_MAX = 0.85;
 
 const AUDIO_PITCH_SCALE = 0.68;
 const AUDIO_SPATIAL_MIN_GAIN = 0.001;
-const AUDIO_SPATIAL_NEAR_DISTANCE_TILES = 2.5;
-const AUDIO_SPATIAL_FAR_DISTANCE_TILES = 18;
-const AUDIO_SPATIAL_FALLOFF_EXPONENT = 3.2;
-const AUDIO_SPATIAL_2D_HEIGHT_VIEW_FACTOR = 0.2;
+const AUDIO_SPATIAL_2D_NEAR_DISTANCE_TILES = 2.5;
+const AUDIO_SPATIAL_2D_FAR_DISTANCE_TILES = 14;
+const AUDIO_SPATIAL_2D_FALLOFF_EXPONENT = 3.8;
+const AUDIO_SPATIAL_2D_HEIGHT_VIEW_FACTOR = 0.34;
+const AUDIO_SPATIAL_3D_NEAR_DISTANCE_TILES = 2.5;
+const AUDIO_SPATIAL_3D_FAR_DISTANCE_TILES = 18;
+const AUDIO_SPATIAL_3D_FALLOFF_EXPONENT = 3.2;
 const AUDIO_SPATIAL_3D_DISTANCE_FACTOR = 1.25;
 const AUDIO_AMBIENT_WORK_MIN_TICKS = 10;
 const AUDIO_REACTIVE_GRID_UPDATE_INTERVAL = 3;
 const AUDIO_REACTIVE_BG_PULSE_SCALE = 0.42;
 const AUDIO_REACTIVE_BG_SWELL_SCALE = 0.23;
+const AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES = 5.5;
+const AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED = 2.1;
+const AUDIO_REACTIVE_BG_EDGE_BLEND = 0.35;
+const AUDIO_REACTIVE_BG_ANALYSER_GAIN = 1.85;
+const AUDIO_REACTIVE_BG_ANALYSER_HISTORY = 8;
+const AUDIO_REACTIVE_BG_ANALYSER_SMOOTHING = 0.18;
+const AUDIO_REACTIVE_BG_TILE_SMOOTH_ACCEL = 0.34;
+const AUDIO_REACTIVE_BG_TILE_SMOOTH_DAMPING = 0.74;
 const AUDIO_REACTIVE_FX_EMITTER_MAX = 48;
 const AUDIO_REACTIVE_FX_DEFAULT_RADIUS_TILES = 4.2;
 const AUDIO_REACTIVE_FX_DEFAULT_LIFE_TICKS = 12;
@@ -60,9 +75,11 @@ let _audioSpatialGridPrev = [];
 let _audioSpatialGridTarget = [];
 let _audioSpatialGridBackgroundPrev = [];
 let _audioSpatialGridBackgroundTarget = [];
+let _audioSpatialGridBackgroundVelocity = [];
 let _audioSpatialGridEffectsPrev = [];
 let _audioSpatialGridEffectsTarget = [];
 let _audioReactiveLastGridTick = -1;
+let _audioTypeBurstState = Object.create(null);
 
 function _makeAudioReactiveGridRows() {
     let rows = new Array(Math.max(0, GRID_H | 0));
@@ -80,6 +97,7 @@ function _ensureAudioReactiveGrid() {
     _audioSpatialGridTarget = _makeAudioReactiveGridRows();
     _audioSpatialGridBackgroundPrev = _makeAudioReactiveGridRows();
     _audioSpatialGridBackgroundTarget = _makeAudioReactiveGridRows();
+    _audioSpatialGridBackgroundVelocity = _makeAudioReactiveGridRows();
     _audioSpatialGridEffectsPrev = _makeAudioReactiveGridRows();
     _audioSpatialGridEffectsTarget = _makeAudioReactiveGridRows();
     _audioReactiveLastGridTick = -1;
@@ -97,10 +115,61 @@ function _getAudioReactiveNowSeconds() {
 }
 
 function _getBackgroundMusicReactiveLevel(nowSeconds) {
-    if (!audioEnabled || !_bgMusicNodes) return 0;
-    let pulse = 0.52 + Math.sin(nowSeconds * 2.05) * AUDIO_REACTIVE_BG_PULSE_SCALE;
-    let swell = 0.35 + Math.sin(nowSeconds * 0.67 + 1.3) * AUDIO_REACTIVE_BG_SWELL_SCALE;
-    return Math.max(0, Math.min(1, pulse * 0.68 + swell * 0.32));
+    if (!audioEnabled || !_bgMusicNodes || !_bgMusicAnalyser || !_bgMusicAnalyserData) return 0;
+    let analyser = _bgMusicAnalyser;
+    let data = _bgMusicAnalyserData;
+    let rms = 0;
+    let peak = 0;
+    if (typeof analyser.getFloatTimeDomainData === 'function') {
+        analyser.getFloatTimeDomainData(data);
+        let sumSq = 0;
+        for (let i = 0; i < data.length; i++) {
+            let sample = Number(data[i]) || 0;
+            sumSq += sample * sample;
+            let absSample = Math.abs(sample);
+            if (absSample > peak) peak = absSample;
+        }
+        rms = Math.sqrt(sumSq / Math.max(1, data.length));
+    } else {
+        analyser.getByteTimeDomainData(data);
+        let sumSq = 0;
+        for (let i = 0; i < data.length; i++) {
+            let sample = ((Number(data[i]) || 128) - 128) / 128;
+            sumSq += sample * sample;
+            let absSample = Math.abs(sample);
+            if (absSample > peak) peak = absSample;
+        }
+        rms = Math.sqrt(sumSq / Math.max(1, data.length));
+    }
+
+    let rawLevel = Math.max(0, Math.min(1, (rms * 4.6 + peak * 1.15) * AUDIO_REACTIVE_BG_ANALYSER_GAIN));
+    _bgMusicReactiveLevelHistory.push(rawLevel);
+    if (_bgMusicReactiveLevelHistory.length > AUDIO_REACTIVE_BG_ANALYSER_HISTORY) {
+        _bgMusicReactiveLevelHistory.splice(0, _bgMusicReactiveLevelHistory.length - AUDIO_REACTIVE_BG_ANALYSER_HISTORY);
+    }
+    let averagedLevel = 0;
+    for (let i = 0; i < _bgMusicReactiveLevelHistory.length; i++) averagedLevel += _bgMusicReactiveLevelHistory[i];
+    averagedLevel /= Math.max(1, _bgMusicReactiveLevelHistory.length);
+    _bgMusicReactiveSmoothedLevel += (averagedLevel - _bgMusicReactiveSmoothedLevel) * AUDIO_REACTIVE_BG_ANALYSER_SMOOTHING;
+    return Math.max(0, Math.min(1, _bgMusicReactiveSmoothedLevel));
+}
+
+function _getBackgroundReactiveTileLevel(baseLevel, tileX, tileY, nowSeconds) {
+    if (!(baseLevel > 0) || !Number.isFinite(tileX) || !Number.isFinite(tileY)) return 0;
+    let centerX = GRID_W * 0.5;
+    let centerY = GRID_H * 0.5;
+    let dx = tileX + 0.5 - centerX;
+    let dy = tileY + 0.5 - centerY;
+    let dist = Math.hypot(dx, dy);
+    let maxDist = Math.max(1, Math.hypot(Math.max(centerX, GRID_W - centerX), Math.max(centerY, GRID_H - centerY)));
+    let distNorm = Math.max(0, Math.min(1, dist / maxDist));
+    let centerWeight = Math.max(0, 1 - distNorm);
+    let wavePhase = dist / Math.max(0.001, AUDIO_REACTIVE_BG_RADIAL_WAVELENGTH_TILES) - nowSeconds * AUDIO_REACTIVE_BG_RADIAL_SCROLL_SPEED;
+    let wave = Math.sin(wavePhase * Math.PI * 2);
+    let waveAmount = AUDIO_REACTIVE_BG_PULSE_SCALE * (AUDIO_REACTIVE_BG_EDGE_BLEND + centerWeight * (1 - AUDIO_REACTIVE_BG_EDGE_BLEND));
+    let waveScale = 1 + wave * waveAmount;
+    let swellScale = 1 + centerWeight * centerWeight * AUDIO_REACTIVE_BG_SWELL_SCALE;
+    return Math.max(0, Math.min(1.5, baseLevel * waveScale * swellScale));
 }
 
 function _recordAudioReactiveEmitter(type, worldX, worldY, strength = 0.75) {
@@ -174,13 +243,22 @@ function updateAudioReactiveState() {
 
         for (let y = 0; y < GRID_H; y++) {
             let bgTargetRow = _audioSpatialGridBackgroundTarget[y];
+            let bgVelocityRow = _audioSpatialGridBackgroundVelocity[y];
             let fxTargetRow = _audioSpatialGridEffectsTarget[y];
             let totalTargetRow = _audioSpatialGridTarget[y];
-            let bgValue = audioReactiveBackgroundLevel;
             for (let x = 0; x < GRID_W; x++) {
-                bgTargetRow[x] = bgValue;
+                let rawBgValue = _getBackgroundReactiveTileLevel(audioReactiveBackgroundLevel, x, y, nowSeconds);
+                let bgDelta = rawBgValue - bgTargetRow[x];
+                let nextVelocity = (bgVelocityRow[x] + bgDelta * AUDIO_REACTIVE_BG_TILE_SMOOTH_ACCEL) * AUDIO_REACTIVE_BG_TILE_SMOOTH_DAMPING;
+                let nextValue = bgTargetRow[x] + nextVelocity;
+                if (Math.abs(rawBgValue - nextValue) < 0.001 && Math.abs(nextVelocity) < 0.001) {
+                    nextValue = rawBgValue;
+                    nextVelocity = 0;
+                }
+                bgVelocityRow[x] = nextVelocity;
+                bgTargetRow[x] = Math.max(0, Math.min(1.5, nextValue));
                 fxTargetRow[x] = 0;
-                totalTargetRow[x] = bgValue;
+                totalTargetRow[x] = bgTargetRow[x];
             }
         }
 
@@ -607,6 +685,43 @@ function _applyBackgroundMusicVolume() {
     else param.exponentialRampToValueAtTime(targetGain, t + 0.12);
 }
 
+function _attachBackgroundMusicAnalyser(loopNode) {
+    if (!audioCtx || !loopNode || !loopNode.gain) return;
+    try {
+        let analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.82;
+        let usesFloatData = typeof analyser.getFloatTimeDomainData === 'function';
+        let data = usesFloatData ? new Float32Array(analyser.fftSize) : new Uint8Array(analyser.fftSize);
+        loopNode.gain.connect(analyser);
+        _bgMusicAnalyser = analyser;
+        _bgMusicAnalyserData = data;
+        _bgMusicReactiveSmoothedLevel = 0;
+        _bgMusicReactiveLevelHistory.length = 0;
+    } catch {
+        _bgMusicAnalyser = null;
+        _bgMusicAnalyserData = null;
+        _bgMusicReactiveSmoothedLevel = 0;
+        _bgMusicReactiveLevelHistory.length = 0;
+    }
+}
+
+function _canPlaySoundTypeNow(type) {
+    let normalizedType = String(type || '').trim();
+    if (!normalizedType) return false;
+    if (normalizedType !== 'builder_work' && normalizedType !== 'heal_tick' && normalizedType !== 'research_tick') return true;
+
+    let tick = Number.isFinite(gameTime) ? gameTime : 0;
+    let state = _audioTypeBurstState[normalizedType];
+    if (!state || tick - state.windowStartTick >= 6) {
+        _audioTypeBurstState[normalizedType] = { windowStartTick: tick, count: 1 };
+        return true;
+    }
+    if (state.count >= 3) return false;
+    state.count++;
+    return true;
+}
+
 function _getAudioSpatialState(worldX, worldY) {
     if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !Number.isFinite(camera.zoom) || camera.zoom <= 0) {
         return { gain: 1, pan: 0 };
@@ -623,6 +738,9 @@ function _getAudioSpatialState(worldX, worldY) {
     let cameraTileX = cx / Math.max(1, TILE);
     let cameraTileY = cy / Math.max(1, TILE);
     let cameraHeightTiles = Math.max(0, Math.max(worldViewW, worldViewH) / Math.max(1, TILE) * AUDIO_SPATIAL_2D_HEIGHT_VIEW_FACTOR);
+    let nearDistanceTiles = AUDIO_SPATIAL_2D_NEAR_DISTANCE_TILES;
+    let farDistanceTiles = AUDIO_SPATIAL_2D_FAR_DISTANCE_TILES;
+    let falloffExponent = AUDIO_SPATIAL_2D_FALLOFF_EXPONENT;
 
     if (renderDimensionMode === '3d' && renderer3dInstance) {
         let visibleWidthTiles = Math.max(1.2, worldViewW / Math.max(1, TILE));
@@ -636,13 +754,16 @@ function _getAudioSpatialState(worldX, worldY) {
         cameraTileX += Math.sin(orbitYaw) * horizontalDistance;
         cameraTileY += Math.cos(orbitYaw) * horizontalDistance;
         cameraHeightTiles = Math.max(0, Math.sin(orbitPitch) * orbitDistance);
+        nearDistanceTiles = AUDIO_SPATIAL_3D_NEAR_DISTANCE_TILES;
+        farDistanceTiles = AUDIO_SPATIAL_3D_FAR_DISTANCE_TILES;
+        falloffExponent = AUDIO_SPATIAL_3D_FALLOFF_EXPONENT;
     }
 
     let distTiles = Math.hypot(sourceTileX - cameraTileX, sourceTileY - cameraTileY, cameraHeightTiles);
     let gain = 1;
-    if (distTiles > AUDIO_SPATIAL_NEAR_DISTANCE_TILES) {
-        let t = Math.max(0, Math.min(1, (distTiles - AUDIO_SPATIAL_NEAR_DISTANCE_TILES) / (AUDIO_SPATIAL_FAR_DISTANCE_TILES - AUDIO_SPATIAL_NEAR_DISTANCE_TILES)));
-        gain = Math.pow(1 - t, AUDIO_SPATIAL_FALLOFF_EXPONENT);
+    if (distTiles > nearDistanceTiles) {
+        let t = Math.max(0, Math.min(1, (distTiles - nearDistanceTiles) / Math.max(0.001, farDistanceTiles - nearDistanceTiles)));
+        gain = Math.pow(1 - t, falloffExponent);
     }
     gain = Math.max(AUDIO_SPATIAL_MIN_GAIN, Math.min(1, gain));
     let pan = Math.max(-1, Math.min(1, nx * 0.85));
@@ -811,6 +932,7 @@ function _playNoise(dur, vol, energyFreq, lpFreq, pan = 0) {
 function playSound(type, worldX, worldY) {
     if (!audioCtx || !audioEnabled) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (!_canPlaySoundTypeNow(type)) return;
     let spatial = (worldX !== undefined) ? _getAudioSpatialState(worldX, worldY) : { gain: 1, pan: 0 };
     let vol = spatial.gain;
     let pan = spatial.pan;
@@ -863,6 +985,10 @@ function stopLaserSound() {
 function startBackgroundMusic() {
     if (!audioCtx || !audioEnabled || _bgMusicNodes) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
+    _bgMusicAnalyser = null;
+    _bgMusicAnalyserData = null;
+    _bgMusicReactiveSmoothedLevel = 0;
+    _bgMusicReactiveLevelHistory.length = 0;
     _bgMusicNodes = { pending: true, cancelled: false, source: null, gain: null };
 
     _startFirstLoopedAudioAsset(AUDIO_BACKGROUND_TRACKS, 0.24, 0).then(loopNode => {
@@ -881,6 +1007,7 @@ function startBackgroundMusic() {
         let targetGain = Math.max(0.0001, _getBackgroundMusicTargetGain());
         loopNode.gain.gain.setValueAtTime(0.0001, t);
         loopNode.gain.gain.exponentialRampToValueAtTime(targetGain, t + 1.2);
+        _attachBackgroundMusicAnalyser(loopNode);
         _bgMusicNodes = {
             pending: false,
             cancelled: false,
@@ -895,6 +1022,10 @@ function stopBackgroundMusic() {
     if (!_bgMusicNodes) return;
     let nodes = _bgMusicNodes;
     _bgMusicNodes = null;
+    _bgMusicAnalyser = null;
+    _bgMusicAnalyserData = null;
+    _bgMusicReactiveSmoothedLevel = 0;
+    _bgMusicReactiveLevelHistory.length = 0;
     nodes.cancelled = true;
     let t = audioCtx ? audioCtx.currentTime : 0;
     if (!nodes.gain || !nodes.source) return;
