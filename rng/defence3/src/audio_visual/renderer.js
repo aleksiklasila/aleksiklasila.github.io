@@ -501,7 +501,7 @@ function build3DOverlayData(bounds, alpha) {
             }
             if (destX !== null && destY !== null) {
                 let color = u.commandState === CMD_ATTACK_MOVING ? 'rgba(255,100,100,0.5)' : 'rgba(100,255,100,0.5)';
-                pushLine(ux, uy, destX, destY, color, rallyLineType === OVERLAY_LINE_DOTTED);
+                if (showRallyLinesForUnits()) pushLine(ux, uy, destX, destY, color, rallyLineType === OVERLAY_LINE_DOTTED);
                 pushMarker(destX, destY, 'plus', u.commandState === CMD_ATTACK_MOVING ? '#f66' : '#4f4');
             }
         }
