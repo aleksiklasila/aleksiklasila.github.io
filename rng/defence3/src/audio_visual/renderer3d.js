@@ -65,6 +65,16 @@
         ];
     }
 
+    const SHADOW_LIGHT_DIRECTION = (() => {
+        let x = -0.42;
+        let y = 0.86;
+        let z = 0.31;
+        let length = Math.hypot(x, y, z) || 1;
+        return [x / length, y / length, z / length];
+    })();
+    const SHADOW_GROUND_Y = 0.004;
+    const SHADOW_FLAT_HEIGHT = 0.024;
+
     function perspective(out, fovY, aspect, near, far) {
         let f = 1 / Math.tan(fovY * 0.5);
         let nf = 1 / (near - far);
@@ -1583,6 +1593,124 @@
             gl.drawElements(gl.TRIANGLES, this.planeMesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
+        getShadowInfo(object) {
+            if (!object) return null;
+            let alpha = Math.max(0, Math.min(1, Number(object.alpha) || 1));
+            if (alpha < 0.14) return null;
+
+            let modelKey = sanitizeModelKey(object.modelKey);
+            if (modelKey === 'particle' || modelKey.indexOf('projectile_') === 0 || modelKey.indexOf('dropped_') === 0) return null;
+
+            let scaleX = Math.max(0.01, Number(object.scaleX) || 0);
+            let scaleY = Math.max(0.01, Number(object.scaleY) || 0);
+            let scaleZ = Math.max(0.01, Number(object.scaleZ) || 0);
+            if (Math.max(scaleX, scaleY, scaleZ) < 0.05) return null;
+
+            let baseY = Math.max(0, Number(object.y) || 0);
+            let casterHeight = Math.max(0.04, baseY + scaleY * 0.58);
+            let shadowStretch = Math.min(1.42, 1.06 + casterHeight * 0.22);
+            let lightY = Math.max(0.2, SHADOW_LIGHT_DIRECTION[1]);
+            let alphaScale = Math.max(0.06, Math.min(0.24, (0.23 - casterHeight * 0.045) * alpha));
+            return {
+                x: (Number(object.x) || 0) - SHADOW_LIGHT_DIRECTION[0] / lightY * casterHeight,
+                y: SHADOW_GROUND_Y,
+                z: (Number(object.z) || 0) - SHADOW_LIGHT_DIRECTION[2] / lightY * casterHeight,
+                rotationY: Number(object.rotationY) || 0,
+                scaleX: scaleX * shadowStretch,
+                scaleY: SHADOW_FLAT_HEIGHT,
+                scaleZ: scaleZ * shadowStretch,
+                alpha: alphaScale,
+                renderShape: object && object.renderShape === 'cylinder' ? 'cylinder' : 'box'
+            };
+        }
+
+        drawShadowObject(object) {
+            let shadow = this.getShadowInfo(object);
+            if (!shadow) return;
+
+            let gl = this.gl;
+            let mesh = this.requestModel(object);
+            if (mesh === undefined || mesh === null) mesh = this.getPrimitiveMesh(shadow);
+
+            gl.useProgram(this.meshProgram);
+            gl.bindVertexArray(mesh.vao);
+            gl.uniformMatrix4fv(this.meshUniforms.viewProjection, false, this.tmpViewProjection);
+            composeModelMatrix(
+                this.tmpModel,
+                shadow.x,
+                shadow.y,
+                shadow.z,
+                shadow.rotationY,
+                shadow.scaleX,
+                shadow.scaleY,
+                shadow.scaleZ
+            );
+            extractNormalMatrix(this.tmpNormal, this.tmpModel);
+            gl.uniformMatrix4fv(this.meshUniforms.model, false, this.tmpModel);
+            gl.uniformMatrix3fv(this.meshUniforms.normalMatrix, false, this.tmpNormal);
+            gl.uniform3f(this.meshUniforms.color, 0, 0, 0);
+            gl.uniform1f(this.meshUniforms.alpha, shadow.alpha);
+            gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
+        }
+
+        drawShadowInstances(objects) {
+            if (!objects || objects.length <= 0) return;
+            let gl = this.gl;
+            let mesh = this.getPrimitiveMesh(objects[0]);
+            this.ensureCubeInstanceCapacity(objects.length);
+
+            let written = 0;
+            for (let index = 0; index < objects.length; index++) {
+                let shadow = this.getShadowInfo(objects[index]);
+                if (!shadow) continue;
+                let base = written * 21;
+                composeModelMatrix(
+                    this.tmpModel,
+                    shadow.x,
+                    shadow.y,
+                    shadow.z,
+                    shadow.rotationY,
+                    shadow.scaleX,
+                    shadow.scaleY,
+                    shadow.scaleZ
+                );
+                this.cubeInstanceArray.set(this.tmpModel, base);
+                this.cubeInstanceArray[base + 16] = 0;
+                this.cubeInstanceArray[base + 17] = 0;
+                this.cubeInstanceArray[base + 18] = 0;
+                this.cubeInstanceArray[base + 19] = shadow.alpha;
+                this.cubeInstanceArray[base + 20] = shadow.renderShape === 'cylinder' ? 1 : 0;
+                written++;
+            }
+            if (written <= 0) return;
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 21));
+            gl.useProgram(this.instancedMeshProgram);
+            gl.bindVertexArray(mesh.vao);
+            gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
+            gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, written);
+        }
+
+        drawShadows(meshObjects, primitiveGroups) {
+            let hasMeshes = !!(meshObjects && meshObjects.length > 0);
+            let hasPrimitives = !!(primitiveGroups && primitiveGroups.size > 0);
+            if (!hasMeshes && !hasPrimitives) return;
+
+            let gl = this.gl;
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.depthMask(false);
+            for (let object of meshObjects || []) this.drawShadowObject(object);
+            if (primitiveGroups) {
+                for (let group of primitiveGroups.values()) this.drawShadowInstances(group);
+            }
+            gl.depthMask(true);
+            gl.disable(gl.BLEND);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        }
+
         drawObject(object) {
             let gl = this.gl;
             let mesh = this.requestModel(object);
@@ -1713,9 +1841,24 @@
             let transparentTexturedCubeGroups = new Map();
             let opaqueMeshObjects = [];
             let transparentMeshObjects = [];
+            let shadowPrimitiveGroups = new Map();
+            let shadowMeshObjects = [];
             for (let object of objects) {
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
                 let mesh = this.requestModel(object);
+                if (this.getShadowInfo(object)) {
+                    if (mesh) {
+                        shadowMeshObjects.push(object);
+                    } else {
+                        let shadowGroupKey = object.renderShape || 'box';
+                        let shadowGroup = shadowPrimitiveGroups.get(shadowGroupKey);
+                        if (!shadowGroup) {
+                            shadowGroup = [];
+                            shadowPrimitiveGroups.set(shadowGroupKey, shadowGroup);
+                        }
+                        shadowGroup.push(object);
+                    }
+                }
                 if (mesh) {
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if (object.topTextureKey && object.topTextureCanvas) {
@@ -1738,6 +1881,7 @@
                     group.push(object);
                 }
             }
+            this.drawShadows(shadowMeshObjects, shadowPrimitiveGroups);
             for (let object of opaqueMeshObjects) this.drawObject(object);
             for (let group of opaqueTexturedCubeGroups.values()) {
                 this.drawTexturedCubeInstances(group.objects, group.texture);
