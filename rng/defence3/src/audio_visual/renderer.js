@@ -6,6 +6,11 @@ let renderer3dBackgroundVersion = 0;
 let renderer3dRotateDrag = null;
 const renderer3dTopTextureCache = new Map();
 const renderer3dOverlapFadeState = new Map();
+const renderer3dSharedAudioTextureCanvases = new Map();
+const renderer3dSideTextureAngleState = new Map();
+let renderer3dMaskedBackgroundCanvas = null;
+let renderer3dMaskedBackgroundCtx = null;
+let renderer3dMaskedBackgroundSignature = '';
 const RENDERER3D_OVERLAP_FADE_DURATION_MS = 500;
 const DRAW_Z_BACKGROUND = 500;
 const DRAW_Z_STRUCTURES = 400;
@@ -23,7 +28,17 @@ let renderer3dLayerCanvases = new Map();
 let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridByPlayerCache = new Map();
+let visibilityGridSmoothedByPlayerCache = new Map();
+let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
+let renderer3dSideTextureAngleStateLastPruneVersion = -1;
+const VISIBILITY_LIGHT_CELL_SIZE = 4;
+const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
+const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
+const VISIBILITY_FADE_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.5;
+const RENDERER3D_MINE_MIN_LIGHT_VISIBILITY = 0.28;
+const DEFAULT_SHADOW_DIR_X = -0.42;
+const DEFAULT_SHADOW_DIR_Y = 0.31;
 let _backgroundTickInterval = null;
 let _hiddenLastTickTime = 0;
 let _hiddenTickAccumulator = 0;
@@ -32,6 +47,7 @@ let _minimapRefreshCounter = 10;
 let _backgroundCacheRefreshCounter = 20;
 let _fpsFrameCount = 0, _fpsLastTime = performance.now(), _fpsDisplay = 0;
 let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
+const _litTintCache = new Map();
 
 function get3DRenderOwnerColor(owner) {
     if (Number.isFinite(owner) && owner >= 0 && owner < PLAYER_COLORS.length) return PLAYER_COLORS[owner];
@@ -73,6 +89,22 @@ function _mixHexColors(colorA, colorB, mix) {
 function _hexToRgba(color, alpha = 1) {
     let rgb = _parseHexColor(color) || { r: 255, g: 255, b: 255 };
     return `rgba(${rgb.r},${rgb.g},${rgb.b},${Math.max(0, Math.min(1, Number(alpha) || 0))})`;
+}
+
+function _getCachedLitTint(baseTint, lightLevel) {
+    let tint = String(baseTint || '#c8ced8');
+    let bucket = Math.max(0, Math.min(24, Math.round(Math.max(0, Math.min(1, Number(lightLevel) || 0)) * 24)));
+    if (bucket >= 24) return tint;
+    let key = `${tint}|${bucket}`;
+    let cached = _litTintCache.get(key);
+    if (cached) return cached;
+    let rgb = _parseHexColor(tint);
+    if (!rgb) return tint;
+    let lightMul = 0.28 + (bucket / 24) * 0.72;
+    let lit = _rgbToHex({ r: rgb.r * lightMul, g: rgb.g * lightMul, b: rgb.b * lightMul });
+    if (_litTintCache.size > 2048) _litTintCache.clear();
+    _litTintCache.set(key, lit);
+    return lit;
 }
 
 function getDamageFlashColor(target, sourceOwner = null) {
@@ -271,6 +303,128 @@ function get3DTopTextureCanvas(key, drawFn) {
     drawFn(g, canvas);
     renderer3dTopTextureCache.set(key, canvas);
     return canvas;
+}
+
+function get3DSharedAudioTextureKeyForPlayer(owner, variant = 'default') {
+    return `shared_audio_player:${Number.isFinite(owner) ? owner : -1}:${variant || 'default'}`;
+}
+
+function get3DSharedAudioTextureKeyForMine(kind, variant = 'default') {
+    return `shared_audio_mine:${kind || 'default'}:${variant || 'default'}`;
+}
+
+function _getAudioTextureCanvasEntry(cacheKey) {
+    let entry = renderer3dSharedAudioTextureCanvases.get(cacheKey);
+    if (entry) return entry;
+    let canvas = document.createElement('canvas');
+    canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+    canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+    let ctx = canvas.getContext('2d');
+    entry = { canvas, ctx, version: -1 };
+    renderer3dSharedAudioTextureCanvases.set(cacheKey, entry);
+    return entry;
+}
+
+function get3DSharedAudioTextureCanvas(cacheKey, variant, baseColor, accentColor, seed = 0) {
+    let entry = _getAudioTextureCanvasEntry(cacheKey);
+    if (!entry || !entry.ctx) return null;
+    let version = Number(audioReactiveTextureVersion) || 0;
+    if (entry.version !== version) {
+        if (window.Defence3SideAudioVisualizations && typeof window.Defence3SideAudioVisualizations.draw === 'function') {
+            window.Defence3SideAudioVisualizations.draw(entry.ctx, { variant, baseColor, accentColor, seed, version });
+        } else {
+            entry.ctx.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+            entry.ctx.fillStyle = baseColor || '#789';
+            entry.ctx.fillRect(0, 0, entry.canvas.width, entry.canvas.height);
+        }
+        entry.canvas._textureVersion = version;
+        entry.version = version;
+    }
+    return entry.canvas;
+}
+
+function _get3DSideAccentColorForOwner(owner, extraColor = null) {
+    let oppositeOwner = Number.isFinite(owner) && PLAYER_COLORS.length > 1
+        ? ((owner + 1) % PLAYER_COLORS.length)
+        : -1;
+    let accentColor = oppositeOwner >= 0 ? PLAYER_COLORS[oppositeOwner] : '#ffffff';
+    if (extraColor) accentColor = _mixHexColors(accentColor, extraColor, 0.45);
+    return accentColor;
+}
+
+function get3DSideAudioTextureForPlayer(owner, variant = 'unit_default', seed = 0, extraColor = null) {
+    let ownerColor = get3DRenderOwnerColor(owner);
+    let accentColor = _get3DSideAccentColorForOwner(owner, extraColor);
+    return get3DSharedAudioTextureCanvas(get3DSharedAudioTextureKeyForPlayer(owner, variant), variant, ownerColor, accentColor, seed);
+}
+
+function get3DSideAudioTextureForMine(kind, variant, baseColor, accentColor, seed = 0) {
+    return get3DSharedAudioTextureCanvas(get3DSharedAudioTextureKeyForMine(kind, variant), variant, baseColor, accentColor, seed);
+}
+
+function get3DUnitSideVisualizationVariant(unit) {
+    let unitType = String((unit && unit.unitType) || 'norm');
+    switch (unitType) {
+        case 'collector': return 'collector';
+        case 'astar_collector': return 'astar_collector';
+        case 'builder_unit': return 'builder_unit';
+        case 'healer_unit': return 'healer_unit';
+        case 'researcher_unit': return 'researcher_unit';
+        case 'salvager_unit': return 'salvager_unit';
+        case 'king': return 'king';
+        case 'snake': return 'snake';
+        case 'flying':
+        case 'scout': return 'tower_watch';
+        case 'tank':
+        case 'boss': return 'barrack';
+        case 'fire_resistant': return 'tower_fire';
+        case 'water_resistant': return 'tower_water';
+        case 'ice_resistant': return 'tower_ice';
+        case 'poison_resistant': return 'tower_poison';
+        case 'laser_resistant': return 'tower_laser';
+        default: return 'unit_default';
+    }
+}
+
+function get3DTowerSideVisualizationVariant(tower) {
+    switch (String((tower && tower.type) || '')) {
+        case 'watch_tower': return 'tower_watch';
+        case 'laser': return 'tower_laser';
+        case 'sniper': return 'tower_sniper';
+        case 'fire': return 'tower_fire';
+        case 'water': return 'tower_water';
+        case 'poison': return 'tower_poison';
+        case 'ice': return 'tower_ice';
+        case 'sand_gun': return 'tower_sand';
+        case 'elements': return 'tower_elements';
+        default: return 'tower_default';
+    }
+}
+
+function get3DSpawnerSideVisualizationVariant(spawner) {
+    switch (String((spawner && spawner.type) || '')) {
+        case 'astar_spawner': return 'spawner_astar';
+        case 'salvager': return 'spawner_salvager';
+        case 'builder_spawner': return 'builder_unit';
+        case 'healer_spawner': return 'spawner_healer';
+        case 'research': return 'spawner_research';
+        default: return 'spawner_energy';
+    }
+}
+
+function get3DFloorItemSideVisualizationVariant(item) {
+    switch (String((item && item.type) || '')) {
+        case 'farm': return 'farm';
+        case 'astar_farm': return 'astar_farm';
+        case 'mine': return 'floor_mine';
+        case 'lava': return 'lava';
+        case 'water_puddle': return 'water_puddle';
+        case 'poison_puddle': return 'poison_puddle';
+        case 'ice_patch': return 'ice_patch';
+        case 'sand': return 'tower_sand';
+        case 'house': return 'house';
+        default: return 'unit_default';
+    }
 }
 
 function draw3DSpriteIntoTopTexture(g, sprite, inset = 8) {
@@ -699,6 +853,34 @@ function build3DOverlayData(bounds, alpha) {
 
 function push3DRenderObject(target, object) {
     if (!target || !object) return;
+    let ox = Number(object.x) || 0;
+    let oz = Number(object.z) || 0;
+    let gx = Math.floor(ox);
+    let gy = Math.floor(oz);
+    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0);
+    let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    // Bilinear interpolation of gradient across 4 surrounding tile corners to avoid boundary jumps
+    let shadowDirX = DEFAULT_SHADOW_DIR_X;
+    let shadowDirZ = DEFAULT_SHADOW_DIR_Y;
+    if (!fullVisibility) {
+        let fx = ox - gx, fz = oz - gy;
+        let ifx = 1 - fx, ifz = 1 - fz;
+        let _vis = visibilityGrid;
+        let g00x = ((_vis[gy] && _vis[gy][gx+1])||0) - ((_vis[gy] && _vis[gy][gx-1])||0);
+        let g00z = ((_vis[gy+1] && _vis[gy+1][gx])||0) - ((_vis[gy-1] && _vis[gy-1][gx])||0);
+        let g10x = ((_vis[gy] && _vis[gy][gx+2])||0) - ((_vis[gy] && _vis[gy][gx])||0);
+        let g10z = ((_vis[gy+1] && _vis[gy+1][gx+1])||0) - ((_vis[gy-1] && _vis[gy-1][gx+1])||0);
+        let g01x = ((_vis[gy+1] && _vis[gy+1][gx+1])||0) - ((_vis[gy+1] && _vis[gy+1][gx-1])||0);
+        let g01z = ((_vis[gy+2] && _vis[gy+2][gx])||0) - ((_vis[gy] && _vis[gy][gx])||0);
+        let g11x = ((_vis[gy+1] && _vis[gy+1][gx+2])||0) - ((_vis[gy+1] && _vis[gy+1][gx])||0);
+        let g11z = ((_vis[gy+2] && _vis[gy+2][gx+1])||0) - ((_vis[gy] && _vis[gy][gx+1])||0);
+        let gradX = g00x*ifx*ifz + g10x*fx*ifz + g01x*ifx*fz + g11x*fx*fz;
+        let gradZ = g00z*ifx*ifz + g10z*fx*ifz + g01z*ifx*fz + g11z*fx*fz;
+        let gradLen = Math.hypot(gradX, gradZ);
+        if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
+    }
+    let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
+    let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     target.push({
         modelKey: object.modelKey || 'cube',
         modelCandidates: Array.isArray(object.modelCandidates) ? object.modelCandidates.slice() : [],
@@ -709,11 +891,18 @@ function push3DRenderObject(target, object) {
         scaleY: Math.max(0.05, Number(object.scaleY) || 0.05),
         scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
         rotationY: Number(object.rotationY) || 0,
-        tint: object.tint || '#c8ced8',
+        tint,
         alpha: Math.max(0.05, Math.min(1, Number(object.alpha) || 1)),
         renderShape: object.renderShape === 'cylinder' ? 'cylinder' : 'box',
         topTextureKey: object.topTextureKey || '',
-        topTextureCanvas: object.topTextureCanvas || null
+        topTextureCanvas: object.topTextureCanvas || null,
+        sideTextureKey: object.sideTextureKey || '',
+        sideTextureCanvas: object.sideTextureCanvas || null,
+        sideTextureAngle: Number.isFinite(object.sideTextureAngle) ? Number(object.sideTextureAngle) : 0,
+        lightLevel: finalLightLevel,
+        shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
+        shadowDirZ: Number.isFinite(object.shadowDirZ) ? Number(object.shadowDirZ) : shadowDirZ,
+        shadowLength: Math.max(0.6, Math.min(2.4, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9)))
     });
 }
 
@@ -838,6 +1027,52 @@ function getBackgroundWorldBoundsForRenderMode() {
     return renderDimensionMode === '3d' ? get3DVisibleWorldBounds() : getVisibleWorldBounds(1);
 }
 
+function get3DBackgroundCanvasWithVisibilityMask(sourceCanvas, backgroundPixelBounds) {
+    if (!sourceCanvas) return sourceCanvas;
+    if (fullVisibility) return sourceCanvas;
+    if (typeof rebuildVisibilityMaskCacheIfNeeded !== 'function') return sourceCanvas;
+
+    rebuildVisibilityMaskCacheIfNeeded();
+    if (typeof _visibilityMaskCanvas === 'undefined' || !_visibilityMaskCanvas) return sourceCanvas;
+
+    if (!renderer3dMaskedBackgroundCanvas || renderer3dMaskedBackgroundCanvas.width !== sourceCanvas.width || renderer3dMaskedBackgroundCanvas.height !== sourceCanvas.height) {
+        renderer3dMaskedBackgroundCanvas = document.createElement('canvas');
+        renderer3dMaskedBackgroundCanvas.width = sourceCanvas.width;
+        renderer3dMaskedBackgroundCanvas.height = sourceCanvas.height;
+        renderer3dMaskedBackgroundCtx = renderer3dMaskedBackgroundCanvas.getContext('2d');
+        renderer3dMaskedBackgroundSignature = '';
+    }
+
+    if (!renderer3dMaskedBackgroundCtx) return sourceCanvas;
+
+    let minX = Math.max(0, Math.floor((backgroundPixelBounds && backgroundPixelBounds.minX) || 0));
+    let minY = Math.max(0, Math.floor((backgroundPixelBounds && backgroundPixelBounds.minY) || 0));
+    let maxX = Math.min(WORLD_W, Math.ceil((backgroundPixelBounds && backgroundPixelBounds.maxX) || WORLD_W));
+    let maxY = Math.min(WORLD_H, Math.ceil((backgroundPixelBounds && backgroundPixelBounds.maxY) || WORLD_H));
+    let sw = Math.max(1, maxX - minX);
+    let sh = Math.max(1, maxY - minY);
+
+    let signature = [
+        renderer3dBackgroundVersion,
+        Number.isFinite(visibilityVersion) ? visibilityVersion : 0,
+        minX,
+        minY,
+        sw,
+        sh,
+        sourceCanvas.width,
+        sourceCanvas.height
+    ].join('|');
+
+    if (renderer3dMaskedBackgroundSignature !== signature) {
+        renderer3dMaskedBackgroundCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+        renderer3dMaskedBackgroundCtx.drawImage(sourceCanvas, 0, 0);
+        renderer3dMaskedBackgroundCtx.drawImage(_visibilityMaskCanvas, minX, minY, sw, sh, 0, 0, sourceCanvas.width, sourceCanvas.height);
+        renderer3dMaskedBackgroundSignature = signature;
+    }
+
+    return renderer3dMaskedBackgroundCanvas;
+}
+
 function build3DFrameData() {
     let bounds = get3DVisibleWorldBounds();
     let alpha = tickAlpha;
@@ -849,6 +1084,18 @@ function build3DFrameData() {
     let backgroundMinY = bounds.minGy * TILE;
     let backgroundMaxX = (bounds.maxGx + 1) * TILE;
     let backgroundMaxY = (bounds.maxGy + 1) * TILE;
+    let sourceBackgroundCanvas = bgCanvas || canvas;
+    let backgroundCanvasFor3D = get3DBackgroundCanvasWithVisibilityMask(sourceBackgroundCanvas, {
+        minX: backgroundMinX,
+        minY: backgroundMinY,
+        maxX: backgroundMaxX,
+        maxY: backgroundMaxY
+    });
+    let backgroundVersionFor3D = renderer3dBackgroundVersion;
+    if (!fullVisibility) {
+        let visVersion = Number.isFinite(visibilityVersion) ? visibilityVersion : 0;
+        backgroundVersionFor3D = renderer3dBackgroundVersion * 1000000 + (visVersion % 1000000);
+    }
     let overlays = build3DOverlayData(bounds, alpha);
     let soundGrid = audioSpatialGrid;
     let bgSoundGrid = audioSpatialGridBackground;
@@ -897,12 +1144,64 @@ function build3DFrameData() {
         }
         return points;
     };
+    let getTileLightLevel = (gx, gy) => {
+        if (fullVisibility) return 1;
+        let raw = (visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0;
+        return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+    };
+    let getAudioReactiveSideTextureAngle = (gx, gy, seed = 0) => {
+        const LEVEL_SMOOTHING = 0.14;
+        const BASE_ANGLE_DELTA = 0.004;
+        const AUDIO_ANGLE_DELTA_SCALE = 0.026;
+        const MAX_SPEED_DELTA_PER_STEP = 0.004;
+        let sampleLevel = (gridRef, sx, sy) => {
+            let row = gridRef && gridRef[sy];
+            return row ? (Number(row[sx]) || 0) : 0;
+        };
+        let version = Number(audioReactiveTextureVersion) || 0;
+        let key = String(seed);
+        let state = renderer3dSideTextureAngleState.get(key);
+        if (!state) {
+            state = {
+                angle: (((Number(seed) || 0) * 0.61803398875) % 1) * Math.PI * 2,
+                smoothedLevel: sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5,
+                lastLevel: sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5,
+                speed: BASE_ANGLE_DELTA,
+                version,
+                lastTouchedVersion: version
+            };
+            renderer3dSideTextureAngleState.set(key, state);
+        }
+        let currentLevel = sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5;
+        if (state.version !== version) {
+            state.smoothedLevel += (currentLevel - state.smoothedLevel) * LEVEL_SMOOTHING;
+            state.smoothedLevel = Math.max(0, Math.min(1, state.smoothedLevel));
+            let targetSpeed = BASE_ANGLE_DELTA + state.smoothedLevel * AUDIO_ANGLE_DELTA_SCALE;
+            let speedDelta = targetSpeed - state.speed;
+            if (speedDelta > MAX_SPEED_DELTA_PER_STEP) speedDelta = MAX_SPEED_DELTA_PER_STEP;
+            if (speedDelta < -MAX_SPEED_DELTA_PER_STEP) speedDelta = -MAX_SPEED_DELTA_PER_STEP;
+            state.speed = Math.max(BASE_ANGLE_DELTA, state.speed + speedDelta);
+            state.angle += state.speed;
+            state.lastLevel = currentLevel;
+            state.version = version;
+        }
+        state.lastTouchedVersion = version;
+        if (renderer3dSideTextureAngleState.size > 512 && renderer3dSideTextureAngleStateLastPruneVersion !== version) {
+            renderer3dSideTextureAngleStateLastPruneVersion = version;
+            for (let [stateKey, entry] of renderer3dSideTextureAngleState.entries()) {
+                if (version - (Number(entry.lastTouchedVersion) || 0) > 64) renderer3dSideTextureAngleState.delete(stateKey);
+            }
+        }
+        return state.angle;
+    };
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint, unitStatus) => {
         let points = getSnakePathPoints(unit, headX, headY);
         let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
         for (let i = points.length - 1; i >= 1; i--) {
             let point = points[i];
             let prev = points[i - 1];
+            let pointGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(point.x / TILE)));
+            let pointGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(point.y / TILE)));
             let age = i / Math.max(1, points.length - 1);
             let dx = prev.x - point.x;
             let dy = prev.y - point.y;
@@ -921,7 +1220,10 @@ function build3DFrameData() {
                 alpha: Math.max(0.35, 0.78 - age * 0.18),
                 renderShape: 'cylinder',
                 topTextureKey: `snake_body:${unit.owner}:${i}`,
-                topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i)
+                topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i),
+                sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake_segment'),
+                sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake_segment', (Number(unit.owner) || 0) + i, '#3dff64'),
+                sideTextureAngle: getAudioReactiveSideTextureAngle(pointGx, pointGy, (Number(unit.id) || 0) * 131 + i)
             });
         }
         push3DRenderObject(target, {
@@ -936,7 +1238,10 @@ function build3DFrameData() {
             tint: ownerTint,
             renderShape: 'cylinder',
             topTextureKey: `unit:${unit.unitType}:${unit.owner}:${unitStatus.keySuffix}`,
-            topTextureCanvas: get3DUnitTopTexture(unit, unit.owner, unitStatus)
+            topTextureCanvas: get3DUnitTopTexture(unit, unit.owner, unitStatus),
+            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake'),
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake', Number(unit.owner) || 0, '#3dff64'),
+            sideTextureAngle: getAudioReactiveSideTextureAngle(Math.floor(headX / TILE), Math.floor(headY / TILE), (Number(unit.id) || 0) * 131 + 97)
         });
     };
 
@@ -952,7 +1257,7 @@ function build3DFrameData() {
 
     for (let m of goldMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+        if (!fullVisibility && getTileLightLevel(m.gx, m.gy) < RENDERER3D_MINE_MIN_LIGHT_VISIBILITY) continue;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
@@ -972,13 +1277,15 @@ function build3DFrameData() {
             topTextureKey: `gold_mine:${m.gold > 0 ? 'active' : 'empty'}`,
             topTextureCanvas: get3DTopTextureCanvas(`gold_mine:${m.gold > 0 ? 'active' : 'empty'}`, (g) => {
                 draw3DSpriteIntoTopTexture(g, _getGoldMineTileSprite(m.gold > 0), 8);
-            })
+            }),
+            sideTextureKey: get3DSharedAudioTextureKeyForMine('gold', 'gold_mine'),
+            sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11)
         });
     }
 
     for (let m of astarMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
+        if (!fullVisibility && getTileLightLevel(m.gx, m.gy) < RENDERER3D_MINE_MIN_LIGHT_VISIBILITY) continue;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
@@ -999,7 +1306,9 @@ function build3DFrameData() {
             topTextureCanvas: get3DTopTextureCanvas(`astar_mine:${m.astar > 0 ? 'active' : 'empty'}`, (g) => {
                 g.fillStyle = '#888'; g.beginPath(); g.arc(32, 32, 18, 0, Math.PI * 2); g.fill();
                 g.fillStyle = '#fff'; g.font = 'bold 28px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('★', 32, 33);
-            })
+            }),
+            sideTextureKey: get3DSharedAudioTextureKeyForMine('astar', 'astar_mine'),
+            sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23)
         });
     }
 
@@ -1018,6 +1327,7 @@ function build3DFrameData() {
             let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
             let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
             let itemStatus = get3DBuildingTextureStatus(cell.item);
+            let itemSideVariant = get3DFloorItemSideVisualizationVariant(cell.item);
             push3DRenderObject(objects, {
                 modelKey: `item_${cell.item.type || 'floor'}`,
                 x: x + 0.5 + reactiveOffsetX * audioMove,
@@ -1029,8 +1339,10 @@ function build3DFrameData() {
                 rotationY: -(Number(cell.item.angle) || 0),
                 tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
                 alpha: get3DConstructionAlpha(cell.item),
-                topTextureKey: `item:${cell.item.type}:${cell.owner}:${_getFloorItemEnergyBucket(cell.item)}:${itemStatus.keySuffix}`,
-                topTextureCanvas: get3DTopTextureForFloorItem(cell.item, itemStatus)
+                topTextureKey: `item:${cell.item.type}:${_getFloorItemEnergyBucket(cell.item)}:${itemStatus.keySuffix}`,
+                topTextureCanvas: get3DTopTextureForFloorItem(cell.item, itemStatus),
+                sideTextureKey: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSharedAudioTextureKeyForPlayer(cell.owner, itemSideVariant) : '',
+                sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null
             });
         }
     }
@@ -1045,6 +1357,7 @@ function build3DFrameData() {
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let towerStatus = get3DBuildingTextureStatus(t);
+        let towerSideVariant = get3DTowerSideVisualizationVariant(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
             x: t.x / TILE + reactiveOffsetX * audioMove,
@@ -1057,7 +1370,9 @@ function build3DFrameData() {
             tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
             alpha: get3DConstructionAlpha(t),
             topTextureKey: `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
-            topTextureCanvas: get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix })
+            topTextureCanvas: get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
+            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(t.owner, towerSideVariant),
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(t.owner, towerSideVariant, Number(t.owner) || 0, (t.baseStats && t.baseStats.color) || null)
         });
     }
 
@@ -1079,6 +1394,7 @@ function build3DFrameData() {
             spawnerExtraBars.push({ pct, bgColor: '#333', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
         }
         let spawnerStatus = get3DBuildingTextureStatus(s, spawnerExtraBars);
+        let spawnerSideVariant = get3DSpawnerSideVisualizationVariant(s);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
             x: s.x / TILE + reactiveOffsetX * audioMove,
@@ -1099,7 +1415,9 @@ function build3DFrameData() {
                                     'spawner_energy',
                 s.owner,
                 { subtype: s.type, status: spawnerStatus, statusKey: spawnerStatus.keySuffix }
-            )
+            ),
+            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(s.owner, spawnerSideVariant),
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(s.owner, spawnerSideVariant, Number(s.owner) || 0, (BASE_CARD_TYPES[s.type] || {}).color || null)
         });
     }
 
@@ -1128,7 +1446,9 @@ function build3DFrameData() {
             tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
             alpha: get3DConstructionAlpha(b),
             topTextureKey: `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
-            topTextureCanvas: get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix })
+            topTextureCanvas: get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
+            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(b.owner, 'barrack'),
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(b.owner, 'barrack', Number(b.owner) || 0, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
         });
     }
 
@@ -1173,6 +1493,8 @@ function build3DFrameData() {
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         let unitStatus = get3DUnitTextureStatus(u);
+        let unitSideVariant = get3DUnitSideVisualizationVariant(u);
+        let unitSideColor = (BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null;
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
@@ -1188,7 +1510,10 @@ function build3DFrameData() {
                 tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
                 renderShape: 'cylinder',
                 topTextureKey: `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
-                topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus)
+                topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus),
+                sideTextureKey: get3DSharedAudioTextureKeyForPlayer(u.owner, unitSideVariant),
+                sideTextureCanvas: get3DSideAudioTextureForPlayer(u.owner, unitSideVariant, Number(u.owner) || 0, unitSideColor),
+                sideTextureAngle: getAudioReactiveSideTextureAngle(ugx, ugy, (Number(u.id) || 0) + (Number(u.owner) || 0) * 17)
             });
         }
     }
@@ -1270,8 +1595,8 @@ function build3DFrameData() {
         viewportHeight: viewH,
         worldWidth: GRID_W,
         worldHeight: GRID_H,
-        backgroundCanvas: bgCanvas || canvas,
-        backgroundVersion: renderer3dBackgroundVersion,
+        backgroundCanvas: backgroundCanvasFor3D,
+        backgroundVersion: backgroundVersionFor3D,
         backgroundBounds: {
             centerX: (backgroundMinX + backgroundMaxX) * 0.5 / TILE,
             centerZ: (backgroundMinY + backgroundMaxY) * 0.5 / TILE,
@@ -1505,38 +1830,158 @@ function createEmptyVisibilityGrid() {
     return vis;
 }
 
+function cloneVisibilityGrid(source) {
+    let copy = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) {
+        let src = source[y] || new Float32Array(GRID_W);
+        copy[y] = new Float32Array(src);
+    }
+    return copy;
+}
+
+function smoothVisibilityGridForPlayer(playerId, targetVis) {
+    if (!targetVis) return targetVis;
+    let nowTick = Number.isFinite(gameTime) ? gameTime : 0;
+    let previous = visibilityGridSmoothedByPlayerCache.get(playerId);
+    if (!previous || previous.length !== GRID_H) {
+        let seeded = cloneVisibilityGrid(targetVis);
+        visibilityGridSmoothedByPlayerCache.set(playerId, seeded);
+        visibilityGridSmoothingTickByPlayer.set(playerId, nowTick);
+        return seeded;
+    }
+
+    let lastTick = visibilityGridSmoothingTickByPlayer.get(playerId);
+    let tickDelta = Number.isFinite(lastTick) ? Math.max(1, nowTick - lastTick) : 1;
+    tickDelta = Math.min(tickDelta, 2);
+    let tickMs = Math.max(1, Number(TICK_MS) || 16.6667);
+    let dtSeconds = (tickDelta * tickMs) / 1000;
+    let maxDelta = Math.max(0.0001, VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND * dtSeconds);
+    let maxDropDelta = Math.max(0.0001, VISIBILITY_FADE_MAX_CHANGE_PER_SECOND * dtSeconds);
+
+    for (let y = 0; y < GRID_H; y++) {
+        let targetRow = targetVis[y];
+        let smoothedRow = previous[y];
+        for (let x = 0; x < GRID_W; x++) {
+            let targetValue = targetRow[x];
+            let currentValue = smoothedRow[x];
+            let diff = targetValue - currentValue;
+            if (diff > maxDelta) diff = maxDelta;
+            else if (diff < -maxDropDelta) diff = -maxDropDelta;
+            smoothedRow[x] = currentValue + diff;
+        }
+    }
+
+    visibilityGridSmoothingTickByPlayer.set(playerId, nowTick);
+    return previous;
+}
+
 function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
-    let setVis = (gx, gy, r) => {
+    let cellSize = VISIBILITY_LIGHT_CELL_SIZE;
+    let cellCols = Math.ceil(GRID_W / cellSize);
+    let cellRows = Math.ceil(GRID_H / cellSize);
+    let coarseCellMax = new Array(cellRows);
+    for (let cy = 0; cy < cellRows; cy++) coarseCellMax[cy] = new Float32Array(cellCols);
+
+    let stampSource = (gx, gy, r) => {
         if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-            if (r > vis[gy][gx]) vis[gy][gx] = r;
+            let range = Math.max(0, Number(r) || 0);
+            if (range <= 0) return;
+            if (range > vis[gy][gx]) vis[gy][gx] = range;
+            let cx = Math.floor(gx / cellSize);
+            let cy = Math.floor(gy / cellSize);
+            if (coarseCellMax[cy] && range > coarseCellMax[cy][cx]) coarseCellMax[cy][cx] = range;
         }
     };
 
-    for (let u of units) if ((u.owner === playerId || (u.watched || 0) > 0) && !u.dead) {
-        setVis(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
-    }
-    for (let t of towers) if ((t.owner === playerId || (t.watched || 0) > 0) && t.energy > 0 && !t.underConstruction) {
-        setVis(t.gx, t.gy, (t.currentStats && t.currentStats.visionRange) || 3);
-    }
-    for (let b of barracks) if ((b.owner === playerId || (b.watched || 0) > 0) && b.energy > 0 && !b.underConstruction) setVis(b.gx, b.gy, 4);
-    for (let s of collectorSpawners) if ((s.owner === playerId || (s.watched || 0) > 0) && s.energy > 0 && !s.underConstruction) setVis(s.gx, s.gy, 4);
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = grid[y][x];
-            if (cell.item && cell.item.energy > 0 && !cell.item.underConstruction && (cell.owner === playerId || (cell.item.watched || 0) > 0)) setVis(x, y, 3);
+    let stampThingChunkMax = (gx, gy, range, owner, watched) => {
+        if (!(spatialUnitsComplexMaxThingVisOffset >= 0)) return;
+        if (!(spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0)) return;
+        if (!(Number.isFinite(gx) && Number.isFinite(gy))) return;
+        let chunkX = Math.max(0, Math.min(CHUNKS_W - 1, Math.floor(gx / CHUNK_SIZE)));
+        let chunkY = Math.max(0, Math.min(CHUNKS_H - 1, Math.floor(gy / CHUNK_SIZE)));
+        let chunkKey = chunkY * CHUNKS_W + chunkX;
+        let scaled = Math.max(0, Math.round((Number(range) || 0) * SPATIAL_VISIBILITY_SCALE));
+        if (scaled <= 0) return;
+        let chunkBase = chunkKey * spatialUnitsComplexStridePerChunk;
+        let setForPlayer = (pid) => {
+            if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
+            let playerBase = chunkBase + pid * spatialUnitsComplexStridePerPlayer;
+            let idx = playerBase + spatialUnitsComplexMaxThingVisOffset;
+            if (scaled > spatialUnitsComplex[idx]) spatialUnitsComplex[idx] = scaled;
+        };
+        let ownerId = Math.floor(Number(owner));
+        if (ownerId >= 0) setForPlayer(ownerId);
+        if ((Number(watched) || 0) > 0) {
+            for (let pid = 0; pid < spatialUnitsComplexPlayerCount; pid++) setForPlayer(pid);
+        }
+    };
+
+    if (spatialUnitsComplexMaxThingVisOffset >= 0 && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0) {
+        let chunksCount = CHUNKS_W * CHUNKS_H;
+        for (let ck = 0; ck < chunksCount; ck++) {
+            let playerBase = ck * spatialUnitsComplexStridePerChunk + playerId * spatialUnitsComplexStridePerPlayer;
+            spatialUnitsComplex[playerBase + spatialUnitsComplexMaxThingVisOffset] = 0;
+        }
+        for (let t of towers) {
+            if (t.energy > 0 && !t.underConstruction) {
+                stampThingChunkMax(t.gx, t.gy, (t.currentStats && t.currentStats.visionRange) || 3, t.owner, t.watched || 0);
+            }
+        }
+        for (let b of barracks) {
+            if (b.energy > 0 && !b.underConstruction) stampThingChunkMax(b.gx, b.gy, 4, b.owner, b.watched || 0);
+        }
+        for (let s of collectorSpawners) {
+            if (s.energy > 0 && !s.underConstruction) stampThingChunkMax(s.gx, s.gy, 4, s.owner, s.watched || 0);
+        }
+        for (let y = 0; y < GRID_H; y++) {
+            let row = grid[y];
+            for (let x = 0; x < GRID_W; x++) {
+                let cell = row[x];
+                if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
+                stampThingChunkMax(x, y, 3, cell.owner, cell.item.watched || 0);
+            }
         }
     }
 
-    // 2-pass DP flood fill (Euclidean approximation)
+    if (spatialUnitsComplex.length > 0 && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplexMaxUnitVisOffset >= 0) {
+        let chunksCount = CHUNKS_W * CHUNKS_H;
+        for (let ck = 0; ck < chunksCount; ck++) {
+            let chunkBase = ck * spatialUnitsComplexStridePerChunk;
+            let playerBase = chunkBase + playerId * spatialUnitsComplexStridePerPlayer;
+            let maxUnitVis = (spatialUnitsComplex[playerBase + spatialUnitsComplexMaxUnitVisOffset] || 0) / SPATIAL_VISIBILITY_SCALE;
+            let maxThingVis = (spatialUnitsComplex[playerBase + spatialUnitsComplexMaxThingVisOffset] || 0) / SPATIAL_VISIBILITY_SCALE;
+            let chunkRange = Math.max(maxUnitVis, maxThingVis);
+            if (!(chunkRange > 0)) continue;
+            let chunkX = ck % CHUNKS_W;
+            let chunkY = Math.floor(ck / CHUNKS_W);
+            let minTileX = chunkX * CHUNK_SIZE;
+            let minTileY = chunkY * CHUNK_SIZE;
+            let maxTileX = Math.min(GRID_W, minTileX + CHUNK_SIZE);
+            let maxTileY = Math.min(GRID_H, minTileY + CHUNK_SIZE);
+            for (let y = minTileY; y < maxTileY; y++) {
+                for (let x = minTileX; x < maxTileX; x++) {
+                    stampSource(x, y, chunkRange);
+                }
+            }
+        }
+    }
+
+    // Preserve watched-unit behavior for non-owner reveal.
+    for (let u of units) {
+        if (u.dead || (u.watched || 0) <= 0 || u.owner === playerId) continue;
+        stampSource(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
+    }
+
+    // O(play area) propagation: each tile step reduces visibility by 1.
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
             let v = vis[y][x];
             if (x > 0) v = Math.max(v, vis[y][x - 1] - 1);
             if (y > 0) v = Math.max(v, vis[y - 1][x] - 1);
-            if (x > 0 && y > 0) v = Math.max(v, vis[y - 1][x - 1] - 1.414);
-            if (x < GRID_W - 1 && y > 0) v = Math.max(v, vis[y - 1][x + 1] - 1.414);
+            if (x > 0 && y > 0) v = Math.max(v, vis[y - 1][x - 1] - 1);
+            if (x < GRID_W - 1 && y > 0) v = Math.max(v, vis[y - 1][x + 1] - 1);
             vis[y][x] = v;
         }
     }
@@ -1545,8 +1990,8 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             let v = vis[y][x];
             if (x < GRID_W - 1) v = Math.max(v, vis[y][x + 1] - 1);
             if (y < GRID_H - 1) v = Math.max(v, vis[y + 1][x] - 1);
-            if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x + 1] - 1.414);
-            if (x > 0 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x - 1] - 1.414);
+            if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x + 1] - 1);
+            if (x > 0 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x - 1] - 1);
             vis[y][x] = v;
         }
     }
@@ -1560,10 +2005,11 @@ function getVisibilityGridForPlayer(playerId) {
     }
     let cached = visibilityGridByPlayerCache.get(playerId);
     if (cached) return cached;
-    let vis = createEmptyVisibilityGrid();
-    computeVisibilityGridForPlayer(playerId, vis);
-    visibilityGridByPlayerCache.set(playerId, vis);
-    return vis;
+    let rawVis = createEmptyVisibilityGrid();
+    computeVisibilityGridForPlayer(playerId, rawVis);
+    let smoothedVis = smoothVisibilityGridForPlayer(playerId, rawVis);
+    visibilityGridByPlayerCache.set(playerId, smoothedVis);
+    return smoothedVis;
 }
 
 function isTileVisibleToPlayer(playerId, gx, gy) {

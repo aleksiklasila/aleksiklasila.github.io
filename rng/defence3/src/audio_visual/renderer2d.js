@@ -1,5 +1,11 @@
 ﻿// DRAWING HELPERS
 // ============================================================
+let _visibilityMaskCanvas = null;
+let _visibilityMaskCtx = null;
+let _visibilityMaskGridCanvas = null;
+let _visibilityMaskGridCtx = null;
+let _visibilityMaskVersion = -1;
+let _visibilityMaskFullVisibility = false;
 let _combinedBgDirtyFull = true;
 let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 
@@ -644,6 +650,8 @@ let _staticLayerCache = {
     visibilityVersion: -1,
     staticCommitVersion: -1
 };
+const _visibilityFogMinAlpha = 0.01;
+const _visibilityFogGamma = 1.8;
 
 function invalidateStaticLayerCache() {
     _staticLayerCache.valid = false;
@@ -822,6 +830,65 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
     }
 }
 
+function ensureVisibilityMaskCanvas() {
+    if (!_visibilityMaskCanvas || _visibilityMaskCanvas.width !== WORLD_W || _visibilityMaskCanvas.height !== WORLD_H) {
+        _visibilityMaskCanvas = document.createElement('canvas');
+        _visibilityMaskCanvas.width = WORLD_W;
+        _visibilityMaskCanvas.height = WORLD_H;
+        _visibilityMaskCtx = _visibilityMaskCanvas.getContext('2d');
+        _visibilityMaskVersion = -1;
+        _visibilityMaskFullVisibility = false;
+    }
+    if (!_visibilityMaskGridCanvas || _visibilityMaskGridCanvas.width !== GRID_W || _visibilityMaskGridCanvas.height !== GRID_H) {
+        _visibilityMaskGridCanvas = document.createElement('canvas');
+        _visibilityMaskGridCanvas.width = GRID_W;
+        _visibilityMaskGridCanvas.height = GRID_H;
+        _visibilityMaskGridCtx = _visibilityMaskGridCanvas.getContext('2d', { willReadFrequently: false });
+        _visibilityMaskVersion = -1;
+        _visibilityMaskFullVisibility = false;
+    }
+}
+
+function rebuildVisibilityMaskCacheIfNeeded() {
+    ensureVisibilityMaskCanvas();
+    if (!_visibilityMaskCtx || !_visibilityMaskGridCtx) return;
+
+    if (fullVisibility) {
+        _visibilityMaskVersion = visibilityVersion;
+        _visibilityMaskFullVisibility = true;
+        _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
+        return;
+    }
+    if (_visibilityMaskVersion === visibilityVersion && !_visibilityMaskFullVisibility) return;
+
+    let invNorm = 1 / Math.max(0.0001, Number(VISIBILITY_LIGHT_NORMALIZATION_RANGE) || 6);
+    let imageData = _visibilityMaskGridCtx.createImageData(GRID_W, GRID_H);
+    let data = imageData.data;
+    let i = 0;
+    for (let y = 0; y < GRID_H; y++) {
+        let row = visibilityGrid[y];
+        for (let x = 0; x < GRID_W; x++) {
+            let raw = row ? (row[x] || 0) : 0;
+            let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
+            let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
+            let alpha = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
+            data[i++] = 10;
+            data[i++] = 10;
+            data[i++] = 10;
+            data[i++] = alpha;
+        }
+    }
+    _visibilityMaskGridCtx.putImageData(imageData, 0, 0);
+
+    _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
+    _visibilityMaskCtx.save();
+    _visibilityMaskCtx.imageSmoothingEnabled = true;
+    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, GRID_W, GRID_H, 0, 0, WORLD_W, WORLD_H);
+    _visibilityMaskCtx.restore();
+    _visibilityMaskVersion = visibilityVersion;
+    _visibilityMaskFullVisibility = false;
+}
+
 function ensureCombinedBgCanvas() {
     if (!_combinedBgCanvas || _combinedBgCanvas.width !== WORLD_W || _combinedBgCanvas.height !== WORLD_H) {
         _combinedBgCanvas = document.createElement('canvas');
@@ -940,12 +1007,31 @@ function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
 
 function drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy) {
     if (fullVisibility || visibilityGrid.length === 0) return;
-    ctx.fillStyle = '#0a0a0a';
+    let invNorm = 1 / Math.max(0.0001, Number(VISIBILITY_LIGHT_NORMALIZATION_RANGE) || 6);
+    let tileSize = TILE;
     for (let y = minGy; y <= maxGy; y++) {
+        let row = visibilityGrid[y];
         for (let x = minGx; x <= maxGx; x++) {
-            if (!visibilityGrid[y] || visibilityGrid[y][x] === 0) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+            let raw = row ? (row[x] || 0) : 0;
+            let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
+            let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
+            if (fogAlpha <= _visibilityFogMinAlpha) continue;
+            ctx.fillStyle = `rgba(10,10,10,${fogAlpha.toFixed(4)})`;
+            ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
         }
     }
+}
+
+function drawLightingOverlayWorld(ctx, minGx, minGy, maxGx, maxGy) {
+    if (!ctx || fullVisibility) return;
+    rebuildVisibilityMaskCacheIfNeeded();
+    if (!_visibilityMaskCanvas) return;
+    let sx = minGx * TILE;
+    let sy = minGy * TILE;
+    let sw = (maxGx - minGx + 1) * TILE;
+    let sh = (maxGy - minGy + 1) * TILE;
+    setFrameDrawImageDepth(DRAW_Z_OVERLAY + 1);
+    queueDrawImage(ctx, _visibilityMaskCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
 }
 
 function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
@@ -965,8 +1051,6 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
         c.minGy !== minGy ||
         c.maxGx !== maxGx ||
         c.maxGy !== maxGy ||
-        c.fullVisibility !== fullVisibility ||
-        (!fullVisibility && c.visibilityVersion !== visibilityVersion) ||
         c.staticCommitVersion !== _staticCacheCommitVersion;
 
     if (!needsRedraw) return;
@@ -985,7 +1069,6 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
         bgCtx.setTransform(camera.zoom * dpr, 0, 0, camera.zoom * dpr, -camera.x * camera.zoom * dpr, -camera.y * camera.zoom * dpr);
     }
     drawCombinedBackground(bgCtx, minGx, minGy, maxGx, maxGy);
-    drawVisibilityMask(bgCtx, minGx, minGy, maxGx, maxGy);
     renderer3dBackgroundVersion++;
 
     c.valid = true;
@@ -999,8 +1082,6 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
     c.minGy = minGy;
     c.maxGx = maxGx;
     c.maxGy = maxGy;
-    c.fullVisibility = fullVisibility;
-    c.visibilityVersion = visibilityVersion;
     c.staticCommitVersion = _staticCacheCommitVersion;
 }
 
@@ -1121,7 +1202,6 @@ function draw() {
     if (!bgCtx) {
         setFrameDrawImageDepth(DRAW_Z_BACKGROUND);
         drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy);
-        drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy);
     }
 
     // Gold mines
@@ -1322,7 +1402,9 @@ function draw() {
         p.x = p.prevX + (p.x - p.prevX) * alpha;
         p.y = p.prevY + (p.y - p.prevY) * alpha;
         let cgy = Math.floor(p.y / TILE), cgx = Math.floor(p.x / TILE);
-        if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
+        if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) {
+            p.draw(ctx);
+        }
         p.x = rx; p.y = ry;
     }
     for (let p of particles) {
@@ -1330,7 +1412,9 @@ function draw() {
         p.x = p.prevX + (p.x - p.prevX) * alpha;
         p.y = p.prevY + (p.y - p.prevY) * alpha;
         let cgy = Math.floor(p.y / TILE), cgx = Math.floor(p.x / TILE);
-        if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) p.draw(ctx);
+        if (fullVisibility || (visibilityGrid[cgy] && visibilityGrid[cgy][cgx] > 0)) {
+            p.draw(ctx);
+        }
         p.x = rx; p.y = ry;
     }
 
@@ -1712,6 +1796,8 @@ function draw() {
         ctx.fillStyle = buildPreview.canBuild ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
         ctx.fillRect(buildPreview.gx * TILE, buildPreview.gy * TILE, TILE, TILE);
     }
+
+    drawLightingOverlayWorld(ctx, minGx, minGy, maxGx, maxGy);
 
     ctx.restore();
 

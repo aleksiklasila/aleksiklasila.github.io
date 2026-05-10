@@ -515,6 +515,9 @@ let spatialUnitsComplexUnitTypeCount = 0;
 let spatialUnitsComplexPlayerCount = 0;
 let spatialUnitsComplexStridePerPlayer = 0;
 let spatialUnitsComplexStridePerChunk = 0;
+let spatialUnitsComplexMaxUnitVisOffset = -1;
+let spatialUnitsComplexMaxThingVisOffset = -1;
+const SPATIAL_VISIBILITY_SCALE = 100;
 const ENABLE_SPATIAL_LOWEST_HEALTH_CACHE = false;
 let spatialUnitsComplexLowestHealthUnit = []; // [chunk][player] => lowest damaged living unit
 const CLOSEST_ENEMY_CHUNK_CACHE_MAX = 12000;
