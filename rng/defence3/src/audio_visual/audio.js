@@ -29,6 +29,7 @@ let audioReactiveGlobalOffsetX = 0;
 let audioReactiveGlobalOffsetY = 0;
 let audioReactiveBackgroundLevel = 0;
 let audioReactiveEffectsLevel = 0;
+let audioReactiveTextureVersion = 0;
 
 let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG = 0;
 let AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX = 0;
@@ -101,6 +102,7 @@ function _ensureAudioReactiveGrid() {
     _audioSpatialGridEffectsPrev = _makeAudioReactiveGridRows();
     _audioSpatialGridEffectsTarget = _makeAudioReactiveGridRows();
     _audioReactiveLastGridTick = -1;
+    audioReactiveTextureVersion = 0;
 }
 
 function _copyAudioReactiveGridRows(targetRows, sourceRows) {
@@ -293,6 +295,7 @@ function updateAudioReactiveState() {
         }
 
         _audioReactiveLastGridTick = nowTick;
+        audioReactiveTextureVersion++;
     }
 
     let blend = (_audioReactiveLastGridTick < 0)

@@ -499,10 +499,10 @@
             20, 21, 22, 20, 22, 23
         ]);
         let uvs = new Float32Array([
-            0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 1, 1, 1, 0, 0, 0,
+            0, 1, 1, 1, 1, 0, 0, 0,
+            0, 1, 1, 1, 1, 0, 0, 0,
+            0, 1, 1, 1, 1, 0, 0, 0,
             0, 1, 1, 1, 1, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0
         ]);
@@ -547,10 +547,10 @@
             let sin = Math.sin(angle);
             positions.push(cos * 0.5, 0, sin * 0.5);
             normals.push(cos, 0, sin);
-            uvs.push(0, 0);
+            uvs.push(t, 1);
             positions.push(cos * 0.5, 1, sin * 0.5);
             normals.push(cos, 0, sin);
-            uvs.push(0, 0);
+            uvs.push(t, 0);
         }
 
         for (let i = 0; i < ringSegments; i++) {
@@ -678,6 +678,7 @@
                 layout(location = 7) in vec3 iColor;
                 layout(location = 8) in float iAlpha;
                 layout(location = 9) in float iShape;
+                layout(location = 10) in float iSideAngle;
                 uniform mat4 uViewProjection;
                 out vec3 vNormal;
                 out vec3 vColor;
@@ -743,6 +744,7 @@
                 layout(location = 7) in vec3 iColor;
                 layout(location = 8) in float iAlpha;
                 layout(location = 9) in float iShape;
+                layout(location = 10) in float iSideAngle;
                 uniform mat4 uViewProjection;
                 out vec3 vNormal;
                 out vec3 vColor;
@@ -750,16 +752,27 @@
                 out float vAlpha;
                 out vec3 vLocalPosition;
                 out float vShape;
+                out float vSideAngle;
+                out vec3 vLightingNormal;
+                const float TWO_PI = 6.28318530718;
                 void main() {
                     mat4 model = mat4(iModelRow0, iModelRow1, iModelRow2, iModelRow3);
                     mat3 normalMatrix = mat3(model);
+                    vec3 transformedNormal = normalize(normalMatrix * aNormal);
                     gl_Position = uViewProjection * model * vec4(aPosition, 1.0);
-                    vNormal = normalize(normalMatrix * aNormal);
+                    vNormal = transformedNormal;
                     vColor = iColor;
                     vUv = aUv;
                     vAlpha = iAlpha;
                     vLocalPosition = aPosition;
                     vShape = iShape;
+                    vSideAngle = iSideAngle;
+                    if (iShape > 0.5 && abs(aNormal.y) < 0.5) {
+                        float phase = (aUv.x + (iSideAngle / TWO_PI)) * TWO_PI;
+                        vLightingNormal = vec3(cos(phase), 0.0, sin(phase));
+                    } else {
+                        vLightingNormal = transformedNormal;
+                    }
                 }
             `, `#version 300 es
                 precision highp float;
@@ -769,9 +782,14 @@
                 in float vAlpha;
                 in vec3 vLocalPosition;
                 in float vShape;
+                in float vSideAngle;
+                in vec3 vLightingNormal;
                 uniform sampler2D uTopTexture;
+                uniform sampler2D uSideTexture;
+                uniform float uHasSideTexture;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
+                const float TWO_PI = 6.28318530718;
                 vec4 packDepth(float depth) {
                     const vec4 bitShift = vec4(256.0 * 256.0 * 256.0, 256.0 * 256.0, 256.0, 1.0);
                     const vec4 bitMask = vec4(0.0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0);
@@ -785,14 +803,7 @@
                         vec2 radial = vLocalPosition.xz;
                         if (dot(radial, radial) > 0.25) discard;
                     }
-                    vec3 surfaceNormal = baseNormal;
-                    if (vShape > 0.5 && abs(surfaceNormal.y) < 0.5) {
-                        vec2 radial = vLocalPosition.xz;
-                        float radialLength = length(radial);
-                        if (radialLength > 0.0001) {
-                            surfaceNormal = normalize(vec3(radial.x / radialLength, 0.0, radial.y / radialLength));
-                        }
-                    }
+                    vec3 surfaceNormal = normalize(vLightingNormal);
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
                     float shade = 0.38 + diffuse * 0.62;
@@ -800,9 +811,19 @@
                     vec2 topUv = vec2(vUv.x, 1.0 - vUv.y);
                     vec4 topSample = texture(uTopTexture, topUv);
                     bool topFace = surfaceNormal.y > 0.8;
+                    vec2 sideUv = topUv;
+                    if (vShape > 0.5) {
+                        sideUv.x = fract(sideUv.x + (vSideAngle / TWO_PI));
+                    }
+                    vec4 sideSample = uHasSideTexture > 0.5 ? texture(uSideTexture, sideUv) : vec4(0.0);
                     vec3 finalColor = sideColor;
                     if (topFace) {
                         finalColor = mix(sideColor, topSample.rgb * shade, clamp(topSample.a, 0.0, 1.0));
+                    } else if (uHasSideTexture > 0.5) {
+                        float sideShade = 0.58 + diffuse * 0.72;
+                        vec3 brightSideSample = min(vec3(1.0), sideSample.rgb * sideShade * 1.25);
+                        float sideBlend = clamp(sideSample.a * 1.2, 0.0, 1.0);
+                        finalColor = mix(sideColor, brightSideSample, sideBlend);
                     }
                     outColor = vec4(finalColor, vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
@@ -868,7 +889,9 @@
             };
             this.texturedCubeUniforms = {
                 viewProjection: gl.getUniformLocation(this.texturedCubeProgram, 'uViewProjection'),
-                topTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uTopTexture')
+                topTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uTopTexture'),
+                sideTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uSideTexture'),
+                hasSideTexture: gl.getUniformLocation(this.texturedCubeProgram, 'uHasSideTexture')
             };
             this.planeUniforms = {
                 viewProjection: gl.getUniformLocation(this.planeProgram, 'uViewProjection'),
@@ -881,7 +904,7 @@
 
             let cubeData = createCubeData();
             this.cubeMesh = createMesh(gl, cubeData.positions, cubeData.normals, cubeData.indices, cubeData.uvs);
-            let cylinderData = createCylinderData(24);
+            let cylinderData = createCylinderData(16);
             this.cylinderMesh = createMesh(gl, cylinderData.positions, cylinderData.normals, cylinderData.indices, cylinderData.uvs);
             let planeData = createPlaneData();
             this.planeMesh = createMesh(gl, planeData.positions, planeData.normals, planeData.indices, planeData.uvs);
@@ -952,7 +975,7 @@
             let bindInstanceAttributes = (mesh) => {
                 gl.bindVertexArray(mesh.vao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-                let instanceStrideBytes = 21 * 4;
+                let instanceStrideBytes = 22 * 4;
                 for (let row = 0; row < 4; row++) {
                     let location = 3 + row;
                     gl.enableVertexAttribArray(location);
@@ -968,6 +991,9 @@
                 gl.enableVertexAttribArray(9);
                 gl.vertexAttribPointer(9, 1, gl.FLOAT, false, instanceStrideBytes, 80);
                 gl.vertexAttribDivisor(9, 1);
+                gl.enableVertexAttribArray(10);
+                gl.vertexAttribPointer(10, 1, gl.FLOAT, false, instanceStrideBytes, 84);
+                gl.vertexAttribDivisor(10, 1);
                 gl.bindVertexArray(null);
             };
             bindInstanceAttributes(this.cubeMesh);
@@ -1220,14 +1246,30 @@
 
         getTopTexture(key, sourceCanvas) {
             if (!key || !sourceCanvas) return null;
+            let version = Number(sourceCanvas._textureVersion) || 0;
             let cached = this.topTextureCache.get(key);
-            if (cached) return cached;
+            if (cached && cached.texture) {
+                let sameSize = cached.width === sourceCanvas.width && cached.height === sourceCanvas.height;
+                if (cached.version === version && sameSize) return cached.texture;
+                this.gl.bindTexture(this.gl.TEXTURE_2D, cached.texture);
+                this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
+                this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+                if (!sameSize) {
+                    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
+                } else {
+                    this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
+                }
+                cached.version = version;
+                cached.width = sourceCanvas.width;
+                cached.height = sourceCanvas.height;
+                return cached.texture;
+            }
             let texture = createTexture(this.gl);
             this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
             this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
             this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
             this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
-            this.topTextureCache.set(key, texture);
+            this.topTextureCache.set(key, { texture, version, width: sourceCanvas.width, height: sourceCanvas.height });
             return texture;
         }
 
@@ -1606,18 +1648,30 @@
             let scaleZ = Math.max(0.01, Number(object.scaleZ) || 0);
             if (Math.max(scaleX, scaleY, scaleZ) < 0.05) return null;
 
+            let lightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
+            let dirX = Number(object.shadowDirX);
+            let dirZ = Number(object.shadowDirZ);
+            if (!Number.isFinite(dirX) || !Number.isFinite(dirZ) || Math.hypot(dirX, dirZ) < 0.0001) {
+                dirX = SHADOW_LIGHT_DIRECTION[0];
+                dirZ = SHADOW_LIGHT_DIRECTION[2];
+            }
+            let dirLength = Math.hypot(dirX, dirZ) || 1;
+            dirX /= dirLength;
+            dirZ /= dirLength;
+            let shadowLength = Math.max(0.6, Math.min(2.6, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9)));
             let baseY = Math.max(0, Number(object.y) || 0);
             let casterHeight = Math.max(0.04, baseY + scaleY * 0.58);
-            let shadowStretch = Math.min(1.42, 1.06 + casterHeight * 0.22);
+            let shadowStretch = Math.min(2.2, (1.02 + casterHeight * 0.16) * shadowLength);
             let lightY = Math.max(0.2, SHADOW_LIGHT_DIRECTION[1]);
-            let alphaScale = Math.max(0.06, Math.min(0.24, (0.23 - casterHeight * 0.045) * alpha));
+            let shadowOffset = (casterHeight * shadowLength / lightY) * 0.4;
+            let alphaScale = Math.max(0.04, Math.min(0.28, (0.05 + 0.24 * lightLevel - casterHeight * 0.03) * alpha));
             return {
-                x: (Number(object.x) || 0) - SHADOW_LIGHT_DIRECTION[0] / lightY * casterHeight,
+                x: (Number(object.x) || 0) - dirX * shadowOffset,
                 y: SHADOW_GROUND_Y,
-                z: (Number(object.z) || 0) - SHADOW_LIGHT_DIRECTION[2] / lightY * casterHeight,
+                z: (Number(object.z) || 0) - dirZ * shadowOffset,
                 rotationY: Number(object.rotationY) || 0,
                 scaleX: scaleX * shadowStretch,
-                scaleY: SHADOW_FLAT_HEIGHT,
+                scaleY: SHADOW_FLAT_HEIGHT * (0.5 + lightLevel),
                 scaleZ: scaleZ * shadowStretch,
                 alpha: alphaScale,
                 renderShape: object && object.renderShape === 'cylinder' ? 'cylinder' : 'box'
@@ -1663,7 +1717,7 @@
             for (let index = 0; index < objects.length; index++) {
                 let shadow = this.getShadowInfo(objects[index]);
                 if (!shadow) continue;
-                let base = written * 21;
+                let base = written * 22;
                 composeModelMatrix(
                     this.tmpModel,
                     shadow.x,
@@ -1680,12 +1734,13 @@
                 this.cubeInstanceArray[base + 18] = 0;
                 this.cubeInstanceArray[base + 19] = shadow.alpha;
                 this.cubeInstanceArray[base + 20] = shadow.renderShape === 'cylinder' ? 1 : 0;
+                this.cubeInstanceArray[base + 21] = 0;
                 written++;
             }
             if (written <= 0) return;
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 21));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 22));
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
@@ -1743,7 +1798,7 @@
             let nextCapacity = Math.max(32, this.cubeInstanceCapacity || 0);
             while (nextCapacity < requiredCount) nextCapacity *= 2;
             this.cubeInstanceCapacity = nextCapacity;
-            this.cubeInstanceArray = new Float32Array(nextCapacity * 21);
+            this.cubeInstanceArray = new Float32Array(nextCapacity * 22);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, this.cubeInstanceArray.byteLength, gl.DYNAMIC_DRAW);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -1756,7 +1811,7 @@
             this.ensureCubeInstanceCapacity(objects.length);
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 21;
+                let base = index * 22;
                 composeModelMatrix(
                     this.tmpModel,
                     object.x,
@@ -1774,24 +1829,25 @@
                 this.cubeInstanceArray[base + 18] = color[2];
                 this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
+                this.cubeInstanceArray[base + 21] = 0;
             }
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 21));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 22));
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
-        drawTexturedCubeInstances(objects, texture) {
-            if (!objects || objects.length <= 0 || !texture) return;
+        drawTexturedCubeInstances(objects, topTexture, sideTexture = null) {
+            if (!objects || objects.length <= 0 || !topTexture) return;
             let gl = this.gl;
             let mesh = this.getPrimitiveMesh(objects[0]);
             this.ensureCubeInstanceCapacity(objects.length);
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 21;
+                let base = index * 22;
                 composeModelMatrix(
                     this.tmpModel,
                     object.x,
@@ -1809,15 +1865,20 @@
                 this.cubeInstanceArray[base + 18] = color[2];
                 this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
+                this.cubeInstanceArray[base + 21] = (Number(object.sideTextureAngle) || 0) - (object.renderShape === 'cylinder' ? (Number(object.rotationY) || 0) : 0);
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 21));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 22));
             gl.useProgram(this.texturedCubeProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.texturedCubeUniforms.viewProjection, false, this.tmpViewProjection);
             gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.bindTexture(gl.TEXTURE_2D, topTexture);
             gl.uniform1i(this.texturedCubeUniforms.topTexture, 0);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, sideTexture);
+            gl.uniform1i(this.texturedCubeUniforms.sideTexture, 1);
+            gl.uniform1f(this.texturedCubeUniforms.hasSideTexture, sideTexture ? 1 : 0);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
@@ -1861,12 +1922,16 @@
                 }
                 if (mesh) {
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
-                } else if (object.topTextureKey && object.topTextureCanvas) {
+                } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey}|${object.renderShape || 'box'}`;
+                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${object.renderShape || 'box'}`;
                     let group = targetGroups.get(groupKey);
                     if (!group) {
-                        group = { texture: this.getTopTexture(object.topTextureKey, object.topTextureCanvas), objects: [] };
+                        group = {
+                            topTexture: this.getTopTexture(object.topTextureKey, object.topTextureCanvas),
+                            sideTexture: object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
+                            objects: []
+                        };
                         targetGroups.set(groupKey, group);
                     }
                     group.objects.push(object);
@@ -1884,7 +1949,7 @@
             this.drawShadows(shadowMeshObjects, shadowPrimitiveGroups);
             for (let object of opaqueMeshObjects) this.drawObject(object);
             for (let group of opaqueTexturedCubeGroups.values()) {
-                this.drawTexturedCubeInstances(group.objects, group.texture);
+                this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture);
             }
             for (let group of opaqueCubeGroups.values()) {
                 this.drawCubeInstances(group);
@@ -1902,7 +1967,7 @@
                 });
                 for (let object of transparentMeshObjects) this.drawObject(object);
                 for (let group of transparentTexturedCubeGroups.values()) {
-                    this.drawTexturedCubeInstances(group.objects, group.texture);
+                    this.drawTexturedCubeInstances(group.objects, group.topTexture, group.sideTexture);
                 }
                 for (let group of transparentCubeGroups.values()) {
                     this.drawCubeInstances(group);

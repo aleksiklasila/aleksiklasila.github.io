@@ -68,6 +68,57 @@ function _updateSpatialLowestHealthForUnit(u, chunkKey) {
     }
 }
 
+function _getSpatialUnitVisibilityScaled(u) {
+    if (!u || u.dead) return 0;
+    let value = Number(u.visionRange);
+    if (!Number.isFinite(value) || value <= 0) {
+        value = Number(u.currentStats && u.currentStats.visionRange);
+    }
+    if (!Number.isFinite(value) || value <= 0) {
+        value = Number((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm || {}).visionRange) || 4;
+    }
+    return Math.max(0, Math.round(value * SPATIAL_VISIBILITY_SCALE));
+}
+
+function _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(chunkKey, owner, previousScaled, currentScaled) {
+    if (!(spatialUnitsComplexMaxUnitVisOffset >= 0)) return;
+    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return;
+    let ck = Math.floor(chunkKey);
+    let pid = Math.floor(owner);
+    if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
+    let playerBase = (ck * spatialUnitsComplexStridePerChunk) + (pid * spatialUnitsComplexStridePerPlayer);
+    let maxIdx = playerBase + spatialUnitsComplexMaxUnitVisOffset;
+    let maxScaled = spatialUnitsComplex[maxIdx] | 0;
+    if (currentScaled > maxScaled) {
+        spatialUnitsComplex[maxIdx] = currentScaled;
+        return;
+    }
+    // If this unit was (or tied for) the chunk max and dropped visibility/dead/removed, recompute max.
+    if (previousScaled >= maxScaled && currentScaled < previousScaled) {
+        _recomputeSpatialMaxUnitVisibilityForChunkPlayer(ck, pid);
+    }
+}
+
+function _recomputeSpatialMaxUnitVisibilityForChunkPlayer(chunkKey, owner) {
+    if (!(spatialUnitsComplexMaxUnitVisOffset >= 0)) return;
+    if (!Number.isFinite(chunkKey) || !Number.isFinite(owner)) return;
+    let ck = Math.floor(chunkKey);
+    let pid = Math.floor(owner);
+    if (ck < 0 || ck >= spatialUnits.length) return;
+    if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
+    let maxScaled = 0;
+    let chunk = spatialUnits[ck];
+    if (chunk && chunk.size > 0) {
+        for (let u of chunk) {
+            if (!u || u.dead || Math.floor(Number(u.owner)) !== pid) continue;
+            let scaled = _getSpatialUnitVisibilityScaled(u);
+            if (scaled > maxScaled) maxScaled = scaled;
+        }
+    }
+    let playerBase = (ck * spatialUnitsComplexStridePerChunk) + (pid * spatialUnitsComplexStridePerPlayer);
+    spatialUnitsComplex[playerBase + spatialUnitsComplexMaxUnitVisOffset] = maxScaled;
+}
+
 function initSpatialHash() {
     CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
     CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
@@ -82,7 +133,9 @@ function initSpatialHash() {
     spatialNormUnitTypeIndex = Number.isFinite(spatialUnitTypeToIndex.norm) ? spatialUnitTypeToIndex.norm : 0;
     spatialUnitsComplexUnitTypeCount = unitKeys.length;
     spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));
-    spatialUnitsComplexStridePerPlayer = 1 + spatialUnitsComplexUnitTypeCount; // total + each unit type
+    spatialUnitsComplexMaxUnitVisOffset = 1 + spatialUnitsComplexUnitTypeCount;
+    spatialUnitsComplexMaxThingVisOffset = spatialUnitsComplexMaxUnitVisOffset + 1;
+    spatialUnitsComplexStridePerPlayer = spatialUnitsComplexMaxThingVisOffset + 1; // total + perUnitType + maxUnitVis + maxThingVis
     spatialUnitsComplexStridePerChunk = spatialUnitsComplexPlayerCount * spatialUnitsComplexStridePerPlayer;
     spatialUnitsComplex = new Int32Array((CHUNKS_W * CHUNKS_H) * spatialUnitsComplexStridePerChunk);
     if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
@@ -100,6 +153,8 @@ function getSpatialKey(wx, wy) {
 }
 function updateUnitSpatial(u) {
     let newKey = getSpatialKey(u.x, u.y);
+    let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
+    let currentScaled = _getSpatialUnitVisibilityScaled(u);
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
         let oldKey = u._spatialKey;
         if (spatialUnits[u._spatialKey].delete(u)) {
@@ -113,6 +168,7 @@ function updateUnitSpatial(u) {
                 let typeCountIdx = playerBase + 1 + typeIdx;
                 spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                 spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
+                _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
             }
             if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
                 let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
@@ -124,6 +180,11 @@ function updateUnitSpatial(u) {
     }
     if (u._spatialKey === newKey) {
         spatialUnits[newKey].add(u);
+        let ownerSame = Math.floor(Number(u.owner));
+        if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
+            _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
+        }
+        u._spatialLastVisScaled = currentScaled;
         if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
         return;
     }
@@ -138,13 +199,16 @@ function updateUnitSpatial(u) {
         let typeCountIdx = playerBase + 1 + typeIdx;
         spatialUnitsComplex[totalIdx] += 1;
         spatialUnitsComplex[typeCountIdx] += 1;
+        _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, owner, 0, currentScaled);
     }
     u._spatialKey = newKey;
+    u._spatialLastVisScaled = currentScaled;
     if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
 }
 function removeUnitSpatial(u) {
     if (u._spatialKey !== undefined) {
         let oldKey = u._spatialKey;
+        let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
         if (spatialUnits[u._spatialKey].delete(u)) {
             let owner = Math.floor(Number(u.owner));
             if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
@@ -156,6 +220,7 @@ function removeUnitSpatial(u) {
                 let typeCountIdx = playerBase + 1 + typeIdx;
                 spatialUnitsComplex[totalIdx] = Math.max(0, spatialUnitsComplex[totalIdx] - 1);
                 spatialUnitsComplex[typeCountIdx] = Math.max(0, spatialUnitsComplex[typeCountIdx] - 1);
+                _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(oldKey, owner, prevScaled, 0);
             }
             if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) {
                 let oldIdx = _spatialChunkPlayerFlatIndex(oldKey, owner);
@@ -164,6 +229,7 @@ function removeUnitSpatial(u) {
                 }
             }
         }
+        u._spatialLastVisScaled = 0;
         u._spatialKey = undefined;
     }
 }

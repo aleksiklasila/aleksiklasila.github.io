@@ -1560,6 +1560,12 @@ function resetWorldState() {
     visibilityGrid = [];
     visibilityVersion = 0;
     visibilityGridByPlayerCache.clear();
+    if (typeof visibilityGridSmoothedByPlayerCache !== 'undefined' && visibilityGridSmoothedByPlayerCache && typeof visibilityGridSmoothedByPlayerCache.clear === 'function') {
+        visibilityGridSmoothedByPlayerCache.clear();
+    }
+    if (typeof visibilityGridSmoothingTickByPlayer !== 'undefined' && visibilityGridSmoothingTickByPlayer && typeof visibilityGridSmoothingTickByPlayer.clear === 'function') {
+        visibilityGridSmoothingTickByPlayer.clear();
+    }
     visibilityCacheTick = -1;
 
     selectedUnits = [];
