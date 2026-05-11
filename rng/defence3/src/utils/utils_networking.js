@@ -984,6 +984,26 @@ function bindInfoPanelPlayerStatusControls(panel) {
         });
     });
 
+    panel.querySelectorAll('.info-idle-worker-select-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let filter = String(btn.getAttribute('data-filter') || '').toLowerCase();
+            if (!filter) return;
+            let nextSelected = [];
+            for (let u of units) {
+                if (!u || u.dead || u.owner !== localPlayerId || !u.workerType) continue;
+                let isIdleLike = (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING);
+                if (!isIdleLike) continue;
+                if (filter !== 'total' && u.workerType !== filter) continue;
+                nextSelected.push(u);
+            }
+            if (nextSelected.length <= 0) return;
+            selectedEntities = [];
+            selectedUnits = nextSelected;
+            activeSubGroups = {};
+            updateInfoPanel();
+        });
+    });
+
     let pingToggle = panel.querySelector('#info-toggle-show-ping');
     if (pingToggle) {
         pingToggle.onchange = () => {

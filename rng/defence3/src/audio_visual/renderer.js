@@ -880,6 +880,54 @@ function push3DRenderObject(target, object) {
         if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
     }
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
+    let _resolveVisionRangeFromSource = (source) => {
+        if (!source) return NaN;
+        if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
+        if (Number.isFinite(source.baseLevelVisionRange)) return Number(source.baseLevelVisionRange);
+        if (Number.isFinite(source.visionRange)) return Number(source.visionRange);
+
+        let ownerId = Number(source.owner);
+        if (!Number.isFinite(ownerId)) ownerId = 0;
+
+        if (source.unitType) {
+            let unitType = String(source.unitType || 'norm');
+            let unitLevel = 1;
+            if (typeof getDisplayLevel === 'function') {
+                unitLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+            }
+            if (typeof getUnitStatForOwner === 'function') {
+                let unitVision = Number(getUnitStatForOwner(ownerId, unitType, unitLevel, 'visionRange'));
+                if (Number.isFinite(unitVision)) return unitVision;
+            }
+            return Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).visionRange);
+        }
+
+        if (source.type) {
+            let buildingType = String(source.type || '');
+            if (buildingType === 'barrack') {
+                buildingType = `barrack_${String(source.unitType || 'norm')}`;
+            }
+            let buildingLevel = 1;
+            if (typeof getDisplayLevel === 'function') {
+                buildingLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+            }
+            if (typeof getBuildingStatForOwner === 'function') {
+                let buildingVision = Number(getBuildingStatForOwner(ownerId, buildingType, buildingLevel, 'visionRange'));
+                if (Number.isFinite(buildingVision)) return buildingVision;
+            }
+            return Number((BASE_CARD_TYPES[buildingType] || {}).visionRange);
+        }
+
+        return NaN;
+    };
+    let visionRange = Number(object.visibilityRangeTiles);
+    if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
+    if (!Number.isFinite(visionRange)) visionRange = _resolveVisionRangeFromSource(object.visibilitySource);
+    let visionHeightScale = 1;
+    if (Number.isFinite(visionRange) && visionRange > 0) {
+        // Linear height scaling from gameplay vision range (4 tiles => 1.0x).
+        visionHeightScale = visionRange / 8;
+    }
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
@@ -889,7 +937,7 @@ function push3DRenderObject(target, object) {
         z: Number(object.z) || 0,
         y: Number(object.y) || 0,
         scaleX: Math.max(0.05, Number(object.scaleX) || 0.05),
-        scaleY: Math.max(0.05, Number(object.scaleY) || 0.05),
+        scaleY: Math.max(0.05, (Number(object.scaleY) || 0.05) * visionHeightScale),
         scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
         rotationY: Number(object.rotationY) || 0,
         tint,
@@ -1237,6 +1285,7 @@ function build3DFrameData() {
             scaleX: footprint,
             scaleY: Math.max(0.24, footprint * 0.52),
             scaleZ: Math.max(0.34, footprint * 1.3),
+            visibilitySource: unit,
             rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
             tint: ownerTint,
             renderShape: 'cylinder',
@@ -1342,6 +1391,7 @@ function build3DFrameData() {
                 scaleX: 0.84,
                 scaleY: 0.14 * getOverlapFlattenScaleForTile(x, y) * (1 + audioHeight),
                 scaleZ: 0.84,
+                visibilitySource: cell.item,
                 rotationY: -(Number(cell.item.angle) || 0),
                 tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
                 alpha: get3DConstructionAlpha(cell.item),
@@ -1373,6 +1423,7 @@ function build3DFrameData() {
             scaleX: 0.82,
             scaleY: 1.05 * getOverlapFlattenScaleForTile(t.gx, t.gy) * (1 + audioHeight),
             scaleZ: 0.82,
+            visibilitySource: t,
             rotationY: Math.PI * 0.5 - (Number(t.angle) || 0),
             tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
             alpha: get3DConstructionAlpha(t),
@@ -1411,6 +1462,7 @@ function build3DFrameData() {
             scaleX: 0.95,
             scaleY: 0.9 * getOverlapFlattenScaleForTile(s.gx, s.gy) * (1 + audioHeight),
             scaleZ: 0.95,
+            visibilitySource: s,
             tint: get3DDamageFlashTint(s, get3DRenderOwnerColor(s.owner)),
             alpha: get3DConstructionAlpha(s),
             topTextureKey: `spawner:${s.type}:${s.owner}:${spawnerStatus.keySuffix}`,
@@ -1452,6 +1504,7 @@ function build3DFrameData() {
             scaleX: 0.98,
             scaleY: 0.86 * getOverlapFlattenScaleForTile(b.gx, b.gy) * (1 + audioHeight),
             scaleZ: 0.98,
+            visibilitySource: b,
             tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
             alpha: get3DConstructionAlpha(b),
             topTextureKey: `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
@@ -1516,6 +1569,7 @@ function build3DFrameData() {
                 scaleX: footprint,
                 scaleY: Math.max(0.32, footprint * 0.9) * (1 + audioHeight),
                 scaleZ: footprint,
+                visibilitySource: u,
                 rotationY: Math.atan2(Number(u.vx) || 0, Number(u.vy) || 1),
                 tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
                 renderShape: 'cylinder',

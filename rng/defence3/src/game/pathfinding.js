@@ -1,5 +1,7 @@
 "use strict";
 
+const OUT_OF_ASTAR_SPEED_MULTIPLIER = 1 / 3;
+
 function _ensurePathBudgetArrays() {
     let count = Math.max(0, players.length || 0);
     if (pathfindBudgetByPlayer.length !== count) pathfindBudgetByPlayer = new Int32Array(count);
@@ -100,12 +102,22 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (pid < 0) return true;
     if (_getPlayerAstarBudgetRemaining(u.owner) < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
-        u.vx = 0;
-        u.vy = 0;
-        return false;
+        // Out of A*: do not hard-stop movement. Unit speed is reduced elsewhere.
+        return true;
     }
     _consumePlayerAstarStockpile(u.owner, amount, u, 'movement');
     return true;
+}
+
+function _getUnitAstarSpeedMultiplier(u) {
+    if (!u) return 1;
+    let pid = _normalizeOwnerId(u.owner);
+    if (pid < 0 || !players[pid]) return 1;
+    let astarCost = Math.max(0, Number(u.astarCost) || Number((BASE_UNIT_STATS[u.unitType] || {}).astarCost) || 0);
+    if (astarCost <= 0) return 1;
+    return _getPlayerAstarBudgetRemaining(u.owner) <= 0
+        ? OUT_OF_ASTAR_SPEED_MULTIPLIER
+        : 1;
 }
 
 function _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks = null) {

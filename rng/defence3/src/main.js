@@ -1276,6 +1276,7 @@ function initInput() {
             if (setResearchStatMatrixPopupOpen(false)) return;
             if (setResearchPopupOpen(false)) return;
             if (setStartingResourcesPopupOpen(false)) return;
+            if (setUnitStateHelpPopupOpen(false)) return;
             if (setHelpPopupOpen(false)) return;
             stopBuildPlacementDrag();
             selectedBuildItem = null; selectedUnits = []; selectedEntities = []; activeSubGroups = {}; attackMoveMode = false; requestBuildMenuRefresh(); updateInfoPanel();
@@ -1533,7 +1534,9 @@ function initInput() {
     const btnRefreshStatsMap = document.getElementById('btn-refresh-statsmap');
     const btnStatsMapClose = document.getElementById('btn-statsmap-close');
     const btnResearchMatrixClose = document.getElementById('btn-research-matrix-close');
+    const btnUnitStateHelpClose = document.getElementById('btn-unit-state-help-close');
     const helpPopup = document.getElementById('help-popup');
+    const unitStateHelpPopup = document.getElementById('unit-state-help-popup');
     const researchPopup = document.getElementById('research-popup');
     const startingResourcesPopup = document.getElementById('starting-resources-popup');
     const statsMapPopup = document.getElementById('statsmap-popup');
@@ -1668,6 +1671,11 @@ function initInput() {
             setHelpPopupOpen(false);
         });
     }
+    if (btnUnitStateHelpClose) {
+        btnUnitStateHelpClose.addEventListener('click', () => {
+            setUnitStateHelpPopupOpen(false);
+        });
+    }
     if (btnResearchClose) {
         btnResearchClose.addEventListener('click', () => {
             setResearchPopupOpen(false);
@@ -1690,6 +1698,11 @@ function initInput() {
         });
         helpPopup.addEventListener('mousedown', (e) => {
             if (e.target === helpPopup) setHelpPopupOpen(false);
+        });
+    }
+    if (unitStateHelpPopup) {
+        unitStateHelpPopup.addEventListener('mousedown', (e) => {
+            if (e.target === unitStateHelpPopup) setUnitStateHelpPopupOpen(false);
         });
     }
     if (researchPopup) {

@@ -269,7 +269,8 @@
         #statsmap-popup,
         #research-matrix-popup,
         #optimization-popup,
-        #config-popup {
+        #config-popup,
+        #unit-state-help-popup {
             position: fixed;
             inset: 0;
             z-index: 1200;
@@ -285,7 +286,8 @@
         #statsmap-popup.hidden,
         #research-matrix-popup.hidden,
         #optimization-popup.hidden,
-        #config-popup.hidden {
+        #config-popup.hidden,
+        #unit-state-help-popup.hidden {
             display: none;
         }
 

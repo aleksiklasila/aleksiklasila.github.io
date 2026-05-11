@@ -2390,7 +2390,8 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
     let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
     let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
-    let astarCostLevelExp = Math.max(1, Number(unitCfg.astarCostLevelExp) || 1.08);
+    // Keep A* / tile increasing with level even if config is set to 1 by mistake.
+    let astarCostLevelExp = Math.max(1.01, Number(unitCfg.astarCostLevelExp) || 1.08);
     let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
     let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
     let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
@@ -2462,6 +2463,12 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         if (Number.isFinite(baseUnitPrice) && baseUnitPrice > 0) {
             let priceExp = Math.max(1, Number(bCfg.spawnedUnitPriceLevelExp) || 1);
             out.unitPrice = Math.max(1, baseUnitPrice * Math.pow(priceExp, lvl - 1));
+        }
+        if (!Number.isFinite(out.visionRange)) {
+            let spawnedVision = Number((BASE_UNIT_STATS[spawnUnitType] || {}).visionRange);
+            if (Number.isFinite(spawnedVision) && spawnedVision > 0) {
+                out.visionRange = spawnedVision * (1 + (lvl - 1) * linearVisionBonus);
+            }
         }
     }
 
