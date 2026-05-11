@@ -476,7 +476,9 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         researcherDps: Infinity,
         transferCooldown: 0.3,
         workerSearchDistance: 25,
-        astarCost: 0.1,
+        // Keep unit A* / tile fully driven by level/research precompute output.
+        // A hard soft-cap here can flatten level growth when decreasing research is also applied.
+        astarCost: Infinity,
     },
     building: {
         maxEnergy: Infinity,

@@ -2667,6 +2667,11 @@ function getUnitStatFromMap(unitType, level, statKey, researchLevel = 0) {
     let lvl = clampThingLevel(level);
     let rLvl = clampResearchLevel(researchLevel);
     let arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
+    if (!arr) {
+        // Recover from stale/partial precomputed tables (e.g. loaded state) and retry once.
+        rebuildPrecomputedStatsMap();
+        arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
+    }
     if (!arr) return normalizePrecomputedUnitStatValue(key, statKey, NaN);
     return normalizePrecomputedUnitStatValue(key, statKey, arr[rLvl]);
 }

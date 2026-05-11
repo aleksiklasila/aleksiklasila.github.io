@@ -267,6 +267,81 @@ function initInput() {
         }
     }
 
+    function _findResearchRallyTargetNear(worldX, worldY, owner, radius = 48) {
+        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+        let exact = getTileEntityRef(gx, gy);
+        if (_isResearcherTargetBuilding(exact, owner)) return exact;
+        let best = null;
+        let bestDist = Infinity;
+        for (let s of collectorSpawners) {
+            if (!_isResearcherTargetBuilding(s, owner)) continue;
+            if (!isTileVisible(s.gx, s.gy)) continue;
+            let d = Math.hypot(s.x - worldX, s.y - worldY);
+            if (d > radius || d >= bestDist) continue;
+            bestDist = d;
+            best = s;
+        }
+        return best;
+    }
+
+    function _findSalvagerRallyTargetNear(worldX, worldY, owner, radius = 22) {
+        let best = null;
+        let bestDist = Infinity;
+        let consider = (item) => {
+            if (!item || item.owner !== owner || !item.markedForSalvage) return;
+            if (item.energy !== undefined && item.energy <= 0) return;
+            if (!Number.isFinite(item.x) || !Number.isFinite(item.y)) return;
+            let gx = Math.floor(item.x / TILE), gy = Math.floor(item.y / TILE);
+            if (!isTileVisible(gx, gy)) return;
+            let d = Math.hypot(item.x - worldX, item.y - worldY);
+            if (d > radius || d >= bestDist) return;
+            bestDist = d;
+            best = item;
+        };
+
+        for (let t of towers) consider(t);
+        for (let b of barracks) consider(b);
+        for (let s of collectorSpawners) consider(s);
+        for (let y = 0; y < GRID_H; y++) {
+            for (let x = 0; x < GRID_W; x++) {
+                let cell = grid[y][x];
+                if (!cell || !cell.item) continue;
+                consider(cell.item);
+            }
+        }
+        return best;
+    }
+
+    function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyUnit = null) {
+        if (!spawner) return { x: worldX, y: worldY, targetUnitId: null };
+        if (clickedEnemyUnit && spawner.type === 'barrack') {
+            return { x: clickedEnemyUnit.x, y: clickedEnemyUnit.y, targetUnitId: clickedEnemyUnit.id };
+        }
+
+        let anchor = null;
+        if (spawner.type === 'spawner') {
+            let gather = _getCollectorGatherTargetNear(worldX, worldY, localPlayerId, 22);
+            if (gather && gather.target) anchor = gather.target;
+        } else if (spawner.type === 'astar_spawner') {
+            let gather = _getAstarCollectorGatherTargetNear(worldX, worldY, localPlayerId, 22);
+            if (gather && gather.target) anchor = gather.target;
+        } else if (spawner.type === 'builder_spawner') {
+            anchor = _getBuilderWorkTargetNear(worldX, worldY, localPlayerId, 22, true);
+        } else if (spawner.type === 'healer_spawner') {
+            anchor = _getHealerQueueTargetNear(worldX, worldY, localPlayerId, 22, false);
+        } else if (spawner.type === 'research') {
+            anchor = _findResearchRallyTargetNear(worldX, worldY, localPlayerId, 48);
+        } else if (spawner.type === 'salvager') {
+            anchor = _findSalvagerRallyTargetNear(worldX, worldY, localPlayerId, 22);
+        }
+
+        if (!anchor) anchor = findOwnRallyAnchorNear(worldX, worldY);
+        if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+            return { x: anchor.x, y: anchor.y, targetUnitId: null };
+        }
+        return { x: worldX, y: worldY, targetUnitId: null };
+    }
+
     function isRallyCapableEntity(ent) {
         if (!ent || ent.owner !== localPlayerId) return false;
         let byType = ['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type);
@@ -814,18 +889,21 @@ function initInput() {
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                let gatherTarget = clickedEnemyUnit
-                    ? null
-                    : (_getCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22)
-                        || _getAstarCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22));
-                let rallyAnchor = clickedEnemyUnit ? null : findOwnRallyAnchorNear(world.x, world.y);
-                let rallyX = clickedEnemyUnit
-                    ? clickedEnemyUnit.x
-                    : (gatherTarget ? gatherTarget.target.x : (rallyAnchor ? rallyAnchor.x : world.x));
-                let rallyY = clickedEnemyUnit
-                    ? clickedEnemyUnit.y
-                    : (gatherTarget ? gatherTarget.target.y : (rallyAnchor ? rallyAnchor.y : world.y));
-                applyRallyTargets(selSpawners, rallyX, rallyY, isCtrlMulti, clickedEnemyUnit ? clickedEnemyUnit.id : null);
+                if (!(isCtrlMulti && multiRallyPoints.length > 0)) multiRallyPoints = [];
+                for (let i = 0; i < selSpawners.length; i++) {
+                    let b = selSpawners[i];
+                    let rp = (isCtrlMulti && multiRallyPoints.length > 0)
+                        ? multiRallyPoints[i % multiRallyPoints.length]
+                        : _resolveSpawnerRallyPointForClick(b, world.x, world.y, clickedEnemyUnit);
+                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
+                    b.rallyX = rp.x;
+                    b.rallyY = rp.y;
+                    b.rallyTargetUnitId = rp.targetUnitId || null;
+                }
+                if (isCtrlMulti) {
+                    let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
+                    multiRallyPoints.push({ x: seed.x, y: seed.y, targetUnitId: seed.targetUnitId || null });
+                }
                 issuedStructureCommand = true;
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];

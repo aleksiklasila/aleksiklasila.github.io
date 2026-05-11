@@ -126,6 +126,15 @@ function spawnQueuedUnitFromSpawner(spawner) {
     units.push(u);
     players[owner].popCount++;
 
+    // For worker units, prefer semantic rally assignment (actual target/task) over plain move rally.
+    if (u.workerType && typeof applyWorkerRallyFromSpawner === 'function') {
+        if (applyWorkerRallyFromSpawner(u, spawner)) {
+            spawner.spawnTimer = 0;
+            spawner._spawnReadyOrder = undefined;
+            return true;
+        }
+    }
+
     let rallyTarget = getSpawnerRallyTargetWorld(spawner);
     if (rallyTarget) {
         let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
