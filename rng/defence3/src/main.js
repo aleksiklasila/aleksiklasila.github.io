@@ -328,7 +328,10 @@ function initInput() {
         } else if (spawner.type === 'builder_spawner') {
             anchor = _getBuilderWorkTargetNear(worldX, worldY, localPlayerId, 22, true);
         } else if (spawner.type === 'healer_spawner') {
-            anchor = _getHealerQueueTargetNear(worldX, worldY, localPlayerId, 22, false);
+            let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+            let exact = getTileEntityRef(gx, gy);
+            if (_isHealerQueueAnchorTarget(exact, localPlayerId)) anchor = exact;
+            if (!anchor) anchor = _getHealerQueueTargetNear(worldX, worldY, localPlayerId, 48, false);
         } else if (spawner.type === 'research') {
             anchor = _findResearchRallyTargetNear(worldX, worldY, localPlayerId, 48);
         } else if (spawner.type === 'salvager') {

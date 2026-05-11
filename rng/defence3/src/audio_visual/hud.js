@@ -4731,8 +4731,19 @@ function showUiBanner(message, kind = 'info', timeoutMs = 2400) {
 }
 
 function renderGameGraph(metric = graphMetric) {
-    graphMetric = 'units';
-    metric = 'units';
+    let metricDefs = {
+        units: { title: 'Units', yTitle: 'UNITS' },
+        workers: { title: 'Workers', yTitle: 'WORKERS' },
+        combat: { title: 'Combat Units', yTitle: 'COMBAT UNITS' },
+        idleWorkers: { title: 'Idle Workers', yTitle: 'IDLE WORKERS' },
+        structures: { title: 'Structures', yTitle: 'STRUCTURES' },
+        pop: { title: 'Population', yTitle: 'POPULATION' },
+        energy: { title: 'Energy', yTitle: 'ENERGY' },
+        astar: { title: 'A*', yTitle: 'A*' }
+    };
+    metric = metricDefs[metric] ? metric : 'units';
+    graphMetric = metric;
+    let metricDef = metricDefs[metric];
     let plotEl = document.getElementById('go-graph-plot');
     if (!plotEl || typeof Plotly === 'undefined') return;
     let samples = gameStatsHistory;
@@ -4772,11 +4783,12 @@ function renderGameGraph(metric = graphMetric) {
             zerolinecolor: '#333'
         },
         yaxis: {
-            title: 'UNITS',
+            title: metricDef.yTitle,
             rangemode: 'tozero',
             gridcolor: '#2a2a2a',
             zerolinecolor: '#333'
-        }
+        },
+        title: { text: metricDef.title, font: { size: 12, color: '#cfd8dc' } }
     }, {
         displayModeBar: false,
         responsive: true

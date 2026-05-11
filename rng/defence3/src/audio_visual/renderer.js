@@ -1809,6 +1809,9 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
     for (let m of goldMines) {
         if (m.gold > 0) drawCell(m.gx, m.gy, '#fd0');
     }
+    for (let m of astarMines) {
+        if (m.astar > 0) drawCell(m.gx, m.gy, '#888');
+    }
 
     _minimapStaticDirty = false;
 }
