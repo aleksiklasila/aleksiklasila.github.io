@@ -638,17 +638,21 @@
                 uniform mat4 uModel;
                 uniform mat3 uNormalMatrix;
                 uniform float uAlpha;
+                uniform float uLightLevel;
                 out vec3 vNormal;
                 out float vAlpha;
+                out float vLightLevel;
                 void main() {
                     gl_Position = uViewProjection * uModel * vec4(aPosition, 1.0);
                     vNormal = normalize(uNormalMatrix * aNormal);
                     vAlpha = uAlpha;
+                    vLightLevel = uLightLevel;
                 }
             `, `#version 300 es
                 precision highp float;
                 in vec3 vNormal;
                 in float vAlpha;
+                in float vLightLevel;
                 uniform vec3 uColor;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
@@ -663,7 +667,8 @@
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
                     float shade = 0.38 + diffuse * 0.62;
-                    outColor = vec4(uColor * shade, vAlpha);
+                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    outColor = vec4(uColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
             `);
@@ -679,12 +684,14 @@
                 layout(location = 8) in float iAlpha;
                 layout(location = 9) in float iShape;
                 layout(location = 10) in float iSideAngle;
+                layout(location = 12) in float iLightLevel;
                 uniform mat4 uViewProjection;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out float vAlpha;
                 out vec3 vLocalPosition;
                 out float vShape;
+                out float vLightLevel;
                 void main() {
                     mat4 model = mat4(iModelRow0, iModelRow1, iModelRow2, iModelRow3);
                     mat3 normalMatrix = mat3(model);
@@ -694,6 +701,7 @@
                     vAlpha = iAlpha;
                     vLocalPosition = aPosition;
                     vShape = iShape;
+                    vLightLevel = iLightLevel;
                 }
             `, `#version 300 es
                 precision highp float;
@@ -702,6 +710,7 @@
                 in float vAlpha;
                 in vec3 vLocalPosition;
                 in float vShape;
+                in float vLightLevel;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
                 vec4 packDepth(float depth) {
@@ -728,7 +737,8 @@
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
                     float shade = 0.38 + diffuse * 0.62;
-                    outColor = vec4(vColor * shade, vAlpha);
+                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    outColor = vec4(vColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
             `);
@@ -745,15 +755,19 @@
                 layout(location = 8) in float iAlpha;
                 layout(location = 9) in float iShape;
                 layout(location = 10) in float iSideAngle;
+                layout(location = 11) in vec3 iSideColor;
+                layout(location = 12) in float iLightLevel;
                 uniform mat4 uViewProjection;
                 out vec3 vNormal;
                 out vec3 vColor;
+                out vec3 vSideColor;
                 out vec2 vUv;
                 out float vAlpha;
                 out vec3 vLocalPosition;
                 out float vShape;
                 out float vSideAngle;
                 out vec3 vLightingNormal;
+                out float vLightLevel;
                 const float TWO_PI = 6.28318530718;
                 void main() {
                     mat4 model = mat4(iModelRow0, iModelRow1, iModelRow2, iModelRow3);
@@ -762,11 +776,13 @@
                     gl_Position = uViewProjection * model * vec4(aPosition, 1.0);
                     vNormal = transformedNormal;
                     vColor = iColor;
+                    vSideColor = iSideColor;
                     vUv = aUv;
                     vAlpha = iAlpha;
                     vLocalPosition = aPosition;
                     vShape = iShape;
                     vSideAngle = iSideAngle;
+                    vLightLevel = iLightLevel;
                     if (iShape > 0.5 && abs(aNormal.y) < 0.5) {
                         float phase = (aUv.x + (iSideAngle / TWO_PI)) * TWO_PI;
                         vLightingNormal = vec3(cos(phase), 0.0, sin(phase));
@@ -778,12 +794,14 @@
                 precision highp float;
                 in vec3 vNormal;
                 in vec3 vColor;
+                in vec3 vSideColor;
                 in vec2 vUv;
                 in float vAlpha;
                 in vec3 vLocalPosition;
                 in float vShape;
                 in float vSideAngle;
                 in vec3 vLightingNormal;
+                in float vLightLevel;
                 uniform sampler2D uTopTexture;
                 uniform sampler2D uSideTexture;
                 uniform float uHasSideTexture;
@@ -807,7 +825,8 @@
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
                     float shade = 0.38 + diffuse * 0.62;
-                    vec3 sideColor = vColor * shade;
+                    vec3 playerSideColor = vColor * shade;
+                    vec3 functionalSideColor = vSideColor * shade;
                     vec2 topUv = vec2(vUv.x, 1.0 - vUv.y);
                     vec4 topSample = texture(uTopTexture, topUv);
                     bool topFace = surfaceNormal.y > 0.8;
@@ -816,15 +835,19 @@
                         sideUv.x = fract(sideUv.x + (vSideAngle / TWO_PI));
                     }
                     vec4 sideSample = uHasSideTexture > 0.5 ? texture(uSideTexture, sideUv) : vec4(0.0);
-                    vec3 finalColor = sideColor;
+                    vec3 finalColor = functionalSideColor;
                     if (topFace) {
-                        finalColor = mix(sideColor, topSample.rgb * shade, clamp(topSample.a, 0.0, 1.0));
+                        finalColor = mix(playerSideColor, topSample.rgb * shade, clamp(topSample.a, 0.0, 1.0));
                     } else if (uHasSideTexture > 0.5) {
-                        float sideShade = 0.58 + diffuse * 0.72;
-                        vec3 brightSideSample = min(vec3(1.0), sideSample.rgb * sideShade * 1.25);
-                        float sideBlend = clamp(sideSample.a * 1.2, 0.0, 1.0);
-                        finalColor = mix(sideColor, brightSideSample, sideBlend);
+                        float overlayAlpha = step(0.5, sideSample.a);
+                        float edgeDistance = min(min(sideUv.x, 1.0 - sideUv.x), min(sideUv.y, 1.0 - sideUv.y));
+                        float seamFactor = 1.0 - smoothstep(0.015, 0.08, edgeDistance);
+                        vec3 playerHuedOverlay = mix(sideSample.rgb, playerSideColor, 0.35);
+                        vec3 seamTintedOverlay = mix(sideSample.rgb, playerHuedOverlay, seamFactor);
+                        finalColor = mix(functionalSideColor, seamTintedOverlay, overlayAlpha);
                     }
+                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    finalColor *= (1.0 - fogAlpha);
                     outColor = vec4(finalColor, vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
@@ -882,7 +905,8 @@
                 model: gl.getUniformLocation(this.meshProgram, 'uModel'),
                 normalMatrix: gl.getUniformLocation(this.meshProgram, 'uNormalMatrix'),
                 color: gl.getUniformLocation(this.meshProgram, 'uColor'),
-                alpha: gl.getUniformLocation(this.meshProgram, 'uAlpha')
+                alpha: gl.getUniformLocation(this.meshProgram, 'uAlpha'),
+                lightLevel: gl.getUniformLocation(this.meshProgram, 'uLightLevel')
             };
             this.instancedMeshUniforms = {
                 viewProjection: gl.getUniformLocation(this.instancedMeshProgram, 'uViewProjection')
@@ -975,7 +999,7 @@
             let bindInstanceAttributes = (mesh) => {
                 gl.bindVertexArray(mesh.vao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-                let instanceStrideBytes = 22 * 4;
+                let instanceStrideBytes = 26 * 4;
                 for (let row = 0; row < 4; row++) {
                     let location = 3 + row;
                     gl.enableVertexAttribArray(location);
@@ -994,6 +1018,12 @@
                 gl.enableVertexAttribArray(10);
                 gl.vertexAttribPointer(10, 1, gl.FLOAT, false, instanceStrideBytes, 84);
                 gl.vertexAttribDivisor(10, 1);
+                gl.enableVertexAttribArray(11);
+                gl.vertexAttribPointer(11, 3, gl.FLOAT, false, instanceStrideBytes, 88);
+                gl.vertexAttribDivisor(11, 1);
+                gl.enableVertexAttribArray(12);
+                gl.vertexAttribPointer(12, 1, gl.FLOAT, false, instanceStrideBytes, 100);
+                gl.vertexAttribDivisor(12, 1);
                 gl.bindVertexArray(null);
             };
             bindInstanceAttributes(this.cubeMesh);
@@ -1704,6 +1734,7 @@
             gl.uniformMatrix3fv(this.meshUniforms.normalMatrix, false, this.tmpNormal);
             gl.uniform3f(this.meshUniforms.color, 0, 0, 0);
             gl.uniform1f(this.meshUniforms.alpha, shadow.alpha);
+            // gl.uniform1f(this.meshUniforms.lightLevel, 1);
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
@@ -1717,7 +1748,7 @@
             for (let index = 0; index < objects.length; index++) {
                 let shadow = this.getShadowInfo(objects[index]);
                 if (!shadow) continue;
-                let base = written * 22;
+                let base = written * 26;
                 composeModelMatrix(
                     this.tmpModel,
                     shadow.x,
@@ -1735,12 +1766,16 @@
                 this.cubeInstanceArray[base + 19] = shadow.alpha;
                 this.cubeInstanceArray[base + 20] = shadow.renderShape === 'cylinder' ? 1 : 0;
                 this.cubeInstanceArray[base + 21] = 0;
+                this.cubeInstanceArray[base + 22] = 0;
+                this.cubeInstanceArray[base + 23] = 0;
+                this.cubeInstanceArray[base + 24] = 0;
+                this.cubeInstanceArray[base + 25] = 1;
                 written++;
             }
             if (written <= 0) return;
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 22));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, written * 26));
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
@@ -1789,6 +1824,7 @@
             let color = hexToRgb(object.tint);
             gl.uniform3f(this.meshUniforms.color, color[0], color[1], color[2]);
             gl.uniform1f(this.meshUniforms.alpha, Math.max(0.05, Math.min(1, Number(object.alpha) || 1)));
+            gl.uniform1f(this.meshUniforms.lightLevel, Math.max(0, Math.min(1, Number(object.lightLevel) || 0)));
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
@@ -1798,7 +1834,7 @@
             let nextCapacity = Math.max(32, this.cubeInstanceCapacity || 0);
             while (nextCapacity < requiredCount) nextCapacity *= 2;
             this.cubeInstanceCapacity = nextCapacity;
-            this.cubeInstanceArray = new Float32Array(nextCapacity * 22);
+            this.cubeInstanceArray = new Float32Array(nextCapacity * 26);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, this.cubeInstanceArray.byteLength, gl.DYNAMIC_DRAW);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -1811,7 +1847,7 @@
             this.ensureCubeInstanceCapacity(objects.length);
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 22;
+                let base = index * 26;
                 composeModelMatrix(
                     this.tmpModel,
                     object.x,
@@ -1830,10 +1866,14 @@
                 this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
                 this.cubeInstanceArray[base + 21] = 0;
+                this.cubeInstanceArray[base + 22] = color[0];
+                this.cubeInstanceArray[base + 23] = color[1];
+                this.cubeInstanceArray[base + 24] = color[2];
+                this.cubeInstanceArray[base + 25] = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
             }
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 22));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
             gl.useProgram(this.instancedMeshProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.instancedMeshUniforms.viewProjection, false, this.tmpViewProjection);
@@ -1847,7 +1887,7 @@
             this.ensureCubeInstanceCapacity(objects.length);
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
-                let base = index * 22;
+                let base = index * 26;
                 composeModelMatrix(
                     this.tmpModel,
                     object.x,
@@ -1866,9 +1906,14 @@
                 this.cubeInstanceArray[base + 19] = Math.max(0.05, Math.min(1, Number(object.alpha) || 1));
                 this.cubeInstanceArray[base + 20] = object.renderShape === 'cylinder' ? 1 : 0;
                 this.cubeInstanceArray[base + 21] = (Number(object.sideTextureAngle) || 0) - (object.renderShape === 'cylinder' ? (Number(object.rotationY) || 0) : 0);
+                let sideColor = hexToRgb(object.sideTint || object.tint);
+                this.cubeInstanceArray[base + 22] = sideColor[0];
+                this.cubeInstanceArray[base + 23] = sideColor[1];
+                this.cubeInstanceArray[base + 24] = sideColor[2];
+                this.cubeInstanceArray[base + 25] = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 22));
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
             gl.useProgram(this.texturedCubeProgram);
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(this.texturedCubeUniforms.viewProjection, false, this.tmpViewProjection);

@@ -402,6 +402,41 @@
         }
     }
 
+    function applyHardAlphaMask(g, size) {
+        let imageData = g.getImageData(0, 0, size, size);
+        let data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            let alpha = data[i + 3];
+            data[i + 3] = alpha > 12 ? 255 : 0;
+        }
+        g.putImageData(imageData, 0, 0);
+    }
+
+    function enforceHorizontalTileSeam(g, size) {
+        let imageData = g.getImageData(0, 0, size, size);
+        let data = imageData.data;
+        let width = Math.max(1, size | 0);
+        let height = Math.max(1, size | 0);
+        let seamColumns = Math.min(3, Math.max(1, Math.floor(width * 0.03)));
+
+        let idx = (x, y) => (y * width + x) * 4;
+        for (let y = 0; y < height; y++) {
+            for (let c = 0; c < seamColumns; c++) {
+                let leftX = c;
+                let rightX = width - 1 - c;
+                let leftIndex = idx(leftX, y);
+                let rightIndex = idx(rightX, y);
+                for (let k = 0; k < 4; k++) {
+                    let averaged = Math.round((data[leftIndex + k] + data[rightIndex + k]) * 0.5);
+                    data[leftIndex + k] = averaged;
+                    data[rightIndex + k] = averaged;
+                }
+            }
+        }
+
+        g.putImageData(imageData, 0, 0);
+    }
+
     function drawVisualization(g, options) {
         let size = g.canvas && g.canvas.width ? g.canvas.width : 96;
         let variant = String(options && options.variant || 'default');
@@ -411,7 +446,6 @@
         let rows = getAudioRows(seed, version);
 
         g.clearRect(0, 0, size, size);
-        drawBackdrop(g, size, palette, rows.energy, version, seed);
 
         switch (variant) {
             case 'collector':
@@ -504,9 +538,12 @@
                 break;
         }
 
-        g.strokeStyle = rgba(mixHex(palette.contrast, '#ffffff', 0.3), 0.5);
+        g.strokeStyle = rgba(mixHex(palette.contrast, '#ffffff', 0.3), 0.75);
         g.lineWidth = Math.max(2, Math.round(size * 0.024));
         g.strokeRect(1.5, 1.5, size - 3, size - 3);
+
+        applyHardAlphaMask(g, size);
+        enforceHorizontalTileSeam(g, size);
     }
 
     window.Defence3SideAudioVisualizations = {
