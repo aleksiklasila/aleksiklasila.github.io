@@ -910,13 +910,17 @@ function countTeamUnits(pid) {
 
 function countTeamStructures(pid) {
     let n = 0;
-    for (let t of towers) if (t.owner === pid && t.energy > 0) n++;
-    for (let b of barracks) if (b.owner === pid && b.energy > 0) n++;
-    for (let s of collectorSpawners) if (s.owner === pid && s.energy > 0) n++;
+    // Count all non-unit owned things from grid ownership once.
+    // Towers/barracks/spawners are also grid items, so this avoids double-counting.
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
-            let item = grid[y][x].item;
-            if (item && grid[y][x].owner === pid && item.energy > 0) n++;
+            let cell = grid[y][x];
+            if (!cell) continue;
+            let item = cell.item;
+            if (!item) continue;
+            if (cell.owner !== pid) continue;
+            if (!(Number(item.energy) > 0)) continue;
+            n++;
         }
     }
     return n;
@@ -925,11 +929,42 @@ function countTeamStructures(pid) {
 function sampleGameStats() {
     if (!gameStarted) return;
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
-    let sample = { tick: gameTime, energy: {}, pop: {}, units: {}, structures: {} };
+    let sample = {
+        tick: gameTime,
+        energy: {},
+        astar: {},
+        pop: {},
+        units: {},
+        workers: {},
+        combat: {},
+        idleWorkers: {},
+        structures: {}
+    };
+    let workersByTeam = {};
+    let idleWorkersByTeam = {};
+    for (let pid of teams) {
+        workersByTeam[pid] = 0;
+        idleWorkersByTeam[pid] = 0;
+    }
+    for (let u of units) {
+        if (!u || u.dead) continue;
+        let pid = Number.isFinite(u.owner) ? u.owner : -1;
+        if (workersByTeam[pid] === undefined) continue;
+        if (!u.workerType) continue;
+        workersByTeam[pid]++;
+        let pathDone = (!u.path || u.pathIndex >= u.path.length);
+        if (u.workerState === 'IDLE' || (!u.workerTarget && pathDone)) {
+            idleWorkersByTeam[pid]++;
+        }
+    }
     for (let pid of teams) {
         sample.energy[pid] = players[pid] ? players[pid].energy : 0;
+        sample.astar[pid] = players[pid] ? Math.max(0, Number(players[pid].astar) || 0) : 0;
         sample.pop[pid] = players[pid] ? players[pid].popCount : 0;
         sample.units[pid] = countTeamUnits(pid);
+        sample.workers[pid] = workersByTeam[pid] || 0;
+        sample.combat[pid] = Math.max(0, sample.units[pid] - sample.workers[pid]);
+        sample.idleWorkers[pid] = idleWorkersByTeam[pid] || 0;
         sample.structures[pid] = countTeamStructures(pid);
     }
     gameStatsHistory.push(sample);
@@ -937,8 +972,19 @@ function sampleGameStats() {
 }
 
 function renderGameGraph(metric = graphMetric) {
-    graphMetric = 'units';
-    metric = 'units';
+    let metricDefs = {
+        units: { title: 'Units', yTitle: 'UNITS' },
+        workers: { title: 'Workers', yTitle: 'WORKERS' },
+        combat: { title: 'Combat Units', yTitle: 'COMBAT UNITS' },
+        idleWorkers: { title: 'Idle Workers', yTitle: 'IDLE WORKERS' },
+        structures: { title: 'Structures', yTitle: 'STRUCTURES' },
+        pop: { title: 'Population', yTitle: 'POPULATION' },
+        energy: { title: 'Energy', yTitle: 'ENERGY' },
+        astar: { title: 'A*', yTitle: 'A*' }
+    };
+    metric = metricDefs[metric] ? metric : 'units';
+    graphMetric = metric;
+    let metricDef = metricDefs[metric];
     let plotEl = document.getElementById('go-graph-plot');
     if (!plotEl || typeof Plotly === 'undefined') return;
     let samples = gameStatsHistory;
@@ -978,11 +1024,12 @@ function renderGameGraph(metric = graphMetric) {
             zerolinecolor: '#333'
         },
         yaxis: {
-            title: 'UNITS',
+            title: metricDef.yTitle,
             rangemode: 'tozero',
             gridcolor: '#2a2a2a',
             zerolinecolor: '#333'
-        }
+        },
+        title: { text: metricDef.title, font: { size: 12, color: '#cfd8dc' } }
     }, {
         displayModeBar: false,
         responsive: true

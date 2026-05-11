@@ -1710,7 +1710,7 @@ function applyWorkerRallyFromSpawner(u, spawner) {
 
     if (u.workerType === 'healer') {
         let qTarget = getTileEntityRef(rgx, rgy);
-        if (!_isHealerQueueAnchorTarget(qTarget, owner)) qTarget = _getHealerQueueTargetNear(rally.x, rally.y, owner, 22, false);
+        if (!_isHealerQueueAnchorTarget(qTarget, owner)) qTarget = _getHealerQueueTargetNear(rally.x, rally.y, owner, 48, false);
         if (!_isHealerQueueAnchorTarget(qTarget, owner)) return false;
         _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
         if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) return false;
@@ -2199,8 +2199,7 @@ function _isHealerQueueTarget(target, owner) {
 
 function _isHealerQueueAnchorTarget(target, owner) {
     if (!target || target.owner !== owner) return false;
-    if (target.energy <= 0 || target.underConstruction) return false;
-    if (!isQueueEnabled(target)) return false;
+    if (target.underConstruction) return false;
     return Array.isArray(target.spawnQueue);
 }
 
@@ -2241,8 +2240,9 @@ function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNe
     let best = null;
     let bestDist = radius;
     let consider = (s) => {
-        if (!s || s.owner !== owner || s.energy <= 0 || s.underConstruction) return;
-        if (!isQueueEnabled(s)) return;
+        if (!s || s.owner !== owner || s.underConstruction) return;
+        if (!Array.isArray(s.spawnQueue)) return;
+        if (requireNeedsWork && !isQueueEnabled(s)) return;
         if (requireNeedsWork && !_isHealerQueueTarget(s, owner)) return;
         let d = Math.hypot(s.x - worldX, s.y - worldY);
         if (d <= bestDist) {
