@@ -200,6 +200,7 @@ class Unit {
         let spd = this.speed;
         if (this.frozen > 0) spd *= 0.5;
         if (this.sandy > 0) spd *= 0.5;
+        spd *= _getUnitAstarSpeedMultiplier(this);
 
         // Snake history
         if (this.isSnake) {

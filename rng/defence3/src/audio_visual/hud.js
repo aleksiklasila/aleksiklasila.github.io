@@ -370,25 +370,302 @@ function buildInfoPanelIdleWorkersHtml(owner) {
         else if (u.workerType === 'healer') idleCounts.healer++;
     }
 
-    let row = (label, idleValue, totalValue) => {
+    let row = (filterKey, label, idleValue, totalValue) => {
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-            + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
-            + `<span class="info-value" style="color:#ddd">${idleValue} / ${totalValue}</span>`
+            + `<button type="button" class="info-idle-worker-select-btn" data-filter="${filterKey}" style="cursor:pointer;color:#bbb;width:88px;min-width:88px;max-width:88px;text-align:left;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 6px;font:inherit" title="Select all ${String(label).toLowerCase()} idle workers">${label}</button>`
+            + `<span class="info-value" style="color:#ddd;flex:0 0 84px;min-width:84px;max-width:84px;text-align:right;font-variant-numeric:tabular-nums">${idleValue} / ${totalValue}</span>`
             + `</div>`;
     };
 
     let html = _buildCollapsibleInfoSectionTitle('idleWorkers', 'Idle Workers');
     if (!_isInfoSectionCollapsed('idleWorkers')) {
-        html += row('Total', idleCounts.total, totalCounts.total);
-        html += row('Collector', idleCounts.collector, totalCounts.collector);
-        html += row('A*er', idleCounts.astarCollector, totalCounts.astarCollector);
-        html += row('Salvager', idleCounts.salvager, totalCounts.salvager);
-        html += row('Researcher', idleCounts.researcher, totalCounts.researcher);
-        html += row('Builder', idleCounts.builder, totalCounts.builder);
-        html += row('Healer', idleCounts.healer, totalCounts.healer);
+        html += row('total', 'Total', idleCounts.total, totalCounts.total);
+        html += row('collector', 'Collector', idleCounts.collector, totalCounts.collector);
+        html += row('astar_collector', 'A*er', idleCounts.astarCollector, totalCounts.astarCollector);
+        html += row('salvager', 'Salvager', idleCounts.salvager, totalCounts.salvager);
+        html += row('researcher', 'Researcher', idleCounts.researcher, totalCounts.researcher);
+        html += row('builder', 'Builder', idleCounts.builder, totalCounts.builder);
+        html += row('healer', 'Healer', idleCounts.healer, totalCounts.healer);
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
+}
+
+function _getInfoPanelUnitStateLabel(u) {
+    return ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][Number(u && u.commandState) || 0] || 'Idle';
+}
+
+function _getInfoPanelWorkerSearchDistanceText(u) {
+    if (!u || !u.workerType) return 'nearby';
+    let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
+    let tiles = Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance'));
+    if (!Number.isFinite(tiles) || tiles <= 0) tiles = 10;
+    return formatBigNumber(tiles, 1);
+}
+
+function _getInfoPanelUnitStateHelpText(u) {
+    if (!u) return 'Current unit order and why it is happening.';
+
+    if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
+        if (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING || u.commandState === CMD_ATTACKING) {
+            return 'Moving slower because your A* stockpile is empty. While out of A*, movement speed is reduced to 33% until A* income recovers.';
+        }
+    }
+
+    if (u.commandState === CMD_HOLDING) {
+        if (u.workerType) return 'Holding because hold/stop was used. Press X to clear hold and let worker auto-AI resume.';
+        return 'Holding position. The unit only fights in place until you give a new order or press X.';
+    }
+
+    if (u.workerType) {
+        let searchRange = _getInfoPanelWorkerSearchDistanceText(u);
+        if (u.workerState === 'MANUAL_MOVE') {
+            return 'Manual move or rally order is active, so automatic worker retargeting is paused. Press X to stop or give a new work order.';
+        }
+        if (u.workerState === 'IDLE') {
+            if (Number.isFinite(u._energyBlockedUntil) && gameTime < u._energyBlockedUntil) {
+                return 'Idle because the worker could not afford its next material or energy pickup. Add more income or wait for resources.';
+            }
+            if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
+                return 'Idle because A* was exhausted recently. Wait for more A* income or reduce pathfinding demand.';
+            }
+            return `Idle because no valid work was found within range (${searchRange} tiles). Build relevant work closer, raise Work Search Distance, or give a manual order.`;
+        }
+        if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
+            return 'Returning carried resources to the nearest drop-off before choosing the next task.';
+        }
+        if (u.workerState === 'RETURNING_FOR_GOLD') {
+            return 'Fetching materials or supplies from the nearest provider before returning to the current task.';
+        }
+        if (u.workerState === 'MOVING_TO' || u.workerState === 'MOVING_TO_ASTAR' || u.workerState === 'MOVING_TO_BUILD' || u.workerState === 'MOVING_TO_HEAL' || u.workerState === 'MOVING_TO_RESEARCH') {
+            return 'Moving toward the current assigned task target.';
+        }
+        if (u.workerState === 'BUILDING_IN_PLACE') {
+            return 'Working on the current build site without making a material trip. Add more energy or a better route to restore full throughput.';
+        }
+        if (u.workerState === 'HEALING') {
+            return 'Applying healing to the current target. The worker will fetch more supplies after this trip if needed.';
+        }
+        if (u.workerState === 'RESEARCHING') {
+            return 'Applying research work to the active lab task. The worker will fetch more materials after this trip if needed.';
+        }
+    }
+
+    if (u.commandState === CMD_IDLE) return 'No active order right now. Give a move, attack-move, attack, or hold command.';
+    if (u.commandState === CMD_MOVING) return 'Moving toward the current destination.';
+    if (u.commandState === CMD_ATTACK_MOVING) return 'Attack-moving: advancing while auto-engaging enemies on the way.';
+    if (u.commandState === CMD_ATTACKING) return 'Attacking or chasing the current target.';
+    return 'Current unit order and why it is happening.';
+}
+
+function _buildInfoPanelUnitStateLabel(u) {
+    return _buildInfoPanelStateLabelButton(_getInfoPanelUnitStateLabel(u), _getInfoPanelUnitStateHelpText(u));
+}
+
+function _buildInfoPanelStateLabelButton(stateLabel, helpText) {
+    let help = _escapeHtml(String(helpText || 'Current state and why it is happening.'));
+    let label = _escapeHtml(String(stateLabel || 'State'));
+    return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-state-help-btn" data-state-label="${label}" data-help-text="${help}" title="Open state help" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">S</button><span>State</span></span>`;
+}
+
+function _getInfoPanelEntityStateLabel(e, includeResearch = false) {
+    return getEntityStatusText(e, includeResearch);
+}
+
+function _getInfoPanelEntityStateHelpText(e, includeResearch = false) {
+    if (!e) return 'Current thing state and why it is happening.';
+    if (e.underConstruction) return 'Under construction. Builders are still delivering and applying build progress.';
+    if (includeResearch && e.isResearching) return 'Actively running research work right now.';
+    if (e.isUpgrading) return 'Upgrading to a higher level. This consumes build progress/resources until complete.';
+    if (e.isStacking) return 'Stacking toward higher level requirements.';
+    if (Array.isArray(e.spawnQueue) && e.spawnQueue.length > 0) return `Ready, with ${e.spawnQueue.length} unit(s) waiting in the spawn queue.`;
+    if (Number.isFinite(e.energy) && e.energy <= 0) return 'Not operational because energy is empty.';
+    return 'Ready and operational.';
+}
+
+function _buildInfoPanelEntityStateLabel(e, includeResearch = false) {
+    return _buildInfoPanelStateLabelButton(_getInfoPanelEntityStateLabel(e, includeResearch), _getInfoPanelEntityStateHelpText(e, includeResearch));
+}
+
+function _buildInfoPanelAssignedLabelButton(mode, dataAttrs = {}) {
+    let attrs = '';
+    for (let [k, v] of Object.entries(dataAttrs || {})) {
+        if (v === undefined || v === null) continue;
+        attrs += ` data-${_escapeHtml(String(k))}="${_escapeHtml(String(v))}"`;
+    }
+    return `<span style="display:inline-flex;align-items:center;gap:4px;"><button type="button" class="info-assigned-open-popup-btn" data-mode="${_escapeHtml(String(mode || ''))}"${attrs} title="Open assigned in popup" style="cursor:pointer;background:#1a2631;color:#cfe6ff;border:1px solid #486179;border-radius:3px;font-size:10px;padding:0 4px;line-height:1.2">A</button><span>Assigned</span></span>`;
+}
+
+function _findInfoPanelUnitById(unitId) {
+    let id = Math.floor(Number(unitId));
+    if (!Number.isFinite(id)) return null;
+    for (let i = 0; i < units.length; i++) {
+        let u = units[i];
+        if (u && !u.dead && Math.floor(Number(u.id)) === id) return u;
+    }
+    return null;
+}
+
+function _resolveInfoPanelEntityAt(gx, gy, targetType = '') {
+    let x = Math.floor(Number(gx));
+    let y = Math.floor(Number(gy));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (targetType === 'mine') {
+        let mine = getGoldMineAt(x, y);
+        if (mine) return mine;
+    }
+    if (targetType === 'astar_mine') {
+        let mine = getAstarMineAt(x, y);
+        if (mine) return mine;
+    }
+    let ref = getTileEntityRef(x, y);
+    if (ref) return ref;
+    return getGoldMineAt(x, y) || getAstarMineAt(x, y) || null;
+}
+
+function _selectInfoPanelAssignedUnit(unitId) {
+    let u = _findInfoPanelUnitById(unitId);
+    if (!u) return;
+    selectedUnits = [u];
+    selectedEntities = [];
+    activeSubGroups = {};
+    updateInfoPanel();
+}
+
+function _selectInfoPanelAssignedTarget(gx, gy, targetType = '') {
+    let e = _resolveInfoPanelEntityAt(gx, gy, targetType);
+    if (!e) return;
+    selectedEntities = [e];
+    selectedUnits = [];
+    activeSubGroups = {};
+    updateInfoPanel();
+}
+
+function _openAssignedInPopupForEntity(gx, gy, targetType = '') {
+    let e = _resolveInfoPanelEntityAt(gx, gy, targetType);
+    if (!e) return;
+    let assigned = [];
+    for (let i = 0; i < units.length; i++) {
+        let u = units[i];
+        if (!u || u.dead || !u.workerType) continue;
+        if (u.workerTarget !== e) continue;
+        assigned.push(u);
+    }
+    if (assigned.length <= 0) return;
+    selectedEntities = [];
+    selectedUnits = assigned;
+    activeSubGroups = {};
+    setResearchPopupOpen(true);
+    updateInfoPanel();
+}
+
+function _openAssignedInPopupForWorker(workerId) {
+    let u = _findInfoPanelUnitById(workerId);
+    if (!u || !u.workerType || !u.workerTarget) return;
+    let target = u.workerTarget;
+    let targetType = String(u.workerTargetType || '');
+    if (target.unitType && Number.isFinite(target.id)) {
+        let tu = _findInfoPanelUnitById(target.id);
+        if (!tu) return;
+        selectedEntities = [];
+        selectedUnits = [tu];
+        activeSubGroups = {};
+        setResearchPopupOpen(true);
+        updateInfoPanel();
+        return;
+    }
+    let gx = Number(target.gx);
+    let gy = Number(target.gy);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+    let e = _resolveInfoPanelEntityAt(gx, gy, targetType);
+    if (!e) return;
+    selectedUnits = [];
+    selectedEntities = [e];
+    activeSubGroups = {};
+    setResearchPopupOpen(true);
+    updateInfoPanel();
+}
+
+function _getInfoPanelThingThumbKey(ref, targetType = '') {
+    if (!ref) return '';
+    if (ref.unitType) return String(ref.unitType);
+    if (ref._isGoldMine || targetType === 'mine') return 'gold_mine';
+    if (ref._isAstarMine || targetType === 'astar_mine') return 'astar_mine';
+    if (ref.type === 'barrack' && ref.unitType) return `barrack_${ref.unitType}`;
+    if (ref.type) return String(ref.type);
+    if (targetType === 'farm') return 'farm';
+    if (targetType === 'astar_farm') return 'astar_farm';
+    return '';
+}
+
+function _getInfoPanelThingTitle(ref, targetType = '') {
+    if (!ref) return 'Assigned target';
+    if (ref.unitType) return `${String(ref.unitType).replace(/_/g, ' ')} #${Math.floor(Number(ref.id) || 0)}`;
+    if (ref._isGoldMine || targetType === 'mine') return 'Gold Mine';
+    if (ref._isAstarMine || targetType === 'astar_mine') return 'A* Mine';
+    if (ref.type === 'barrack' && ref.unitType) return `Barrack (${ref.unitType})`;
+    if (ref.type) return String(ref.type).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return 'Assigned target';
+}
+
+function _buildInfoPanelAssignedWorkersHtml(e) {
+    let wrapStart = '<span style="display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;height:16px;overflow:hidden;white-space:nowrap;vertical-align:middle;line-height:0">';
+    let wrapEnd = '</span>';
+    if (!e) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
+    let assigned = [];
+    for (let i = 0; i < units.length; i++) {
+        let u = units[i];
+        if (!u || u.dead || !u.workerType) continue;
+        if (u.workerTarget !== e) continue;
+        assigned.push(u);
+    }
+    if (assigned.length === 0) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
+    let maxVisible = 8;
+    let html = wrapStart;
+    for (let i = 0; i < assigned.length && i < maxVisible; i++) {
+        let u = assigned[i];
+        let thumb = getItemThumbnail(u.unitType, 14);
+        let title = _escapeHtml(_getInfoPanelThingTitle(u));
+        html += `<button type="button" class="info-assigned-unit-btn" data-unit-id="${u.id}" title="${title}" style="cursor:pointer;background:#151515;border:1px solid #3f4f5f;border-radius:3px;padding:0;width:16px;height:16px;min-width:16px;display:inline-flex;align-items:center;justify-content:center">`;
+        html += `<img src="${thumb}" width="12" height="12" style="display:block;border-radius:50%">`;
+        html += `</button>`;
+    }
+    if (assigned.length > maxVisible) {
+        html += `<span title="${assigned.length - maxVisible} more assigned" style="display:inline-flex;align-items:center;justify-content:center;height:16px;min-width:16px;padding:0 4px;background:#1a1a1a;border:1px solid #3f4f5f;border-radius:3px;color:#9fb2c7;font-size:9px;line-height:1">+${assigned.length - maxVisible}</span>`;
+    }
+    html += wrapEnd;
+    return html;
+}
+
+function _buildInfoPanelWorkerAssignedTargetHtml(u) {
+    let wrapStart = '<span style="display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap;height:16px;overflow:hidden;white-space:nowrap;vertical-align:middle;line-height:0">';
+    let wrapEnd = '</span>';
+    if (!u || !u.workerType) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
+    let target = u.workerTarget;
+    let targetType = String(u.workerTargetType || '');
+    if (!target) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
+
+    if (target.unitType && Number.isFinite(target.id)) {
+        let title = _escapeHtml(_getInfoPanelThingTitle(target));
+        return wrapStart
+            + `<button type="button" class="info-assigned-unit-btn" data-unit-id="${target.id}" title="${title}" style="cursor:pointer;background:#151515;border:1px solid #3f4f5f;border-radius:3px;padding:0;width:16px;height:16px;min-width:16px;display:inline-flex;align-items:center;justify-content:center">`
+            + `<img src="${getItemThumbnail(target.unitType, 14)}" width="12" height="12" style="display:block;border-radius:50%">`
+            + `</button>`
+            + wrapEnd;
+    }
+
+    let gx = Number(target.gx);
+    let gy = Number(target.gy);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return `${wrapStart}<span style="color:#9aa;line-height:1">None</span>${wrapEnd}`;
+
+    let thumbKey = _getInfoPanelThingThumbKey(target, targetType);
+    let title = _escapeHtml(_getInfoPanelThingTitle(target, targetType));
+    let imgHtml = thumbKey
+        ? `<img src="${getItemThumbnail(thumbKey, 14)}" width="12" height="12" style="display:block;${targetType.indexOf('mine') >= 0 ? '' : 'border-radius:3px;'}">`
+        : '<span style="color:#9cf">T</span>';
+    return wrapStart + `<button type="button" class="info-assigned-target-btn" data-target-gx="${Math.floor(gx)}" data-target-gy="${Math.floor(gy)}" data-target-type="${_escapeHtml(targetType)}" title="${title}" style="cursor:pointer;background:#151515;border:1px solid #3f4f5f;border-radius:3px;padding:0;width:16px;height:16px;min-width:16px;display:inline-flex;align-items:center;justify-content:center">`
+        + imgHtml
+        + `</button>` + wrapEnd;
 }
 
 function updateHUD() {
@@ -1643,7 +1920,7 @@ function getEntityEnergyDisplayMax(e) {
 
 function getEntityStatusText(e, includeResearch = false) {
     if (!e) return '';
-    if (e.underConstruction) return '\uD83D\uDD28 Under Construction';
+    if (e.underConstruction) return '\uD83D\uDD28 Building';
     if (includeResearch && e.isResearching) return '\uD83E\uDDEA Researching';
     if (e.isUpgrading) return '\u2B06\uFE0F Upgrading';
     if (e.isStacking) {
@@ -1685,7 +1962,8 @@ function renderBarrackInfo(e) {
     let baseMaxEnergy = getEntityBaseEnergyMax(e);
     let effMaxEnergy = getEntityEffectiveEnergyMax(e);
     html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
-    html += infoRow('Status', getEntityStatusText(e));
+    html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
+    html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
@@ -1810,7 +2088,8 @@ function renderTowerInfo(e) {
     let baseMaxEnergy = getEntityBaseEnergyMax(e);
     let effMaxEnergy = getEntityEffectiveEnergyMax(e);
     html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
-    html += infoRow('Status', getEntityStatusText(e));
+    html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
+    html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
@@ -1963,7 +2242,8 @@ function renderSpawnerInfo(e) {
     let baseMaxEnergy = getEntityBaseEnergyMax(e);
     let effMaxEnergy = getEntityEffectiveEnergyMax(e);
     html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
-    html += infoRow('Status', getEntityStatusText(e));
+    html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
+    html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
@@ -2012,6 +2292,8 @@ function renderFloorItemInfo(e) {
     let baseMaxEnergy = getEntityBaseEnergyMax(e);
     let effMaxEnergy = getEntityEffectiveEnergyMax(e);
     if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), effMaxEnergy));
+    html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
+    html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
@@ -2180,7 +2462,8 @@ function renderUnitInfo(u) {
     let baseAstarCost = Math.max(0.1, Number(u.baseLevelAstarCost ?? getUnitStatForOwner(u.owner, u.unitType, lvl, 'astarCost')) || 1);
     let effAstarCost = Math.max(0.1, Number(u.astarCost ?? getUnitStatForOwner(u.owner, u.unitType, effLvl, 'astarCost')) || baseAstarCost);
     html += infoRow(withInfoPanelStatMatrixButton('A* / Tile', { title: `${u.unitType} / A* Cost`, kind: 'unit', key: u.unitType, statKey: 'astarCost' }), formatBigNumber(baseAstarCost, 2), formatBigNumber(effAstarCost, 2));
-    html += infoRow('State', ['Idle', 'Move', 'AtkMove', 'Attack', 'Hold'][u.commandState]);
+    html += infoRow(_buildInfoPanelUnitStateLabel(u), _getInfoPanelUnitStateLabel(u));
+    if (u.workerType) html += infoRow(_buildInfoPanelAssignedLabelButton('worker', { unitId: u.id }), _buildInfoPanelWorkerAssignedTargetHtml(u));
     let immunes = [];
     if (s.fireResistant) immunes.push('Fire');
     if (s.poisonResistant) immunes.push('Poison');
@@ -2875,7 +3158,8 @@ function renderResearchInfo(e) {
     let baseMaxEnergy = getEntityBaseEnergyMax(e);
     let effMaxEnergy = getEntityEffectiveEnergyMax(e);
     html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
-    html += infoRow('Status', getEntityStatusText(e, true));
+    html += infoRow(_buildInfoPanelEntityStateLabel(e, true), _getInfoPanelEntityStateLabel(e, true));
+    html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
@@ -3585,6 +3869,39 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         });
     });
 
+    panel.querySelectorAll('.info-state-help-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let stateLabel = btn.dataset.stateLabel || 'State';
+            let helpText = btn.dataset.helpText || 'Current unit order and why it is happening.';
+            setUnitStateHelpPopupOpen(true, stateLabel, helpText);
+        });
+    });
+
+    panel.querySelectorAll('.info-assigned-unit-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            _selectInfoPanelAssignedUnit(btn.dataset.unitId);
+        });
+    });
+
+    panel.querySelectorAll('.info-assigned-target-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            _selectInfoPanelAssignedTarget(btn.dataset.targetGx, btn.dataset.targetGy, btn.dataset.targetType || '');
+        });
+    });
+
+    panel.querySelectorAll('.info-assigned-open-popup-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            let mode = String(btn.dataset.mode || '').toLowerCase();
+            if (mode === 'worker') {
+                _openAssignedInPopupForWorker(btn.dataset.unitId);
+                return;
+            }
+            if (mode === 'entity') {
+                _openAssignedInPopupForEntity(btn.dataset.gx, btn.dataset.gy, btn.dataset.targetType || '');
+            }
+        });
+    });
+
     restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
 
     panel.querySelectorAll('.info-research-move-top-btn').forEach(btn => {
@@ -3893,6 +4210,20 @@ function setHelpPopupOpen(open) {
         let modeEl = document.getElementById('help-game-mode');
         if (modeEl) modeEl.textContent = getGameModeLabel(gameMode);
         setHelpTab('keybinds');
+    }
+    popup.classList.toggle('hidden', !open);
+    return wasOpen !== open;
+}
+
+function setUnitStateHelpPopupOpen(open, stateLabel = 'State', helpText = '') {
+    let popup = document.getElementById('unit-state-help-popup');
+    if (!popup) return false;
+    let wasOpen = !popup.classList.contains('hidden');
+    if (open) {
+        let titleEl = document.getElementById('unit-state-help-title');
+        let bodyEl = document.getElementById('unit-state-help-body');
+        if (titleEl) titleEl.textContent = `${String(stateLabel || 'State')} Help`;
+        if (bodyEl) bodyEl.textContent = String(helpText || 'Current unit order and why it is happening.');
     }
     popup.classList.toggle('hidden', !open);
     return wasOpen !== open;
