@@ -1314,7 +1314,7 @@ function _collectorFindTarget(u, myGx, myGy) {
 }
 
 function _collectorCanWalk(nx, ny) {
-    return hasActiveGoldMineAt(nx, ny);
+    return hasActiveGoldMineAt(nx, ny) || hasActiveAstarMineAt(nx, ny);
 }
 
 let _activeBuilderWorkCacheTick = -1;
@@ -1475,6 +1475,11 @@ function _getWorkerAutoSearchDistancePx(u) {
     let distTiles = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
     if (!Number.isFinite(distTiles) || distTiles <= 0) distTiles = 10;
     return Math.max(TILE, distTiles * TILE);
+}
+
+function _getResearcherAutoSearchDistancePx(u) {
+    // Researchers often need to cross a larger base area to find active labs.
+    return Math.max(_getWorkerAutoSearchDistancePx(u), TILE * 32);
 }
 
 function _getTargetPriorityLevel(target) {
@@ -1661,6 +1666,123 @@ function getPathCanWalkForUnit(unit) {
     return null;
 }
 
+function applyWorkerRallyFromSpawner(u, spawner) {
+    if (!u || !spawner || !u.workerType) return false;
+    let rally = getSpawnerRallyTargetWorld(spawner);
+    if (!rally) return false;
+
+    let owner = u.owner;
+    let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
+    let rgx = Math.floor(rally.x / TILE), rgy = Math.floor(rally.y / TILE);
+
+    if (u.workerType === 'collector') {
+        let gather = _getCollectorGatherTargetAt(rgx, rgy, owner, null) || _getCollectorGatherTargetNear(rally.x, rally.y, owner, 22);
+        if (!gather || !_isCollectorTargetValid(gather.target, gather.type, owner)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
+        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
+        _clearWorkerTarget(u);
+        u._collectorPinnedTarget = gather.target;
+        u._collectorPinnedTargetType = gather.type;
+        _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
+        return true;
+    }
+
+    if (u.workerType === 'astar_collector') {
+        let gather = _getAstarCollectorGatherTargetAt(rgx, rgy, owner, null) || _getAstarCollectorGatherTargetNear(rally.x, rally.y, owner, 22);
+        if (!gather || !_isAstarCollectorTargetValid(gather.target, gather.type, owner)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
+        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
+        _clearWorkerTarget(u);
+        u._astarPinnedTarget = gather.target;
+        u._astarPinnedTargetType = gather.type;
+        _astarCollectorAssignTarget(u, gather.target, gather.type);
+        return true;
+    }
+
+    if (u.workerType === 'builder') {
+        let target = _getBuilderWorkTargetAt(rgx, rgy, owner, true) || _getBuilderWorkTargetNear(rally.x, rally.y, owner, 22, true);
+        if (!target || !_isBuilderWorkTarget(target, owner, true)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, target, null);
+        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
+        _builderAssignTarget(u, target, myGx, myGy);
+        return true;
+    }
+
+    if (u.workerType === 'healer') {
+        let qTarget = getTileEntityRef(rgx, rgy);
+        if (!_isHealerQueueAnchorTarget(qTarget, owner)) qTarget = _getHealerQueueTargetNear(rally.x, rally.y, owner, 22, false);
+        if (!_isHealerQueueAnchorTarget(qTarget, owner)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
+        if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) return false;
+        _clearWorkerTarget(u);
+        u._healerPinnedQueueTarget = qTarget;
+        if (_isHealerQueueTarget(qTarget, owner)) _setHealerQueueCommit(u, qTarget);
+        else _clearHealerQueueCommit(u);
+        _healerFindTarget(u, myGx, myGy);
+        return true;
+    }
+
+    if (u.workerType === 'researcher') {
+        let rTarget = getTileEntityRef(rgx, rgy);
+        if (!_isResearcherTargetBuilding(rTarget, owner)) {
+            rTarget = null;
+            let bestDist = Infinity;
+            for (let s of collectorSpawners) {
+                if (!_isResearcherTargetBuilding(s, owner)) continue;
+                let d = Math.hypot(s.x - rally.x, s.y - rally.y);
+                if (d > 48 || d >= bestDist) continue;
+                bestDist = d;
+                rTarget = s;
+            }
+        }
+        if (!rTarget) return false;
+        _releaseManualWorkerAssignmentConflicts(u, rTarget, 'research');
+        if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) return false;
+        _clearWorkerTarget(u);
+        if (!_setWorkerTarget(u, rTarget, 'research')) return false;
+        u.workerState = 'MOVING_TO_RESEARCH';
+        u._workerNextIdleRetargetTick = gameTime;
+        u._researchSpawnerTarget = null;
+        let path = _requestWorkerPath(u, myGx, myGy, rTarget.gx, rTarget.gy, null, null);
+        if (path && path.length > 0) {
+            u.path = path;
+            u.pathIndex = 0;
+            u.commandState = CMD_MOVING;
+        } else {
+            u.commandState = CMD_IDLE;
+        }
+        return true;
+    }
+
+    if (u.workerType === 'salvager') {
+        let target = getTileEntityRef(rgx, rgy);
+        let isValid = (obj) => !!obj && obj.owner === owner && !!obj.markedForSalvage && (!(obj.energy !== undefined) || obj.energy > 0);
+        if (!isValid(target)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, target, null);
+        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
+        if (!_setWorkerTarget(u, target, null)) return false;
+        let canWalk = (nx, ny) => nx === target.gx && ny === target.gy;
+        u.path = _requestWorkerPath(u, myGx, myGy, target.gx, target.gy, canWalk, null, true);
+        if (u.path) {
+            u.workerState = 'MOVING_TO';
+            u.pathIndex = 0;
+            u.commandState = CMD_MOVING;
+            return true;
+        }
+        if (_workerHasPendingAutoRouteToTarget(u, target)) {
+            u.workerState = 'MOVING_TO';
+            return true;
+        }
+        _clearWorkerAutoRoute(u);
+        _clearWorkerTarget(u);
+        u.workerState = 'IDLE';
+        u.commandState = CMD_IDLE;
+        return false;
+    }
+
+    return false;
+}
+
 function _isBuilderRepairTarget(target) {
     if (!target) return false;
     let energy = Number(target.energy);
@@ -1756,7 +1878,7 @@ function _collectorAssignMine(u, mine, myGx, myGy) {
 }
 
 function _astarCollectorCanWalk(nx, ny) {
-    return hasActiveAstarMineAt(nx, ny);
+    return hasActiveGoldMineAt(nx, ny) || hasActiveAstarMineAt(nx, ny);
 }
 
 function _astarCollectorRememberGatherSite(u, target = null) {
@@ -2208,9 +2330,12 @@ function _isResearcherTargetBuilding(target, owner) {
     if (!target || target.type !== 'research') return false;
     if (target.owner !== owner) return false;
     if (target.energy <= 0 || target.underConstruction || target.markedForSalvage) return false;
-    if (!isAutoResearchEnabled(target) || target.isUpgrading) return false;
+    if (target.isUpgrading) return false;
     let task = target.researchTask;
     if (!task) {
+        // Only auto-start new research when auto-research is enabled.
+        // If a task already exists, researchers may still assist it.
+        if (!isAutoResearchEnabled(target)) return false;
         task = tryAdvancePlayerResearchTask(owner);
         target.researchTask = task || null;
     }
@@ -2220,7 +2345,7 @@ function _isResearcherTargetBuilding(target, owner) {
 
 function _findNearestResearchBuildingNeedingWork(u) {
     let candidates = [];
-    let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearch = _getResearcherAutoSearchDistancePx(u);
     for (let s of collectorSpawners) {
         if (!_isResearcherTargetBuilding(s, u.owner)) continue;
         let d = Math.hypot(s.x - u.x, s.y - u.y);

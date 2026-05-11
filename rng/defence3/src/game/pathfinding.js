@@ -93,10 +93,26 @@ function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = nu
     _recordAstarUsage(pid, delta, unit, sourceTag);
 }
 
+function _resolveUnitAstarTileCost(u) {
+    if (!u) return 0.1;
+    let unitCost = Number(u.astarCost);
+    if (Number.isFinite(unitCost) && unitCost > 0) return Math.max(0.1, unitCost);
+
+    let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
+    let unitType = String(u.unitType || 'norm');
+    let level = Math.max(1, Math.floor(Number(u.effectiveLevel || u.unitLevel || 1) || 1));
+    let mapCost = Number(getUnitStatForOwner(owner, unitType, level, 'astarCost'));
+    if (Number.isFinite(mapCost) && mapCost > 0) return Math.max(0.1, mapCost);
+
+    let baseCost = Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).astarCost);
+    if (Number.isFinite(baseCost) && baseCost > 0) return Math.max(0.1, baseCost);
+    return 0.1;
+}
+
 function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (!u) return false;
     let tileCount = Math.max(0, Number(tiles) || 0);
-    let amount = tileCount * Math.max(0.1, Number(u.astarCost) || Number((BASE_UNIT_STATS[u.unitType] || {}).astarCost) || 1);
+    let amount = tileCount * _resolveUnitAstarTileCost(u);
     if (amount <= 0) return true;
     let pid = _normalizeOwnerId(u.owner);
     if (pid < 0) return true;
@@ -113,9 +129,10 @@ function _getUnitAstarSpeedMultiplier(u) {
     if (!u) return 1;
     let pid = _normalizeOwnerId(u.owner);
     if (pid < 0 || !players[pid]) return 1;
-    let astarCost = Math.max(0, Number(u.astarCost) || Number((BASE_UNIT_STATS[u.unitType] || {}).astarCost) || 0);
+    let astarCost = _resolveUnitAstarTileCost(u);
     if (astarCost <= 0) return 1;
-    return _getPlayerAstarBudgetRemaining(u.owner) <= 0
+    // Slow down whenever we cannot afford even one tile of movement A* cost.
+    return _getPlayerAstarBudgetRemaining(u.owner) < astarCost
         ? OUT_OF_ASTAR_SPEED_MULTIPLIER
         : 1;
 }
@@ -714,13 +731,9 @@ function canUnitOccupyTile(unit, gx, gy) {
     if (!!getCloudTowerAt(gx, gy, unit ? unit.owner : null)) return true;
     if (!unit) return false;
 
-    // Collectors can stand on active gold mines.
-    if (unit.workerType === 'collector') {
-        if (hasActiveGoldMineAt(gx, gy)) return true;
-    }
-
-    if (unit.workerType === 'astar_collector') {
-        if (hasActiveAstarMineAt(gx, gy)) return true;
+    // Collector variants can stand on both active mine types.
+    if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') {
+        if (hasActiveGoldMineAt(gx, gy) || hasActiveAstarMineAt(gx, gy)) return true;
     }
 
     // Builders can stand on active build/upgrade targets.

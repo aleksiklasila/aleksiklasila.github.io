@@ -589,8 +589,8 @@ function _openAssignedInPopupForWorker(workerId) {
 function _getInfoPanelThingThumbKey(ref, targetType = '') {
     if (!ref) return '';
     if (ref.unitType) return String(ref.unitType);
-    if (ref._isGoldMine || targetType === 'mine') return 'gold_mine';
-    if (ref._isAstarMine || targetType === 'astar_mine') return 'astar_mine';
+    if (ref._isGoldMine || targetType === 'mine' || (Number.isFinite(ref.gold) && Number.isFinite(ref.maxGold))) return 'goldmine';
+    if (ref._isAstarMine || targetType === 'astar_mine' || (Number.isFinite(ref.astar) && Number.isFinite(ref.maxAstar))) return 'astarmine';
     if (ref.type === 'barrack' && ref.unitType) return `barrack_${ref.unitType}`;
     if (ref.type) return String(ref.type);
     if (targetType === 'farm') return 'farm';
@@ -601,8 +601,8 @@ function _getInfoPanelThingThumbKey(ref, targetType = '') {
 function _getInfoPanelThingTitle(ref, targetType = '') {
     if (!ref) return 'Assigned target';
     if (ref.unitType) return `${String(ref.unitType).replace(/_/g, ' ')} #${Math.floor(Number(ref.id) || 0)}`;
-    if (ref._isGoldMine || targetType === 'mine') return 'Gold Mine';
-    if (ref._isAstarMine || targetType === 'astar_mine') return 'A* Mine';
+    if (ref._isGoldMine || targetType === 'mine' || (Number.isFinite(ref.gold) && Number.isFinite(ref.maxGold))) return 'Gold Mine';
+    if (ref._isAstarMine || targetType === 'astar_mine' || (Number.isFinite(ref.astar) && Number.isFinite(ref.maxAstar))) return 'A* Mine';
     if (ref.type === 'barrack' && ref.unitType) return `Barrack (${ref.unitType})`;
     if (ref.type) return String(ref.type).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     return 'Assigned target';
@@ -1826,9 +1826,19 @@ function getActiveEntities() {
     });
 }
 
+function _isGoldMineLikeEntity(e) {
+    if (!e) return false;
+    return !!e._isGoldMine || (Number.isFinite(e.gold) && Number.isFinite(e.maxGold));
+}
+
+function _isAstarMineLikeEntity(e) {
+    if (!e) return false;
+    return !!e._isAstarMine || (Number.isFinite(e.astar) && Number.isFinite(e.maxAstar));
+}
+
 function getEntityGroupKey(e) {
-    if (e._isGoldMine) return 'goldmine';
-    if (e._isAstarMine) return 'astarmine';
+    if (_isGoldMineLikeEntity(e)) return 'goldmine';
+    if (_isAstarMineLikeEntity(e)) return 'astarmine';
     if (ignoreLevelSubgroups) {
         if (e.type === 'barrack') return 'barrack_' + e.unitType;
         if (e instanceof Tower) return 'tower_' + e.type;
@@ -1847,8 +1857,8 @@ function getEntityGroupKey(e) {
 }
 
 function getEntityGroupLabel(e) {
-    if (e._isGoldMine) return 'Energy Mine';
-    if (e._isAstarMine) return 'A* Mine';
+    if (_isGoldMineLikeEntity(e)) return 'Energy Mine';
+    if (_isAstarMineLikeEntity(e)) return 'A* Mine';
     if (e.type === 'barrack') return ((BASE_CARD_TYPES['barrack_' + e.unitType] || {}).name || e.unitType);
     if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).name || e.type;
     if (e.type === 'spawner') return 'Collector';
@@ -1864,8 +1874,8 @@ function getEntityGroupLabel(e) {
 function getGroupThumbKey(grp) {
     let e = grp.items[0];
     if (grp.isUnit) return e.unitType;
-    if (e._isGoldMine) return 'goldmine';
-    if (e._isAstarMine) return 'astarmine';
+    if (_isGoldMineLikeEntity(e)) return 'goldmine';
+    if (_isAstarMineLikeEntity(e)) return 'astarmine';
     if (e.type === 'barrack') return 'barrack_' + e.unitType;
     if (e instanceof Tower) return e.type;
     if (e.type === 'spawner' || e.type === 'astar_spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner' || e.type === 'research') return e.type;
@@ -1876,8 +1886,8 @@ function getGroupThumbKey(grp) {
 function getGroupBorderColor(grp) {
     let e = grp.items[0];
     if (grp.isUnit) return (BASE_UNIT_STATS[e.unitType] || {}).color || '#fff';
-    if (e._isGoldMine) return '#fd0';
-    if (e._isAstarMine) return '#bbb';
+    if (_isGoldMineLikeEntity(e)) return '#fd0';
+    if (_isAstarMineLikeEntity(e)) return '#bbb';
     if (e.type === 'barrack') return (BASE_UNIT_STATS[e.unitType] || {}).color || '#686';
     if (e instanceof Tower) return (BASE_CARD_TYPES[e.type] || {}).color || '#fff';
     let ct = BASE_CARD_TYPES[e.type] || {};
@@ -1888,8 +1898,8 @@ function getGroupLevel(key, grp) {
     if (ignoreLevelSubgroups) return null;
     let e = grp.items[0];
     if (grp.isUnit) return getUnitBaseLevel(e);
-    if (e._isGoldMine) return null;
-    if (e._isAstarMine) return null;
+    if (_isGoldMineLikeEntity(e)) return null;
+    if (_isAstarMineLikeEntity(e)) return null;
     if (e.underConstruction) return 0;
     if (e.effectiveLevel !== undefined) return getThingEffectiveLevel(e);
     if (e.level !== undefined || e.stacks) return getThingBaseLevel(e);
@@ -1897,7 +1907,7 @@ function getGroupLevel(key, grp) {
 }
 
 function getEntityLevelToken(e) {
-    if (!e || e._isGoldMine || e._isAstarMine) return null;
+    if (!e || _isGoldMineLikeEntity(e) || _isAstarMineLikeEntity(e)) return null;
     if (e.underConstruction) return 'build';
     if (e.isUpgrading) return 'upg';
     if (e.isStacking) return 'stack';
@@ -2653,8 +2663,8 @@ function renderUnitGroupInfo(group) {
 }
 
 function renderEntityBlock(e) {
-    if (e._isGoldMine) return renderGoldMineInfo(e);
-    if (e._isAstarMine) return renderAstarMineInfo(e);
+    if (_isGoldMineLikeEntity(e)) return renderGoldMineInfo(e);
+    if (_isAstarMineLikeEntity(e)) return renderAstarMineInfo(e);
     let ctx = getInfoPanelMatrixContextForEntity(e);
     if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackInfo(e));
     if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerInfo(e));
@@ -2669,8 +2679,8 @@ function renderEntityGroupBlock(group) {
     let ctx = getInfoPanelMatrixContextForEntity(e);
     if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackGroupInfo(group));
     if (e instanceof Tower) return runWithInfoPanelStatMatrixContext(ctx, () => renderTowerGroupInfo(group));
-    if (e._isGoldMine) return renderGoldMineGroupInfo(group);
-    if (e._isAstarMine) return renderAstarMineGroupInfo(group);
+    if (_isGoldMineLikeEntity(e)) return renderGoldMineGroupInfo(group);
+    if (_isAstarMineLikeEntity(e)) return renderAstarMineGroupInfo(group);
     if (e.type === 'research') return runWithInfoPanelStatMatrixContext(ctx, () => renderResearchGroupInfo(group));
     if (e.type === 'spawner' || e.type === 'astar_spawner' || e.type === 'salvager' || e.type === 'builder_spawner' || e.type === 'healer_spawner') return runWithInfoPanelStatMatrixContext(ctx, () => renderSpawnerGroupInfo(group));
     if (e.type && BASE_CARD_TYPES[e.type]) return runWithInfoPanelStatMatrixContext(ctx, () => renderFloorItemGroupInfo(group));
@@ -3668,7 +3678,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         } else {
             let e0 = items[0];
             let prefix = items.length > 1 ? `${items.length}x ` : '';
-            if (e0._isGoldMine || e0._isAstarMine) {
+            if (_isGoldMineLikeEntity(e0) || _isAstarMineLikeEntity(e0)) {
                 html += `<div class="info-title">${subgroupPopupBtnHtml}${prefix}${label}</div>`;
             } else {
                 let mixedEntityLevels = false;

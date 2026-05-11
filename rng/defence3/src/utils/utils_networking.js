@@ -635,6 +635,16 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         delete u._snapshotRefs;
     }
 
+    // Re-derive live unit stats from precomputed tables after snapshot assignment.
+    // This prevents stale/invalid serialized fields (including astarCost) from bypassing runtime scaling.
+    for (let u of units) {
+        if (!u || u.dead) continue;
+        let baseLevel = Math.max(1, getUnitBaseLevel(u));
+        applyUnitLevelScaling(u, baseLevel);
+        let effLevel = Math.max(1, getUnitEffectiveLevel(u, baseLevel));
+        if (effLevel !== baseLevel) applyUnitEffectiveScaling(u, effLevel);
+    }
+
     nextUnitId = Math.max(snapshotNextUnitId, units.reduce((m, u) => Math.max(m, Math.floor(Number(u.id) || 0) + 1), 1));
 
     goldMines = Array.isArray(snapshot.goldMines) ? cloneSnapshotValue(snapshot.goldMines) : goldMines;
