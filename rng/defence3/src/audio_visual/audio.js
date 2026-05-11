@@ -709,19 +709,48 @@ function _attachBackgroundMusicAnalyser(loopNode) {
     }
 }
 
+// Per-frame global audio source cap: reset each game tick
+let _audioFrameSoundCount = 0;
+let _audioFrameSoundTick = -1;
+const AUDIO_MAX_SOUNDS_PER_FRAME = 6;
+
+// Throttle rules: [maxPerWindow, windowTicks]
+const _audioTypeThrottle = {
+    builder_work:      [3, 6],
+    heal_tick:         [3, 6],
+    research_tick:     [3, 6],
+    gold_collected:    [3, 6],
+    astar_collected:   [2, 6],
+    salvage_collected: [2, 6],
+    melee_hit:         [4, 4],
+};
+
 function _canPlaySoundTypeNow(type) {
     let normalizedType = String(type || '').trim();
     if (!normalizedType) return false;
-    if (normalizedType !== 'builder_work' && normalizedType !== 'heal_tick' && normalizedType !== 'research_tick') return true;
 
+    // Global per-frame cap
     let tick = Number.isFinite(gameTime) ? gameTime : 0;
-    let state = _audioTypeBurstState[normalizedType];
-    if (!state || tick - state.windowStartTick >= 6) {
-        _audioTypeBurstState[normalizedType] = { windowStartTick: tick, count: 1 };
-        return true;
+    if (tick !== _audioFrameSoundTick) {
+        _audioFrameSoundCount = 0;
+        _audioFrameSoundTick = tick;
     }
-    if (state.count >= 3) return false;
-    state.count++;
+    if (_audioFrameSoundCount >= AUDIO_MAX_SOUNDS_PER_FRAME) return false;
+
+    let throttle = _audioTypeThrottle[normalizedType];
+    if (throttle) {
+        let [maxCount, windowTicks] = throttle;
+        let state = _audioTypeBurstState[normalizedType];
+        if (!state || tick - state.windowStartTick >= windowTicks) {
+            _audioTypeBurstState[normalizedType] = { windowStartTick: tick, count: 1 };
+        } else if (state.count >= maxCount) {
+            return false;
+        } else {
+            state.count++;
+        }
+    }
+
+    _audioFrameSoundCount++;
     return true;
 }
 

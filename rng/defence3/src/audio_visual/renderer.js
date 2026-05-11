@@ -881,6 +881,7 @@ function push3DRenderObject(target, object) {
     }
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
+    let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
         modelKey: object.modelKey || 'cube',
         modelCandidates: Array.isArray(object.modelCandidates) ? object.modelCandidates.slice() : [],
@@ -892,6 +893,7 @@ function push3DRenderObject(target, object) {
         scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
         rotationY: Number(object.rotationY) || 0,
         tint,
+        sideTint,
         alpha: Math.max(0.05, Math.min(1, Number(object.alpha) || 1)),
         renderShape: object.renderShape === 'cylinder' ? 'cylinder' : 'box',
         topTextureKey: object.topTextureKey || '',
@@ -1223,6 +1225,7 @@ function build3DFrameData() {
                 topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i),
                 sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake_segment'),
                 sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake_segment', (Number(unit.owner) || 0) + i, '#3dff64'),
+                sideTint: get3DDamageFlashTint(unit, '#3dff64'),
                 sideTextureAngle: getAudioReactiveSideTextureAngle(pointGx, pointGy, (Number(unit.id) || 0) * 131 + i)
             });
         }
@@ -1241,6 +1244,7 @@ function build3DFrameData() {
             topTextureCanvas: get3DUnitTopTexture(unit, unit.owner, unitStatus),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake'),
             sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake', Number(unit.owner) || 0, '#3dff64'),
+            sideTint: get3DDamageFlashTint(unit, '#3dff64'),
             sideTextureAngle: getAudioReactiveSideTextureAngle(Math.floor(headX / TILE), Math.floor(headY / TILE), (Number(unit.id) || 0) * 131 + 97)
         });
     };
@@ -1279,7 +1283,8 @@ function build3DFrameData() {
                 draw3DSpriteIntoTopTexture(g, _getGoldMineTileSprite(m.gold > 0), 8);
             }),
             sideTextureKey: get3DSharedAudioTextureKeyForMine('gold', 'gold_mine'),
-            sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11)
+            sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11),
+            sideTint: '#f0c83a'
         });
     }
 
@@ -1308,7 +1313,8 @@ function build3DFrameData() {
                 g.fillStyle = '#fff'; g.font = 'bold 28px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('★', 32, 33);
             }),
             sideTextureKey: get3DSharedAudioTextureKeyForMine('astar', 'astar_mine'),
-            sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23)
+            sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23),
+            sideTint: '#d8d8e8'
         });
     }
 
@@ -1342,7 +1348,8 @@ function build3DFrameData() {
                 topTextureKey: `item:${cell.item.type}:${_getFloorItemEnergyBucket(cell.item)}:${itemStatus.keySuffix}`,
                 topTextureCanvas: get3DTopTextureForFloorItem(cell.item, itemStatus),
                 sideTextureKey: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSharedAudioTextureKeyForPlayer(cell.owner, itemSideVariant) : '',
-                sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null
+                sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null,
+                sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
             });
         }
     }
@@ -1372,7 +1379,8 @@ function build3DFrameData() {
             topTextureKey: `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
             topTextureCanvas: get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(t.owner, towerSideVariant),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(t.owner, towerSideVariant, Number(t.owner) || 0, (t.baseStats && t.baseStats.color) || null)
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(t.owner, towerSideVariant, Number(t.owner) || 0, (t.baseStats && t.baseStats.color) || null),
+            sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
         });
     }
 
@@ -1417,7 +1425,8 @@ function build3DFrameData() {
                 { subtype: s.type, status: spawnerStatus, statusKey: spawnerStatus.keySuffix }
             ),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(s.owner, spawnerSideVariant),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(s.owner, spawnerSideVariant, Number(s.owner) || 0, (BASE_CARD_TYPES[s.type] || {}).color || null)
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(s.owner, spawnerSideVariant, Number(s.owner) || 0, (BASE_CARD_TYPES[s.type] || {}).color || null),
+            sideTint: get3DDamageFlashTint(s, (BASE_CARD_TYPES[s.type] || {}).color || get3DRenderOwnerColor(s.owner))
         });
     }
 
@@ -1448,7 +1457,8 @@ function build3DFrameData() {
             topTextureKey: `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
             topTextureCanvas: get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(b.owner, 'barrack'),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(b.owner, 'barrack', Number(b.owner) || 0, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
+            sideTextureCanvas: get3DSideAudioTextureForPlayer(b.owner, 'barrack', Number(b.owner) || 0, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color),
+            sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
         });
     }
 
@@ -1513,6 +1523,7 @@ function build3DFrameData() {
                 topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus),
                 sideTextureKey: get3DSharedAudioTextureKeyForPlayer(u.owner, unitSideVariant),
                 sideTextureCanvas: get3DSideAudioTextureForPlayer(u.owner, unitSideVariant, Number(u.owner) || 0, unitSideColor),
+                sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
                 sideTextureAngle: getAudioReactiveSideTextureAngle(ugx, ugy, (Number(u.id) || 0) + (Number(u.owner) || 0) * 17)
             });
         }
