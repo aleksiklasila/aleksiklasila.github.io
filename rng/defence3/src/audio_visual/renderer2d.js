@@ -518,9 +518,17 @@ function getItemThumbnail(key, size) {
             ctx.moveTo(cx, cy + tr); ctx.lineTo(cx - tr, cy - tr); ctx.lineTo(cx + tr, cy - tr);
             ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
         } else if (us.vis === 'star') {
-            ctx.fillStyle = us.color; ctx.beginPath();
-            for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); }
-            ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+            if (key === 'collector' || key === 'astar_collector') {
+                ctx.font = `${Math.max(10, Math.round(r * 2.2))}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = key === 'collector' ? '#ffd34d' : '#f4f4f4';
+                ctx.fillText(key === 'collector' ? '⚡' : '★', cx, cy + 1 * s);
+            } else {
+                ctx.fillStyle = us.color; ctx.beginPath();
+                for (let i = 0; i < 5; i++) { let a = (i * 4 * Math.PI) / 5 - Math.PI / 2; ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); }
+                ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+            }
         } else if (us.vis === 'triangle_down') {
             ctx.fillStyle = us.color; ctx.beginPath();
             let tr = r;

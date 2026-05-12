@@ -433,7 +433,7 @@ function _getInfoPanelUnitStateHelpText(u) {
             if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
                 return 'Idle because A* was exhausted recently. Wait for more A* income or reduce pathfinding demand.';
             }
-            return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise Work Search Distance, or give a manual order.`;
+            return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise Work Distance, or give a manual order.`;
         }
         if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
             return 'Returning carried resources to the nearest drop-off before choosing the next task.';
@@ -915,6 +915,7 @@ function renderBuildItemDetailedStats(key) {
         let healerDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'healerDps');
         let researcherDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'researcherDps');
         let transferCooldown = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'transferCooldown');
+        let astarCost = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'astarCost');
         return {
             energy: Math.max(1, Math.floor(Number(energy) || 1)),
             atk: Math.max(0, Math.floor(Number(atk) || 0)),
@@ -927,7 +928,8 @@ function renderBuildItemDetailedStats(key) {
             builderDps: Math.max(0, Number(builderDps) || 0),
             healerDps: Math.max(0, Number(healerDps) || 0),
             researcherDps: Math.max(0, Number(researcherDps) || 0),
-            transferCooldown: Math.max(0.01, Number(transferCooldown) || Number((BASE_UNIT_STATS[unitType] || {}).transferCooldown) || 0.01)
+            transferCooldown: Math.max(0.01, Number(transferCooldown) || Number((BASE_UNIT_STATS[unitType] || {}).transferCooldown) || 0.01),
+            astarCost: Math.max(0, Number(astarCost) || 0)
         };
     };
 
@@ -964,7 +966,8 @@ function renderBuildItemDetailedStats(key) {
         addRow('Unit Range', formatAreaDistanceStat(up.range), { kind: 'unit', key: unitType, statKey: 'attackRange' });
         addRow('Unit Visibility', formatAreaDistanceStat(up.vision), { kind: 'unit', key: unitType, statKey: 'visionRange' });
         addRow('Unit Speed', up.speed.toFixed(1), { kind: 'unit', key: unitType, statKey: 'speed' });
-        if (up.workerSearchDistance > 0) addRow('Work Search Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: unitType, statKey: 'workerSearchDistance' });
+        addRow('Unit A* / Tile', fmt(up.astarCost, 1), { kind: 'unit', key: unitType, statKey: 'astarCost' });
+        if (up.workerSearchDistance > 0) addRow('Work Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: unitType, statKey: 'workerSearchDistance' });
     } else if (key === 'spawner' || key === 'astar_spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
         let workerType = key === 'spawner'
             ? 'collector'
@@ -991,7 +994,8 @@ function renderBuildItemDetailedStats(key) {
         if (Number.isFinite(buildingVisibility)) addRow('Visibility', formatAreaDistanceStat(buildingVisibility), { kind: 'building', key, statKey: 'visionRange' });
         addRow(key === 'research' ? 'Researcher Visibility' : 'Worker Visibility', formatAreaDistanceStat(up.vision), { kind: 'unit', key: workerType, statKey: 'visionRange' });
         addRow(key === 'research' ? 'Researcher Speed' : 'Worker Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
-        if (up.workerSearchDistance > 0) addRow('Work Search Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: workerType, statKey: 'workerSearchDistance' });
+        addRow(key === 'research' ? 'Researcher A* / Tile' : 'Worker A* / Tile', fmt(up.astarCost, 1), { kind: 'unit', key: workerType, statKey: 'astarCost' });
+        if (up.workerSearchDistance > 0) addRow('Work Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: workerType, statKey: 'workerSearchDistance' });
         if (key === 'research') {
             let efficiency = getBuildingStatForOwner(localPlayerId, key, level, 'efficiency');
             if (Number.isFinite(efficiency)) addRow('Efficiency', efficiency.toFixed(2), { kind: 'building', key, statKey: 'efficiency' });
@@ -2279,7 +2283,7 @@ function renderSpawnerInfo(e) {
     let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, sLevel, 'workerSearchDistance');
     let effWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, effLevel, 'workerSearchDistance');
     if (Number.isFinite(baseWorkerSearchDistance)) {
-        html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${e.type} / Work Search Distance`, kind: 'unit', key: workerUnitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${e.type} / Work Distance`, kind: 'unit', key: workerUnitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     }
     // html += infoRow('Upgrade', `${upg.goldCost}g, ENERGY ${upg.energyNow}->${upg.energyNext}`);
     html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
@@ -2455,7 +2459,7 @@ function renderUnitInfo(u) {
         let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Build Speed', { title: `${u.unitType} / Build Speed`, kind: 'unit', key: u.unitType, statKey: 'builderDps' }), `${formatBigNumber(baseBuild, 1)}/trip`, `${formatBigNumber(effBuild, 1)}/trip`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${u.unitType} / Work Search Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'healer') {
         let baseHeal = Number(u.baseLevelhealerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0;
         let effHeal = Number(u.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0;
@@ -2465,7 +2469,7 @@ function renderUnitInfo(u) {
         let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Heal Speed', { title: `${u.unitType} / Heal Speed`, kind: 'unit', key: u.unitType, statKey: 'healerDps' }), `${formatBigNumber(baseHeal, 1)}/trip`, `${formatBigNumber(effHeal, 1)}/trip`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${u.unitType} / Work Search Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'researcher') {
         let baseResearch = Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
         let effResearch = Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
@@ -2475,7 +2479,7 @@ function renderUnitInfo(u) {
         let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Research Speed', { title: `${u.unitType} / Research Speed`, kind: 'unit', key: u.unitType, statKey: 'researcherDps' }), `${formatBigNumber(baseResearch, 1)}/trip`, `${formatBigNumber(effResearch, 1)}/trip`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${u.unitType} / Work Search Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
         let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
         let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
@@ -2486,7 +2490,7 @@ function renderUnitInfo(u) {
         let gatherLabel = (u.workerType === 'astar_collector') ? 'A* Gather' : 'Gather Speed';
         html += infoRow(withInfoPanelStatMatrixButton(gatherLabel, { title: `${u.unitType} / Gather Speed`, kind: 'unit', key: u.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(baseGather, 1)}/trip`, `${formatBigNumber(effGather, 1)}/trip`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${u.unitType} / Work Search Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'salvager') {
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
@@ -2494,7 +2498,7 @@ function renderUnitInfo(u) {
         let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow('Salvage Yield', `10% x L${lvl}`, `10% x L${effLvl}`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `${u.unitType} / Work Search Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else {
         html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u.unitType} / Attack`, kind: 'unit', key: u.unitType, statKey: 'atk' }), baseAtk, effAtk);
         html += infoRow(withInfoPanelStatMatrixButton('DPS', {
@@ -3215,7 +3219,7 @@ function renderResearchInfo(e) {
     let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', e.level || 1, 'workerSearchDistance');
     let effWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', getThingEffectiveLevel(e), 'workerSearchDistance');
     if (Number.isFinite(baseWorkerSearchDistance)) {
-        html += infoRow(withInfoPanelStatMatrixButton('Work Search Distance', { title: `research / Work Search Distance`, kind: 'unit', key: 'researcher_unit', statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `research / Work Distance`, kind: 'unit', key: 'researcher_unit', statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     }
     if (e.owner === localPlayerId) {
         html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');

@@ -228,7 +228,10 @@ function updateWorkerAI(u) {
                 }
                 u.carryingValue = 0;
                 if (!canRunHeavyAi) return;
-                // Re-acquire after each drop-off so collectors can switch to newly built/closer sources.
+                if (_isCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) && _workerOwnsReservedTarget(u)) {
+                    _collectorAssignTarget(u, u.workerTarget, u.workerTargetType, myGx, myGy);
+                    return;
+                }
                 u._lastMineTarget = null;
                 _clearWorkerTarget(u, 'target_no_work');
                 _collectorFindTarget(u, myGx, myGy);
@@ -315,7 +318,10 @@ function updateWorkerAI(u) {
                 }
                 u.carryingValue = 0;
                 if (!canRunHeavyAi) return;
-                // Re-acquire after each drop-off so A* collectors can switch to newly built/closer sources.
+                if (_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) && _workerOwnsReservedTarget(u)) {
+                    _astarCollectorAssignTarget(u, u.workerTarget, u.workerTargetType);
+                    return;
+                }
                 u._astarLastMineTarget = null;
                 u._astarLastMineTargetType = null;
                 _clearWorkerTarget(u, 'target_no_work');
@@ -1492,13 +1498,7 @@ function _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea
 }
 
 function _isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea) {
-    if (!_isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea)) return false;
-    if (!u) return true;
-    let ux = Number(u.x);
-    let uy = Number(u.y);
-    if (!Number.isFinite(ux) || !Number.isFinite(uy)) return true;
-    if (ux === originX && uy === originY) return true;
-    return _isTargetWithinWorkerSearchArea(ux, uy, target, maxSearchArea);
+    return _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea);
 }
 
 function _getResearcherAutoSearchDistancePx(u) {
