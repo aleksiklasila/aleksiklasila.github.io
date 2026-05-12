@@ -1345,31 +1345,47 @@
 
             let areaTileGroups = new Map();
             for (let tile of overlays.areaTiles || []) {
-                let corners = [
-                    projectGround(tile.x, tile.y),
-                    projectGround(tile.x + 1, tile.y),
-                    projectGround(tile.x + 1, tile.y + 1),
-                    projectGround(tile.x, tile.y + 1)
-                ];
-                if (corners.some(p => !p)) continue;
                 let key = `${tile.strokeColor}|${tile.fillColor || ''}|${tile.dashed ? 1 : 0}`;
                 let group = getPathGroup(areaTileGroups, key, () => ({
                     strokeColor: tile.strokeColor,
-                    fillColor: tile.fillColor || null,
                     dashed: !!tile.dashed,
-                    path: new Path2D()
+                    tiles: []
                 }));
-                group.path.moveTo(corners[0].x, corners[0].y);
-                for (let i = 1; i < corners.length; i++) group.path.lineTo(corners[i].x, corners[i].y);
-                group.path.closePath();
+                group.tiles.push(tile);
             }
             for (let group of areaTileGroups.values()) {
+                let tileSet = new Set();
+                for (let tile of group.tiles) tileSet.add(`${tile.x},${tile.y}`);
+                let path = new Path2D();
+                for (let tile of group.tiles) {
+                    let corners = [
+                        projectGround(tile.x, tile.y),
+                        projectGround(tile.x + 1, tile.y),
+                        projectGround(tile.x + 1, tile.y + 1),
+                        projectGround(tile.x, tile.y + 1)
+                    ];
+                    if (corners.some(p => !p)) continue;
+                    if (!tileSet.has(`${tile.x},${tile.y - 1}`)) {
+                        path.moveTo(corners[0].x, corners[0].y);
+                        path.lineTo(corners[1].x, corners[1].y);
+                    }
+                    if (!tileSet.has(`${tile.x + 1},${tile.y}`)) {
+                        path.moveTo(corners[1].x, corners[1].y);
+                        path.lineTo(corners[2].x, corners[2].y);
+                    }
+                    if (!tileSet.has(`${tile.x},${tile.y + 1}`)) {
+                        path.moveTo(corners[2].x, corners[2].y);
+                        path.lineTo(corners[3].x, corners[3].y);
+                    }
+                    if (!tileSet.has(`${tile.x - 1},${tile.y}`)) {
+                        path.moveTo(corners[3].x, corners[3].y);
+                        path.lineTo(corners[0].x, corners[0].y);
+                    }
+                }
                 ctx.strokeStyle = group.strokeColor;
-                ctx.fillStyle = group.fillColor || 'transparent';
                 ctx.lineWidth = 1.1;
                 ctx.setLineDash(group.dashed ? [5, 4] : []);
-                if (group.fillColor) ctx.fill(group.path);
-                ctx.stroke(group.path);
+                ctx.stroke(path);
             }
 
             let ringGroups = new Map();

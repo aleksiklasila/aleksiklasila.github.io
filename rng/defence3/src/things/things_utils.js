@@ -1032,6 +1032,12 @@ function getEntityBaseVisibilityRangeArea(e) {
     if (statsType) {
         let s = calculateItemStats(statsType, baseLevel, e.owner);
         if (s && Number.isFinite(s.visionRange)) return s.visionRange;
+        if (typeof getBuildingStatForOwner === 'function') {
+            let statVision = Number(getBuildingStatForOwner(e.owner, statsType, baseLevel, 'visionRange'));
+            if (Number.isFinite(statVision)) return statVision;
+        }
+        let defVision = Number(BASE_CARD_TYPES && BASE_CARD_TYPES[statsType] && BASE_CARD_TYPES[statsType].visionRange);
+        if (Number.isFinite(defVision)) return defVision;
     }
     if (Number.isFinite(e.baseLevelVisionRange)) return Number(e.baseLevelVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
     return getEntityVisibilityRangeArea(e);
@@ -1051,6 +1057,12 @@ function getEntityEffectiveVisibilityRangeArea(e) {
     if (statsType) {
         let s = calculateItemStats(statsType, effLevel, e.owner);
         if (s && Number.isFinite(s.visionRange)) return s.visionRange;
+        if (typeof getBuildingStatForOwner === 'function') {
+            let statVision = Number(getBuildingStatForOwner(e.owner, statsType, effLevel, 'visionRange'));
+            if (Number.isFinite(statVision)) return statVision;
+        }
+        let defVision = Number(BASE_CARD_TYPES && BASE_CARD_TYPES[statsType] && BASE_CARD_TYPES[statsType].visionRange);
+        if (Number.isFinite(defVision)) return defVision;
     }
     return getEntityVisibilityRangeArea(e);
 }

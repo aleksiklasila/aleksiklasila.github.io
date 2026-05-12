@@ -11,18 +11,45 @@ let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 
 function _drawAreaCoverageOverlay2D(ctx, cells, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY) {
     if (!ctx || !Array.isArray(cells) || cells.length <= 0) return;
+    let cellSet = new Set();
+    for (let i = 0; i < cells.length; i++) {
+        let cell = cells[i];
+        if (!cell) continue;
+        cellSet.add(`${cell.x},${cell.y}`);
+    }
     ctx.save();
-    ctx.fillStyle = color;
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2.5;
     for (let i = 0; i < cells.length; i++) {
         let cell = cells[i];
         if (!cell) continue;
         let x = cell.x * TILE;
         let y = cell.y * TILE;
         if (!_overlayBoundsVisible(x, y, x + TILE, y + TILE, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 4)) continue;
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+        if (!cellSet.has(`${cell.x},${cell.y - 1}`)) {
+            ctx.beginPath();
+            ctx.moveTo(x, y + 0.5);
+            ctx.lineTo(x + TILE, y + 0.5);
+            ctx.stroke();
+        }
+        if (!cellSet.has(`${cell.x + 1},${cell.y}`)) {
+            ctx.beginPath();
+            ctx.moveTo(x + TILE - 0.5, y);
+            ctx.lineTo(x + TILE - 0.5, y + TILE);
+            ctx.stroke();
+        }
+        if (!cellSet.has(`${cell.x},${cell.y + 1}`)) {
+            ctx.beginPath();
+            ctx.moveTo(x, y + TILE - 0.5);
+            ctx.lineTo(x + TILE, y + TILE - 0.5);
+            ctx.stroke();
+        }
+        if (!cellSet.has(`${cell.x - 1},${cell.y}`)) {
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, y);
+            ctx.lineTo(x + 0.5, y + TILE);
+            ctx.stroke();
+        }
     }
     ctx.restore();
 }
@@ -857,12 +884,10 @@ function ensureVisibilityMaskCanvas() {
         _visibilityMaskVersion = -1;
         _visibilityMaskFullVisibility = false;
     }
-    let lightGridW = Math.max(1, Math.ceil(WORLD_W / VISIBILITY_LIGHT_CELL_SIZE));
-    let lightGridH = Math.max(1, Math.ceil(WORLD_H / VISIBILITY_LIGHT_CELL_SIZE));
-    if (!_visibilityMaskGridCanvas || _visibilityMaskGridCanvas.width !== lightGridW || _visibilityMaskGridCanvas.height !== lightGridH) {
+    if (!_visibilityMaskGridCanvas || _visibilityMaskGridCanvas.width !== GRID_W || _visibilityMaskGridCanvas.height !== GRID_H) {
         _visibilityMaskGridCanvas = document.createElement('canvas');
-        _visibilityMaskGridCanvas.width = lightGridW;
-        _visibilityMaskGridCanvas.height = lightGridH;
+        _visibilityMaskGridCanvas.width = GRID_W;
+        _visibilityMaskGridCanvas.height = GRID_H;
         _visibilityMaskGridCtx = _visibilityMaskGridCanvas.getContext('2d', { willReadFrequently: false });
         _visibilityMaskVersion = -1;
         _visibilityMaskFullVisibility = false;
@@ -882,19 +907,13 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     if (_visibilityMaskVersion === visibilityVersion && !_visibilityMaskFullVisibility) return;
 
     let invNorm = 1 / Math.max(0.0001, Number(VISIBILITY_LIGHT_NORMALIZATION_RANGE) || 6);
-    let lightGridW = _visibilityMaskGridCanvas.width;
-    let lightGridH = _visibilityMaskGridCanvas.height;
-    let imageData = _visibilityMaskGridCtx.createImageData(lightGridW, lightGridH);
+    let imageData = _visibilityMaskGridCtx.createImageData(GRID_W, GRID_H);
     let data = imageData.data;
     let i = 0;
-    for (let y = 0; y < lightGridH; y++) {
-        let wy = Math.min(WORLD_H - 1, Math.floor(y * VISIBILITY_LIGHT_CELL_SIZE + VISIBILITY_LIGHT_CELL_SIZE * 0.5));
-        let gy = Math.max(0, Math.min(GRID_H - 1, Math.floor(wy / TILE)));
-        let row = visibilityGrid[gy];
-        for (let x = 0; x < lightGridW; x++) {
-            let wx = Math.min(WORLD_W - 1, Math.floor(x * VISIBILITY_LIGHT_CELL_SIZE + VISIBILITY_LIGHT_CELL_SIZE * 0.5));
-            let gx = Math.max(0, Math.min(GRID_W - 1, Math.floor(wx / TILE)));
-            let raw = row ? (row[gx] || 0) : 0;
+    for (let y = 0; y < GRID_H; y++) {
+        let row = visibilityGrid[y];
+        for (let x = 0; x < GRID_W; x++) {
+            let raw = row ? (row[x] || 0) : 0;
             let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
             let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
             let alpha = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
@@ -906,36 +925,10 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     }
     _visibilityMaskGridCtx.putImageData(imageData, 0, 0);
 
-    let sources = Array.isArray(visibilityLightSources) ? visibilityLightSources : [];
-    if (sources.length > 0) {
-        _visibilityMaskGridCtx.save();
-        _visibilityMaskGridCtx.globalCompositeOperation = 'destination-out';
-        for (let si = 0; si < sources.length; si++) {
-            let source = sources[si];
-            if (!source) continue;
-            let radiusPx = Math.max(TILE * 1.5, Number(source.rangeArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
-            if (!(radiusPx > 0)) continue;
-            let sx = Number(source.x) / VISIBILITY_LIGHT_CELL_SIZE;
-            let sy = Number(source.y) / VISIBILITY_LIGHT_CELL_SIZE;
-            let sr = radiusPx / VISIBILITY_LIGHT_CELL_SIZE;
-            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sr) || sr <= 0) continue;
-            let strength = Math.max(0.35, Math.min(0.92, 0.55 + Number(source.rangeArea) * 0.08));
-            let grad = _visibilityMaskGridCtx.createRadialGradient(sx, sy, Math.max(0.5, sr * 0.12), sx, sy, sr);
-            grad.addColorStop(0, `rgba(0,0,0,${strength.toFixed(4)})`);
-            grad.addColorStop(0.45, `rgba(0,0,0,${(strength * 0.42).toFixed(4)})`);
-            grad.addColorStop(1, 'rgba(0,0,0,0)');
-            _visibilityMaskGridCtx.fillStyle = grad;
-            _visibilityMaskGridCtx.beginPath();
-            _visibilityMaskGridCtx.arc(sx, sy, sr, 0, Math.PI * 2);
-            _visibilityMaskGridCtx.fill();
-        }
-        _visibilityMaskGridCtx.restore();
-    }
-
     _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
     _visibilityMaskCtx.save();
     _visibilityMaskCtx.imageSmoothingEnabled = true;
-    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, lightGridW, lightGridH, 0, 0, WORLD_W, WORLD_H);
+    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, GRID_W, GRID_H, 0, 0, WORLD_W, WORLD_H);
     _visibilityMaskCtx.restore();
     _visibilityMaskVersion = visibilityVersion;
     _visibilityMaskFullVisibility = false;
