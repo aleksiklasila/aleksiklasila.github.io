@@ -57,7 +57,8 @@ class Projectile {
         let targetEnergyBefore = t.energy;
         let baseDmg = this.dmg;
         let splashDmg = Number.isFinite(this.blastDamage) ? this.blastDamage : baseDmg;
-        let splashRadiusPx = Math.max(0, (Number.isFinite(this.blastRadius) ? this.blastRadius : (64 / TILE)) * TILE);
+        let splashRadiusArea = Number.isFinite(this.blastRadius) ? this.blastRadius : ((64 / TILE) / AREA_UNIT_TILE_EQUIVALENT);
+        let splashRadiusPx = Math.max(0, Number(splashRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
         let hasBlast = Number.isFinite(this.blastDamage) && this.blastDamage > 0 && Number.isFinite(this.blastRadius) && this.blastRadius > 0;
         if (this.type === 'fire') {
             applyStatusEffect(t, 'fire', this.level || 1, baseDmg * 0.05, this.sourceOwner, this.type);

@@ -28,14 +28,17 @@ let renderer3dLayerCanvases = new Map();
 let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridByPlayerCache = new Map();
+let visibilityLightSourcesByPlayerCache = new Map();
 let visibilityGridSmoothedByPlayerCache = new Map();
 let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
+let visibilityLightSources = [];
 let renderer3dSideTextureAngleStateLastPruneVersion = -1;
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
 const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
 const VISIBILITY_FADE_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.5;
+const VISIBILITY_AREA_LIGHT_FLOOR = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.72;
 const RENDERER3D_MINE_MIN_LIGHT_VISIBILITY = 0.28;
 const DEFAULT_SHADOW_DIR_X = -0.42;
 const DEFAULT_SHADOW_DIR_Y = 0.31;
@@ -639,13 +642,21 @@ function get3DTopTextureForFloorItem(item, statusOptions = null) {
 }
 
 function build3DOverlayData(bounds, alpha) {
-    let overlays = { lines: [], rings: [], rects: [], markers: [], bars: [], texts: [] };
+    let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
     let activeSelectedEntities = getActiveEntities();
     let activeSelectedUnits = getActiveUnits();
     let bakeHudIntoTopTexture = true;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
     let pushMarker = (x, y, kind, color) => overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
     let pushRing = (x, y, radiusPx, strokeColor, fillColor = null, dashed = false) => overlays.rings.push({ x: x / TILE, z: y / TILE, radius: radiusPx / TILE, strokeColor, fillColor, dashed });
+    let pushAreaTiles = (wx, wy, rangeArea, strokeColor, fillColor = null, dashed = false) => {
+        let cells = getAreaRangeCellsAtWorld(wx, wy, rangeArea);
+        for (let i = 0; i < cells.length; i++) {
+            let cell = cells[i];
+            if (!cell) continue;
+            overlays.areaTiles.push({ x: cell.x, y: cell.y, strokeColor, fillColor, dashed });
+        }
+    };
     let pushRect = (x, y, halfWpx, halfHpx, color, dashed = false) => overlays.rects.push({ x: x / TILE, z: y / TILE, halfWidth: halfWpx / TILE, halfHeight: halfHpx / TILE, color, dashed });
     let pushBar = (x, y, lift, offsetY, width, height, pct, bgColor, fillColor) => {
         if (bakeHudIntoTopTexture) return;
@@ -707,9 +718,8 @@ function build3DOverlayData(bounds, alpha) {
         }
 
         if ((renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) && ent instanceof Tower) {
-            let visTiles = getEntityVisibilityRangeTiles(ent);
-            let rr = Number.isFinite(visTiles) ? visTiles * TILE : 0;
-            if (rr > 0) pushRing(ex, ey, rr, 'rgba(120,255,120,0.55)', null);
+            let visArea = getEntityVisibilityRangeArea(ent);
+            if (Number.isFinite(visArea) && visArea > 0) pushAreaTiles(ex, ey, visArea, 'rgba(120,255,120,0.55)', 'rgba(120,255,120,0.18)');
         }
     }
 
@@ -725,11 +735,11 @@ function build3DOverlayData(bounds, alpha) {
     if (renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
         for (let u of activeSelectedUnits) {
             if (!u || u.dead) continue;
-            let rr = getUnitRenderActionRangePx(u);
-            if (rr <= 0) continue;
+            let rangeArea = getUnitRenderActionRangeArea(u);
+            if (rangeArea <= 0) continue;
             let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
             let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-            pushRing(ux, uy, rr, 'rgba(120,220,255,0.5)', null);
+            pushAreaTiles(ux, uy, rangeArea, 'rgba(120,220,255,0.5)', 'rgba(120,220,255,0.18)');
         }
     }
 
@@ -1946,137 +1956,111 @@ function smoothVisibilityGridForPlayer(playerId, targetVis) {
 function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
-    let cellSize = VISIBILITY_LIGHT_CELL_SIZE;
-    let cellCols = Math.ceil(GRID_W / cellSize);
-    let cellRows = Math.ceil(GRID_H / cellSize);
-    let coarseCellMax = new Array(cellRows);
-    for (let cy = 0; cy < cellRows; cy++) coarseCellMax[cy] = new Float32Array(cellCols);
-
-    let stampSource = (gx, gy, r) => {
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-            let range = Math.max(0, Number(r) || 0);
-            if (range <= 0) return;
-            if (range > vis[gy][gx]) vis[gy][gx] = range;
-            let cx = Math.floor(gx / cellSize);
-            let cy = Math.floor(gy / cellSize);
-            if (coarseCellMax[cy] && range > coarseCellMax[cy][cx]) coarseCellMax[cy][cx] = range;
-        }
+    let areaRangeBySourceArea = new Map();
+    let localLightSources = [];
+    let addAreaVisibilitySource = (areaId, rangeArea) => {
+        let aId = Math.floor(Number(areaId));
+        let range = Math.max(0, Number(rangeArea) || 0);
+        if (aId < 0 || !(range > 0)) return;
+        let current = areaRangeBySourceArea.get(aId) || 0;
+        if (range > current) areaRangeBySourceArea.set(aId, range);
+    };
+    let addWorldVisibilitySource = (wx, wy, rangeArea) => {
+        let x = Number(wx);
+        let y = Number(wy);
+        let range = Math.max(0, Number(rangeArea) || 0);
+        let areaId = getAreaIdAtWorld(x, y);
+        addAreaVisibilitySource(areaId, range);
+        if (areaId < 0 || !(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        localLightSources.push({ x, y, rangeArea: range, areaId });
     };
 
-    let stampThingChunkMax = (gx, gy, range, owner, watched) => {
-        if (!(spatialUnitsComplexMaxThingVisOffset >= 0)) return;
-        if (!(spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0)) return;
-        if (!(Number.isFinite(gx) && Number.isFinite(gy))) return;
-        let chunkX = Math.max(0, Math.min(CHUNKS_W - 1, Math.floor(gx / CHUNK_SIZE)));
-        let chunkY = Math.max(0, Math.min(CHUNKS_H - 1, Math.floor(gy / CHUNK_SIZE)));
-        let chunkKey = chunkY * CHUNKS_W + chunkX;
-        let scaled = Math.max(0, Math.round((Number(range) || 0) * SPATIAL_VISIBILITY_SCALE));
-        if (scaled <= 0) return;
-        let chunkBase = chunkKey * spatialUnitsComplexStridePerChunk;
-        let setForPlayer = (pid) => {
-            if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
-            let playerBase = chunkBase + pid * spatialUnitsComplexStridePerPlayer;
-            let idx = playerBase + spatialUnitsComplexMaxThingVisOffset;
-            if (scaled > spatialUnitsComplex[idx]) spatialUnitsComplex[idx] = scaled;
-        };
+    let shouldRevealForPlayer = (owner, watched) => {
         let ownerId = Math.floor(Number(owner));
-        if (ownerId >= 0) setForPlayer(ownerId);
-        if ((Number(watched) || 0) > 0) {
-            for (let pid = 0; pid < spatialUnitsComplexPlayerCount; pid++) setForPlayer(pid);
-        }
+        return ownerId === playerId || (Number(watched) || 0) > 0;
     };
 
-    if (spatialUnitsComplexMaxThingVisOffset >= 0 && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0) {
-        let chunksCount = CHUNKS_W * CHUNKS_H;
-        for (let ck = 0; ck < chunksCount; ck++) {
-            let playerBase = ck * spatialUnitsComplexStridePerChunk + playerId * spatialUnitsComplexStridePerPlayer;
-            spatialUnitsComplex[playerBase + spatialUnitsComplexMaxThingVisOffset] = 0;
-        }
-        for (let t of towers) {
-            if (t.energy > 0 && !t.underConstruction) {
-                stampThingChunkMax(t.gx, t.gy, (t.currentStats && t.currentStats.visionRange) || 3, t.owner, t.watched || 0);
-            }
-        }
-        for (let b of barracks) {
-            if (b.energy > 0 && !b.underConstruction) stampThingChunkMax(b.gx, b.gy, 4, b.owner, b.watched || 0);
-        }
-        for (let s of collectorSpawners) {
-            if (s.energy > 0 && !s.underConstruction) stampThingChunkMax(s.gx, s.gy, 4, s.owner, s.watched || 0);
-        }
-        for (let y = 0; y < GRID_H; y++) {
-            let row = grid[y];
-            for (let x = 0; x < GRID_W; x++) {
-                let cell = row[x];
-                if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
-                stampThingChunkMax(x, y, 3, cell.owner, cell.item.watched || 0);
-            }
-        }
-    }
-
-    if (spatialUnitsComplex.length > 0 && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplexMaxUnitVisOffset >= 0) {
-        let chunksCount = CHUNKS_W * CHUNKS_H;
-        for (let ck = 0; ck < chunksCount; ck++) {
-            let chunkBase = ck * spatialUnitsComplexStridePerChunk;
-            let playerBase = chunkBase + playerId * spatialUnitsComplexStridePerPlayer;
-            let maxUnitVis = (spatialUnitsComplex[playerBase + spatialUnitsComplexMaxUnitVisOffset] || 0) / SPATIAL_VISIBILITY_SCALE;
-            let maxThingVis = (spatialUnitsComplex[playerBase + spatialUnitsComplexMaxThingVisOffset] || 0) / SPATIAL_VISIBILITY_SCALE;
-            let chunkRange = Math.max(maxUnitVis, maxThingVis);
-            if (!(chunkRange > 0)) continue;
-            let chunkX = ck % CHUNKS_W;
-            let chunkY = Math.floor(ck / CHUNKS_W);
-            let minTileX = chunkX * CHUNK_SIZE;
-            let minTileY = chunkY * CHUNK_SIZE;
-            let maxTileX = Math.min(GRID_W, minTileX + CHUNK_SIZE);
-            let maxTileY = Math.min(GRID_H, minTileY + CHUNK_SIZE);
-            for (let y = minTileY; y < maxTileY; y++) {
-                for (let x = minTileX; x < maxTileX; x++) {
-                    stampSource(x, y, chunkRange);
-                }
-            }
-        }
-    }
-
-    // Preserve watched-unit behavior for non-owner reveal.
     for (let u of units) {
-        if (u.dead || (u.watched || 0) <= 0 || u.owner === playerId) continue;
-        stampSource(Math.floor(u.x / TILE), Math.floor(u.y / TILE), u.visionRange || 4);
+        if (!u || u.dead) continue;
+        if (!shouldRevealForPlayer(u.owner, u.watched || 0)) continue;
+        let visionArea = Number.isFinite(u.visionRangeArea) ? Number(u.visionRangeArea) : ((Number(u.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
+        addWorldVisibilitySource(u.x, u.y, visionArea);
+    }
+    for (let t of towers) {
+        if (!t || !(t.energy > 0) || t.underConstruction) continue;
+        if (!shouldRevealForPlayer(t.owner, t.watched || 0)) continue;
+        addWorldVisibilitySource(t.x, t.y, Number(t.currentStats && t.currentStats.visionRange));
+    }
+    for (let b of barracks) {
+        if (!b || !(b.energy > 0) || b.underConstruction) continue;
+        if (!shouldRevealForPlayer(b.owner, b.watched || 0)) continue;
+        addWorldVisibilitySource(b.x, b.y, getEntityVisibilityRangeArea(b));
+    }
+    for (let s of collectorSpawners) {
+        if (!s || !(s.energy > 0) || s.underConstruction) continue;
+        if (!shouldRevealForPlayer(s.owner, s.watched || 0)) continue;
+        addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
+    }
+    for (let y = 0; y < GRID_H; y++) {
+        let row = grid[y];
+        for (let x = 0; x < GRID_W; x++) {
+            let cell = row[x];
+            if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
+            if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0)) continue;
+            addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
+        }
     }
 
-    // O(play area) propagation: each tile step reduces visibility by 1.
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let v = vis[y][x];
-            if (x > 0) v = Math.max(v, vis[y][x - 1] - 1);
-            if (y > 0) v = Math.max(v, vis[y - 1][x] - 1);
-            if (x > 0 && y > 0) v = Math.max(v, vis[y - 1][x - 1] - 1);
-            if (x < GRID_W - 1 && y > 0) v = Math.max(v, vis[y - 1][x + 1] - 1);
-            vis[y][x] = v;
+    for (let entry of areaRangeBySourceArea.entries()) {
+        let areaId = entry[0];
+        let rangeArea = entry[1];
+        let cells = getGridCellsWithinAreaDistance(areaId, Math.ceil(rangeArea));
+        for (let i = 0; i < cells.length; i++) {
+            let cell = cells[i];
+            if (!cell) continue;
+            if (vis[cell.y] && VISIBILITY_AREA_LIGHT_FLOOR > vis[cell.y][cell.x]) {
+                vis[cell.y][cell.x] = VISIBILITY_AREA_LIGHT_FLOOR;
+            }
         }
     }
-    for (let y = GRID_H - 1; y >= 0; y--) {
-        for (let x = GRID_W - 1; x >= 0; x--) {
-            let v = vis[y][x];
-            if (x < GRID_W - 1) v = Math.max(v, vis[y][x + 1] - 1);
-            if (y < GRID_H - 1) v = Math.max(v, vis[y + 1][x] - 1);
-            if (x < GRID_W - 1 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x + 1] - 1);
-            if (x > 0 && y < GRID_H - 1) v = Math.max(v, vis[y + 1][x - 1] - 1);
-            vis[y][x] = v;
+
+    for (let i = 0; i < localLightSources.length; i++) {
+        let source = localLightSources[i];
+        let cells = getGridCellsWithinAreaDistance(source.areaId, Math.ceil(source.rangeArea));
+        let radiusPx = Math.max(TILE * 1.5, Number(source.rangeArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
+        for (let j = 0; j < cells.length; j++) {
+            let cell = cells[j];
+            if (!cell || !vis[cell.y]) continue;
+            let cx = cell.x * TILE + TILE * 0.5;
+            let cy = cell.y * TILE + TILE * 0.5;
+            let dist = Math.hypot(cx - source.x, cy - source.y);
+            if (dist >= radiusPx) continue;
+            let t = 1 - (dist / radiusPx);
+            let falloff = t * t * (3 - 2 * t);
+            let boostedLight = VISIBILITY_AREA_LIGHT_FLOOR + (VISIBILITY_LIGHT_NORMALIZATION_RANGE - VISIBILITY_AREA_LIGHT_FLOOR) * falloff;
+            if (boostedLight > vis[cell.y][cell.x]) {
+                vis[cell.y][cell.x] = boostedLight;
+            }
         }
     }
+
+    return localLightSources;
 }
 
 function getVisibilityGridForPlayer(playerId) {
     if (fullVisibility) return null;
     if (visibilityCacheTick !== gameTime) {
         visibilityGridByPlayerCache.clear();
+        visibilityLightSourcesByPlayerCache.clear();
         visibilityCacheTick = gameTime;
     }
     let cached = visibilityGridByPlayerCache.get(playerId);
     if (cached) return cached;
     let rawVis = createEmptyVisibilityGrid();
-    computeVisibilityGridForPlayer(playerId, rawVis);
+    let lightSources = computeVisibilityGridForPlayer(playerId, rawVis) || [];
     let smoothedVis = smoothVisibilityGridForPlayer(playerId, rawVis);
     visibilityGridByPlayerCache.set(playerId, smoothedVis);
+    visibilityLightSourcesByPlayerCache.set(playerId, lightSources);
     return smoothedVis;
 }
 
@@ -2099,6 +2083,7 @@ function updateVisibility(playerId) {
     if (fullVisibility) return;
 
     visibilityGrid = getVisibilityGridForPlayer(playerId);
+    visibilityLightSources = visibilityLightSourcesByPlayerCache.get(playerId) || [];
 
     visibilityVersion++;
 }

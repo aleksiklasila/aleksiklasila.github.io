@@ -1225,7 +1225,7 @@ function _collectorFindTarget(u, myGx, myGy) {
     u._collectorPinnedTargetType = null;
 
     let origin = _collectorGetSearchOrigin(u);
-    let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let anchorSpawner = null;
     if (_isCollectorSpawnerValidForUnit(u, u._collectorNextSpawner)) {
         anchorSpawner = u._collectorNextSpawner;
@@ -1235,64 +1235,55 @@ function _collectorFindTarget(u, myGx, myGy) {
         anchorSpawner = _findClosestSpawner(u, 'spawner');
     }
 
-    let originGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.x / TILE)));
-    let originGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.y / TILE)));
-    let tileRadius = Math.max(0, Math.ceil(maxSearch / TILE));
-
-    let minX = Math.max(0, originGx - tileRadius);
-    let maxX = Math.min(GRID_W - 1, originGx + tileRadius);
-    let minY = Math.max(0, originGy - tileRadius);
-    let maxY = Math.min(GRID_H - 1, originGy + tileRadius);
-    let maxSearchSq = maxSearch * maxSearch;
-
     let candidates = [];
 
-    for (let y = minY; y <= maxY; y++) {
-        for (let x = minX; x <= maxX; x++) {
-            let worldX = x * TILE + TILE * 0.5;
-            let worldY = y * TILE + TILE * 0.5;
-            let dx = worldX - origin.x;
-            let dy = worldY - origin.y;
-            let originDistSq = dx * dx + dy * dy;
-            if (originDistSq > maxSearchSq) continue;
+    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
+        if (!tileRef || !cell) return false;
 
-            let drop = getDroppedItemAt(x, y);
-            let mine = getGoldMineAt(x, y);
-            let cell = grid[y][x];
-            let item = cell && cell.item;
+        let x = tileRef.x;
+        let y = tileRef.y;
+        let worldX = x * TILE + TILE * 0.5;
+        let worldY = y * TILE + TILE * 0.5;
+        let dx = worldX - origin.x;
+        let dy = worldY - origin.y;
+        let originDistSq = dx * dx + dy * dy;
 
-            let candidate = null;
-            let candidateType = null;
-            let dropPenalty = 0;
+        let drop = getDroppedItemAt(x, y);
+        let mine = getGoldMineAt(x, y);
+        let item = cell.item;
 
-            if (drop) {
-                candidate = drop;
-                candidateType = 'drop';
-                dropPenalty = TILE * 0.5;
-            } else if (mine && mine.gold > 0) {
-                candidate = mine;
-                candidateType = 'mine';
-            } else if (item && item.type === 'farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
-                candidate = item;
-                candidateType = 'farm';
-            }
+        let candidate = null;
+        let candidateType = null;
+        let dropPenalty = 0;
 
-            if (!candidate) continue;
-            if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) continue;
-
-            let originDist = Math.sqrt(originDistSq);
-            let spawnerDist = anchorSpawner
-                ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
-                : Math.hypot(candidate.x - u.x, candidate.y - u.y);
-
-            candidates.push({
-                target: candidate,
-                targetType: candidateType,
-                dist: spawnerDist + originDist * 0.22 + dropPenalty,
-                worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
-            });
+        if (drop) {
+            candidate = drop;
+            candidateType = 'drop';
+            dropPenalty = TILE * 0.5;
+        } else if (mine && mine.gold > 0) {
+            candidate = mine;
+            candidateType = 'mine';
+        } else if (item && item.type === 'farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
+            candidate = item;
+            candidateType = 'farm';
         }
-    }
+
+        if (!candidate) return false;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
+
+        let originDist = Math.sqrt(originDistSq);
+        let spawnerDist = anchorSpawner
+            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+
+        candidates.push({
+            target: candidate,
+            targetType: candidateType,
+            dist: spawnerDist + originDist * 0.22 + dropPenalty,
+            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+        });
+        return false;
+    });
 
     let picked = _pickDistributedWorkerCandidate(u, candidates);
     if (picked && picked.target) {
@@ -1472,9 +1463,18 @@ function _getWorkerVisionRangePx(u) {
 function _getWorkerAutoSearchDistancePx(u) {
     if (!u) return TILE * 10;
     let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
-    let distTiles = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
+    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
+    let distTiles = Number(distArea) * AREA_UNIT_TILE_EQUIVALENT;
     if (!Number.isFinite(distTiles) || distTiles <= 0) distTiles = 10;
     return Math.max(TILE, distTiles * TILE);
+}
+
+function _getWorkerAutoSearchDistanceArea(u) {
+    if (!u) return 2.0;
+    let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
+    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
+    if (!Number.isFinite(distArea) || distArea <= 0) distArea = 2.0;
+    return Math.max(0, distArea);
 }
 
 function _getResearcherAutoSearchDistancePx(u) {
@@ -1487,7 +1487,7 @@ function _getTargetPriorityLevel(target) {
     if (target.workerType) return getUnitEffectiveLevel(target, getUnitBaseLevel(target));
     if (Number.isFinite(target.effectiveLevel)) return Math.max(0, Math.floor(target.effectiveLevel));
     if (Number.isFinite(target.level)) return Math.max(0, Math.floor(target.level));
-    if (Number.isFinite(target.stacks)) return Math.max(0, stackCountToLevel(target.stacks));
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     return 1;
 }
 
@@ -1939,7 +1939,7 @@ function _astarCollectorFindTarget(u) {
     u._astarPinnedTargetType = null;
 
     let origin = _astarCollectorGetSearchOrigin(u);
-    let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let anchorSpawner =
         (u._astarNextSpawner
             && u._astarNextSpawner.type === 'astar_spawner'
@@ -1949,57 +1949,49 @@ function _astarCollectorFindTarget(u) {
             ? u._astarNextSpawner
             : _findClosestSpawner(u, 'astar_spawner');
 
-    let originGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(origin.x / TILE)));
-    let originGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(origin.y / TILE)));
-    let tileRadius = Math.max(0, Math.ceil(maxSearch / TILE));
-    let minX = Math.max(0, originGx - tileRadius);
-    let maxX = Math.min(GRID_W - 1, originGx + tileRadius);
-    let minY = Math.max(0, originGy - tileRadius);
-    let maxY = Math.min(GRID_H - 1, originGy + tileRadius);
-    let maxSearchSq = maxSearch * maxSearch;
-
     let candidates = [];
 
-    for (let y = minY; y <= maxY; y++) {
-        for (let x = minX; x <= maxX; x++) {
-            let worldX = x * TILE + TILE * 0.5;
-            let worldY = y * TILE + TILE * 0.5;
-            let dx = worldX - origin.x;
-            let dy = worldY - origin.y;
-            let originDistSq = dx * dx + dy * dy;
-            if (originDistSq > maxSearchSq) continue;
+    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
+        if (!tileRef || !cell) return false;
 
-            let mine = getAstarMineAt(x, y);
-            let cell = grid[y][x];
-            let item = cell && cell.item;
+        let x = tileRef.x;
+        let y = tileRef.y;
+        let worldX = x * TILE + TILE * 0.5;
+        let worldY = y * TILE + TILE * 0.5;
+        let dx = worldX - origin.x;
+        let dy = worldY - origin.y;
+        let originDistSq = dx * dx + dy * dy;
 
-            let candidate = null;
-            let candidateType = null;
+        let mine = getAstarMineAt(x, y);
+        let item = cell.item;
 
-            if (mine && mine.astar > 0) {
-                candidate = mine;
-                candidateType = 'astar_mine';
-            } else if (item && item.type === 'astar_farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
-                candidate = item;
-                candidateType = 'astar_farm';
-            }
+        let candidate = null;
+        let candidateType = null;
 
-            if (!candidate) continue;
-            if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) continue;
-
-            let originDist = Math.sqrt(originDistSq);
-            let spawnerDist = anchorSpawner
-                ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
-                : Math.hypot(candidate.x - u.x, candidate.y - u.y);
-
-            candidates.push({
-                target: candidate,
-                targetType: candidateType,
-                dist: spawnerDist + originDist * 0.22,
-                worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
-            });
+        if (mine && mine.astar > 0) {
+            candidate = mine;
+            candidateType = 'astar_mine';
+        } else if (item && item.type === 'astar_farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
+            candidate = item;
+            candidateType = 'astar_farm';
         }
-    }
+
+        if (!candidate) return false;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
+
+        let originDist = Math.sqrt(originDistSq);
+        let spawnerDist = anchorSpawner
+            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+
+        candidates.push({
+            target: candidate,
+            targetType: candidateType,
+            dist: spawnerDist + originDist * 0.22,
+            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+        });
+        return false;
+    });
 
     let picked = _pickDistributedWorkerCandidate(u, candidates);
     if (picked && picked.target) {
@@ -2016,12 +2008,25 @@ function _astarCollectorFindTarget(u) {
 function _salvagerFindTarget(u, myGx, myGy) {
     let owner = u.owner;
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
     let spawnerSet = new Set(collectorSpawners);
     for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
     for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
     for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
-    for (let fy = 0; fy < GRID_H; fy++) for (let fx = 0; fx < GRID_W; fx++) { let c = grid[fy][fx]; if (c.item && c.owner === owner && c.item.markedForSalvage && !(c.item instanceof Barrack) && !spawnerSet.has(c.item) && _canAssignWorkerTargetExclusive(u, c.item, null)) { let d = Math.hypot(c.item.x - u.x, c.item.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = c.item; } } }
+    forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
+        if (!tileRef || !c || !c.item) return false;
+        if (c.owner !== owner || !c.item.markedForSalvage) return false;
+        if (c.item instanceof Barrack || spawnerSet.has(c.item)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, c.item, null)) return false;
+        let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
+        if (d > maxSearch) return false;
+        if (d < bestDist) {
+            bestDist = d;
+            bestItem = c.item;
+        }
+        return false;
+    });
     if (bestItem) {
         if (!_setWorkerTarget(u, bestItem, null)) {
             u.workerState = 'IDLE';

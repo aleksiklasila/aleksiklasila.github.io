@@ -9,6 +9,16 @@ let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
 let areas = [];
 let goldMines = []; // {gx, gy, gold, maxGold}
 let astarMines = []; // {gx, gy, astar, maxAstar}
+let areaNeighborIds = []; // [areaId] -> [neighborAreaId]
+let areaDistanceMatrix = []; // [areaId] -> Int16Array(areaCount)
+let areaIdsByDistance = []; // [areaId][distance] -> [areaId]
+let areaIdsWithinDistance = []; // [areaId][distance] -> [areaId]
+let areaIdGrid = []; // 2D lookup [y][x] -> areaId
+let gridCellsByArea = []; // [areaId] -> [{x,y}]
+let gridCellsByAreaDistance = []; // [areaId][distance] -> [{x,y}]
+let gridCellsWithinAreaDistance = []; // [areaId][distance] -> [{x,y}]
+let spatialUnitsByArea = []; // [areaId] -> Set<Unit>
+let droppedItemsByArea = []; // [areaId] -> [drop]
 
 const TILE_ENTITY_NONE = '';
 const TILE_ENTITY_GOLDMINE = 'goldmine';
@@ -20,6 +30,256 @@ let _adjacencyDirtyTiles = new Set();
 let _adjacencyNeedsRecalc = true;
 let _adjacencyDirtyAll = true;
 let _adjacencyLastRecalcTick = -1;
+
+function resetAreaDistanceCaches() {
+    areaNeighborIds = [];
+    areaDistanceMatrix = [];
+    areaIdsByDistance = [];
+    areaIdsWithinDistance = [];
+    areaIdGrid = [];
+    gridCellsByArea = [];
+    gridCellsByAreaDistance = [];
+    gridCellsWithinAreaDistance = [];
+    spatialUnitsByArea = [];
+    droppedItemsByArea = [];
+}
+
+function _ensureArrayBucketsLength(list, length, factory) {
+    if (!Array.isArray(list)) list = [];
+    while (list.length < length) list.push(factory());
+    return list;
+}
+
+function _addDroppedItemToAreaBucket(drop, areaId) {
+    let aId = Math.floor(Number(areaId));
+    if (!drop || aId < 0) return;
+    droppedItemsByArea = _ensureArrayBucketsLength(droppedItemsByArea, aId + 1, () => []);
+    let bucket = droppedItemsByArea[aId];
+    if (!Array.isArray(bucket)) bucket = droppedItemsByArea[aId] = [];
+    if (bucket.indexOf(drop) === -1) bucket.push(drop);
+    drop._areaBucketId = aId;
+}
+
+function _removeDroppedItemFromAreaBucket(drop) {
+    if (!drop) return;
+    let aId = Math.floor(Number(drop._areaBucketId));
+    if (!(aId >= 0 && aId < droppedItemsByArea.length)) {
+        delete drop._areaBucketId;
+        return;
+    }
+    let bucket = droppedItemsByArea[aId];
+    if (Array.isArray(bucket)) {
+        let index = bucket.indexOf(drop);
+        if (index >= 0) bucket.splice(index, 1);
+    }
+    delete drop._areaBucketId;
+}
+
+function rebuildAreaDistanceCachesFromAreas() {
+    _areaById = [];
+    let areaCount = Array.isArray(areas) ? areas.length : 0;
+    areaIdGrid = Array.from({ length: GRID_H }, () => new Int32Array(GRID_W).fill(-1));
+    if (areaCount <= 0) {
+        resetAreaDistanceCaches();
+        return;
+    }
+
+    let neighborSets = Array.from({ length: areaCount }, () => new Set());
+    for (let area of areas) {
+        if (!area || !Number.isFinite(area.id)) continue;
+        _areaById[area.id] = area;
+    }
+
+    for (let y = 0; y < GRID_H; y++) {
+        let row = grid[y];
+        if (!row) continue;
+        for (let x = 0; x < GRID_W; x++) {
+            let cell = row[x];
+            if (!cell) continue;
+            let areaId = Math.floor(Number(cell.areaId));
+            areaIdGrid[y][x] = areaId;
+            if (!(areaId >= 0 && areaId < areaCount)) continue;
+
+            if (x + 1 < GRID_W) {
+                let rightId = Math.floor(Number(grid[y][x + 1] && grid[y][x + 1].areaId));
+                if (rightId >= 0 && rightId < areaCount && rightId !== areaId) {
+                    neighborSets[areaId].add(rightId);
+                    neighborSets[rightId].add(areaId);
+                }
+            }
+            if (y + 1 < GRID_H) {
+                let downId = Math.floor(Number(grid[y + 1] && grid[y + 1][x] && grid[y + 1][x].areaId));
+                if (downId >= 0 && downId < areaCount && downId !== areaId) {
+                    neighborSets[areaId].add(downId);
+                    neighborSets[downId].add(areaId);
+                }
+            }
+        }
+    }
+
+    areaNeighborIds = new Array(areaCount);
+    areaDistanceMatrix = new Array(areaCount);
+    areaIdsByDistance = new Array(areaCount);
+    areaIdsWithinDistance = new Array(areaCount);
+    gridCellsByArea = new Array(areaCount);
+    gridCellsByAreaDistance = new Array(areaCount);
+    gridCellsWithinAreaDistance = new Array(areaCount);
+    if (!Array.isArray(spatialUnitsByArea) || spatialUnitsByArea.length !== areaCount) {
+        spatialUnitsByArea = Array.from({ length: areaCount }, () => new Set());
+    } else {
+        for (let i = 0; i < spatialUnitsByArea.length; i++) {
+            if (!(spatialUnitsByArea[i] instanceof Set)) spatialUnitsByArea[i] = new Set();
+        }
+    }
+    droppedItemsByArea = Array.from({ length: areaCount }, () => []);
+    for (let i = 0; i < droppedItems.length; i++) {
+        let drop = droppedItems[i];
+        if (!drop) continue;
+        _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(drop.gx, drop.gy));
+    }
+
+    for (let source = 0; source < areaCount; source++) {
+        let neighbors = Array.from(neighborSets[source]).sort((a, b) => a - b);
+        areaNeighborIds[source] = neighbors;
+        if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
+        let ownCells = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
+        gridCellsByArea[source] = ownCells;
+
+        let distances = new Int16Array(areaCount);
+        distances.fill(-1);
+        distances[source] = 0;
+
+        let queue = [source];
+        let head = 0;
+        let maxDistance = 0;
+        while (head < queue.length) {
+            let current = queue[head++];
+            let nextDistance = distances[current] + 1;
+            let currentNeighbors = neighborSets[current];
+            if (!currentNeighbors) continue;
+            for (let next of currentNeighbors) {
+                if (distances[next] !== -1) continue;
+                distances[next] = nextDistance;
+                if (nextDistance > maxDistance) maxDistance = nextDistance;
+                queue.push(next);
+            }
+        }
+
+        let exact = Array.from({ length: maxDistance + 1 }, () => []);
+        for (let target = 0; target < areaCount; target++) {
+            let dist = distances[target];
+            if (dist < 0) continue;
+            if (!exact[dist]) exact[dist] = [];
+            exact[dist].push(target);
+        }
+
+        let within = new Array(exact.length);
+        let cumulative = [];
+        for (let distance = 0; distance < exact.length; distance++) {
+            if (exact[distance] && exact[distance].length > 0) cumulative = cumulative.concat(exact[distance]);
+            within[distance] = cumulative.slice();
+        }
+
+        let exactGridCells = new Array(exact.length);
+        let cumulativeGridCells = new Array(exact.length);
+        let cumulativeCells = [];
+        for (let distance = 0; distance < exact.length; distance++) {
+            let areaIds = exact[distance] || [];
+            let cellsAtDistance = [];
+            for (let i = 0; i < areaIds.length; i++) {
+                let targetAreaId = areaIds[i];
+                let targetArea = _areaById[targetAreaId];
+                if (!targetArea || !Array.isArray(targetArea.cells) || targetArea.cells.length <= 0) continue;
+                cellsAtDistance = cellsAtDistance.concat(targetArea.cells);
+            }
+            exactGridCells[distance] = cellsAtDistance;
+            if (cellsAtDistance.length > 0) cumulativeCells = cumulativeCells.concat(cellsAtDistance);
+            cumulativeGridCells[distance] = cumulativeCells.slice();
+        }
+
+        areaDistanceMatrix[source] = distances;
+        areaIdsByDistance[source] = exact;
+        areaIdsWithinDistance[source] = within;
+        gridCellsByAreaDistance[source] = exactGridCells;
+        gridCellsWithinAreaDistance[source] = cumulativeGridCells;
+        if (_areaById[source]) {
+            _areaById[source].distanceRow = distances;
+            _areaById[source].areaIdsByDistance = exact;
+            _areaById[source].areaIdsWithinDistance = within;
+            _areaById[source].gridCells = ownCells;
+            _areaById[source].gridCellsByAreaDistance = exactGridCells;
+            _areaById[source].gridCellsWithinAreaDistance = cumulativeGridCells;
+        }
+    }
+}
+
+function getAreaIdAtTile(gx, gy) {
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
+    let row = areaIdGrid[gy];
+    if (!row) return -1;
+    let areaId = Math.floor(Number(row[gx]));
+    return areaId >= 0 ? areaId : -1;
+}
+
+function getAreaIdAtWorld(wx, wy) {
+    let gx = Math.floor(Number(wx) / TILE);
+    let gy = Math.floor(Number(wy) / TILE);
+    return getAreaIdAtTile(gx, gy);
+}
+
+function getAreaDistance(areaA, areaB) {
+    let aId = Math.floor(Number(areaA));
+    let bId = Math.floor(Number(areaB));
+    if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length) return -1;
+    let row = areaDistanceMatrix[aId];
+    if (!row || bId >= row.length) return -1;
+    return row[bId];
+}
+
+function getAreaIdsAtDistance(areaId, distance) {
+    let aId = Math.floor(Number(areaId));
+    let dist = Math.max(0, Math.floor(Number(distance) || 0));
+    let buckets = areaIdsByDistance[aId];
+    if (!buckets || !buckets[dist]) return [];
+    return buckets[dist];
+}
+
+function getAreaIdsWithinDistance(areaId, distance) {
+    let aId = Math.floor(Number(areaId));
+    let dist = Math.max(0, Math.floor(Number(distance) || 0));
+    let buckets = areaIdsWithinDistance[aId];
+    if (!buckets || buckets.length <= 0) return [];
+    if (dist >= buckets.length) dist = buckets.length - 1;
+    return dist >= 0 && buckets[dist] ? buckets[dist] : [];
+}
+
+function getGridCellsAtAreaDistance(areaId, distance) {
+    let aId = Math.floor(Number(areaId));
+    let dist = Math.max(0, Math.floor(Number(distance) || 0));
+    let buckets = gridCellsByAreaDistance[aId];
+    if (!buckets || !buckets[dist]) return [];
+    return buckets[dist];
+}
+
+function getGridCellsWithinAreaDistance(areaId, distance) {
+    let aId = Math.floor(Number(areaId));
+    let dist = Math.max(0, Math.floor(Number(distance) || 0));
+    let buckets = gridCellsWithinAreaDistance[aId];
+    if (!buckets || buckets.length <= 0) return [];
+    if (dist >= buckets.length) dist = buckets.length - 1;
+    return dist >= 0 && buckets[dist] ? buckets[dist] : [];
+}
+
+function getDroppedItemsWithinAreaDistance(areaId, distance) {
+    let areaIds = getAreaIdsWithinDistance(areaId, distance);
+    if (!areaIds || areaIds.length <= 0) return [];
+    let drops = [];
+    for (let i = 0; i < areaIds.length; i++) {
+        let bucket = droppedItemsByArea[areaIds[i]];
+        if (Array.isArray(bucket) && bucket.length > 0) drops = drops.concat(bucket);
+    }
+    return drops;
+}
 
 function _adjTileKey(gx, gy) {
     return gy * GRID_W + gx;
@@ -177,6 +437,7 @@ function initDroppedItemGrid() {
     for (let y = 0; y < GRID_H; y++) {
         droppedItemGrid.push(new Array(GRID_W).fill(null));
     }
+    droppedItemsByArea = Array.from({ length: Array.isArray(areas) ? areas.length : 0 }, () => []);
 }
 
 function getDroppedItemAt(gx, gy) {
@@ -210,6 +471,7 @@ function addDroppedItem(drop) {
     if (!Number.isFinite(drop.timer)) drop.timer = TICK_RATE * 120;
 
     _setDroppedItemAt(gx, gy, drop);
+    _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(gx, gy));
     drop._droppedIndex = droppedItems.length;
     droppedItems.push(drop);
     return drop;
@@ -234,6 +496,7 @@ function removeDroppedItem(drop) {
     if (idx < 0 || idx >= droppedItems.length || droppedItems[idx] !== drop) {
         return false;
     }
+    _removeDroppedItemFromAreaBucket(drop);
     let lastIdx = droppedItems.length - 1;
     let moved = droppedItems[lastIdx];
     droppedItems[idx] = moved;

@@ -999,12 +999,22 @@ function recomputePlayerPopCaps() {
 }
 
 
-function getEntityVisibilityRangeTiles(e) {
+function getEntityVisibilityRangeArea(e) {
     if (!e) return null;
+    if (e.currentStats && Number.isFinite(e.currentStats.visionRangeArea)) return e.currentStats.visionRangeArea;
+    if (Number.isFinite(e.visionRangeArea)) return e.visionRangeArea;
+    if (Number.isFinite(e.baseLevelVisionRangeArea)) return e.baseLevelVisionRangeArea;
+    if (Number.isFinite(e.baseVisionRangeArea)) return e.baseVisionRangeArea;
     if (e.currentStats && Number.isFinite(e.currentStats.visionRange)) return e.currentStats.visionRange;
-    if (Number.isFinite(e.baseLevelVisionRange)) return e.baseLevelVisionRange;
-    if (Number.isFinite(e.visionRange)) return e.visionRange;
+    if (Number.isFinite(e.baseLevelVisionRange)) return Number(e.baseLevelVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
+    if (Number.isFinite(e.baseVisionRange)) return Number(e.baseVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
+    if (Number.isFinite(e.visionRange)) return Number(e.visionRange) / AREA_UNIT_TILE_EQUIVALENT;
     return null;
+}
+
+function getEntityVisibilityRangeTiles(e) {
+    let area = getEntityVisibilityRangeArea(e);
+    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
 }
 
 function getEntityStatsCalcType(e) {
@@ -1013,20 +1023,28 @@ function getEntityStatsCalcType(e) {
     return e.type || '';
 }
 
-function getEntityBaseVisibilityRangeTiles(e) {
+function getEntityBaseVisibilityRangeArea(e) {
     if (!e) return null;
+    if (Number.isFinite(e.baseLevelVisionRangeArea)) return e.baseLevelVisionRangeArea;
+    if (Number.isFinite(e.baseVisionRangeArea)) return e.baseVisionRangeArea;
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     if (statsType) {
         let s = calculateItemStats(statsType, baseLevel, e.owner);
         if (s && Number.isFinite(s.visionRange)) return s.visionRange;
     }
-    if (Number.isFinite(e.baseLevelVisionRange)) return e.baseLevelVisionRange;
-    return getEntityVisibilityRangeTiles(e);
+    if (Number.isFinite(e.baseLevelVisionRange)) return Number(e.baseLevelVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
+    return getEntityVisibilityRangeArea(e);
 }
 
-function getEntityEffectiveVisibilityRangeTiles(e) {
+function getEntityBaseVisibilityRangeTiles(e) {
+    let area = getEntityBaseVisibilityRangeArea(e);
+    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
+}
+
+function getEntityEffectiveVisibilityRangeArea(e) {
     if (!e) return null;
+    if (Number.isFinite(e.visionRangeArea)) return e.visionRangeArea;
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     let effLevel = getThingEffectiveLevel(e, baseLevel);
@@ -1034,7 +1052,12 @@ function getEntityEffectiveVisibilityRangeTiles(e) {
         let s = calculateItemStats(statsType, effLevel, e.owner);
         if (s && Number.isFinite(s.visionRange)) return s.visionRange;
     }
-    return getEntityVisibilityRangeTiles(e);
+    return getEntityVisibilityRangeArea(e);
+}
+
+function getEntityEffectiveVisibilityRangeTiles(e) {
+    let area = getEntityEffectiveVisibilityRangeArea(e);
+    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
 }
 
 function getEntityBaseEnergyMax(e) {
@@ -1060,19 +1083,27 @@ function getEntityEffectiveEnergyMax(e) {
     return getEntityEnergyDisplayMax(e);
 }
 
-function getUnitRenderActionRangePx(u) {
+function getUnitRenderActionRangeArea(u) {
     if (!u) return 0;
-    // Worker interaction checks use a fixed touch distance in AI logic.
     if (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
-        return 24;
+        return (24 / TILE) / AREA_UNIT_TILE_EQUIVALENT;
     }
-    let atkRange = Math.max(0, Number(u.attackRange) || 0);
-    if (atkRange <= 0) return 0;
-    // Combat checks are center distance <= attackRange + self radius + target radius.
-    // Use a typical target radius for preview circles so this reflects practical reach.
-    let selfR = Math.max(0, Number(u.r) || 0);
-    let typicalTargetR = 8;
-    return atkRange + selfR + typicalTargetR;
+    let atkRange = Math.max(0, Number(u.attackRangeArea) || 0);
+    if (atkRange <= 0 && Number.isFinite(u.attackRange)) {
+        atkRange = ((Number(u.attackRange) || 0) / TILE) / AREA_UNIT_TILE_EQUIVALENT;
+    }
+    return Math.max(0, atkRange);
+}
+
+function getUnitRenderActionRangePx(u) {
+    let area = getUnitRenderActionRangeArea(u);
+    return area > 0 ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT * TILE) : 0;
+}
+
+function getAreaRangeCellsAtWorld(wx, wy, rangeArea) {
+    let sourceAreaId = getAreaIdAtWorld(wx, wy);
+    if (sourceAreaId < 0) return [];
+    return getGridCellsWithinAreaDistance(sourceAreaId, Math.ceil(Math.max(0, Number(rangeArea) || 0)));
 }
 
 function markConstructionComplete(item) {
@@ -1214,5 +1245,5 @@ function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
 }
 
 function formatRangeStatTiles(v) {
-    return (Number.isFinite(v) && v > 0) ? `${v.toFixed(1)}` : '-';
+    return (Number.isFinite(v) && v > 0) ? `${(Number(v) / AREA_UNIT_TILE_EQUIVALENT).toFixed(2)}a` : '-';
 }

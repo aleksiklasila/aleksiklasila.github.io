@@ -676,6 +676,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     }
 
     areas = Array.isArray(snapshot.areas) ? cloneSnapshotValue(snapshot.areas) : areas;
+    rebuildAreaDistanceCachesFromAreas();
     resignedTeams = new Set(Array.isArray(snapshot.resignedTeams) ? snapshot.resignedTeams.map(v => Math.floor(Number(v) || 0)) : []);
     recomputePlayerPopCaps();
 
@@ -1586,6 +1587,7 @@ function resetWorldState() {
     astarMines = [];
     initTileEntityLookup();
     areas = [];
+    resetAreaDistanceCaches();
     grid = [];
     visibilityGrid = [];
     visibilityVersion = 0;
