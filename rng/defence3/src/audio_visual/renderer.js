@@ -28,18 +28,14 @@ let renderer3dLayerCanvases = new Map();
 let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridByPlayerCache = new Map();
-let visibilityLightSourcesByPlayerCache = new Map();
 let visibilityGridSmoothedByPlayerCache = new Map();
 let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
-let visibilityLightSources = [];
 let renderer3dSideTextureAngleStateLastPruneVersion = -1;
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
 const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
 const VISIBILITY_FADE_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.5;
-const VISIBILITY_AREA_LIGHT_FLOOR = VISIBILITY_LIGHT_NORMALIZATION_RANGE * 0.72;
-const RENDERER3D_MINE_MIN_LIGHT_VISIBILITY = 0.28;
 const DEFAULT_SHADOW_DIR_X = -0.42;
 const DEFAULT_SHADOW_DIR_Y = 0.31;
 let _backgroundTickInterval = null;
@@ -892,6 +888,14 @@ function push3DRenderObject(target, object) {
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
     let _resolveVisionRangeFromSource = (source) => {
         if (!source) return NaN;
+        if (typeof getEntityVisibilityRangeTiles === 'function') {
+            let sharedTiles = Number(getEntityVisibilityRangeTiles(source));
+            if (Number.isFinite(sharedTiles)) return sharedTiles;
+        }
+        if (source.currentStats && Number.isFinite(source.currentStats.visionRangeArea)) return Number(source.currentStats.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+        if (Number.isFinite(source.visionRangeArea)) return Number(source.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+        if (Number.isFinite(source.baseLevelVisionRangeArea)) return Number(source.baseLevelVisionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+        if (Number.isFinite(source.baseVisionRangeArea)) return Number(source.baseVisionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
         if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
         if (Number.isFinite(source.baseLevelVisionRange)) return Number(source.baseLevelVisionRange);
         if (Number.isFinite(source.visionRange)) return Number(source.visionRange);
@@ -933,10 +937,15 @@ function push3DRenderObject(target, object) {
     let visionRange = Number(object.visibilityRangeTiles);
     if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
     if (!Number.isFinite(visionRange)) visionRange = _resolveVisionRangeFromSource(object.visibilitySource);
-    let visionHeightScale = 1;
+    let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
     if (Number.isFinite(visionRange) && visionRange > 0) {
-        // Linear height scaling from gameplay vision range (4 tiles => 1.0x).
-        visionHeightScale = visionRange / 8;
+        // For non-mines, vertical size is derived from visibility only.
+        let visibilityHeight = Math.max(0.18, visionRange / 5);
+        if (!(object.heightMode === 'mine')) {
+            resolvedScaleY = visibilityHeight;
+        } else {
+            resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
+        }
     }
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
@@ -947,7 +956,7 @@ function push3DRenderObject(target, object) {
         z: Number(object.z) || 0,
         y: Number(object.y) || 0,
         scaleX: Math.max(0.05, Number(object.scaleX) || 0.05),
-        scaleY: Math.max(0.05, (Number(object.scaleY) || 0.05) * visionHeightScale),
+        scaleY: resolvedScaleY,
         scaleZ: Math.max(0.05, Number(object.scaleZ) || 0.05),
         rotationY: Number(object.rotationY) || 0,
         tint,
@@ -1320,7 +1329,7 @@ function build3DFrameData() {
 
     for (let m of goldMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && getTileLightLevel(m.gx, m.gy) < RENDERER3D_MINE_MIN_LIGHT_VISIBILITY) continue;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
@@ -1335,6 +1344,7 @@ function build3DFrameData() {
             scaleX: 0.9,
             scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy) * (1 + audioHeight),
             scaleZ: 0.9,
+            heightMode: 'mine',
             tint: '#f0c83a',
             alpha: 1,
             topTextureKey: `gold_mine:${m.gold > 0 ? 'active' : 'empty'}`,
@@ -1349,7 +1359,7 @@ function build3DFrameData() {
 
     for (let m of astarMines) {
         if (m.gx < bounds.minGx || m.gx > bounds.maxGx || m.gy < bounds.minGy || m.gy > bounds.maxGy) continue;
-        if (!fullVisibility && getTileLightLevel(m.gx, m.gy) < RENDERER3D_MINE_MIN_LIGHT_VISIBILITY) continue;
+        if (!fullVisibility && (!visibilityGrid[m.gy] || visibilityGrid[m.gy][m.gx] === 0)) continue;
         let bgSoundRow = bgSoundGrid[m.gy];
         let fxSoundRow = fxSoundGrid[m.gy];
         let bgLevel = bgSoundRow ? bgSoundRow[m.gx] || 0 : 0;
@@ -1364,6 +1374,7 @@ function build3DFrameData() {
             scaleX: 0.9,
             scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy) * (1 + audioHeight),
             scaleZ: 0.9,
+            heightMode: 'mine',
             tint: '#d8d8e8',
             alpha: 1,
             topTextureKey: `astar_mine:${m.astar > 0 ? 'active' : 'empty'}`,
@@ -1957,7 +1968,15 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
     let areaRangeBySourceArea = new Map();
-    let localLightSources = [];
+    let includedTiles = new Array(GRID_H);
+    for (let y = 0; y < GRID_H; y++) includedTiles[y] = new Uint8Array(GRID_W);
+    let stampSource = (gx, gy, rangeTiles) => {
+        let x = Math.floor(Number(gx));
+        let y = Math.floor(Number(gy));
+        let range = Math.max(0, Number(rangeTiles) || 0);
+        if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H || !(range > 0)) return;
+        if (range > vis[y][x]) vis[y][x] = range;
+    };
     let addAreaVisibilitySource = (areaId, rangeArea) => {
         let aId = Math.floor(Number(areaId));
         let range = Math.max(0, Number(rangeArea) || 0);
@@ -1972,7 +1991,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let areaId = getAreaIdAtWorld(x, y);
         addAreaVisibilitySource(areaId, range);
         if (areaId < 0 || !(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        localLightSources.push({ x, y, rangeArea: range, areaId });
+        stampSource(x / TILE, y / TILE, range * AREA_UNIT_TILE_EQUIVALENT);
     };
 
     let shouldRevealForPlayer = (owner, watched) => {
@@ -2018,49 +2037,52 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         for (let i = 0; i < cells.length; i++) {
             let cell = cells[i];
             if (!cell) continue;
-            if (vis[cell.y] && VISIBILITY_AREA_LIGHT_FLOOR > vis[cell.y][cell.x]) {
-                vis[cell.y][cell.x] = VISIBILITY_AREA_LIGHT_FLOOR;
-            }
+            includedTiles[cell.y][cell.x] = 1;
         }
     }
 
-    for (let i = 0; i < localLightSources.length; i++) {
-        let source = localLightSources[i];
-        let cells = getGridCellsWithinAreaDistance(source.areaId, Math.ceil(source.rangeArea));
-        let radiusPx = Math.max(TILE * 1.5, Number(source.rangeArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
-        for (let j = 0; j < cells.length; j++) {
-            let cell = cells[j];
-            if (!cell || !vis[cell.y]) continue;
-            let cx = cell.x * TILE + TILE * 0.5;
-            let cy = cell.y * TILE + TILE * 0.5;
-            let dist = Math.hypot(cx - source.x, cy - source.y);
-            if (dist >= radiusPx) continue;
-            let t = 1 - (dist / radiusPx);
-            let falloff = t * t * (3 - 2 * t);
-            let boostedLight = VISIBILITY_AREA_LIGHT_FLOOR + (VISIBILITY_LIGHT_NORMALIZATION_RANGE - VISIBILITY_AREA_LIGHT_FLOOR) * falloff;
-            if (boostedLight > vis[cell.y][cell.x]) {
-                vis[cell.y][cell.x] = boostedLight;
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            if (!includedTiles[y][x]) {
+                vis[y][x] = 0;
+                continue;
             }
+            let v = vis[y][x];
+            if (x > 0 && includedTiles[y][x - 1]) v = Math.max(v, vis[y][x - 1] - 1);
+            if (y > 0 && includedTiles[y - 1][x]) v = Math.max(v, vis[y - 1][x] - 1);
+            if (x > 0 && y > 0 && includedTiles[y - 1][x - 1]) v = Math.max(v, vis[y - 1][x - 1] - 1);
+            if (x < GRID_W - 1 && y > 0 && includedTiles[y - 1][x + 1]) v = Math.max(v, vis[y - 1][x + 1] - 1);
+            vis[y][x] = v;
         }
     }
-
-    return localLightSources;
+    for (let y = GRID_H - 1; y >= 0; y--) {
+        for (let x = GRID_W - 1; x >= 0; x--) {
+            if (!includedTiles[y][x]) {
+                vis[y][x] = 0;
+                continue;
+            }
+            let v = vis[y][x];
+            if (x < GRID_W - 1 && includedTiles[y][x + 1]) v = Math.max(v, vis[y][x + 1] - 1);
+            if (y < GRID_H - 1 && includedTiles[y + 1][x]) v = Math.max(v, vis[y + 1][x] - 1);
+            if (x < GRID_W - 1 && y < GRID_H - 1 && includedTiles[y + 1][x + 1]) v = Math.max(v, vis[y + 1][x + 1] - 1);
+            if (x > 0 && y < GRID_H - 1 && includedTiles[y + 1][x - 1]) v = Math.max(v, vis[y + 1][x - 1] - 1);
+            vis[y][x] = v;
+        }
+    }
 }
 
 function getVisibilityGridForPlayer(playerId) {
     if (fullVisibility) return null;
     if (visibilityCacheTick !== gameTime) {
         visibilityGridByPlayerCache.clear();
-        visibilityLightSourcesByPlayerCache.clear();
         visibilityCacheTick = gameTime;
     }
     let cached = visibilityGridByPlayerCache.get(playerId);
     if (cached) return cached;
     let rawVis = createEmptyVisibilityGrid();
-    let lightSources = computeVisibilityGridForPlayer(playerId, rawVis) || [];
+    computeVisibilityGridForPlayer(playerId, rawVis);
     let smoothedVis = smoothVisibilityGridForPlayer(playerId, rawVis);
     visibilityGridByPlayerCache.set(playerId, smoothedVis);
-    visibilityLightSourcesByPlayerCache.set(playerId, lightSources);
     return smoothedVis;
 }
 
@@ -2083,7 +2105,6 @@ function updateVisibility(playerId) {
     if (fullVisibility) return;
 
     visibilityGrid = getVisibilityGridForPlayer(playerId);
-    visibilityLightSources = visibilityLightSourcesByPlayerCache.get(playerId) || [];
 
     visibilityVersion++;
 }
