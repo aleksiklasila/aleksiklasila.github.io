@@ -3285,10 +3285,13 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     let scaled = computeUnitLevelScaledStats(unit, lvl);
     if (!scaled) return;
 
-    let prevEnergyAbs = Number(unit.energy);
-    if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
-    unit.maxEnergy = scaled.maxEnergy;
-    unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(prevEnergyAbs)));
+    if (!Number.isFinite(unit.maxEnergy) || unit.maxEnergy <= 0) {
+        let baseMaxEnergy = Number(unit.baseLevelmaxEnergy);
+        if (!Number.isFinite(baseMaxEnergy) || baseMaxEnergy <= 0) baseMaxEnergy = Number(scaled.maxEnergy) || 1;
+        unit.maxEnergy = Math.max(1, Math.floor(baseMaxEnergy));
+    }
+    if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
+    unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
     unit.attackDamage = scaled.attackDamage;
     unit.attackCooldown = scaled.attackCooldown;
     unit.speed = scaled.speed;

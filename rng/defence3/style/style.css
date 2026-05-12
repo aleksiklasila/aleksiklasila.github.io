@@ -727,7 +727,7 @@
 
         /* RIGHT PANEL (info/unit menu) */
         #right-panel {
-            width: 220px;
+            width: 245px;
             background: rgba(0, 0, 0, 0.95);
             border-left: 2px solid #333;
             display: flex;
@@ -1113,7 +1113,7 @@
         }
 
         .build-item {
-            width: 48px;
+            width: 46px;
             height: 52px;
             flex-shrink: 0;
             display: flex;
