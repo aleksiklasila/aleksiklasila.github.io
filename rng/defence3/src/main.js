@@ -2556,9 +2556,9 @@ function startGame() {
     loadUiSettingsFromStorage();
     updateBuildPlacementModeButton();
 
-    rebuildPrecomputedStatsMap();
-
     resetWorldState();
+
+    rebuildPrecomputedStatsMap();
 
     mapAlerts = [];
     controlGroupAlertState = {};

@@ -122,7 +122,7 @@ let BUILDING_ENERGY_LEVEL_EXP = 2;
 let BUILDING_LEVEL_MULT_EXP = 1.6;
 let BUILDING_DAMAGE_LEVEL_EXP = 1.4;
 let BUILDING_LINEAR_CD_REDUCTION_PER_LEVEL = 0.10;
-let BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = 0.10;
+let BUILDING_LINEAR_VISION_BONUS_PER_LEVEL = 0.20;
 let SAND_GUN_CD_LEVEL_EXP = 0.9;
 let RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = 1.05;
 let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
@@ -135,7 +135,7 @@ const BUILDING_FORMULA_CONFIG = {
     energyLevelExp: 2,
     damageLevelExp: 1.4,
     linearCdReductionPerLevel: 0.10,
-    linearVisionBonusPerLevel: 0.10,
+    linearVisionBonusPerLevel: 0.20,
     sandGunCdLevelExp: 0.9,
     researchEfficiencyLevelExp: 1.05,
     researchEfficiencyCap: 3,
@@ -199,6 +199,9 @@ const UNIT_FORMULA_CONFIG = {
 
 const RESEARCH_FORMULA_CONFIG = {
     unitPriceBonusExp: 1.8,
+    unitVisionRangeBonusExp: 1.08,
+    unitAttackRangeBonusExp: 1.08,
+    buildingVisionRangeBonusExp: 1.06,
 };
 
 // Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
@@ -367,19 +370,19 @@ const BASE_UNIT_STATS = {
 };
 
 const UNIT_LEVEL_SCALING = {
-    _default: { energyExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.02, visionCapBonus: 1.2 },
-    boss: { energyExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.015, visionCapBonus: 1.0 },
-    flying: { energyExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.03, visionCapBonus: 1.8 },
-    snake: { energyExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.02, visionCapBonus: 1.3 },
-    tank: { energyExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.0 },
-    scout: { energyExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 3.2 },
-    collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    astar_collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    salvager_unit: { energyExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    builder_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    healer_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    researcher_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.015, visionCapBonus: 0.8 },
-    king: { energyExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.02, visionCapBonus: 1.2 },
+    _default: { energyExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.04, visionCapBonus: 2.4 },
+    boss: { energyExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.03, visionCapBonus: 2.0 },
+    flying: { energyExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.06, visionCapBonus: 3.6 },
+    snake: { energyExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.04, visionCapBonus: 2.6 },
+    tank: { energyExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.0 },
+    scout: { energyExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.08, visionCapBonus: 6.4 },
+    collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    astar_collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    salvager_unit: { energyExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    builder_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    healer_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    researcher_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    king: { energyExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.4 },
 };
 
 let RESEARCH_COST_EXP = 3;
@@ -466,11 +469,11 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         },
         visionRange: ({ baseAtLevel1 }) => {
             let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 2) : 10;
+            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 4) : 20;
         },
         attackRange: ({ baseAtLevel1 }) => {
             let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
-            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 2) : 7;
+            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 4) : 14;
         },
         gatherPerTrip: Infinity,
         builderDps: Infinity,
@@ -498,7 +501,7 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         },
         visionRange: ({ baseAtLevel1 }) => {
             let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
-            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 1.5) : 16;
+            return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 3) : 32;
         },
         multiplier: ({ key }) => (key === 'farm' || key === 'astar_farm') ? 10 : Infinity,
         efficiency: 3,

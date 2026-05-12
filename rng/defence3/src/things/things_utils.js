@@ -1115,7 +1115,7 @@ function getUnitRenderActionRangePx(u) {
 function getAreaRangeCellsAtWorld(wx, wy, rangeArea) {
     let sourceAreaId = getAreaIdAtWorld(wx, wy);
     if (sourceAreaId < 0) return [];
-    return getGridCellsWithinAreaDistance(sourceAreaId, Math.ceil(Math.max(0, Number(rangeArea) || 0)));
+    return getGridCellsWithinAreaDistance(sourceAreaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
 }
 
 function markConstructionComplete(item) {
@@ -1257,5 +1257,5 @@ function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
 }
 
 function formatRangeStatTiles(v) {
-    return (Number.isFinite(v) && v > 0) ? `${(Number(v) / AREA_UNIT_TILE_EQUIVALENT).toFixed(2)}a` : '-';
+    return Number.isFinite(v) ? `${Math.max(0, Math.floor(Number(v) / AREA_UNIT_TILE_EQUIVALENT))}a` : '-';
 }

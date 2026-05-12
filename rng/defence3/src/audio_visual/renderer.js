@@ -939,13 +939,8 @@ function push3DRenderObject(target, object) {
     if (!Number.isFinite(visionRange)) visionRange = _resolveVisionRangeFromSource(object.visibilitySource);
     let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
     if (Number.isFinite(visionRange) && visionRange > 0) {
-        // For non-mines, vertical size is derived from visibility only.
         let visibilityHeight = Math.max(0.18, visionRange / 5);
-        if (!(object.heightMode === 'mine')) {
-            resolvedScaleY = visibilityHeight;
-        } else {
-            resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
-        }
+        resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
     }
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
@@ -2033,7 +2028,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     for (let entry of areaRangeBySourceArea.entries()) {
         let areaId = entry[0];
         let rangeArea = entry[1];
-        let cells = getGridCellsWithinAreaDistance(areaId, Math.ceil(rangeArea));
+        let cells = getGridCellsWithinAreaDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
         for (let i = 0; i < cells.length; i++) {
             let cell = cells[i];
             if (!cell) continue;

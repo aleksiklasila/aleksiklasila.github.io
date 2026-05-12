@@ -2292,6 +2292,9 @@ function getResearchBonusExp(kind) {
 
 function getResearchBonusExpForStat(kind, statKey) {
     if (statKey === 'unitPrice') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitPriceBonusExp) || 1);
+    if (kind === 'unit' && statKey === 'visionRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitVisionRangeBonusExp) || 1);
+    if (kind === 'unit' && statKey === 'attackRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.unitAttackRangeBonusExp) || 1);
+    if (kind === 'building' && statKey === 'visionRange') return Math.max(1, Number(RESEARCH_FORMULA_CONFIG.buildingVisionRangeBonusExp) || 1);
     if (kind === 'building' && statKey === 'popCap') return Math.max(1, Number(RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP) || 2);
     return getResearchBonusExp(kind);
 }
@@ -2326,9 +2329,6 @@ function applyPrecomputedSoftCap(value, cap, statKey, baseValue, maxValueBeforeC
     let denom = maxValueBeforeCap - baseValue;
     if (!Number.isFinite(denom) || Math.abs(denom) < 1e-9) return value;
 
-    // Preserve multiplicative spacing where possible by projecting the raw value
-    // onto the baseline->max segment in log space, then mapping that position to
-    // baseline->cap in log space.
     let canUseLog = value > 0 && baseValue > 0 && maxValueBeforeCap > 0 && cap > 0;
     if (canUseLog) {
         let logDenom = Math.log(maxValueBeforeCap / baseValue);
@@ -2412,6 +2412,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let speedMult = Math.pow(cfg.speedExp || 1, lvl - 1);
     let cdMult = Math.pow(cfg.cdExp || 1, lvl - 1);
     let visionMult = Math.pow(cfg.visionExp || 1, lvl - 1);
+    let rangeMult = Math.pow((cfg.rangeExp !== undefined ? cfg.rangeExp : (cfg.visionExp || 1)), lvl - 1);
 
     let energy = Math.max(1, Math.floor((Number(s.energy) || 1) * energyMult));
     let atk = (Number(s.atk) || 0) > 0 ? Math.max(1, Math.round((Number(s.atk) || 0) * dmgMult)) : 0;
@@ -2429,7 +2430,9 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
     let visionRange = Math.min(visionCap, baseVision * visionMult);
 
-    let attackRange = Math.max(0, Number(s.attackRange) || 0);
+    let baseAttackRange = Math.max(0, Number(s.attackRange) || 0);
+    let attackRangeCap = baseAttackRange + (cfg.rangeCapBonus !== undefined ? cfg.rangeCapBonus : (cfg.visionCapBonus || 1.2));
+    let attackRange = baseAttackRange > 0 ? Math.min(attackRangeCap, baseAttackRange * rangeMult) : 0;
     let workerSearchDistance = s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
     let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
@@ -2540,6 +2543,9 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
     if (Number.isFinite(def.cd)) out.cd = def.cd;
     if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
+    if (def.target === 'wall' && Number.isFinite(def.visionRange)) {
+        out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
+    }
     if (key === 'research') {
         let baseEfficiency = Number.isFinite(def.efficiency) ? def.efficiency : 1;
         out.efficiency = Math.min(researchEfficiencyCap, baseEfficiency * Math.pow(researchEfficiencyExp, lvl - 1));
@@ -2548,11 +2554,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     if (key === 'water' || key === 'smg' || key === 'pistol') {
         let towerCdFloor = Math.max(0.001, Number(bCfg.directTowerCdFloor) || 0.001);
         if (Number.isFinite(def.cd)) out.cd = Math.max(towerCdFloor, def.cd * (1 - (lvl - 1) * linearCdReduction));
-        if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
-    } else if (key === 'fire' || key === 'poison') {
-        if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
     } else if (key === 'sand_gun') {
-        if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
         if (Number.isFinite(def.cd)) out.cd = def.cd * Math.pow(sandGunCdExp, lvl);
     }
     if (Number.isFinite(def.maxVisionRange) && Number.isFinite(out.visionRange)) {
@@ -2705,26 +2707,21 @@ function rebuildPrecomputedStatsMap() {
 }
 
 function ensurePrecomputedStatsMap() {
-    if (!PRECOMPUTED_STATS_READY) rebuildPrecomputedStatsMap();
+    return !!PRECOMPUTED_STATS_READY;
 }
 
 function getUnitStatFromMap(unitType, level, statKey, researchLevel = 0) {
-    ensurePrecomputedStatsMap();
+    if (!ensurePrecomputedStatsMap()) return normalizePrecomputedUnitStatValue(unitType, statKey, NaN);
     let key = PRECOMPUTED_STATS_MAP.unit[unitType] ? unitType : 'norm';
     let lvl = clampThingLevel(level);
     let rLvl = clampResearchLevel(researchLevel);
     let arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
-    if (!arr) {
-        // Recover from stale/partial precomputed tables (e.g. loaded state) and retry once.
-        rebuildPrecomputedStatsMap();
-        arr = (((PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {})[statKey] || null);
-    }
     if (!arr) return normalizePrecomputedUnitStatValue(key, statKey, NaN);
     return normalizePrecomputedUnitStatValue(key, statKey, arr[rLvl]);
 }
 
 function getBuildingStatFromMap(buildingKey, level, statKey, researchLevel = 0) {
-    ensurePrecomputedStatsMap();
+    if (!ensurePrecomputedStatsMap()) return NaN;
     let key = PRECOMPUTED_STATS_MAP.building[buildingKey] ? buildingKey : 'farm';
     let lvl = clampThingLevel(level);
     let rLvl = clampResearchLevel(researchLevel);
@@ -2895,14 +2892,15 @@ function applyResearchMultiplierToValue(baseValue, mult, statKey) {
 function formatResearchStatValue(statKey, value) {
     if (!Number.isFinite(value)) return '-';
     let compact = (v, d = 2) => formatBigNumber(v, d);
+    let areaCompact = (v) => `${Math.max(0, Math.floor(Number(v) || 0))} areas`;
     if (statKey === 'burnDuration' || statKey === 'poisonDuration' || statKey === 'freezeDuration' || statKey === 'wetDuration' || statKey === 'sandDuration' || statKey === 'watchDuration') {
         return `${compact(value, 2)}s`;
     }
     if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
     if (statKey === 'blastDamage') return compact(value, 2);
-    if (statKey === 'blastRadius') return `${compact(value, 2)} areas`;
-    if (statKey === 'workerSearchDistance') return `${compact(value, 2)} areas`;
-    if (statKey === 'attackRange' || statKey === 'visionRange') return `${compact(value, 2)} areas`;
+    if (statKey === 'blastRadius') return areaCompact(value);
+    if (statKey === 'workerSearchDistance') return areaCompact(value);
+    if (statKey === 'attackRange' || statKey === 'visionRange') return areaCompact(value);
     if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
     if (statKey === 'efficiency') return compact(value, 2);
     if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
