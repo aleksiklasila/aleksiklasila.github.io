@@ -258,7 +258,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     if (typeof visitor !== 'function') return false;
     let sourceAreaId = getAreaIdAtWorld(wx, wy);
     if (sourceAreaId < 0) return false;
-    let maxDistance = Math.max(0, Math.ceil(Number(rangeAreaUnits) || 0));
+    let maxDistance = Math.max(0, Math.floor(Number(rangeAreaUnits) || 0));
     let areaIds = getAreaIdsWithinDistance(sourceAreaId, maxDistance);
     if (!areaIds || areaIds.length <= 0) return false;
 
@@ -288,7 +288,7 @@ function forEachGridCellInAreaRange(wx, wy, rangeAreaUnits, visitor) {
     if (typeof visitor !== 'function') return false;
     let sourceAreaId = getAreaIdAtWorld(wx, wy);
     if (sourceAreaId < 0) return false;
-    let maxDistance = Math.max(0, Math.ceil(Number(rangeAreaUnits) || 0));
+    let maxDistance = Math.max(0, Math.floor(Number(rangeAreaUnits) || 0));
     let cells = getGridCellsWithinAreaDistance(sourceAreaId, maxDistance);
     if (!cells || cells.length <= 0) return false;
     for (let i = 0; i < cells.length; i++) {

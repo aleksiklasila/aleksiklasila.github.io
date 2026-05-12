@@ -126,7 +126,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
     units.push(u);
     players[owner].popCount++;
 
-    // For worker units, prefer semantic rally assignment (actual target/task) over plain move rally.
+    // For worker units, rally is a direct move order that must be followed before auto-search resumes.
     if (u.workerType && typeof applyWorkerRallyFromSpawner === 'function') {
         if (applyWorkerRallyFromSpawner(u, spawner)) {
             spawner.spawnTimer = 0;
@@ -138,22 +138,29 @@ function spawnQueuedUnitFromSpawner(spawner) {
     let rallyTarget = getSpawnerRallyTargetWorld(spawner);
     if (rallyTarget) {
         let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
+        let rallyPath = null;
         if (_canUsePathfindRequestBudget(u.owner)) {
             _consumePathfindRequestBudget(u.owner);
             let rallyCacheKey = _makeSpawnerRallyTemplateKey(spawner, spawnPos.x, spawnPos.y, rgx, rgy, u);
-            let templatedPath = _getSpawnerRallyTemplatePath(rallyCacheKey);
-            if (!templatedPath) {
-                templatedPath = _findPathForUnitTagged('spawner_rally', u, spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                _setSpawnerRallyTemplatePath(rallyCacheKey, templatedPath);
+            rallyPath = _getSpawnerRallyTemplatePath(rallyCacheKey);
+            if (!rallyPath) {
+                rallyPath = _findPathForUnitTagged('spawner_rally', u, spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
+                _setSpawnerRallyTemplatePath(rallyCacheKey, rallyPath);
             }
-            u.path = templatedPath;
+        }
+
+        if (spawner.type === 'barrack') {
+            u.path = rallyPath;
             u.pathIndex = 0;
-            if (spawner.type === 'barrack') {
-                u.commandState = CMD_ATTACK_MOVING;
-            } else {
-                u.commandState = CMD_MOVING;
-                u.workerState = 'MANUAL_MOVE';
+            if (u.path && u.path.length > 0) u.commandState = CMD_ATTACK_MOVING;
+        } else {
+            if (!rallyPath || rallyPath.length <= 0) {
+                rallyPath = _makeFallbackPathForUnit(u, spawnPos.x, spawnPos.y, rgx, rgy, CMD_MOVING, 'spawner_rally');
             }
+            u.path = rallyPath;
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
+            u.commandState = CMD_MOVING;
+            u.workerState = 'MANUAL_MOVE';
         }
     }
 

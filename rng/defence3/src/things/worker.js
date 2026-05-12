@@ -1269,6 +1269,7 @@ function _collectorFindTarget(u, myGx, myGy) {
         }
 
         if (!candidate) return false;
+        if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
         if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
 
         let originDist = Math.sqrt(originDistSq);
@@ -1477,6 +1478,29 @@ function _getWorkerAutoSearchDistanceArea(u) {
     return Math.max(0, distArea);
 }
 
+function _isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea) {
+    if (!target) return false;
+    let sourceAreaId = getAreaIdAtWorld(originX, originY);
+    if (sourceAreaId < 0) return false;
+    let targetAreaId = Number.isFinite(target.areaId)
+        ? Math.floor(target.areaId)
+        : getAreaIdAtWorld(target.x, target.y);
+    if (targetAreaId < 0) return false;
+    let areaDistance = getAreaDistance(sourceAreaId, targetAreaId);
+    if (areaDistance < 0) return false;
+    return areaDistance <= Math.floor(Math.max(0, Number(maxSearchArea) || 0));
+}
+
+function _isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea) {
+    if (!_isTargetWithinWorkerSearchArea(originX, originY, target, maxSearchArea)) return false;
+    if (!u) return true;
+    let ux = Number(u.x);
+    let uy = Number(u.y);
+    if (!Number.isFinite(ux) || !Number.isFinite(uy)) return true;
+    if (ux === originX && uy === originY) return true;
+    return _isTargetWithinWorkerSearchArea(ux, uy, target, maxSearchArea);
+}
+
 function _getResearcherAutoSearchDistancePx(u) {
     // Researchers often need to cross a larger base area to find active labs.
     return Math.max(_getWorkerAutoSearchDistancePx(u), TILE * 32);
@@ -1670,117 +1694,9 @@ function applyWorkerRallyFromSpawner(u, spawner) {
     if (!u || !spawner || !u.workerType) return false;
     let rally = getSpawnerRallyTargetWorld(spawner);
     if (!rally) return false;
-
-    let owner = u.owner;
-    let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
     let rgx = Math.floor(rally.x / TILE), rgy = Math.floor(rally.y / TILE);
-
-    if (u.workerType === 'collector') {
-        let gather = _getCollectorGatherTargetAt(rgx, rgy, owner, null) || _getCollectorGatherTargetNear(rally.x, rally.y, owner, 22);
-        if (!gather || !_isCollectorTargetValid(gather.target, gather.type, owner)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
-        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
-        _clearWorkerTarget(u);
-        u._collectorPinnedTarget = gather.target;
-        u._collectorPinnedTargetType = gather.type;
-        _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
-        return true;
-    }
-
-    if (u.workerType === 'astar_collector') {
-        let gather = _getAstarCollectorGatherTargetAt(rgx, rgy, owner, null) || _getAstarCollectorGatherTargetNear(rally.x, rally.y, owner, 22);
-        if (!gather || !_isAstarCollectorTargetValid(gather.target, gather.type, owner)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
-        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
-        _clearWorkerTarget(u);
-        u._astarPinnedTarget = gather.target;
-        u._astarPinnedTargetType = gather.type;
-        _astarCollectorAssignTarget(u, gather.target, gather.type);
-        return true;
-    }
-
-    if (u.workerType === 'builder') {
-        let target = _getBuilderWorkTargetAt(rgx, rgy, owner, true) || _getBuilderWorkTargetNear(rally.x, rally.y, owner, 22, true);
-        if (!target || !_isBuilderWorkTarget(target, owner, true)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, target, null);
-        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
-        _builderAssignTarget(u, target, myGx, myGy);
-        return true;
-    }
-
-    if (u.workerType === 'healer') {
-        let qTarget = getTileEntityRef(rgx, rgy);
-        if (!_isHealerQueueAnchorTarget(qTarget, owner)) qTarget = _getHealerQueueTargetNear(rally.x, rally.y, owner, 48, false);
-        if (!_isHealerQueueAnchorTarget(qTarget, owner)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
-        if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) return false;
-        _clearWorkerTarget(u);
-        u._healerPinnedQueueTarget = qTarget;
-        if (_isHealerQueueTarget(qTarget, owner)) _setHealerQueueCommit(u, qTarget);
-        else _clearHealerQueueCommit(u);
-        _healerFindTarget(u, myGx, myGy);
-        return true;
-    }
-
-    if (u.workerType === 'researcher') {
-        let rTarget = getTileEntityRef(rgx, rgy);
-        if (!_isResearcherTargetBuilding(rTarget, owner)) {
-            rTarget = null;
-            let bestDist = Infinity;
-            for (let s of collectorSpawners) {
-                if (!_isResearcherTargetBuilding(s, owner)) continue;
-                let d = Math.hypot(s.x - rally.x, s.y - rally.y);
-                if (d > 48 || d >= bestDist) continue;
-                bestDist = d;
-                rTarget = s;
-            }
-        }
-        if (!rTarget) return false;
-        _releaseManualWorkerAssignmentConflicts(u, rTarget, 'research');
-        if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) return false;
-        _clearWorkerTarget(u);
-        if (!_setWorkerTarget(u, rTarget, 'research')) return false;
-        u.workerState = 'MOVING_TO_RESEARCH';
-        u._workerNextIdleRetargetTick = gameTime;
-        u._researchSpawnerTarget = null;
-        let path = _requestWorkerPath(u, myGx, myGy, rTarget.gx, rTarget.gy, null, null);
-        if (path && path.length > 0) {
-            u.path = path;
-            u.pathIndex = 0;
-            u.commandState = CMD_MOVING;
-        } else {
-            u.commandState = CMD_IDLE;
-        }
-        return true;
-    }
-
-    if (u.workerType === 'salvager') {
-        let target = getTileEntityRef(rgx, rgy);
-        let isValid = (obj) => !!obj && obj.owner === owner && !!obj.markedForSalvage && (!(obj.energy !== undefined) || obj.energy > 0);
-        if (!isValid(target)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, target, null);
-        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
-        if (!_setWorkerTarget(u, target, null)) return false;
-        let canWalk = (nx, ny) => nx === target.gx && ny === target.gy;
-        u.path = _requestWorkerPath(u, myGx, myGy, target.gx, target.gy, canWalk, null, true);
-        if (u.path) {
-            u.workerState = 'MOVING_TO';
-            u.pathIndex = 0;
-            u.commandState = CMD_MOVING;
-            return true;
-        }
-        if (_workerHasPendingAutoRouteToTarget(u, target)) {
-            u.workerState = 'MOVING_TO';
-            return true;
-        }
-        _clearWorkerAutoRoute(u);
-        _clearWorkerTarget(u);
-        u.workerState = 'IDLE';
-        u.commandState = CMD_IDLE;
-        return false;
-    }
-
-    return false;
+    issueWorkerBlockedAssignFallbackMove(u, rgx, rgy);
+    return true;
 }
 
 function _isBuilderRepairTarget(target) {
@@ -1977,6 +1893,7 @@ function _astarCollectorFindTarget(u) {
         }
 
         if (!candidate) return false;
+        if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
         if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
 
         let originDist = Math.sqrt(originDistSq);
@@ -2011,9 +1928,9 @@ function _salvagerFindTarget(u, myGx, myGy) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let bestDist = 99999, bestItem = null;
     let spawnerSet = new Set(collectorSpawners);
-    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
-    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
-    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
+    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
+    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
     forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
         if (!tileRef || !c || !c.item) return false;
         if (c.owner !== owner || !c.item.markedForSalvage) return false;
@@ -2309,8 +2226,10 @@ function _getHealerCommittedQueueTarget(u) {
 function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
     let candidates = [];
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     let consider = (s) => {
         if (!_isHealerQueueTarget(s, u.owner)) return;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         let d = Math.hypot(s.x - originX, s.y - originY);
         if (d > maxSearch) return;
         let worldDist = Math.hypot(s.x - u.x, s.y - u.y);
@@ -2351,8 +2270,10 @@ function _isResearcherTargetBuilding(target, owner) {
 function _findNearestResearchBuildingNeedingWork(u) {
     let candidates = [];
     let maxSearch = _getResearcherAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     for (let s of collectorSpawners) {
         if (!_isResearcherTargetBuilding(s, u.owner)) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue;
         let d = Math.hypot(s.x - u.x, s.y - u.y);
         if (d > maxSearch) continue;
         candidates.push({
@@ -2413,6 +2334,7 @@ function _ensureHealerDamagedCandidatesCacheCurrent() {
 
 function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     if (!(maxSearch > 0)) return null;
     let owner = Math.floor(Number(u.owner));
     _ensureHealerDamagedCandidatesCacheCurrent();
@@ -2448,6 +2370,7 @@ function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
     for (let entry of candidates) {
         let target = entry && entry.u;
         if (!_isHealerTargetUnit(target, owner)) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, target, maxSearchArea)) continue;
 
         let dx = target.x - originX;
         let dy = target.y - originY;
@@ -2573,8 +2496,10 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     if (!ownedTargets || ownedTargets.length <= 0) return null;
     let candidates = [];
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     for (let b of ownedTargets) {
         if (!_isBuilderWorkTarget(b, owner)) continue;
+        if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
         let d = Math.hypot(b.x - originX, b.y - originY);
         if (d > maxSearch) continue;
         let worldDist = Math.hypot(b.x - u.x, b.y - u.y);

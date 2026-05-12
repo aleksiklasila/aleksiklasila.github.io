@@ -54,6 +54,11 @@ function _drawAreaCoverageOverlay2D(ctx, cells, color, overlayViewMinX, overlayV
     ctx.restore();
 }
 
+function _drawAreaRangeOverlay2D(ctx, worldX, worldY, rangeArea, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY) {
+    if (!Number.isFinite(rangeArea) || rangeArea <= 0) return;
+    _drawAreaCoverageOverlay2D(ctx, getAreaRangeCellsAtWorld(worldX, worldY, rangeArea), color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
+}
+
 const TOWER_ICON_SPRITE_CACHE = new Map();
 const TOWER_ICON_SPRITE_CACHE_MAX = 1024;
 const TOWER_ICON_ANGLE_STEPS = 32;
@@ -576,7 +581,7 @@ function getTowerPreviewVisionRange(type, level) {
     return vr;
 }
 
-function drawBuildPlacementGhost(ctx, gx, gy, key, canBuild, previewLevel) {
+function drawBuildPlacementGhost(ctx, gx, gy, key, canBuild, previewLevel, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY) {
     let img = getItemThumbnailImage(key, 30);
     if (img && img.complete && img.naturalWidth > 0) {
         ctx.save();
@@ -587,16 +592,18 @@ function drawBuildPlacementGhost(ctx, gx, gy, key, canBuild, previewLevel) {
 
     let def = BASE_CARD_TYPES[key];
     if (renderRangeMode !== RENDER_RANGE_NONE && def && def.target === 'wall' && def.towerEnergy && !def.isCloud) {
-        let rrTiles = getTowerPreviewVisionRange(key, previewLevel);
-        if (rrTiles > 0) {
-            ctx.save();
-            ctx.lineWidth = 1.4;
-            ctx.strokeStyle = canBuild ? 'rgba(80,255,80,0.45)' : 'rgba(255,90,90,0.45)';
-            ctx.beginPath();
-            ctx.arc(gx * TILE + TILE / 2, gy * TILE + TILE / 2, rrTiles * TILE, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-        }
+        let rrArea = getTowerPreviewVisionRange(key, previewLevel);
+        _drawAreaRangeOverlay2D(
+            ctx,
+            gx * TILE + TILE / 2,
+            gy * TILE + TILE / 2,
+            rrArea,
+            canBuild ? 'rgba(80,255,80,0.45)' : 'rgba(255,90,90,0.45)',
+            overlayViewMinX,
+            overlayViewMinY,
+            overlayViewMaxX,
+            overlayViewMaxY
+        );
     }
 }
 
@@ -613,7 +620,7 @@ function getCurrentBuildPreviewData() {
         canBuild: false,
         previewLevel,
         image: getItemThumbnailImage(selectedBuildItem, 30),
-        rangeRadiusTiles: 0,
+        rangeRadiusArea: 0,
         areaCells: null,
         filledCount: 0,
         areaCellCount: 0,
@@ -653,7 +660,7 @@ function getCurrentBuildPreviewData() {
 
     let def = BASE_CARD_TYPES[selectedBuildItem];
     if (renderRangeMode !== RENDER_RANGE_NONE && def && def.target === 'wall' && def.towerEnergy && !def.isCloud) {
-        preview.rangeRadiusTiles = getTowerPreviewVisionRange(selectedBuildItem, previewLevel);
+        preview.rangeRadiusArea = getTowerPreviewVisionRange(selectedBuildItem, previewLevel);
     }
     return preview;
 }
@@ -1665,7 +1672,7 @@ function draw() {
                 let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
                 let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
                 let color = (u.owner === localOwnerIndex || !isMultiplayer) ? 'rgba(120,220,255,0.52)' : 'rgba(255,150,150,0.52)';
-                _drawAreaCoverageOverlay2D(ctx, getAreaRangeCellsAtWorld(ux, uy, rangeArea), color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
+                _drawAreaRangeOverlay2D(ctx, ux, uy, rangeArea, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
             }
         }
     }
@@ -1802,16 +1809,7 @@ function draw() {
                 ctx.fillStyle = cell.occupied ? 'rgba(0,255,0,0.2)' : 'rgba(255,100,0,0.2)';
                 ctx.fillRect(cell.x * TILE + 3, cell.y * TILE + 3, TILE - 6, TILE - 6);
             }
-            ctx.strokeStyle = buildPreview.canBuild ? 'rgba(0,255,0,0.9)' : 'rgba(255,200,0,0.9)';
-            ctx.lineWidth = 3;
-            let areaId = grid[buildPreview.gy][buildPreview.gx].areaId;
-            for (let cell of buildPreview.areaCells) {
-                let px = cell.x * TILE, py = cell.y * TILE;
-                if (cell.x === GRID_W - 1 || grid[cell.y][cell.x + 1].areaId !== areaId) { ctx.beginPath(); ctx.moveTo(px + TILE, py); ctx.lineTo(px + TILE, py + TILE); ctx.stroke(); }
-                if (cell.x === 0 || grid[cell.y][cell.x - 1].areaId !== areaId) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + TILE); ctx.stroke(); }
-                if (cell.y === GRID_H - 1 || grid[cell.y + 1][cell.x].areaId !== areaId) { ctx.beginPath(); ctx.moveTo(px, py + TILE); ctx.lineTo(px + TILE, py + TILE); ctx.stroke(); }
-                if (cell.y === 0 || grid[cell.y - 1][cell.x].areaId !== areaId) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + TILE, py); ctx.stroke(); }
-            }
+            _drawAreaCoverageOverlay2D(ctx, buildPreview.areaCells, buildPreview.canBuild ? 'rgba(0,255,0,0.9)' : 'rgba(255,200,0,0.9)', overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
             let cx = buildPreview.areaCenterX * TILE;
             let cy = buildPreview.areaCenterY * TILE;
             ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1825,7 +1823,7 @@ function draw() {
                 ctx.fillText(`⚡${buildPreview.areaUpgradeCost}`, cx, cy + 26);
             }
         }
-        drawBuildPlacementGhost(ctx, buildPreview.gx, buildPreview.gy, buildPreview.key, !!buildPreview.canBuild, buildPreview.previewLevel);
+        drawBuildPlacementGhost(ctx, buildPreview.gx, buildPreview.gy, buildPreview.key, !!buildPreview.canBuild, buildPreview.previewLevel, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
         ctx.fillStyle = buildPreview.canBuild ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
         ctx.fillRect(buildPreview.gx * TILE, buildPreview.gy * TILE, TILE, TILE);
     }
