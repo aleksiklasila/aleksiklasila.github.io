@@ -491,7 +491,7 @@ function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
                 g.textAlign = 'center';
                 g.textBaseline = 'middle';
                 g.fillStyle = unitType === 'collector' ? '#ffd34d' : '#f4f4f4';
-                g.fillText(unitType === 'collector' ? '⭐' : '★', size * 0.5, size * 0.52);
+                g.fillText(unitType === 'collector' ? '⚡' : '★', size * 0.5, size * 0.52);
             } else {
                 drawCachedUnitStar(g, size * 0.5, size * 0.5, Math.round(size * 0.18), color, '#111', 2);
             }
