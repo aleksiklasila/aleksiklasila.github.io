@@ -5,14 +5,17 @@
 // ============================================================
 function initGrid() {
     grid = [];
+    areaIdGrid = [];
     initDroppedItemGrid();
     workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
     for (let y = 0; y < GRID_H; y++) {
         let row = [];
+        let areaRow = new Int32Array(GRID_W).fill(-1);
         for (let x = 0; x < GRID_W; x++) {
             row.push({ type: TYPE_FLOOR, item: null, owner: -1, areaId: -1, droppedItem: null });
         }
         grid.push(row);
+        areaIdGrid.push(areaRow);
     }
 }
 
@@ -36,6 +39,7 @@ function generateAreas() {
                 let cur = queue.shift();
                 cells.push({ x: cur.x, y: cur.y });
                 grid[cur.y][cur.x].areaId = areaId;
+                if (areaIdGrid[cur.y]) areaIdGrid[cur.y][cur.x] = areaId;
                 if (cur.x < minAreaGx) minAreaGx = cur.x;
                 if (cur.y < minAreaGy) minAreaGy = cur.y;
                 if (cur.x > maxAreaGx) maxAreaGx = cur.x;
@@ -73,6 +77,7 @@ function generateAreas() {
         }
     }
 
+    rebuildAreaDistanceCachesFromAreas();
     _areaColorCache = null;
     _areaOutlinePathCache = null;
     _markCombinedBgFullDirty();

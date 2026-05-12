@@ -143,6 +143,8 @@ function initSpatialHash() {
     } else {
         spatialUnitsComplexLowestHealthUnit = [];
     }
+    let areaCount = Array.isArray(areas) ? areas.length : 0;
+    spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => new Set());
 }
 function getSpatialKey(wx, wy) {
     let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
@@ -153,8 +155,15 @@ function getSpatialKey(wx, wy) {
 }
 function updateUnitSpatial(u) {
     let newKey = getSpatialKey(u.x, u.y);
+    let newAreaId = getAreaIdAtWorld(u.x, u.y);
     let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
     let currentScaled = _getSpatialUnitVisibilityScaled(u);
+    if (u._spatialAreaId !== undefined && u._spatialAreaId !== newAreaId) {
+        let oldAreaId = u._spatialAreaId;
+        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length && spatialUnitsByArea[oldAreaId]) {
+            spatialUnitsByArea[oldAreaId].delete(u);
+        }
+    }
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
         let oldKey = u._spatialKey;
         if (spatialUnits[u._spatialKey].delete(u)) {
@@ -180,15 +189,18 @@ function updateUnitSpatial(u) {
     }
     if (u._spatialKey === newKey) {
         spatialUnits[newKey].add(u);
+        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) spatialUnitsByArea[newAreaId].add(u);
         let ownerSame = Math.floor(Number(u.owner));
         if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
             _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
         }
         u._spatialLastVisScaled = currentScaled;
+        u._spatialAreaId = newAreaId;
         if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
         return;
     }
     spatialUnits[newKey].add(u);
+    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) spatialUnitsByArea[newAreaId].add(u);
     let owner = Math.floor(Number(u.owner));
     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
         let typeIdx = spatialUnitTypeToIndex[u.unitType];
@@ -202,6 +214,7 @@ function updateUnitSpatial(u) {
         _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, owner, 0, currentScaled);
     }
     u._spatialKey = newKey;
+    u._spatialAreaId = newAreaId;
     u._spatialLastVisScaled = currentScaled;
     if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
 }
@@ -232,6 +245,58 @@ function removeUnitSpatial(u) {
         u._spatialLastVisScaled = 0;
         u._spatialKey = undefined;
     }
+    if (u._spatialAreaId !== undefined) {
+        let oldAreaId = u._spatialAreaId;
+        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length && spatialUnitsByArea[oldAreaId]) {
+            spatialUnitsByArea[oldAreaId].delete(u);
+        }
+        u._spatialAreaId = undefined;
+    }
+}
+
+function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
+    if (typeof visitor !== 'function') return false;
+    let sourceAreaId = getAreaIdAtWorld(wx, wy);
+    if (sourceAreaId < 0) return false;
+    let maxDistance = Math.max(0, Math.ceil(Number(rangeAreaUnits) || 0));
+    let areaIds = getAreaIdsWithinDistance(sourceAreaId, maxDistance);
+    if (!areaIds || areaIds.length <= 0) return false;
+
+    let includeDead = !!(opts && opts.includeDead);
+    let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
+    let playerFilter = Number.isFinite(opts && opts.player) ? Math.floor(opts.player) : -1;
+    let enemyFilter = Number.isFinite(opts && opts.enemyOfPlayer) ? Math.floor(opts.enemyOfPlayer) : -1;
+    let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
+
+    for (let i = 0; i < areaIds.length; i++) {
+        let areaId = areaIds[i];
+        let bucket = spatialUnitsByArea[areaId];
+        if (!bucket || bucket.size <= 0) continue;
+        for (let u of bucket) {
+            if (!includeDead && u.dead) continue;
+            if (playerFilter >= 0 && u.owner !== playerFilter) continue;
+            if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
+            if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
+            if (predicate && !predicate(u)) continue;
+            if (visitor(u, areaId) === true) return true;
+        }
+    }
+    return false;
+}
+
+function forEachGridCellInAreaRange(wx, wy, rangeAreaUnits, visitor) {
+    if (typeof visitor !== 'function') return false;
+    let sourceAreaId = getAreaIdAtWorld(wx, wy);
+    if (sourceAreaId < 0) return false;
+    let maxDistance = Math.max(0, Math.ceil(Number(rangeAreaUnits) || 0));
+    let cells = getGridCellsWithinAreaDistance(sourceAreaId, maxDistance);
+    if (!cells || cells.length <= 0) return false;
+    for (let i = 0; i < cells.length; i++) {
+        let cell = cells[i];
+        if (!cell) continue;
+        if (visitor(cell, grid[cell.y] && grid[cell.y][cell.x], sourceAreaId) === true) return true;
+    }
+    return false;
 }
 function getUnitsInRange(wx, wy, rangePx) {
     let result = [];

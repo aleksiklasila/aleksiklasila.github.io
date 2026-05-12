@@ -148,7 +148,8 @@ class Tower {
 
     shoot() {
         if (this.cd > 0) return;
-        let rangePx = this.currentStats.visionRange * TILE;
+        let rangeArea = Math.max(0, Number(this.currentStats.visionRange) || 0);
+        let rangePx = Number(this.currentStats.visionRange) * AREA_UNIT_TILE_EQUIVALENT * TILE;
         let preferredTarget = getTowerPreferredTargetInRange(this, rangePx);
         if (preferredTarget) {
             let target = preferredTarget;
@@ -168,8 +169,12 @@ class Tower {
         let bestPrimary = null, bestSecondary = null, bestImmune = null;
         let dPrimary = rangePx, dSecondary = rangePx, dImmune = rangePx;
 
-        forEachUnitInRange(this.x, this.y, rangePx, (u, d2) => {
+        forEachUnitInAreaRange(this.x, this.y, rangeArea, (u) => {
             if (u.turretImmune) return;
+            let dx = u.x - this.x;
+            let dy = u.y - this.y;
+            let d2 = dx * dx + dy * dy;
+            if (d2 > rangePx * rangePx) return;
             let d = Math.sqrt(d2);
 
             let immune = (this.type === 'fire' && u.fireResistant) || (this.type === 'water' && u.waterResistant) ||

@@ -2358,9 +2358,9 @@ function getUnitStatFallbackValue(unitType, statKey) {
     if (statKey === 'atk') return Math.max(0, Number(s.atk) || 0);
     if (statKey === 'atkCd') return Math.max(0.01, Number(s.atkCd) || Math.max(0.05, Number(unitCfg.baseAttackCooldownFallback) || 1.5));
     if (statKey === 'speed') return Math.max(0.1, Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1));
-    if (statKey === 'visionRange') return Math.max(0.25, Number(s.visionRange) || Math.max(0.25, Number(unitCfg.baseVisionFallback) || 4));
+    if (statKey === 'visionRange') return Math.max(0.05, Number(s.visionRange) || Math.max(0.05, Number(unitCfg.baseVisionFallback) || 0.8));
     if (statKey === 'attackRange') return Math.max(0, Number(s.attackRange) || 0);
-    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(1, Number(s.workerSearchDistance) || 10) : 0;
+    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     if (statKey === 'gatherPerTrip') return Math.max(0, Number(s.gatherPerTrip) || 0);
     if (statKey === 'builderDps') return Math.max(0, Number(s.builderDps) || 0);
     if (statKey === 'healerDps') return Math.max(0, Number(s.healerDps) || 0);
@@ -2377,9 +2377,9 @@ function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
     if (statKey === 'atk') return Math.max(0, Number(v) || 0);
     if (statKey === 'atkCd') return Math.max(0.01, Number(v) || 0.01);
     if (statKey === 'speed') return Math.max(0.1, Number(v) || 0.1);
-    if (statKey === 'visionRange') return Math.max(0.25, Number(v) || 0.25);
+    if (statKey === 'visionRange') return Math.max(0.05, Number(v) || 0.05);
     if (statKey === 'attackRange') return Math.max(0, Number(v) || 0);
-    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(1, Number(v) || 1) : 0;
+    if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(v) || 0.2) : 0;
     if (statKey === 'gatherPerTrip') {
         if (unitType === 'collector' || unitType === 'astar_collector') return Math.max(1, Number(v) || 1);
         return 0;
@@ -2424,13 +2424,13 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let speedCap = cfg.speedCapAbs !== undefined ? cfg.speedCapAbs : (baseSpeed * (cfg.speedCapMul || 1.8));
     let speed = Math.min(speedCap, baseSpeed * speedMult);
 
-    let baseVisionMin = Math.max(0.01, Number(unitCfg.baseVisionMin) || 0.25);
-    let baseVision = Math.max(baseVisionMin, Number(s.visionRange) || Math.max(baseVisionMin, Number(unitCfg.baseVisionFallback) || 4));
+    let baseVisionMin = Math.max(0.05, Number(unitCfg.baseVisionMin) || 0.05);
+    let baseVision = Math.max(baseVisionMin, Number(s.visionRange) || Math.max(baseVisionMin, Number(unitCfg.baseVisionFallback) || 0.8));
     let visionCap = baseVision + (cfg.visionCapBonus || 1.2);
     let visionRange = Math.min(visionCap, baseVision * visionMult);
 
     let attackRange = Math.max(0, Number(s.attackRange) || 0);
-    let workerSearchDistance = s.isWorker ? Math.max(1, Number(s.workerSearchDistance) || 10) : 0;
+    let workerSearchDistance = s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
     let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
     let gatherPerTrip = (unitType === 'collector' || unitType === 'astar_collector') ? Math.max(1, gatherBase * Math.pow(lvl, gatherLvlExp)) : 0;
@@ -2900,9 +2900,10 @@ function formatResearchStatValue(statKey, value) {
     }
     if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
     if (statKey === 'blastDamage') return compact(value, 2);
-    if (statKey === 'blastRadius') return `${compact(value, 2)} tiles`;
-    if (statKey === 'workerSearchDistance') return `${compact(value, 2)} tiles`;
-    if (statKey === 'speed' || statKey === 'attackRange' || statKey === 'visionRange' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
+    if (statKey === 'blastRadius') return `${compact(value, 2)} areas`;
+    if (statKey === 'workerSearchDistance') return `${compact(value, 2)} areas`;
+    if (statKey === 'attackRange' || statKey === 'visionRange') return `${compact(value, 2)} areas`;
+    if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
     if (statKey === 'efficiency') return compact(value, 2);
     if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
     if (statKey === 'builderDps' || statKey === 'healerDps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
@@ -3183,8 +3184,8 @@ function computeUnitLevelScaledStats(unit, level) {
     let attackDamage = getUnitStatForOwner(owner, unitType, lvl, 'atk');
     let attackCooldownSec = getUnitStatForOwner(owner, unitType, lvl, 'atkCd');
     let speed = getUnitStatForOwner(owner, unitType, lvl, 'speed');
-    let visionRange = getUnitStatForOwner(owner, unitType, lvl, 'visionRange');
-    let attackRangeTiles = getUnitStatForOwner(owner, unitType, lvl, 'attackRange');
+    let visionRangeArea = getUnitStatForOwner(owner, unitType, lvl, 'visionRange');
+    let attackRangeArea = getUnitStatForOwner(owner, unitType, lvl, 'attackRange');
     let gatherPerTrip = getUnitStatForOwner(owner, unitType, lvl, 'gatherPerTrip');
     let builderDps = getUnitStatForOwner(owner, unitType, lvl, 'builderDps');
     let healerDps = getUnitStatForOwner(owner, unitType, lvl, 'healerDps');
@@ -3193,7 +3194,8 @@ function computeUnitLevelScaledStats(unit, level) {
     let astarCost = getUnitStatForOwner(owner, unitType, lvl, 'astarCost');
 
     let attackCooldown = secondsToTicks(attackCooldownSec);
-    let attackRange = attackRangeTiles * TILE;
+    let visionRange = Number(visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    let attackRange = Number(attackRangeArea) * AREA_UNIT_TILE_EQUIVALENT * TILE;
     let transferCooldownTicks = unit.workerType ? secondsToTicks(transferCooldownSec) : 0;
 
     return {
@@ -3202,7 +3204,9 @@ function computeUnitLevelScaledStats(unit, level) {
         attackDamage,
         attackCooldown,
         speed,
+        visionRangeArea,
         visionRange,
+        attackRangeArea,
         attackRange,
         gatherPerTrip,
         builderDps,
@@ -3230,7 +3234,9 @@ function applyUnitLevelScaling(unit, level) {
     unit.baseSpeed = unit.baseSpeed || unit.speed || 1;
     unit.baseAttackCooldown = unit.baseAttackCooldown || unit.attackCooldown || 30;
     unit.baseVisionRange = unit.baseVisionRange || unit.visionRange || 4;
+    if (!Number.isFinite(unit.baseVisionRangeArea)) unit.baseVisionRangeArea = Number(unit.baseVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
     if (!Number.isFinite(unit.baseAttackRange)) unit.baseAttackRange = (Number(unit.attackRange) || 0) / TILE;
+    if (!Number.isFinite(unit.baseAttackRangeArea)) unit.baseAttackRangeArea = Number(unit.baseAttackRange) / AREA_UNIT_TILE_EQUIVALENT;
 
     let scaled = computeUnitLevelScaledStats(unit, lvl);
     if (!scaled) return;
@@ -3242,7 +3248,9 @@ function applyUnitLevelScaling(unit, level) {
     unit.attackDamage = scaled.attackDamage;
     unit.attackCooldown = scaled.attackCooldown;
     unit.speed = scaled.speed;
+    unit.visionRangeArea = scaled.visionRangeArea;
     unit.visionRange = scaled.visionRange;
+    unit.attackRangeArea = scaled.attackRangeArea;
     unit.attackRange = scaled.attackRange;
     unit.astarCost = scaled.astarCost;
     if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;
@@ -3259,7 +3267,9 @@ function applyUnitLevelScaling(unit, level) {
     unit.baseLevelAttackDamage = scaled.attackDamage;
     unit.baseLevelAttackCooldown = scaled.attackCooldown;
     unit.baseLevelSpeed = scaled.speed;
+    unit.baseLevelVisionRangeArea = scaled.visionRangeArea;
     unit.baseLevelVisionRange = scaled.visionRange;
+    unit.baseLevelAttackRangeArea = scaled.attackRangeArea;
     unit.baseLevelAttackRange = scaled.attackRange / TILE;
     unit.baseLevelAstarCost = scaled.astarCost;
     if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.baseLevelGatherPerTrip = scaled.gatherPerTrip;
@@ -3284,7 +3294,9 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     unit.attackDamage = scaled.attackDamage;
     unit.attackCooldown = scaled.attackCooldown;
     unit.speed = scaled.speed;
+    unit.visionRangeArea = scaled.visionRangeArea;
     unit.visionRange = scaled.visionRange;
+    unit.attackRangeArea = scaled.attackRangeArea;
     unit.attackRange = scaled.attackRange;
     unit.astarCost = scaled.astarCost;
     if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;

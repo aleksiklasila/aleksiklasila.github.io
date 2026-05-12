@@ -398,9 +398,9 @@ function _getInfoPanelUnitStateLabel(u) {
 function _getInfoPanelWorkerSearchDistanceText(u) {
     if (!u || !u.workerType) return 'nearby';
     let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
-    let tiles = Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance'));
-    if (!Number.isFinite(tiles) || tiles <= 0) tiles = 10;
-    return formatBigNumber(tiles, 1);
+    let areas = Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance'));
+    if (!Number.isFinite(areas) || areas <= 0) areas = 2.0;
+    return `${formatBigNumber(areas, 2)}a`;
 }
 
 function _getInfoPanelUnitStateHelpText(u) {
@@ -429,7 +429,7 @@ function _getInfoPanelUnitStateHelpText(u) {
             if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
                 return 'Idle because A* was exhausted recently. Wait for more A* income or reduce pathfinding demand.';
             }
-            return `Idle because no valid work was found within range (${searchRange} tiles). Build relevant work closer, raise Work Search Distance, or give a manual order.`;
+            return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise Work Search Distance, or give a manual order.`;
         }
         if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
             return 'Returning carried resources to the nearest drop-off before choosing the next task.';
@@ -1020,7 +1020,7 @@ function renderBuildItemDetailedStats(key) {
                 addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
                 if (Number.isFinite(blastDamage) && Number.isFinite(blastRadius) && blastDamage > 0 && blastRadius > 0) {
                     addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
-                    addRow('Blast Radius', `${blastRadius.toFixed(2)} tiles`, { kind: 'building', key, statKey: 'blastRadius' });
+                    addRow('Blast Radius', `${blastRadius.toFixed(2)} areas`, { kind: 'building', key, statKey: 'blastRadius' });
                 }
             } else if (key === 'poison') {
                 let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
@@ -1082,7 +1082,7 @@ function renderBuildItemDetailedStats(key) {
                 addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
             }
             if (Number.isFinite(blastRadius) && blastRadius > 0) {
-                addRow('Blast Radius', `${blastRadius.toFixed(2)} tiles`, { kind: 'building', key, statKey: 'blastRadius' });
+                addRow('Blast Radius', `${blastRadius.toFixed(2)} areas`, { kind: 'building', key, statKey: 'blastRadius' });
             }
         }
         if (key === 'lava' && stats.damage > 0) {

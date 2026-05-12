@@ -1343,6 +1343,35 @@
                 ctx.stroke(group.path);
             }
 
+            let areaTileGroups = new Map();
+            for (let tile of overlays.areaTiles || []) {
+                let corners = [
+                    projectGround(tile.x, tile.y),
+                    projectGround(tile.x + 1, tile.y),
+                    projectGround(tile.x + 1, tile.y + 1),
+                    projectGround(tile.x, tile.y + 1)
+                ];
+                if (corners.some(p => !p)) continue;
+                let key = `${tile.strokeColor}|${tile.fillColor || ''}|${tile.dashed ? 1 : 0}`;
+                let group = getPathGroup(areaTileGroups, key, () => ({
+                    strokeColor: tile.strokeColor,
+                    fillColor: tile.fillColor || null,
+                    dashed: !!tile.dashed,
+                    path: new Path2D()
+                }));
+                group.path.moveTo(corners[0].x, corners[0].y);
+                for (let i = 1; i < corners.length; i++) group.path.lineTo(corners[i].x, corners[i].y);
+                group.path.closePath();
+            }
+            for (let group of areaTileGroups.values()) {
+                ctx.strokeStyle = group.strokeColor;
+                ctx.fillStyle = group.fillColor || 'transparent';
+                ctx.lineWidth = 1.1;
+                ctx.setLineDash(group.dashed ? [5, 4] : []);
+                if (group.fillColor) ctx.fill(group.path);
+                ctx.stroke(group.path);
+            }
+
             let ringGroups = new Map();
             for (let ring of overlays.rings || []) {
                 let steps = 40;

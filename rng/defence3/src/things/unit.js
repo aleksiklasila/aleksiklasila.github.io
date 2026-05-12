@@ -18,8 +18,10 @@ class Unit {
         this.energy = s.energy; this.maxEnergy = s.energy;
         this.speed = s.speed;
         this.attackDamage = s.atk;
-        this.attackRange = s.attackRange * TILE;
-        this.visionRange = s.visionRange || 4;
+        this.attackRangeArea = Math.max(0, Number(s.attackRange) || 0);
+        this.attackRange = this.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
+        this.visionRangeArea = Math.max(0, Number(s.visionRange) || 0);
+        this.visionRange = (this.visionRangeArea || 0.8) * AREA_UNIT_TILE_EQUIVALENT;
         this.attackCooldown = secondsToTicks(s.atkCd);
         this.attackTimer = 0;
         this.color = s.color; this.r = s.r;
@@ -59,7 +61,9 @@ class Unit {
         this.baseAttackDamage = this.attackDamage;
         this.baseSpeed = this.speed;
         this.baseAttackCooldown = this.attackCooldown;
+        this.baseVisionRangeArea = this.visionRangeArea;
         this.baseVisionRange = this.visionRange;
+        this.baseAttackRangeArea = this.attackRangeArea;
         this.baseAttackRange = this.attackRange / TILE;
 
         this.baseLevel = 1;
@@ -67,7 +71,9 @@ class Unit {
         this.baseLevelAttackDamage = this.attackDamage;
         this.baseLevelAttackCooldown = this.attackCooldown;
         this.baseLevelSpeed = this.speed;
+        this.baseLevelVisionRangeArea = this.visionRangeArea;
         this.baseLevelVisionRange = this.visionRange;
+        this.baseLevelAttackRangeArea = this.attackRangeArea;
         this.baseLevelGatherPerTrip = 0;
         this.baseLevelBuilderDps = 0;
         this.baseLevelhealerDps = 0;
@@ -173,9 +179,9 @@ class Unit {
                 else if (item.type === 'mine') {
                     let blastDamage = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastDamage');
                     if (!Number.isFinite(blastDamage) || blastDamage <= 0) blastDamage = Number(item.damage) || 135;
-                    let blastRadiusTiles = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
-                    if (!Number.isFinite(blastRadiusTiles) || blastRadiusTiles <= 0) blastRadiusTiles = 1.2;
-                    let blastRadiusPx = Math.max(0, blastRadiusTiles * TILE);
+                    let blastRadiusArea = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
+                    if (!Number.isFinite(blastRadiusArea) || blastRadiusArea <= 0) blastRadiusArea = 0.24;
+                    let blastRadiusPx = Math.max(0, Number(blastRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
 
                     forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
                         if (!u) return;
@@ -294,7 +300,7 @@ class Unit {
             return;
         }
         // Auto-aggro nearby enemies
-        let aggroRange = this.visionRange * TILE;
+        let aggroRange = Math.max(TILE, this.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
             this.targetUnit = closest;
@@ -395,7 +401,7 @@ class Unit {
 
     doAttackMoving(spd) {
         // Check for nearby enemies first
-        let aggroRange = this.visionRange * TILE;
+        let aggroRange = Math.max(TILE, this.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
             this.targetUnit = closest;
@@ -687,7 +693,7 @@ class Unit {
     }
 
     doHolding() {
-        forEachUnitInRange(this.x, this.y, this.attackRange, (u) => {
+        forEachUnitInAreaRange(this.x, this.y, this.attackRangeArea, (u) => {
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
             if (this.attackTimer <= 0) {
