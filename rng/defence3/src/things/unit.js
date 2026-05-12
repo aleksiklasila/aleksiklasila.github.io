@@ -850,7 +850,7 @@ class Unit {
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = this.unitType === 'collector' ? '#ffd34d' : (this.carryingValue > 0 ? '#f4f4f4' : '#9aa0a6');
-                ctx.fillText(this.unitType === 'collector' ? '⭐' : (this.carryingValue > 0 ? '★' : '☆'), this.x, this.y + 1);
+                ctx.fillText(this.unitType === 'collector' ? '⚡' : (this.carryingValue > 0 ? '★' : '☆'), this.x, this.y + 1);
                 ctx.restore();
             } else {
                 drawCachedUnitStar(ctx, this.x, this.y, this.r, this.color, strokeColor, lw);
