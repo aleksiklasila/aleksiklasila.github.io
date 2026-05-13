@@ -1204,10 +1204,13 @@ function removeUnitNow(u, adjustPop = true) {
 
 function configureWorkerUnitFromType(u) {
     if (!u) return;
-    if (u.unitType === 'collector') {
-        u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
-    } else if (u.unitType === 'astar_collector') {
-        u.workerState = 'IDLE'; u.workerType = 'astar_collector'; u.carryingValue = 0; _clearWorkerTarget(u);
+    let resourceCollectorCfg = getResourceTypeByCollectorUnit(u.unitType);
+    if (resourceCollectorCfg) {
+        u.workerState = 'IDLE';
+        u.workerType = resourceCollectorCfg.collectorUnitKey;
+        u.carryingValue = 0;
+        _clearWorkerTarget(u);
+        if (typeof _clearResourceCollectorTaskMemory === 'function') _clearResourceCollectorTaskMemory(u);
     } else if (u.unitType === 'salvager_unit') {
         u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
     } else if (u.unitType === 'builder_unit') {

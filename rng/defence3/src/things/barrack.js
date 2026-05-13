@@ -103,23 +103,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
     let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
     let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-
-    if (spawner.type === 'spawner') {
-        u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
-    } else if (spawner.type === 'astar_spawner') {
-        u.workerState = 'IDLE'; u.workerType = 'astar_collector'; u.carryingValue = 0; _clearWorkerTarget(u);
-    } else if (spawner.type === 'salvager') {
-        u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
-    } else if (spawner.type === 'builder_spawner') {
-        u.workerState = 'IDLE'; u.workerType = 'builder'; u.carryingValue = 0; _clearWorkerTarget(u);
-        u.builderHasMaterial = false;
-    } else if (spawner.type === 'healer_spawner') {
-        u.workerState = 'IDLE'; u.workerType = 'healer'; u.carryingValue = 0; _clearWorkerTarget(u);
-        u.healerHasMaterial = false;
-    } else if (spawner.type === 'research') {
-        u.workerState = 'IDLE'; u.workerType = 'researcher'; u.carryingValue = 0; _clearWorkerTarget(u);
-        u.researcherHasMaterial = false;
-    }
+    configureWorkerUnitFromType(u);
 
     applyUnitLevelScaling(u, spawnInfo.level);
     u.energy = u.maxEnergy;

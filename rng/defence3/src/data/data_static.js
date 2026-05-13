@@ -52,6 +52,192 @@ const PLAYER_COLORS_DIM = ['rgba(68,136,255,0.3)', 'rgba(255,68,68,0.3)'];
 
 const AREA_UNIT_TILE_EQUIVALENT = 5;
 
+const RESOURCE_TYPES = {
+    energy: {
+        key: 'energy',
+        label: 'Energy',
+        stockpileKey: 'energy',
+        icon: '⚡',
+        color: '#da0',
+        mineArrayKey: 'goldMines',
+        mineStatKey: 'gold',
+        mineTileType: 'mine',
+        farmKey: 'farm',
+        farmName: 'Energy Farm',
+        farmIcon: '🌾',
+        farmColor: '#da0',
+        farmDescription: 'Energy collectors can harvest here; farm level multiplies energy gather speed.',
+        collectorBuildingKey: 'spawner',
+        collectorBuildingName: 'Collector',
+        collectorBuildingIcon: '🏭',
+        collectorBuildingColor: '#432',
+        collectorBuildingDescription: 'Spawns collectors that gather energy from mines.',
+        collectorUnitKey: 'collector',
+        collectorUnitName: 'Collector',
+        collectorUnitColor: '#aaa',
+        collectorUnitVis: 'star',
+        collectorUnitDescription: 'Resource worker. Mines energy tiles and refills the shared energy stockpile.',
+        gatherPerTrip: 23,
+        dropoffSound: 'gold_collected',
+        carryGlyph: '⚡',
+        emptyCarryGlyph: '⚡',
+        supportsDropTarget: true,
+    },
+    astar: {
+        key: 'astar',
+        label: 'A*',
+        stockpileKey: 'astar',
+        icon: '★',
+        color: '#9aa',
+        mineArrayKey: 'astarMines',
+        mineStatKey: 'astar',
+        mineTileType: 'astar_mine',
+        farmKey: 'astar_farm',
+        farmName: 'A* Farm',
+        farmIcon: '★',
+        farmColor: '#9aa',
+        farmDescription: 'A* collectors can harvest here; farm level multiplies A* gather speed.',
+        collectorBuildingKey: 'astar_spawner',
+        collectorBuildingName: 'A*',
+        collectorBuildingIcon: '★',
+        collectorBuildingColor: '#555',
+        collectorBuildingDescription: 'Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.',
+        collectorUnitKey: 'astar_collector',
+        collectorUnitName: 'A* Collector',
+        collectorUnitColor: '#bbb',
+        collectorUnitVis: 'star',
+        collectorUnitDescription: 'Resource worker. Mines gray A* tiles and refills the shared A* stockpile used by pathfinding.',
+        gatherPerTrip: 30,
+        dropoffSound: 'astar_collected',
+        carryGlyph: '★',
+        emptyCarryGlyph: '☆',
+        supportsDropTarget: false,
+    }
+};
+
+const RESOURCE_TYPE_LIST = Object.freeze(Object.values(RESOURCE_TYPES));
+const RESOURCE_TYPE_BY_COLLECTOR_UNIT = Object.freeze(RESOURCE_TYPE_LIST.reduce((out, cfg) => {
+    out[cfg.collectorUnitKey] = cfg;
+    return out;
+}, {}));
+const RESOURCE_TYPE_BY_COLLECTOR_BUILDING = Object.freeze(RESOURCE_TYPE_LIST.reduce((out, cfg) => {
+    out[cfg.collectorBuildingKey] = cfg;
+    return out;
+}, {}));
+const RESOURCE_TYPE_BY_FARM = Object.freeze(RESOURCE_TYPE_LIST.reduce((out, cfg) => {
+    out[cfg.farmKey] = cfg;
+    return out;
+}, {}));
+
+function getResourceTypeConfig(resourceKey) {
+    return RESOURCE_TYPES[resourceKey] || null;
+}
+
+function getResourceTypeByCollectorUnit(unitType) {
+    return RESOURCE_TYPE_BY_COLLECTOR_UNIT[unitType] || null;
+}
+
+function getResourceTypeByCollectorBuilding(buildingKey) {
+    return RESOURCE_TYPE_BY_COLLECTOR_BUILDING[buildingKey] || null;
+}
+
+function getResourceTypeByFarmKey(farmKey) {
+    return RESOURCE_TYPE_BY_FARM[farmKey] || null;
+}
+
+function getCollectorUnitTypeForResource(resourceKey) {
+    let cfg = getResourceTypeConfig(resourceKey);
+    return cfg ? cfg.collectorUnitKey : null;
+}
+
+function getCollectorBuildingKeyForResource(resourceKey) {
+    let cfg = getResourceTypeConfig(resourceKey);
+    return cfg ? cfg.collectorBuildingKey : null;
+}
+
+function getCollectorFarmKeyForResource(resourceKey) {
+    let cfg = getResourceTypeConfig(resourceKey);
+    return cfg ? cfg.farmKey : null;
+}
+
+function buildResourceCollectorCardTypes() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.farmKey] = { name: cfg.farmName, price: cfg.key === 'astar' ? 50 : 40, icon: cfg.farmIcon, color: cfg.farmColor, visionRange: 0, multiplier: 0.02, target: 'floor', resourceKey: cfg.key };
+        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, target: 'floor', resourceKey: cfg.key };
+    }
+    return out;
+}
+
+function buildResourceCollectorDescriptions() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.farmKey] = cfg.farmDescription;
+        out[cfg.collectorBuildingKey] = cfg.collectorBuildingDescription;
+        out[cfg.collectorUnitKey] = cfg.collectorUnitDescription;
+    }
+    return out;
+}
+
+function buildResourceCollectorSpawnConfig() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.collectorUnitKey] = { baseTime: 15, reduction: 0.10 };
+    }
+    return out;
+}
+
+function buildResourceCollectorUnitStats() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.collectorUnitKey] = {
+            energy: 15,
+            price: 15,
+            speed: 2.0,
+            atk: 0,
+            attackRange: 0,
+            visionRange: 0.6,
+            atkCd: 49.95,
+            astarCost: 10,
+            gatherPerTrip: cfg.gatherPerTrip,
+            transferCooldown: 2.0,
+            workerSearchDistance: 2.0,
+            color: cfg.collectorUnitColor,
+            r: 6,
+            vis: cfg.collectorUnitVis,
+            isWorker: true,
+            resourceKey: cfg.key,
+        };
+    }
+    return out;
+}
+
+function buildResourceCollectorUnitScaling() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.collectorUnitKey] = { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 };
+    }
+    return out;
+}
+
+function buildResourceCollectorResearchableStats() {
+    let out = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        out[cfg.collectorUnitKey] = ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'];
+    }
+    return out;
+}
+
+const RESOURCE_COLLECTOR_CARD_TYPES = Object.freeze(buildResourceCollectorCardTypes());
+const RESOURCE_COLLECTOR_DESCRIPTIONS = Object.freeze(buildResourceCollectorDescriptions());
+const RESOURCE_COLLECTOR_SPAWN_CONFIG = Object.freeze(buildResourceCollectorSpawnConfig());
+const RESOURCE_COLLECTOR_UNIT_STATS = Object.freeze(buildResourceCollectorUnitStats());
+const RESOURCE_COLLECTOR_UNIT_SCALING = Object.freeze(buildResourceCollectorUnitScaling());
+const RESOURCE_COLLECTOR_RESEARCHABLE_STATS = Object.freeze(buildResourceCollectorResearchableStats());
+const RESOURCE_FARM_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.farmKey));
+const RESOURCE_COLLECTOR_BUILDING_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.collectorBuildingKey));
+const RESOURCE_COLLECTOR_UNIT_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg => cfg.collectorUnitKey));
+
 
 
 // ============================================================
@@ -78,12 +264,9 @@ const BASE_CARD_TYPES = {
     ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0, freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
     water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0, wetDuration: 3, target: 'floor' },
     mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", visionRange: 0, blastDamage: 135, blastRadius: 0.084, target: 'floor' },
-    farm: { name: "Energy Farm", price: 40, icon: "\uD83C\uDF3E", color: "#da0", visionRange: 0, multiplier: 0.02, target: 'floor' },
-    astar_farm: { name: "A* Farm", price: 50, icon: "\u2605", color: "#9aa", visionRange: 0, multiplier: 0.02, target: 'floor' },
+    ...RESOURCE_COLLECTOR_CARD_TYPES,
 
     // Special
-    spawner: { name: "Collector", price: 150, icon: "\uD83C\uDFED", color: "#432", visionRange: 0.6, energy: 60, target: 'floor' },
-    astar_spawner: { name: "A*", price: 170, icon: "\u2605", color: "#555", visionRange: 0.6, energy: 60, target: 'floor' },
     salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", visionRange: 0.6, energy: 60, target: 'floor' },
     builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", visionRange: 0.6, energy: 60, target: 'floor' },
     healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", visionRange: 0.6, energy: 60, target: 'floor' },
@@ -207,22 +390,23 @@ const RESEARCH_FORMULA_CONFIG = {
 // Ensure every card/building type has a canonical base Energy in BASE_CARD_TYPES.
 // Keep towerEnergy mirrored for compatibility with existing checks/UI code paths.
 const BASE_CARD_DEFAULT_ENERGY = {
-    farm: 1000,
-    astar_farm: 1000,
     sand: 30,
     lava: 30,
     poison_puddle: 30,
     ice_patch: 30,
     water_puddle: 30,
     mine: 30,
-    spawner: 60,
-    astar_spawner: 60,
     salvager: 60,
     builder_spawner: 60,
     healer_spawner: 60,
     research: 70,
     house: 120,
     area_upgrader: 1,
+    ...RESOURCE_TYPE_LIST.reduce((out, cfg) => {
+        out[cfg.farmKey] = 1000;
+        out[cfg.collectorBuildingKey] = 60;
+        return out;
+    }, {}),
 };
 
 const DEFAULT_BARRACK_BUILDING_ENERGY = 60;
@@ -262,11 +446,7 @@ const DESCRIPTIONS = {
     ice_patch: "Freezes enemies walking over it. Fast to build. Strong agains moles. Low health.",
     water_puddle: "Soaks enemies walking over it. Fast to build. Strong agains moles. Low health.",
     mine: "Explodes once when an enemy walks over it. Fast to build. Strong agains moles. Low health.",
-    farm: "Energy collectors can harvest here; farm level multiplies energy gather speed.",
-    astar_farm: "A* collectors can harvest here; farm level multiplies A* gather speed.",
     // Special
-    spawner: "Spawns collectors that gather energy from mines.",
-    astar_spawner: "Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.",
     salvager: "Spawns salvagers that recycle marked buildings.",
     builder_spawner: "Spawns builders that construct buildings. All placed buildings start at 1 energy and need builders to become functional.",
     healer_spawner: "Spawns healers that restore damaged friendly units. Healers fetch supplies from healer spawners before each heal.",
@@ -311,15 +491,15 @@ const DESCRIPTIONS = {
     scout: "Fast flying recon. Very high vision, low Energy, low attack. Patrols random points continuously.",
     healer_unit: "Support worker. Fetches healing supplies from healer spawners and restores nearby damaged friendly units.",
     researcher_unit: "Research worker. Fetches supplies from research labs and converts them into research progress.",
-    astar_collector: "Resource worker. Mines gray A* tiles and refills the shared A* stockpile used by pathfinding.",
+    ...RESOURCE_COLLECTOR_DESCRIPTIONS,
 };
 
 // Build menu categories
 const BUILD_CATEGORIES = {
     barracks: ['barrack_norm', 'barrack_fast', 'barrack_tank', 'barrack_boss', 'barrack_flying', 'barrack_mole', 'barrack_poison_resistant', 'barrack_fire_resistant', 'barrack_water_resistant', 'barrack_ice_resistant', 'barrack_laser_resistant', 'barrack_snake', 'barrack_scout'],
     towers: ['pistol', 'smg', 'water', 'poison', 'fire', 'sand_gun', 'ice', 'sniper', 'elements', 'laser', 'watch_tower'],
-    floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', 'farm', 'astar_farm'],
-    special: ['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
+    floor: ['sand', 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'mine', ...RESOURCE_FARM_KEYS],
+    special: [...RESOURCE_COLLECTOR_BUILDING_KEYS, 'salvager', 'builder_spawner', 'healer_spawner', 'research', 'house', 'area_upgrader', 'cloud_0a', 'cloud_0b', 'cloud_1a', 'cloud_1b', 'cloud_2a', 'cloud_2b', 'cloud_3a', 'cloud_3b'],
 };
 
 // Spawn timing config for non-barrack producers and barrack level-reduction rules.
@@ -337,8 +517,7 @@ const BARRACK_SPAWN_CONFIG = {
     ice_resistant: { baseTime: 65, reduction: 0.08 },
     laser_resistant: { baseTime: 55, reduction: 0.08 },
     scout: { baseTime: 14, reduction: 0.11 },
-    collector: { baseTime: 15, reduction: 0.10 },
-    astar_collector: { baseTime: 15, reduction: 0.10 },
+    ...RESOURCE_COLLECTOR_SPAWN_CONFIG,
     salvager_unit: { baseTime: 20, reduction: 0.10 },
     builder_unit: { baseTime: 25, reduction: 0.10 },
     healer_unit: { baseTime: 25, reduction: 0.10 },
@@ -360,8 +539,7 @@ const BASE_UNIT_STATS = {
     laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 0.8, atkCd: 1.75, astarCost: 10, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
     snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
     scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.1, visionRange: 1.8, atkCd: 1.6, astarCost: 10, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, gatherPerTrip: 23, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#aaa', r: 6, vis: 'star', isWorker: true },
-    astar_collector: { energy: 15, price: 15, speed: 2.0, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, gatherPerTrip: 30, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#bbb', r: 6, vis: 'star', isWorker: true },
+    ...RESOURCE_COLLECTOR_UNIT_STATS,
     salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
     builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
     healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
@@ -376,8 +554,7 @@ const UNIT_LEVEL_SCALING = {
     snake: { energyExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.04, visionCapBonus: 2.6 },
     tank: { energyExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.0 },
     scout: { energyExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.08, visionCapBonus: 6.4 },
-    collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    astar_collector: { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    ...RESOURCE_COLLECTOR_UNIT_SCALING,
     salvager_unit: { energyExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
     builder_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
     healer_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
@@ -433,8 +610,7 @@ const RESEARCH_STAT_LABELS = {
 
 const RESEARCHABLE_UNIT_STATS = {
     _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost'],
-    collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
-    astar_collector: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'],
+    ...RESOURCE_COLLECTOR_RESEARCHABLE_STATS,
     salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost'],
     builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost'],
     healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost'],
@@ -448,7 +624,8 @@ const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastD
 function getSpawnedUnitTypeForBuildingKey(key) {
     if (!key) return null;
     if (key.startsWith('barrack_')) return (BASE_CARD_TYPES[key] || {}).unitType || 'norm';
-    if (key === 'spawner') return 'collector';
+    let resourceCollectorBuilding = getResourceTypeByCollectorBuilding(key);
+    if (resourceCollectorBuilding) return resourceCollectorBuilding.collectorUnitKey;
     if (key === 'salvager') return 'salvager_unit';
     if (key === 'builder_spawner') return 'builder_unit';
     if (key === 'healer_spawner') return 'healer_unit';
