@@ -598,7 +598,7 @@ const RESEARCH_STAT_LABELS = {
     atk: 'Attack',
     attackRange: 'Range',
     atkCd: 'Atk Cooldown',
-    astarCost: 'A* / Tile',
+    astarCost: '★ / Tile',
     transferCooldown: 'Cooldown',
     workerSearchDistance: 'Work Distance',
     gatherPerTrip: 'Gather Speed',
@@ -658,7 +658,7 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         researcherDps: Infinity,
         transferCooldown: 0.3,
         workerSearchDistance: 5,
-        // Keep unit A* / tile fully driven by level/research precompute output.
+        // Keep unit ★ / tile fully driven by level/research precompute output.
         // A hard soft-cap here can flatten level growth when decreasing research is also applied.
         astarCost: Infinity,
     },

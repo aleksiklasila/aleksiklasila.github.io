@@ -2440,7 +2440,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let workerBaseRate = Math.max(0, Number(unitCfg.workerSpecialistBaseRate) || 0);
     let workerGrowthExp = Math.max(1, Number(unitCfg.workerSpecialistLevelExp) || 1);
     let workerTransferCdExp = Math.max(0.01, Number(unitCfg.workerTransferCooldownLevelExp) || 1);
-    // Keep A* / tile increasing with level even if config is set to 1 by mistake.
+    // Keep ★ / tile increasing with level even if config is set to 1 by mistake.
     let astarCostLevelExp = Math.max(1.01, Number(unitCfg.astarCostLevelExp) || 1.08);
     let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
     let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
