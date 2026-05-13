@@ -257,7 +257,7 @@ function _buildFloorItemSprite(type, bucket) {
         g.fillStyle = `rgba(0,0,0,${alpha})`; g.beginPath(); g.arc(x, y, 8, 0, 6.28); g.fill();
     } else if (type === 'farm') {
         g.fillStyle = '#da0'; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
-        g.font = '14px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('\uD83C\uDF3E', x, y);
+        g.font = 'bold 11px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff7c2'; g.fillText('\u26A1', x, y);
     } else if (type === 'astar_farm') {
         g.fillStyle = '#888'; g.beginPath(); g.arc(x, y, 12, 0, 6.28); g.fill();
         g.font = '14px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText('\u2605', x, y);
@@ -274,8 +274,16 @@ function _buildFloorItemSprite(type, bucket) {
         g.fillStyle = '#222';
         g.fillRect(x - 2, y + 1, 4, 7);
     } else if (type === 'mine') {
-        g.fillStyle = '#444'; g.beginPath(); g.arc(x, y, 8, 0, 6.28); g.fill();
-        g.fillStyle = '#f00'; g.beginPath(); g.arc(x, y, 3, 0, 6.28); g.fill();
+        g.fillStyle = '#da0';
+        g.fillRect(2, 2, TILE - 4, TILE - 4);
+        g.fillStyle = '#fff7c2';
+        g.strokeStyle = '#7a5b00';
+        g.lineWidth = 1.25;
+        g.font = 'bold 14px Arial';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.strokeText('\u26A1', x, y + 1);
+        g.fillText('\u26A1', x, y + 1);
     }
     return c;
 }
@@ -332,6 +340,15 @@ function _getGoldMineTileSprite(isActive) {
         g.fillRect(2, 2, TILE - 4, TILE - 4);
         g.globalAlpha = 1;
     }
+
+    g.fillStyle = isActive ? '#fff7c2' : '#c9c08a';
+    g.strokeStyle = isActive ? '#7a5b00' : '#6f6740';
+    g.lineWidth = 1.25;
+    g.font = 'bold 14px Arial';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.strokeText('\u26A1', TILE * 0.5, TILE * 0.5 + 1);
+    g.fillText('\u26A1', TILE * 0.5, TILE * 0.5 + 1);
 
     GOLD_MINE_TILE_SPRITE_CACHE.set(key, c);
     return c;
@@ -393,7 +410,14 @@ function getItemThumbnail(key, size) {
         ctx.beginPath(); ctx.moveTo(cx, cy - 7 * s); ctx.lineTo(cx - 5 * s, cy + 3 * s); ctx.lineTo(cx + 5 * s, cy + 3 * s); ctx.closePath(); ctx.fill();
     } else if (key === 'goldmine') {
         ctx.fillStyle = '#fd0'; ctx.fillRect(cx - 10 * s, cy - 10 * s, 20 * s, 20 * s);
-        ctx.fillStyle = '#a80'; ctx.fillRect(cx - 6 * s, cy - 6 * s, 12 * s, 12 * s);
+        ctx.fillStyle = '#fff7c2';
+        ctx.strokeStyle = '#7a5b00';
+        ctx.lineWidth = Math.max(1, s * 0.9);
+        ctx.font = `${Math.max(11, Math.round(15 * s))}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.strokeText('\u26A1', cx, cy + 1 * s);
+        ctx.fillText('\u26A1', cx, cy + 1 * s);
     } else if (def && def.target === 'wall' && def.isCloud) {
         // Cloud tower
         ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx, cy - 1 * s, 12 * s, 0, 6.28); ctx.fill();
@@ -480,8 +504,8 @@ function getItemThumbnail(key, size) {
             ctx.fillStyle = floorColors[key]; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
         } else if (key === 'farm') {
             ctx.fillStyle = '#da0'; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
-            ctx.font = Math.round(14 * s) + "px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.fillStyle = "#fff"; ctx.fillText("\uD83C\uDF3E", cx, cy);
+            ctx.font = `bold ${Math.round(14 * s)}px Arial`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillStyle = "#fff7c2"; ctx.fillText("\u26A1", cx, cy);
         } else if (key === 'astar_farm') {
             ctx.fillStyle = '#888'; ctx.beginPath(); ctx.arc(cx, cy, 12 * s, 0, 6.28); ctx.fill();
             ctx.font = Math.round(14 * s) + "px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
@@ -498,8 +522,15 @@ function getItemThumbnail(key, size) {
             ctx.fillStyle = '#222';
             ctx.fillRect(cx - 2 * s, cy + 1 * s, 4 * s, 7 * s);
         } else if (key === 'mine') {
-            ctx.fillStyle = '#444'; ctx.beginPath(); ctx.arc(cx, cy, 8 * s, 0, 6.28); ctx.fill();
-            ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(cx, cy, 3 * s, 0, 6.28); ctx.fill();
+            ctx.fillStyle = '#fd0'; ctx.fillRect(cx - 10 * s, cy - 10 * s, 20 * s, 20 * s);
+            ctx.fillStyle = '#fff7c2';
+            ctx.strokeStyle = '#7a5b00';
+            ctx.lineWidth = Math.max(1, s * 0.9);
+            ctx.font = `${Math.max(11, Math.round(15 * s))}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.strokeText('\u26A1', cx, cy + 1 * s);
+            ctx.fillText('\u26A1', cx, cy + 1 * s);
         }
     } else if (us) {
         // Unit type
