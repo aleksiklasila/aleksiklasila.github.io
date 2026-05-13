@@ -732,8 +732,10 @@ function canUnitOccupyTile(unit, gx, gy) {
     if (!unit) return false;
 
     // Collector variants can stand on both active mine types.
-    if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') {
-        if (hasActiveGoldMineAt(gx, gy) || hasActiveAstarMineAt(gx, gy)) return true;
+    if (isResourceCollectorWorkerType(unit.workerType)) {
+        for (let resourceKey of RESOURCE_TYPE_LIST) {
+            if (hasActiveResourceMineAt(resourceKey, gx, gy)) return true;
+        }
     }
 
     // Builders can stand on active build/upgrade targets.

@@ -1078,9 +1078,10 @@ function renderBuildItemDetailedStats(key) {
     } else {
         let stats = calculateItemStats(key, level, localPlayerId);
         if (stats.maxEnergy > 0) addRow('Energy', `${fmt(stats.maxEnergy)}/${fmt(stats.maxEnergy)}`, { kind: 'building', key, statKey: 'maxEnergy' });
-        if (key === 'farm') {
-            let multiplier = Number.isFinite(stats.multiplier) ? stats.multiplier : level;
-            addRow('Multiplier', `${multiplier.toFixed(2)}x gather`, { kind: 'building', key, statKey: 'multiplier' });
+            if (key === 'farm' || key === 'astar_farm') {
+                let multiplier = Number.isFinite(stats.multiplier) ? stats.multiplier : level;
+                let gatherLabel = key === 'astar_farm' ? 'x A* gather' : 'x gather';
+                addRow('Multiplier', `${multiplier.toFixed(2)}${gatherLabel}`, { kind: 'building', key, statKey: 'multiplier' });
         }
         if (key === 'house') {
             let popCap = getBuildingStatForOwner(localPlayerId, key, level, 'popCap');
@@ -1839,7 +1840,6 @@ function getActiveUnits() {
 function getActiveEntities() {
     if (selectedEntities.length === 0) return [];
     return selectedEntities.filter(e => {
-        if (e.energy !== undefined && e.energy <= 0) return false;
         return activeSubGroups[getEntityGroupKey(e)] !== false;
     });
 }
@@ -2368,13 +2368,13 @@ function renderFloorItemInfo(e) {
     if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
     if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
     if (e.type === 'farm' || e.type === 'astar_farm') {
-        let statKey = e.type === 'astar_farm' ? 'astar_farm' : 'farm';
-        let baseInc = getBuildingStatForOwner(e.owner, statKey, baseLevel, 'multiplier');
-        let effInc = getBuildingStatForOwner(e.owner, statKey, effLevel, 'multiplier');
+        let buildingKey = e.type === 'astar_farm' ? 'astar_farm' : 'farm';
+        let baseInc = getBuildingStatForOwner(e.owner, buildingKey, baseLevel, 'multiplier');
+        let effInc = getBuildingStatForOwner(e.owner, buildingKey, effLevel, 'multiplier');
         if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
         if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
         let gatherLabel = e.type === 'astar_farm' ? 'x A* gather' : 'x gather';
-        html += infoRow('Multiplier', `${baseInc.toFixed(2)}${gatherLabel}`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}${gatherLabel}` : undefined);
+        html += infoRow(withInfoPanelStatMatrixButton('Multiplier', { title: `${buildingKey} / Multiplier`, kind: 'building', key: buildingKey, statKey: 'multiplier' }), `${baseInc.toFixed(2)}${gatherLabel}`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}${gatherLabel}` : undefined);
     }
     if (e.type === 'house') {
         let basePopCap = getBuildingStatForOwner(e.owner, 'house', baseLevel, 'popCap');
@@ -3546,12 +3546,14 @@ function renderFloorItemGroupInfo(group) {
     if (e.type === 'sand') html += infoRow('Effect', '50% slow');
     if (e.type === 'ice_patch') html += infoRow('Effect', '50% slow + freeze');
     if (e.type === 'water_puddle') html += infoRow('Effect', 'Soak (ice combo)');
-    if (e.type === 'farm') {
-        let baseInc = getBuildingStatForOwner(e.owner, 'farm', baseLevel, 'multiplier');
-        let effInc = getBuildingStatForOwner(e.owner, 'farm', effLevel, 'multiplier');
+    if (e.type === 'farm' || e.type === 'astar_farm') {
+        let buildingKey = e.type === 'astar_farm' ? 'astar_farm' : 'farm';
+        let baseInc = getBuildingStatForOwner(e.owner, buildingKey, baseLevel, 'multiplier');
+        let effInc = getBuildingStatForOwner(e.owner, buildingKey, effLevel, 'multiplier');
         if (!Number.isFinite(baseInc)) baseInc = Math.max(1, baseLevel);
         if (!Number.isFinite(effInc)) effInc = Math.max(1, effLevel);
-        html += infoRow('Multiplier', `${baseInc.toFixed(2)}x gather`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}x gather` : undefined);
+        let gatherLabel = e.type === 'astar_farm' ? 'x A* gather' : 'x gather';
+        html += infoRow(withInfoPanelStatMatrixButton('Multiplier', { title: `${buildingKey} / Multiplier`, kind: 'building', key: buildingKey, statKey: 'multiplier' }), `${baseInc.toFixed(2)}${gatherLabel}`, Math.abs(baseInc - effInc) > 1e-6 ? `${effInc.toFixed(2)}${gatherLabel}` : undefined);
     }
     if (e.type === 'house') {
         let totalBasePopCap = 0;

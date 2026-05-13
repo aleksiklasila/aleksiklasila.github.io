@@ -375,6 +375,14 @@ function getAstarMineAt(gx, gy) {
     return getTileEntityRef(gx, gy);
 }
 
+function getResourceMineAt(resourceKey, gx, gy) {
+    let cfg = getResourceTypeConfig(resourceKey);
+    if (!cfg) return null;
+    if (cfg.mineTileType === 'mine') return getGoldMineAt(gx, gy);
+    if (cfg.mineTileType === 'astar_mine') return getAstarMineAt(gx, gy);
+    return null;
+}
+
 function isSpawnerEntity(ref) {
     return !!ref && (
         (ref instanceof CollectorSpawner) ||
@@ -417,6 +425,14 @@ function hasActiveGoldMineAt(gx, gy) {
 function hasActiveAstarMineAt(gx, gy) {
     let mine = getAstarMineAt(gx, gy);
     return !!(mine && Number.isFinite(mine.astar) && mine.astar > 0);
+}
+
+function hasActiveResourceMineAt(resourceKey, gx, gy) {
+    let cfg = getResourceTypeConfig(resourceKey);
+    if (!cfg) return false;
+    let mine = getResourceMineAt(resourceKey, gx, gy);
+    let mineStatKey = String(cfg.mineStatKey || '');
+    return !!(mine && mineStatKey && Number.isFinite(mine[mineStatKey]) && mine[mineStatKey] > 0);
 }
 
 let rng = null; // shared PRNG

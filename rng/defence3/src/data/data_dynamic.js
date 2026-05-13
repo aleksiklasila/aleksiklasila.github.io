@@ -2704,6 +2704,7 @@ function rebuildPrecomputedStatsMap() {
     }
 
     PRECOMPUTED_STATS_READY = true;
+    rebuildResearchThings();
 }
 
 function ensurePrecomputedStatsMap() {
@@ -2782,8 +2783,8 @@ function getResearchStatEntriesForThing(kind, key) {
     };
 
     addStat('maxEnergy', getBaseBuildingmaxEnergyForResearch(key));
-    addStat('popCap', getBuildingStatFromMap(key, 1, 'popCap', 0));
     let d = BASE_CARD_TYPES[key] || {};
+    addStat('popCap', getBuildingStatFromMap(key, 1, 'popCap', 0));
     addStat('damage', d.damage);
     addStat('blastDamage', getBuildingStatFromMap(key, 1, 'blastDamage', 0));
     addStat('blastRadius', getBuildingStatFromMap(key, 1, 'blastRadius', 0));
@@ -2805,7 +2806,10 @@ function getResearchStatEntriesForThing(kind, key) {
     return out;
 }
 
-const RESEARCH_THINGS = (() => {
+let RESEARCH_THINGS = [];
+let RESEARCH_THINGS_BY_ID = {};
+
+function rebuildResearchThings() {
     let things = [];
     for (let key in BASE_CARD_TYPES) {
         let def = BASE_CARD_TYPES[key];
@@ -2832,14 +2836,11 @@ const RESEARCH_THINGS = (() => {
             stats
         });
     }
-    return things;
-})();
-
-const RESEARCH_THINGS_BY_ID = (() => {
+    RESEARCH_THINGS = things;
     let out = {};
     for (let t of RESEARCH_THINGS) out[`${t.kind}:${t.key}`] = t;
-    return out;
-})();
+    RESEARCH_THINGS_BY_ID = out;
+}
 
 function getResearchThing(kind, key) {
     return RESEARCH_THINGS_BY_ID[`${kind}:${key}`] || null;

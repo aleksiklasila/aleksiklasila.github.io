@@ -229,6 +229,36 @@ function screenToWorld(sx, sy) {
     return { x, y };
 }
 
+function _isCollectorGatherTargetType(targetType) {
+    if (!targetType) return false;
+    if (targetType === 'drop') return true;
+    for (let resourceKey of RESOURCE_TYPE_LIST) {
+        let cfg = getResourceTypeConfig(resourceKey);
+        if (cfg && (targetType === cfg.mineTileType || targetType === cfg.farmKey)) return true;
+    }
+    return false;
+}
+
+function _getResourceCollectorConfigForSpawnerType(spawnerType) {
+    let resourceKey = getResourceTypeByCollectorBuilding(spawnerType);
+    return resourceKey ? getResourceTypeConfig(resourceKey) : null;
+}
+
+function _getGatherTargetNearForCollectorWorkerType(workerType, worldX, worldY, owner, radius = 22) {
+    let cfg = getResourceCollectorConfigByWorkerType(workerType);
+    return cfg ? _getResourceCollectorGatherTargetNear(worldX, worldY, owner, cfg, radius) : null;
+}
+
+function _getGatherTargetAtForCollectorWorkerType(workerType, gx, gy, owner, preferredType = null) {
+    let cfg = getResourceCollectorConfigByWorkerType(workerType);
+    return cfg ? _getResourceCollectorGatherTargetAt(gx, gy, owner, cfg, preferredType) : null;
+}
+
+function _isValidGatherTargetForCollectorWorkerType(workerType, target, targetType, owner) {
+    let cfg = getResourceCollectorConfigByWorkerType(workerType);
+    return !!(cfg && _isResourceCollectorTargetValid(target, targetType, owner, cfg));
+}
+
 function initInput() {
     let gameArea = document.getElementById('game-area');
     let multiRallyPoints = [];
@@ -319,11 +349,9 @@ function initInput() {
         }
 
         let anchor = null;
-        if (spawner.type === 'spawner') {
-            let gather = _getCollectorGatherTargetNear(worldX, worldY, localPlayerId, 22);
-            if (gather && gather.target) anchor = gather.target;
-        } else if (spawner.type === 'astar_spawner') {
-            let gather = _getAstarCollectorGatherTargetNear(worldX, worldY, localPlayerId, 22);
+        let resourceCollectorCfg = _getResourceCollectorConfigForSpawnerType(spawner.type);
+        if (resourceCollectorCfg) {
+            let gather = _getResourceCollectorGatherTargetNear(worldX, worldY, localPlayerId, resourceCollectorCfg, 22);
             if (gather && gather.target) anchor = gather.target;
         } else if (spawner.type === 'builder_spawner') {
             anchor = _getBuilderWorkTargetNear(worldX, worldY, localPlayerId, 22, true);
@@ -739,7 +767,7 @@ function initInput() {
         if (!workerUnits || workerUnits.length === 0) return;
         let multiTargets = targetType === 'build'
             ? multiBuilderAssignTargets
-            : (targetType === 'mine' || targetType === 'farm' || targetType === 'astar_mine' || targetType === 'astar_farm')
+            : _isCollectorGatherTargetType(targetType)
                 ? multiCollectorAssignTargets
                 : (targetType === 'research')
                     ? multiResearcherAssignTargets
@@ -955,16 +983,29 @@ function initInput() {
                 }
             }
             if (activeUnits.length > 0) {
+                let forceManualWorkerMove = issuedStructureCommand;
                 // --- Worker targeting logic ---
                 let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
-                let collectorUnits = activeUnits.filter(u => u.workerType === 'collector');
-                let astarCollectorUnits = activeUnits.filter(u => u.workerType === 'astar_collector');
+                let collectorUnitGroups = RESOURCE_TYPE_LIST.map(resourceKey => {
+                    let cfg = getResourceTypeConfig(resourceKey);
+                    return cfg ? {
+                        resourceKey,
+                        cfg,
+                        units: activeUnits.filter(u => u.workerType === cfg.collectorUnitKey)
+                    } : null;
+                }).filter(group => group && group.units.length > 0);
                 let salvagerUnits = activeUnits.filter(u => u.workerType === 'salvager');
                 let healerUnits = activeUnits.filter(u => u.workerType === 'healer');
                 let researcherUnits = activeUnits.filter(u => u.workerType === 'researcher');
-                let workerIds = [...builderUnits, ...collectorUnits, ...astarCollectorUnits, ...salvagerUnits, ...healerUnits, ...researcherUnits].map(u => u.id);
+                let workerIds = [
+                    ...builderUnits,
+                    ...collectorUnitGroups.flatMap(group => group.units),
+                    ...salvagerUnits,
+                    ...healerUnits,
+                    ...researcherUnits
+                ].map(u => u.id);
 
-                if (builderUnits.length > 0) {
+                if (!forceManualWorkerMove && builderUnits.length > 0) {
                     // Generic builder-targeting for any placeable object that can be built/upgraded.
                     let buildTarget = _getBuilderWorkTargetNear(world.x, world.y, localPlayerId, 22, true);
                     if (buildTarget) {
@@ -978,10 +1019,18 @@ function initInput() {
                     multiBuilderAssignTargets = [];
                 }
 
-                if (collectorUnits.length > 0) {
-                    let gatherTarget = _getCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22);
-                    if (gatherTarget) {
-                        applyWorkerAssignTargets(collectorUnits, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
+                if (!forceManualWorkerMove && collectorUnitGroups.length > 0) {
+                    let issuedCollectorAssign = false;
+                    let clickGx = Math.floor(world.x / TILE);
+                    let clickGy = Math.floor(world.y / TILE);
+                    for (let group of collectorUnitGroups) {
+                        let workerType = group.cfg.collectorUnitKey;
+                        let gatherTarget = _getGatherTargetAtForCollectorWorkerType(workerType, clickGx, clickGy, localPlayerId);
+                        if (!gatherTarget) continue;
+                        applyWorkerAssignTargets(group.units, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
+                        issuedCollectorAssign = true;
+                    }
+                    if (issuedCollectorAssign) {
                         updateInfoPanel();
                         let nonWorkers = activeUnits.filter(u => !u.workerType);
                         if (nonWorkers.length === 0) return;
@@ -990,19 +1039,7 @@ function initInput() {
                     multiCollectorAssignTargets = [];
                 }
 
-                if (astarCollectorUnits.length > 0) {
-                    let gatherTarget = _getAstarCollectorGatherTargetNear(world.x, world.y, localPlayerId, 22);
-                    if (gatherTarget) {
-                        applyWorkerAssignTargets(astarCollectorUnits, gatherTarget.type, gatherTarget.target.gx, gatherTarget.target.gy, isCtrlMulti);
-                        updateInfoPanel();
-                        let nonWorkers = activeUnits.filter(u => !u.workerType);
-                        if (nonWorkers.length === 0) return;
-                    }
-                } else if (!isCtrlMulti) {
-                    multiCollectorAssignTargets = [];
-                }
-
-                if (healerUnits.length > 0) {
+                if (!forceManualWorkerMove && healerUnits.length > 0) {
                     let queueTarget = _getHealerQueueTargetNear(world.x, world.y, localPlayerId, 22, false);
                     if (queueTarget) {
                         applyWorkerAssignTargets(healerUnits, 'queue', queueTarget.gx, queueTarget.gy, isCtrlMulti);
@@ -1014,7 +1051,7 @@ function initInput() {
                     multiHealerAssignTargets = [];
                 }
 
-                if (researcherUnits.length > 0) {
+                if (!forceManualWorkerMove && researcherUnits.length > 0) {
                     let researchTarget = null;
                     let researchBestDist = Infinity;
                     for (let s of collectorSpawners) {
@@ -2003,9 +2040,7 @@ function processActions(actions, playerId) {
                     u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                     u.commandState = CMD_MOVING;
                     if (u.workerState) {
-                        _clearWorkerTarget(u);
-                        Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
-                        clearWorkerTaskMemoryForFreeRetarget(u);
+                        interruptWorkerForManualMove(u);
                     }
                     if (_canUsePathfindRequestBudget(u.owner)) {
                         _consumePathfindRequestBudget(u.owner);
@@ -2035,9 +2070,7 @@ function processActions(actions, playerId) {
                     u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                     u.commandState = CMD_ATTACK_MOVING;
                     if (u.workerState) {
-                        _clearWorkerTarget(u);
-                        Object.assign(u, { workerState: 'MANUAL_MOVE', workerTarget: null, workerTargetType: null });
-                        clearWorkerTaskMemoryForFreeRetarget(u);
+                        interruptWorkerForManualMove(u);
                     }
                     if (_canUsePathfindRequestBudget(u.owner)) {
                         _consumePathfindRequestBudget(u.owner);
@@ -2159,17 +2192,14 @@ function processActions(actions, playerId) {
                 for (let i = 0; i < count; i++) {
                     if (s.spawnQueue.length >= 10) break;
                     let queuedLevel = getThingEffectiveLevel(s);
-                    let queuedType = s.type === 'spawner'
-                        ? 'collector'
-                        : s.type === 'astar_spawner'
-                            ? 'astar_collector'
-                            : s.type === 'builder_spawner'
-                                ? 'builder_unit'
-                                : s.type === 'healer_spawner'
-                                    ? 'healer_unit'
-                                    : s.type === 'research'
-                                        ? 'researcher_unit'
-                                        : 'salvager_unit';
+                    let queuedType = getSpawnedUnitTypeForBuildingKey(s.type)
+                        || (s.type === 'builder_spawner'
+                            ? 'builder_unit'
+                            : s.type === 'healer_spawner'
+                                ? 'healer_unit'
+                                : s.type === 'research'
+                                    ? 'researcher_unit'
+                                    : 'salvager_unit');
                     s.spawnQueue.push(getQueuedSpawnInfo({ unitType: queuedType, level: queuedLevel }, queuedType, queuedLevel, playerId));
                 }
             }
@@ -2211,37 +2241,17 @@ function processActions(actions, playerId) {
                         _clearWorkerTarget(u); // clear old target
                         _builderAssignTarget(u, target, myGx, myGy);
                     }
-                } else if (u.workerType === 'collector' && (a.targetType === 'mine' || a.targetType === 'farm')) {
-                    let gather = _getCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
-                    if (gather && _isCollectorTargetValid(gather.target, gather.type, playerId)) {
+                } else if (isResourceCollectorWorkerType(u.workerType) && _isCollectorGatherTargetType(a.targetType)) {
+                    let gather = _getGatherTargetAtForCollectorWorkerType(u.workerType, a.targetGx, a.targetGy, playerId, a.targetType);
+                    if (gather && _isValidGatherTargetForCollectorWorkerType(u.workerType, gather.target, gather.type, playerId)) {
                         _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
                         if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
-                            _clearWorkerTarget(u);
-                            u.workerState = 'IDLE';
-                            u.commandState = CMD_IDLE;
-                            _collectorFindTarget(u, myGx, myGy);
+                            issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                             continue;
                         }
                         _clearWorkerTarget(u);
-                        u._collectorPinnedTarget = gather.target;
-                        u._collectorPinnedTargetType = gather.type;
-                        _collectorAssignTarget(u, gather.target, gather.type, myGx, myGy);
-                    }
-                } else if (u.workerType === 'astar_collector' && (a.targetType === 'astar_mine' || a.targetType === 'astar_farm')) {
-                    let gather = _getAstarCollectorGatherTargetAt(a.targetGx, a.targetGy, playerId, a.targetType);
-                    if (gather && _isAstarCollectorTargetValid(gather.target, gather.type, playerId)) {
-                        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
-                        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
-                            _clearWorkerTarget(u);
-                            u.workerState = 'IDLE';
-                            u.commandState = CMD_IDLE;
-                            _astarCollectorFindTarget(u);
-                            continue;
-                        }
-                        _clearWorkerTarget(u);
-                        u._astarPinnedTarget = gather.target;
-                        u._astarPinnedTargetType = gather.type;
-                        _astarCollectorAssignTarget(u, gather.target, gather.type);
+                        _setResourceCollectorPinnedTarget(u, gather.target, gather.type);
+                        _resourceCollectorAssignTarget(u, gather.target, gather.type, getResourceCollectorConfigByWorkerType(u.workerType));
                     }
                 } else if (u.workerType === 'healer' && a.targetType === 'queue') {
                     let qTarget = getTileEntityRef(a.targetGx, a.targetGy);
@@ -2619,10 +2629,9 @@ function startGame() {
 
     let applyWorkerDefaults = (u) => {
         if (!u) return;
-        if (u.unitType === 'collector') {
-            u.workerState = 'IDLE'; u.workerType = 'collector'; u.carryingValue = 0; _clearWorkerTarget(u);
-        } else if (u.unitType === 'astar_collector') {
-            u.workerState = 'IDLE'; u.workerType = 'astar_collector'; u.carryingValue = 0; _clearWorkerTarget(u);
+        let resourceCollectorKey = getResourceTypeByCollectorUnit(u.unitType);
+        if (resourceCollectorKey) {
+            u.workerState = 'IDLE'; u.workerType = u.unitType; u.carryingValue = 0; _clearWorkerTarget(u);
         } else if (u.unitType === 'salvager_unit') {
             u.workerState = 'IDLE'; u.workerType = 'salvager'; u.carryingValue = 0; _clearWorkerTarget(u);
         } else if (u.unitType === 'builder_unit') {

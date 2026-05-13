@@ -117,217 +117,18 @@ function updateWorkerAI(u) {
             if (u.pathIsFallbackAstar) {
                 _tryUpgradeAstarFallbackPath(u);
             }
-            // Keep manual move active while deferred pathfinding catches up.
             return;
         }
         if (!u.path || u.pathIndex >= u.path.length) {
             u._workerNextIdleRetargetTick = gameTime;
             u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
         }
-        return; // Suppress auto-AI while manually moving
+        return;
     }
 
-    if (u.workerType === 'collector') {
-        if (u.workerState === 'IDLE') {
-            if (!u._lastIdleStateTime || u.workerState !== 'IDLE') u._lastIdleStateTime = gameTime;
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-            _collectorFindTarget(u, myGx, myGy);
-        } else if (u.workerState === 'MOVING_TO') {
-            u._lastIdleStateTime = 0;
-            if (!u.workerTarget || !_workerOwnsReservedTarget(u)) {
-                _clearWorkerTarget(u, 'target_missing');
-                _clearWorkerAutoRoute(u);
-                _collectorFindTarget(u, myGx, myGy);
-                return;
-            }
-            if (u.workerTargetType === 'drop' && getDroppedItemAt(u.workerTarget.gx, u.workerTarget.gy) !== u.workerTarget) {
-                _clearWorkerTarget(u, 'target_missing'); _collectorFindTarget(u, myGx, myGy); return;
-            }
-            if (u.workerTargetType === 'mine' && u.workerTarget.gold <= 0) {
-                _clearWorkerTarget(u, 'target_no_work'); _collectorFindTarget(u, myGx, myGy); return;
-            }
-            if (u.workerTargetType === 'farm' && (!u.workerTarget || u.workerTarget.type !== 'farm' || u.workerTarget.owner !== owner || u.workerTarget.underConstruction || u.workerTarget.energy <= 0)) {
-                _clearWorkerTarget(u, 'target_no_work'); _collectorFindTarget(u, myGx, myGy); return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                if (_workerHasPendingAutoRouteToTarget(u)) return;
-                let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                if (dist <= 24) {
-                    if (u.workerTransferCooldown > 0) return;
-                    if (u.workerTargetType === 'drop') {
-                        u.carryingValue = u.workerTarget.value;
-                        removeDroppedItem(u.workerTarget);
-                    } else if (u.workerTargetType === 'farm') {
-                        let gatherPerTrip = Number(u.gatherPerTrip);
-                        if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
-                            let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
-                            gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
-                        }
-                        if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
-                        let farmLvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.stacks || 1));
-                        let mult = getBuildingStatForOwner(owner, 'farm', farmLvl, 'multiplier');
-                        if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
-                        u.carryingValue = Math.max(1, gatherPerTrip * mult);
-                    } else {
-                        let gatherPerTrip = Number(u.gatherPerTrip);
-                        if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
-                            let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
-                            gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
-                        }
-                        if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
-                        let extract = Math.min(gatherPerTrip, u.workerTarget.gold);
-                        u.workerTarget.gold -= extract;
-                        // u.workerTarget.gold -= 1
-                        u.carryingValue = extract;
-                        if (u.workerTarget.gold <= 0) {
-                            let mine = u.workerTarget;
-                            grid[mine.gy][mine.gx].type = TYPE_FLOOR;
-                            let idx = goldMines.indexOf(mine);
-                            if (idx >= 0) goldMines.splice(idx, 1);
-                            clearTileEntity(mine.gx, mine.gy, mine);
-                            _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
-                            dirtyGrid = true;
-                        }
-                    }
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector', u);
-                    _collectorRememberGatherSite(u, u.workerTarget, u.workerTargetType);
-                    // Remember the mine we just used for re-targeting after return
-                    u._lastMineTarget = (u.workerTargetType === 'mine') ? u.workerTarget : null;
-                    if (u.workerTargetType === 'drop') _clearWorkerTarget(u, 'target_missing');
-                    u.workerState = 'RETURNING'; _workerReturnPath(u);
-                } else {
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let canWalk = u.workerTargetType === 'mine' ? _collectorCanWalk : null;
-                    u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, null, true);
-                    if (u.path) {
-                        u.pathIndex = 0;
-                        u.commandState = CMD_MOVING;
-                    } else {
-                        _collectorFindTarget(u, myGx, myGy);
-                    }
-                }
-            }
-        } else if (u.workerState === 'RETURNING') {
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let closest = _findClosestSpawner(u, 'spawner');
-                let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
-                if (isAtDropoff && closest) {
-                    u._collectorLastDropoffSpawner = closest;
-                    u._collectorNextSpawner = closest;
-                }
-                if (u.carryingValue > 0 && !isAtDropoff) {
-                    _workerReturnPath(u);
-                    return;
-                }
-                if (u.carryingValue > 0 && isAtDropoff) {
-                    if (u.workerTransferCooldown > 0) return;
-                    players[owner].energy += u.carryingValue;
-                    recordEnergyDelta(owner, 'collect', u.carryingValue);
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('collector', u);
-                    if (owner === localPlayerId) playSound('gold_collected', u.x, u.y);
-                }
-                u.carryingValue = 0;
-                if (!canRunHeavyAi) return;
-                if (_isCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) && _workerOwnsReservedTarget(u)) {
-                    _collectorAssignTarget(u, u.workerTarget, u.workerTargetType, myGx, myGy);
-                    return;
-                }
-                u._lastMineTarget = null;
-                _clearWorkerTarget(u, 'target_no_work');
-                _collectorFindTarget(u, myGx, myGy);
-            }
-        }
-    } else if (u.workerType === 'astar_collector') {
-        if (u.workerState === 'IDLE') {
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-            _astarCollectorFindTarget(u);
-        } else if (u.workerState === 'MOVING_TO_ASTAR') {
-            if (!_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) || !_workerOwnsReservedTarget(u)) {
-                _clearWorkerTarget(u, 'target_no_work');
-                _clearWorkerAutoRoute(u);
-                _astarCollectorFindTarget(u);
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                if (_workerHasPendingAutoRouteToTarget(u)) return;
-                let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                if (dist <= 24) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let gatherPerTrip = Number(u.gatherPerTrip);
-                    if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
-                        let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
-                        gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
-                    }
-                    if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
-                    if (u.workerTargetType === 'astar_farm') {
-                        let lvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.effectiveStacks || u.workerTarget.stacks || 1));
-                        let mult = getBuildingStatForOwner(owner, 'astar_farm', lvl, 'multiplier');
-                        if (!Number.isFinite(mult) || mult <= 0) mult = 1;
-                        gatherPerTrip *= mult;
-                    }
-                    let extract = u.workerTargetType === 'astar_mine'
-                        ? Math.min(gatherPerTrip, u.workerTarget.astar)
-                        : gatherPerTrip;
-                    if (u.workerTargetType === 'astar_mine') u.workerTarget.astar -= extract;
-                    u.carryingValue = extract;
-                    if (u.workerTargetType === 'astar_mine' && u.workerTarget.astar <= 0) {
-                        let mine = u.workerTarget;
-                        grid[mine.gy][mine.gx].type = TYPE_FLOOR;
-                        let idx = astarMines.indexOf(mine);
-                        if (idx >= 0) astarMines.splice(idx, 1);
-                        clearTileEntity(mine.gx, mine.gy, mine);
-                        _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
-                        dirtyGrid = true;
-                    }
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
-                    _astarCollectorRememberGatherSite(u, u.workerTarget);
-                    u._astarLastMineTarget = u.workerTarget;
-                    u._astarLastMineTargetType = u.workerTargetType;
-                    u.workerState = 'RETURNING_ASTAR'; _workerReturnPath(u);
-                } else {
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let canWalk = u.workerTargetType === 'astar_mine' ? _astarCollectorCanWalk : null;
-                    u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'astar_collector', true);
-                    if (u.path) {
-                        u.pathIndex = 0;
-                        u.commandState = CMD_MOVING;
-                    } else {
-                        _astarCollectorFindTarget(u);
-                    }
-                }
-            }
-        } else if (u.workerState === 'RETURNING_ASTAR') {
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let closest = _findClosestSpawner(u, 'astar_spawner');
-                let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
-                if (isAtDropoff && closest) {
-                    u._astarNextSpawner = closest;
-                }
-                if (u.carryingValue > 0 && !isAtDropoff) {
-                    _workerReturnPath(u);
-                    return;
-                }
-                if (u.carryingValue > 0 && isAtDropoff) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let player = players[owner];
-                    let curAstar = Math.max(0, Number(player.astar) || 0);
-                    let nextValue = curAstar + Math.max(0, Number(u.carryingValue) || 0);
-                    _setPlayerAstarBudget(owner, nextValue);
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('astar_collector', u);
-                    if (owner === localPlayerId) playSound('astar_collected', u.x, u.y);
-                }
-                u.carryingValue = 0;
-                if (!canRunHeavyAi) return;
-                if (_isAstarCollectorTargetValid(u.workerTarget, u.workerTargetType, owner) && _workerOwnsReservedTarget(u)) {
-                    _astarCollectorAssignTarget(u, u.workerTarget, u.workerTargetType);
-                    return;
-                }
-                u._astarLastMineTarget = null;
-                u._astarLastMineTargetType = null;
-                _clearWorkerTarget(u, 'target_no_work');
-                _astarCollectorFindTarget(u);
-            }
-        }
+    if (isResourceCollectorWorkerType(u.workerType)) {
+        _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi);
+        return;
     } else if (u.workerType === 'salvager') {
         if (u.workerState === 'IDLE') {
             if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
@@ -1051,173 +852,467 @@ function updateWorkerAI(u) {
     }
 }
 
-function _isCollectorTargetValid(target, targetType, owner) {
-    if (!target) return false;
-    if (targetType === 'mine') {
-        return Number.isFinite(target.gold) && target.gold > 0;
+function _getResourceCollectorMineArray(resourceCfg) {
+    if (!resourceCfg) return null;
+    if (resourceCfg.mineArrayKey === 'goldMines') return goldMines;
+    if (resourceCfg.mineArrayKey === 'astarMines') return astarMines;
+    return null;
+}
+
+function _setResourceCollectorPinnedTarget(u, target, targetType, resourceCfg = null) {
+    let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
+    let mem = _getResourceCollectorMemory(u);
+    mem.pinnedTarget = target || null;
+    mem.pinnedTargetType = targetType || null;
+    if (!cfg) return;
+    if (cfg.stockpileKey === 'energy') {
+        u._collectorPinnedTarget = mem.pinnedTarget;
+        u._collectorPinnedTargetType = mem.pinnedTargetType;
+    } else if (cfg.stockpileKey === 'astar') {
+        u._astarPinnedTarget = mem.pinnedTarget;
+        u._astarPinnedTargetType = mem.pinnedTargetType;
     }
-    if (targetType === 'farm') {
-        return target.type === 'farm' && target.owner === owner && !target.underConstruction && target.energy > 0;
+}
+
+function _getResourceCollectorPinnedTarget(u, resourceCfg = null) {
+    let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
+    let mem = _getResourceCollectorMemory(u);
+    if (!mem.pinnedTarget && cfg) {
+        if (cfg.stockpileKey === 'energy' && u._collectorPinnedTarget) {
+            mem.pinnedTarget = u._collectorPinnedTarget;
+            mem.pinnedTargetType = u._collectorPinnedTargetType || null;
+        } else if (cfg.stockpileKey === 'astar' && u._astarPinnedTarget) {
+            mem.pinnedTarget = u._astarPinnedTarget;
+            mem.pinnedTargetType = u._astarPinnedTargetType || null;
+        }
+    }
+    return { target: mem.pinnedTarget || null, targetType: mem.pinnedTargetType || null };
+}
+
+function _resourceCollectorGetGatherPerTrip(u, owner) {
+    let gatherPerTrip = Number(u.gatherPerTrip);
+    if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
+        let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
+        gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
+    }
+    if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
+    return gatherPerTrip;
+}
+
+function _depositResourceCollectorPayload(u, owner, resourceCfg) {
+    let amount = Math.max(0, Number(u.carryingValue) || 0);
+    if (!(amount > 0) || !resourceCfg) return;
+    if (resourceCfg.stockpileKey === 'astar') {
+        let player = players[owner];
+        let curValue = Math.max(0, Number(player && player[resourceCfg.stockpileKey]) || 0);
+        _setPlayerAstarBudget(owner, curValue + amount);
+    } else {
+        players[owner][resourceCfg.stockpileKey] = Math.max(0, Number(players[owner][resourceCfg.stockpileKey]) || 0) + amount;
+        recordEnergyDelta(owner, 'collect', amount);
+    }
+    if (owner === localPlayerId && resourceCfg.dropoffSound) playSound(resourceCfg.dropoffSound, u.x, u.y);
+}
+
+function _resourceCollectorAssignTarget(u, target, targetType, resourceCfg) {
+    if (!_setWorkerTarget(u, target, targetType)) {
+        u.workerState = 'IDLE';
+        u.commandState = CMD_IDLE;
+        return;
+    }
+    let canWalk = targetType === resourceCfg.mineTileType ? _resourceCollectorCanWalk : null;
+    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+    u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, resourceCfg.collectorUnitKey, true);
+    if (u.path) {
+        _rememberResourceCollectorGatherSite(u, target, targetType, resourceCfg);
+        u.workerState = 'MOVING_TO';
+        u.pathIndex = 0;
+        u.commandState = CMD_MOVING;
+    } else if (_workerHasPendingAutoRouteToTarget(u, target)) {
+        _rememberResourceCollectorGatherSite(u, target, targetType, resourceCfg);
+        u.workerState = 'MOVING_TO';
+    } else {
+        _clearWorkerAutoRoute(u);
+        _clearWorkerTarget(u);
+        u.workerState = 'IDLE';
+        u.commandState = CMD_IDLE;
+    }
+}
+
+function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
+    let pinned = _getResourceCollectorPinnedTarget(u, resourceCfg);
+    if (_isResourceCollectorTargetValid(pinned.target, pinned.targetType, u.owner, resourceCfg)
+        && _canAssignWorkerTargetExclusive(u, pinned.target, pinned.targetType)) {
+        _resourceCollectorAssignTarget(u, pinned.target, pinned.targetType, resourceCfg);
+        return;
+    }
+    _setResourceCollectorPinnedTarget(u, null, null, resourceCfg);
+
+    let origin = _getResourceCollectorSearchOrigin(u, resourceCfg);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
+    let mem = _getResourceCollectorMemory(u);
+    let anchorSpawner = null;
+    if (_isResourceCollectorSpawnerValidForUnit(u, mem.nextSpawner, resourceCfg)) {
+        anchorSpawner = mem.nextSpawner;
+    } else if (_isResourceCollectorSpawnerValidForUnit(u, mem.lastDropoffSpawner, resourceCfg)) {
+        anchorSpawner = mem.lastDropoffSpawner;
+    } else {
+        anchorSpawner = _findClosestSpawner(u, resourceCfg.collectorBuildingKey);
+    }
+
+    let candidates = [];
+    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
+        if (!tileRef || !cell) return false;
+
+        let x = tileRef.x;
+        let y = tileRef.y;
+        let worldX = x * TILE + TILE * 0.5;
+        let worldY = y * TILE + TILE * 0.5;
+        let dx = worldX - origin.x;
+        let dy = worldY - origin.y;
+        let originDistSq = dx * dx + dy * dy;
+
+        let drop = resourceCfg.supportsDropTarget ? getDroppedItemAt(x, y) : null;
+        let mine = getResourceMineAt(resourceCfg.key, x, y);
+        let item = cell.item;
+
+        let candidate = null;
+        let candidateType = null;
+        let dropPenalty = 0;
+        if (drop) {
+            candidate = drop;
+            candidateType = 'drop';
+            dropPenalty = TILE * 0.5;
+        } else if (mine && Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0) {
+            candidate = mine;
+            candidateType = resourceCfg.mineTileType;
+        } else if (item && item.type === resourceCfg.farmKey && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
+            candidate = item;
+            candidateType = resourceCfg.farmKey;
+        }
+
+        if (!candidate) return false;
+        if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
+
+        let originDist = Math.sqrt(originDistSq);
+        let spawnerDist = anchorSpawner
+            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
+            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
+        candidates.push({
+            target: candidate,
+            targetType: candidateType,
+            dist: spawnerDist + originDist * 0.22 + dropPenalty,
+            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
+        });
+        return false;
+    });
+
+    let picked = _pickDistributedWorkerCandidate(u, candidates);
+    if (picked && picked.target) {
+        _resourceCollectorAssignTarget(u, picked.target, picked.targetType !== undefined ? picked.targetType : null, resourceCfg);
+        return;
+    }
+    u.workerState = 'IDLE';
+    u.commandState = CMD_IDLE;
+}
+
+function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
+    let resourceCfg = _getResourceCollectorConfigForUnit(u);
+    if (!resourceCfg) return;
+    let mem = _getResourceCollectorMemory(u);
+    if (u.workerState === 'IDLE') {
+        if (!u._lastIdleStateTime || u.workerState !== 'IDLE') u._lastIdleStateTime = gameTime;
+        if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
+        _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
+        return;
+    }
+    if (u.workerState === 'MOVING_TO' || u.workerState === 'MOVING_TO_ASTAR') {
+        u._lastIdleStateTime = 0;
+        if (!u.workerTarget || !_workerOwnsReservedTarget(u)) {
+            _clearWorkerTarget(u, 'target_missing');
+            _clearWorkerAutoRoute(u);
+            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
+            return;
+        }
+        if (!_isResourceCollectorTargetValid(u.workerTarget, u.workerTargetType, owner, resourceCfg)) {
+            _clearWorkerTarget(u, 'target_no_work');
+            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
+            return;
+        }
+        if (!u.path || u.pathIndex >= u.path.length) {
+            if (_workerHasPendingAutoRouteToTarget(u)) return;
+            let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
+            if (dist <= 24) {
+                if (u.workerTransferCooldown > 0) return;
+                if (u.workerTargetType === 'drop') {
+                    u.carryingValue = u.workerTarget.value;
+                    removeDroppedItem(u.workerTarget);
+                } else {
+                    let gatherPerTrip = _resourceCollectorGetGatherPerTrip(u, owner);
+                    if (u.workerTargetType === resourceCfg.farmKey) {
+                        let farmLvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.effectiveStacks || u.workerTarget.stacks || 1));
+                        let mult = getBuildingStatForOwner(owner, resourceCfg.farmKey, farmLvl, 'multiplier');
+                        if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
+                        u.carryingValue = Math.max(1, gatherPerTrip * mult);
+                    } else {
+                        let extract = Math.min(gatherPerTrip, Math.max(0, Number(u.workerTarget[resourceCfg.mineStatKey]) || 0));
+                        u.workerTarget[resourceCfg.mineStatKey] -= extract;
+                        u.carryingValue = extract;
+                        if (u.workerTarget[resourceCfg.mineStatKey] <= 0) {
+                            let mine = u.workerTarget;
+                            grid[mine.gy][mine.gx].type = TYPE_FLOOR;
+                            let mineArray = _getResourceCollectorMineArray(resourceCfg);
+                            let idx = mineArray ? mineArray.indexOf(mine) : -1;
+                            if (idx >= 0) mineArray.splice(idx, 1);
+                            clearTileEntity(mine.gx, mine.gy, mine);
+                            _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
+                            dirtyGrid = true;
+                        }
+                    }
+                }
+                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks(u.workerType, u);
+                _rememberResourceCollectorGatherSite(u, u.workerTarget, u.workerTargetType, resourceCfg);
+                mem.lastMineTarget = (u.workerTargetType === resourceCfg.mineTileType) ? u.workerTarget : null;
+                mem.lastMineTargetType = (u.workerTargetType === resourceCfg.mineTileType) ? u.workerTargetType : null;
+                if (resourceCfg.stockpileKey === 'energy') u._lastMineTarget = mem.lastMineTarget;
+                else if (resourceCfg.stockpileKey === 'astar') {
+                    u._astarLastMineTarget = mem.lastMineTarget;
+                    u._astarLastMineTargetType = mem.lastMineTargetType;
+                }
+                if (u.workerTargetType === 'drop') _clearWorkerTarget(u, 'target_missing');
+                u.workerState = 'RETURNING';
+                _workerReturnPath(u);
+            } else {
+                let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+                let canWalk = u.workerTargetType === resourceCfg.mineTileType ? _resourceCollectorCanWalk : null;
+                u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, resourceCfg.collectorUnitKey, true);
+                if (u.path) {
+                    u.pathIndex = 0;
+                    u.commandState = CMD_MOVING;
+                } else {
+                    _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
+                }
+            }
+        }
+        return;
+    }
+    if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
+        if (!u.path || u.pathIndex >= u.path.length) {
+            let closest = _findClosestSpawner(u, resourceCfg.collectorBuildingKey);
+            let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
+            if (isAtDropoff && closest) {
+                _setResourceCollectorLastDropoffSpawner(u, closest);
+                _setResourceCollectorNextSpawner(u, closest);
+            }
+            if (u.carryingValue > 0 && !isAtDropoff) {
+                _workerReturnPath(u);
+                return;
+            }
+            if (u.carryingValue > 0 && isAtDropoff) {
+                if (u.workerTransferCooldown > 0) return;
+                _depositResourceCollectorPayload(u, owner, resourceCfg);
+                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks(u.workerType, u);
+            }
+            u.carryingValue = 0;
+            if (!canRunHeavyAi) return;
+            if (_isResourceCollectorTargetValid(u.workerTarget, u.workerTargetType, owner, resourceCfg) && _workerOwnsReservedTarget(u)) {
+                _resourceCollectorAssignTarget(u, u.workerTarget, u.workerTargetType, resourceCfg);
+                return;
+            }
+            mem.lastMineTarget = null;
+            mem.lastMineTargetType = null;
+            u._lastMineTarget = null;
+            u._astarLastMineTarget = null;
+            u._astarLastMineTargetType = null;
+            _clearWorkerTarget(u, 'target_no_work');
+            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
+        }
+    }
+}
+
+function _getResourceCollectorConfigForUnit(u) {
+    return getResourceCollectorConfigByWorkerType(u && u.workerType);
+}
+
+function _isResourceCollectorTargetValid(target, targetType, owner, resourceCfg) {
+    if (!target || !resourceCfg) return false;
+    if (targetType === resourceCfg.mineTileType) {
+        return Number.isFinite(target[resourceCfg.mineStatKey]) && target[resourceCfg.mineStatKey] > 0;
+    }
+    if (targetType === resourceCfg.farmKey) {
+        return target.type === resourceCfg.farmKey && target.owner === owner && !target.underConstruction && target.energy > 0;
     }
     if (targetType === 'drop') {
-        return getDroppedItemAt(target.gx, target.gy) === target;
+        return !!resourceCfg.supportsDropTarget && getDroppedItemAt(target.gx, target.gy) === target;
     }
     return false;
 }
 
-function _collectorRememberGatherSite(u, target = null, targetType = null) {
+function _rememberResourceCollectorGatherSite(u, target = null, targetType = null, resourceCfg = null) {
     if (!u || !target) return;
+    let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
+    let mem = _getResourceCollectorMemory(u);
     if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
-        u._collectorLastGatherX = target.x;
-        u._collectorLastGatherY = target.y;
+        mem.lastGatherX = target.x;
+        mem.lastGatherY = target.y;
     }
     if (Number.isFinite(target.gx) && Number.isFinite(target.gy)) {
-        u._collectorLastGatherGx = target.gx;
-        u._collectorLastGatherGy = target.gy;
+        mem.lastGatherGx = target.gx;
+        mem.lastGatherGy = target.gy;
     }
-    if (targetType) u._collectorLastGatherType = targetType;
+    if (targetType) mem.lastGatherType = targetType;
+    if (!cfg) return;
+    if (cfg.stockpileKey === 'energy') {
+        u._collectorLastGatherX = mem.lastGatherX;
+        u._collectorLastGatherY = mem.lastGatherY;
+        u._collectorLastGatherGx = mem.lastGatherGx;
+        u._collectorLastGatherGy = mem.lastGatherGy;
+        u._collectorLastGatherType = mem.lastGatherType;
+    } else if (cfg.stockpileKey === 'astar') {
+        u._astarLastGatherX = mem.lastGatherX;
+        u._astarLastGatherY = mem.lastGatherY;
+        u._astarLastGatherGx = mem.lastGatherGx;
+        u._astarLastGatherGy = mem.lastGatherGy;
+    }
 }
 
-function _isCollectorSpawnerValidForUnit(u, spawner) {
-    if (!u || !spawner) return false;
-    return spawner.type === 'spawner'
+function _isResourceCollectorSpawnerValidForUnit(u, spawner, resourceCfg = null) {
+    let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
+    if (!u || !spawner || !cfg) return false;
+    return spawner.type === cfg.collectorBuildingKey
         && spawner.owner === u.owner
         && spawner.energy > 0
         && !spawner.underConstruction;
 }
 
-function _collectorGetSearchOrigin(u) {
+function _getResourceCollectorSearchOrigin(u, resourceCfg = null) {
+    let cfg = resourceCfg || _getResourceCollectorConfigForUnit(u);
     if (u && u.workerState === 'IDLE' && (gameTime - (u._lastIdleStateTime || 0)) < secondsToTicks(5)) {
         return { x: u.x, y: u.y };
     }
-    if (u && Number.isFinite(u._collectorLastGatherX) && Number.isFinite(u._collectorLastGatherY)) {
+    let mem = _getResourceCollectorMemory(u);
+    if (u && Number.isFinite(mem.lastGatherX) && Number.isFinite(mem.lastGatherY)) {
+        return { x: mem.lastGatherX, y: mem.lastGatherY };
+    }
+    if (cfg && cfg.stockpileKey === 'energy' && u && Number.isFinite(u._collectorLastGatherX) && Number.isFinite(u._collectorLastGatherY)) {
         return { x: u._collectorLastGatherX, y: u._collectorLastGatherY };
+    }
+    if (cfg && cfg.stockpileKey === 'astar' && u && Number.isFinite(u._astarLastGatherX) && Number.isFinite(u._astarLastGatherY)) {
+        return { x: u._astarLastGatherX, y: u._astarLastGatherY };
     }
     return { x: u.x, y: u.y };
 }
 
-function _getCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
-    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
-    if (preferredType === 'mine' || preferredType === null) {
-        let mine = getGoldMineAt(gx, gy);
-        if (mine && mine.gold <= 0) mine = null;
-        if (mine) return { target: mine, type: 'mine' };
+function _getResourceCollectorGatherTargetAt(gx, gy, owner, resourceCfg, preferredType = null) {
+    if (!resourceCfg || !Number.isFinite(gx) || !Number.isFinite(gy)) return null;
+    if (preferredType === resourceCfg.mineTileType || preferredType === null) {
+        let mine = getResourceMineAt(resourceCfg.key, gx, gy);
+        if (mine && !(Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0)) mine = null;
+        if (mine) return { target: mine, type: resourceCfg.mineTileType };
     }
-    if (preferredType === 'farm' || preferredType === null) {
+    if (preferredType === resourceCfg.farmKey || preferredType === null) {
         if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
             let cell = grid[gy][gx];
             let item = cell && cell.item;
-            if (item && item.type === 'farm' && item.owner === owner && !item.underConstruction && item.energy > 0) {
-                return { target: item, type: 'farm' };
+            if (item && item.type === resourceCfg.farmKey && item.owner === owner && !item.underConstruction && item.energy > 0) {
+                return { target: item, type: resourceCfg.farmKey };
             }
         }
     }
+    if (resourceCfg.supportsDropTarget && (preferredType === 'drop' || preferredType === null)) {
+        let drop = getDroppedItemAt(gx, gy);
+        if (drop) return { target: drop, type: 'drop' };
+    }
     return null;
+}
+
+function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCfg, radius = 22) {
+    if (!resourceCfg) return null;
+    let best = null;
+    let bestDist = radius;
+
+    let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+    let mineTileRadius = Math.max(1, Math.ceil(radius / TILE));
+    let mineMinGx = Math.max(0, gx - mineTileRadius), mineMaxGx = Math.min(GRID_W - 1, gx + mineTileRadius);
+    let mineMinGy = Math.max(0, gy - mineTileRadius), mineMaxGy = Math.min(GRID_H - 1, gy + mineTileRadius);
+    for (let y = mineMinGy; y <= mineMaxGy; y++) {
+        for (let x = mineMinGx; x <= mineMaxGx; x++) {
+            let m = getResourceMineAt(resourceCfg.key, x, y);
+            if (!m || !(Number.isFinite(m[resourceCfg.mineStatKey]) && m[resourceCfg.mineStatKey] > 0)) continue;
+            let d = Math.hypot(m.x - worldX, m.y - worldY);
+            if (d <= bestDist) {
+                bestDist = d;
+                best = { target: m, type: resourceCfg.mineTileType };
+            }
+        }
+    }
+
+    let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
+    let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
+    for (let y = minGy; y <= maxGy; y++) {
+        for (let x = minGx; x <= maxGx; x++) {
+            let cell = grid[y][x];
+            let item = cell && cell.item;
+            if (!item || item.type !== resourceCfg.farmKey || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
+            let d = Math.hypot(item.x - worldX, item.y - worldY);
+            if (d <= bestDist) {
+                bestDist = d;
+                best = { target: item, type: resourceCfg.farmKey };
+            }
+        }
+    }
+    if (resourceCfg.supportsDropTarget) {
+        let minDropGx = Math.max(0, gx - 1), maxDropGx = Math.min(GRID_W - 1, gx + 1);
+        let minDropGy = Math.max(0, gy - 1), maxDropGy = Math.min(GRID_H - 1, gy + 1);
+        for (let y = minDropGy; y <= maxDropGy; y++) {
+            for (let x = minDropGx; x <= maxDropGx; x++) {
+                let drop = getDroppedItemAt(x, y);
+                if (!drop) continue;
+                let d = Math.hypot(drop.x - worldX, drop.y - worldY);
+                if (d <= bestDist) {
+                    bestDist = d;
+                    best = { target: drop, type: 'drop' };
+                }
+            }
+        }
+    }
+    return best;
+}
+
+function _isCollectorTargetValid(target, targetType, owner) {
+    return _isResourceCollectorTargetValid(target, targetType, owner, getResourceTypeConfig('energy'));
+}
+
+function _collectorRememberGatherSite(u, target = null, targetType = null) {
+    _rememberResourceCollectorGatherSite(u, target, targetType, getResourceTypeConfig('energy'));
+}
+
+function _isCollectorSpawnerValidForUnit(u, spawner) {
+    return _isResourceCollectorSpawnerValidForUnit(u, spawner, getResourceTypeConfig('energy'));
+}
+
+function _collectorGetSearchOrigin(u) {
+    return _getResourceCollectorSearchOrigin(u, getResourceTypeConfig('energy'));
+}
+
+function _getCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
+    return _getResourceCollectorGatherTargetAt(gx, gy, owner, getResourceTypeConfig('energy'), preferredType);
 }
 
 function _getCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) {
-    let best = null;
-    let bestDist = radius;
-
-    // Mine lookup is tile-indexed, so check only nearby tiles instead of scanning all mines.
-    let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
-    let mineTileRadius = Math.max(1, Math.ceil(radius / TILE));
-    let mineMinGx = Math.max(0, gx - mineTileRadius), mineMaxGx = Math.min(GRID_W - 1, gx + mineTileRadius);
-    let mineMinGy = Math.max(0, gy - mineTileRadius), mineMaxGy = Math.min(GRID_H - 1, gy + mineTileRadius);
-    for (let y = mineMinGy; y <= mineMaxGy; y++) {
-        for (let x = mineMinGx; x <= mineMaxGx; x++) {
-            let m = getGoldMineAt(x, y);
-            if (!m || m.gold <= 0) continue;
-            let d = Math.hypot(m.x - worldX, m.y - worldY);
-            if (d <= bestDist) {
-                bestDist = d;
-                best = { target: m, type: 'mine' };
-            }
-        }
-    }
-
-    let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
-    let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
-    for (let y = minGy; y <= maxGy; y++) {
-        for (let x = minGx; x <= maxGx; x++) {
-            let cell = grid[y][x];
-            let item = cell && cell.item;
-            if (!item || item.type !== 'farm' || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
-            let d = Math.hypot(item.x - worldX, item.y - worldY);
-            if (d <= bestDist) {
-                bestDist = d;
-                best = { target: item, type: 'farm' };
-            }
-        }
-    }
-    return best;
+    return _getResourceCollectorGatherTargetNear(worldX, worldY, owner, getResourceTypeConfig('energy'), radius);
 }
 
 function _isAstarCollectorTargetValid(target, targetType, owner) {
-    if (!target) return false;
-    if (targetType === 'astar_mine') {
-        return Number.isFinite(target.astar) && target.astar > 0;
-    }
-    if (targetType === 'astar_farm') {
-        return target.type === 'astar_farm' && target.owner === owner && !target.underConstruction && target.energy > 0;
-    }
-    return false;
+    return _isResourceCollectorTargetValid(target, targetType, owner, getResourceTypeConfig('astar'));
 }
 
 function _getAstarCollectorGatherTargetAt(gx, gy, owner, preferredType = null) {
-    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
-    if (preferredType === 'astar_mine' || preferredType === null) {
-        let mine = getAstarMineAt(gx, gy);
-        if (mine && mine.astar <= 0) mine = null;
-        if (mine) return { target: mine, type: 'astar_mine' };
-    }
-    if (preferredType === 'astar_farm' || preferredType === null) {
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-            let cell = grid[gy][gx];
-            let item = cell && cell.item;
-            if (item && item.type === 'astar_farm' && item.owner === owner && !item.underConstruction && item.energy > 0) {
-                return { target: item, type: 'astar_farm' };
-            }
-        }
-    }
-    return null;
+    return _getResourceCollectorGatherTargetAt(gx, gy, owner, getResourceTypeConfig('astar'), preferredType);
 }
 
 function _getAstarCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) {
-    let best = null;
-    let bestDist = radius;
-
-    let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
-    let mineTileRadius = Math.max(1, Math.ceil(radius / TILE));
-    let mineMinGx = Math.max(0, gx - mineTileRadius), mineMaxGx = Math.min(GRID_W - 1, gx + mineTileRadius);
-    let mineMinGy = Math.max(0, gy - mineTileRadius), mineMaxGy = Math.min(GRID_H - 1, gy + mineTileRadius);
-    for (let y = mineMinGy; y <= mineMaxGy; y++) {
-        for (let x = mineMinGx; x <= mineMaxGx; x++) {
-            let m = getAstarMineAt(x, y);
-            if (!m || m.astar <= 0) continue;
-            let d = Math.hypot(m.x - worldX, m.y - worldY);
-            if (d <= bestDist) {
-                bestDist = d;
-                best = { target: m, type: 'astar_mine' };
-            }
-        }
-    }
-
-    let minGx = Math.max(0, gx - 1), maxGx = Math.min(GRID_W - 1, gx + 1);
-    let minGy = Math.max(0, gy - 1), maxGy = Math.min(GRID_H - 1, gy + 1);
-    for (let y = minGy; y <= maxGy; y++) {
-        for (let x = minGx; x <= maxGx; x++) {
-            let cell = grid[y][x];
-            let item = cell && cell.item;
-            if (!item || item.type !== 'astar_farm' || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
-            let d = Math.hypot(item.x - worldX, item.y - worldY);
-            if (d <= bestDist) {
-                bestDist = d;
-                best = { target: item, type: 'astar_farm' };
-            }
-        }
-    }
-    return best;
+    return _getResourceCollectorGatherTargetNear(worldX, worldY, owner, getResourceTypeConfig('astar'), radius);
 }
 
 // Collector: find nearest gold mine/farm/drop, preferring area around last gather source.
@@ -1312,7 +1407,7 @@ function _collectorFindTarget(u, myGx, myGy) {
 }
 
 function _collectorCanWalk(nx, ny) {
-    return hasActiveGoldMineAt(nx, ny) || hasActiveAstarMineAt(nx, ny);
+    return _resourceCollectorCanWalk(nx, ny);
 }
 
 let _activeBuilderWorkCacheTick = -1;
@@ -1408,9 +1503,94 @@ function getBuilderTripGoldCost(u) {
     return Math.max(1, Math.round(dps));
 }
 
+function isResourceCollectorWorkerType(workerType) {
+    return !!getResourceTypeByCollectorUnit(workerType);
+}
+
+function getResourceCollectorConfigByWorkerType(workerType) {
+    return getResourceTypeByCollectorUnit(workerType);
+}
+
+function _getResourceCollectorMemory(u) {
+    if (!u) return null;
+    if (!u._resourceCollectorMemory || typeof u._resourceCollectorMemory !== 'object') {
+        u._resourceCollectorMemory = {
+            pinnedTarget: null,
+            pinnedTargetType: null,
+            lastGatherX: null,
+            lastGatherY: null,
+            lastGatherGx: null,
+            lastGatherGy: null,
+            lastGatherType: null,
+            nextSpawner: null,
+            lastDropoffSpawner: null,
+            lastMineTarget: null,
+            lastMineTargetType: null,
+        };
+    }
+    return u._resourceCollectorMemory;
+}
+
+function _setResourceCollectorNextSpawner(u, spawner) {
+    let mem = _getResourceCollectorMemory(u);
+    if (mem) mem.nextSpawner = spawner || null;
+    let cfg = getResourceCollectorConfigByWorkerType(u && u.workerType);
+    if (!cfg) return;
+    if (cfg.stockpileKey === 'energy') u._collectorNextSpawner = spawner || null;
+    else if (cfg.stockpileKey === 'astar') u._astarNextSpawner = spawner || null;
+}
+
+function _setResourceCollectorLastDropoffSpawner(u, spawner) {
+    let mem = _getResourceCollectorMemory(u);
+    if (mem) mem.lastDropoffSpawner = spawner || null;
+    let cfg = getResourceCollectorConfigByWorkerType(u && u.workerType);
+    if (!cfg) return;
+    if (cfg.stockpileKey === 'energy') u._collectorLastDropoffSpawner = spawner || null;
+}
+
+function _clearResourceCollectorTaskMemory(u) {
+    let mem = _getResourceCollectorMemory(u);
+    if (mem) {
+        mem.pinnedTarget = null;
+        mem.pinnedTargetType = null;
+        mem.lastGatherX = null;
+        mem.lastGatherY = null;
+        mem.lastGatherGx = null;
+        mem.lastGatherGy = null;
+        mem.lastGatherType = null;
+        mem.nextSpawner = null;
+        mem.lastDropoffSpawner = null;
+        mem.lastMineTarget = null;
+        mem.lastMineTargetType = null;
+    }
+    u._collectorPinnedTarget = null;
+    u._collectorPinnedTargetType = null;
+    u._collectorLastGatherX = null;
+    u._collectorLastGatherY = null;
+    u._collectorLastGatherGx = null;
+    u._collectorLastGatherGy = null;
+    u._collectorLastGatherType = null;
+    u._collectorNextSpawner = null;
+    u._collectorLastDropoffSpawner = null;
+    u._lastMineTarget = null;
+    u._astarLastGatherX = null;
+    u._astarLastGatherY = null;
+    u._astarLastGatherGx = null;
+    u._astarLastGatherGy = null;
+    u._astarPinnedTarget = null;
+    u._astarPinnedTargetType = null;
+    u._astarNextSpawner = null;
+    u._astarLastMineTarget = null;
+    u._astarLastMineTargetType = null;
+}
+
+function _resourceCollectorCanWalk(nx, ny) {
+    return hasActiveGoldMineAt(nx, ny) || hasActiveAstarMineAt(nx, ny);
+}
+
 function getWorkerUnitTypeFromWorkerType(workerType) {
-    if (workerType === 'collector') return 'collector';
-    if (workerType === 'astar_collector') return 'astar_collector';
+    let resourceCollector = getResourceCollectorConfigByWorkerType(workerType);
+    if (resourceCollector) return resourceCollector.collectorUnitKey;
     if (workerType === 'salvager') return 'salvager_unit';
     if (workerType === 'builder') return 'builder_unit';
     if (workerType === 'healer') return 'healer_unit';
@@ -1434,7 +1614,7 @@ function getBuilderTransferCooldownTicks(unit = null) {
 
 function getWorkerTypeTransferCooldownTicks(workerType, unit = null) {
     if (workerType === 'builder') return getBuilderTransferCooldownTicks(unit);
-    if (workerType === 'collector' || workerType === 'astar_collector' || workerType === 'salvager' || workerType === 'healer' || workerType === 'researcher') {
+    if (isResourceCollectorWorkerType(workerType) || workerType === 'salvager' || workerType === 'healer' || workerType === 'researcher') {
         return secondsToTicks(getWorkerTransferCooldownSeconds(workerType, unit));
     }
     return secondsToTicks(getWorkerTransferCooldownSeconds(workerType, unit));
@@ -1517,18 +1697,11 @@ function _getTargetPriorityLevel(target) {
 
 // Per-target worker load counters (updated on target set/clear).
 let workerReservedTiles = [];
-const _WORKER_TARGET_LOAD_TYPE_COUNT = 6;
+const _WORKER_TARGET_LOAD_TYPES = [...RESOURCE_COLLECTOR_UNIT_KEYS, 'salvager', 'builder', 'healer', 'researcher'];
+const _WORKER_TARGET_LOAD_TYPE_COUNT = _WORKER_TARGET_LOAD_TYPES.length;
 
 function _workerTypeToLoadIndex(workerType) {
-    switch (workerType) {
-        case 'collector': return 0;
-        case 'astar_collector': return 1;
-        case 'salvager': return 2;
-        case 'builder': return 3;
-        case 'healer': return 4;
-        case 'researcher': return 5;
-    }
-    return -1;
+    return _WORKER_TARGET_LOAD_TYPES.indexOf(workerType);
 }
 
 function _getWorkerTargetTileIndex(target) {
@@ -1684,19 +1857,81 @@ function _pickDistributedWorkerTarget(u, candidates) {
 
 function getPathCanWalkForUnit(unit) {
     if (!unit || unit.isFlying) return null;
-    if (unit.workerType === 'collector') return _collectorCanWalk;
-    if (unit.workerType === 'astar_collector') return _astarCollectorCanWalk;
+    if (isResourceCollectorWorkerType(unit.workerType)) return _resourceCollectorCanWalk;
     if (unit.workerType === 'builder') return _builderCanWalk(unit.owner);
     return null;
 }
 
-function applyWorkerRallyFromSpawner(u, spawner) {
-    if (!u || !spawner || !u.workerType) return false;
-    let rally = getSpawnerRallyTargetWorld(spawner);
-    if (!rally) return false;
-    let rgx = Math.floor(rally.x / TILE), rgy = Math.floor(rally.y / TILE);
-    issueWorkerBlockedAssignFallbackMove(u, rgx, rgy);
-    return true;
+function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
+    _resourceCollectorAssignTarget(u, target, targetType, getResourceTypeConfig('energy'));
+}
+
+function _collectorAssignMine(u, mine, myGx, myGy) {
+    _collectorAssignTarget(u, mine, 'mine', myGx, myGy);
+}
+
+function _astarCollectorCanWalk(nx, ny) {
+    return _resourceCollectorCanWalk(nx, ny);
+}
+
+function _astarCollectorRememberGatherSite(u, target = null) {
+    _rememberResourceCollectorGatherSite(u, target, target && target.type ? target.type : null, getResourceTypeConfig('astar'));
+}
+
+function _astarCollectorGetSearchOrigin(u) {
+    return _getResourceCollectorSearchOrigin(u, getResourceTypeConfig('astar'));
+}
+
+function _astarCollectorAssignTarget(u, target, targetType) {
+    _resourceCollectorAssignTarget(u, target, targetType, getResourceTypeConfig('astar'));
+}
+
+function _astarCollectorAssignMine(u, mine) {
+    _astarCollectorAssignTarget(u, mine, 'astar_mine');
+}
+
+function _astarCollectorFindTarget(u) {
+    _resourceCollectorFindTarget(u, Math.floor(u.x / TILE), Math.floor(u.y / TILE), getResourceTypeConfig('astar'));
+}
+
+// Salvager: find nearest marked building
+function _salvagerFindTarget(u, myGx, myGy) {
+    let owner = u.owner;
+    let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
+    let bestDist = 99999, bestItem = null;
+    let spawnerSet = new Set(collectorSpawners);
+    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
+    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
+    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
+    forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
+        if (!tileRef || !c || !c.item) return false;
+        if (c.owner !== owner || !c.item.markedForSalvage) return false;
+        if (c.item instanceof Barrack || spawnerSet.has(c.item)) return false;
+        if (!_canAssignWorkerTargetExclusive(u, c.item, null)) return false;
+        let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
+        if (d > maxSearch) return false;
+        if (d < bestDist) {
+            bestDist = d;
+            bestItem = c.item;
+        }
+        return false;
+    });
+    if (bestItem) {
+        if (!_setWorkerTarget(u, bestItem, null)) {
+            u.workerState = 'IDLE';
+            u.commandState = CMD_IDLE;
+            return;
+        }
+        let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
+        let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
+        u.path = _requestWorkerPath(u, startGx, startGy, bestItem.gx, bestItem.gy, canWalk, null, true);
+        if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
+        else if (_workerHasPendingAutoRouteToTarget(u, bestItem)) { u.workerState = 'MOVING_TO'; }
+        else { _clearWorkerAutoRoute(u); _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
+    } else {
+        u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
+    }
 }
 
 function _isBuilderRepairTarget(target) {
@@ -1767,198 +2002,6 @@ function _getBuilderWorkTargetNear(worldX, worldY, owner, radius = 22, allowDisa
         }
     }
     return best;
-}
-
-function _collectorAssignTarget(u, target, targetType, myGx, myGy) {
-    if (!_setWorkerTarget(u, target, targetType)) {
-        u.workerState = 'IDLE';
-        u.commandState = CMD_IDLE;
-        return;
-    }
-    let canWalk = targetType === 'mine' ? _collectorCanWalk : null;
-    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-    u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, null, true);
-    if (u.path) {
-        _collectorRememberGatherSite(u, target, targetType);
-        u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING;
-    }
-    else if (_workerHasPendingAutoRouteToTarget(u, target)) {
-        _collectorRememberGatherSite(u, target, targetType);
-        u.workerState = 'MOVING_TO';
-    }
-    else { _clearWorkerAutoRoute(u); _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
-}
-
-function _collectorAssignMine(u, mine, myGx, myGy) {
-    _collectorAssignTarget(u, mine, 'mine', myGx, myGy);
-}
-
-function _astarCollectorCanWalk(nx, ny) {
-    return hasActiveGoldMineAt(nx, ny) || hasActiveAstarMineAt(nx, ny);
-}
-
-function _astarCollectorRememberGatherSite(u, target = null) {
-    if (!u || !target) return;
-    if (Number.isFinite(target.x) && Number.isFinite(target.y)) {
-        u._astarLastGatherX = target.x;
-        u._astarLastGatherY = target.y;
-    }
-    if (Number.isFinite(target.gx) && Number.isFinite(target.gy)) {
-        u._astarLastGatherGx = target.gx;
-        u._astarLastGatherGy = target.gy;
-    }
-}
-
-function _astarCollectorGetSearchOrigin(u) {
-    if (u && Number.isFinite(u._astarLastGatherX) && Number.isFinite(u._astarLastGatherY)) {
-        return { x: u._astarLastGatherX, y: u._astarLastGatherY };
-    }
-    return { x: u.x, y: u.y };
-}
-
-function _astarCollectorAssignTarget(u, target, targetType) {
-    if (!_setWorkerTarget(u, target, targetType)) {
-        u.workerState = 'IDLE';
-        u.commandState = CMD_IDLE;
-        return;
-    }
-    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-    let canWalk = targetType === 'astar_mine' ? _astarCollectorCanWalk : null;
-    u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, canWalk, 'astar_collector', true);
-    if (u.path) {
-        _astarCollectorRememberGatherSite(u, target);
-        u.workerState = 'MOVING_TO_ASTAR';
-        u.pathIndex = 0;
-        u.commandState = CMD_MOVING;
-    } else if (_workerHasPendingAutoRouteToTarget(u, target)) {
-        _astarCollectorRememberGatherSite(u, target);
-        u.workerState = 'MOVING_TO_ASTAR';
-    } else {
-        _clearWorkerAutoRoute(u);
-        _clearWorkerTarget(u);
-        u.workerState = 'IDLE';
-        u.commandState = CMD_IDLE;
-    }
-}
-
-function _astarCollectorAssignMine(u, mine) {
-    _astarCollectorAssignTarget(u, mine, 'astar_mine');
-}
-
-function _astarCollectorFindTarget(u) {
-    if (_isAstarCollectorTargetValid(u._astarPinnedTarget, u._astarPinnedTargetType, u.owner)
-        && _canAssignWorkerTargetExclusive(u, u._astarPinnedTarget, u._astarPinnedTargetType)) {
-        _astarCollectorAssignTarget(u, u._astarPinnedTarget, u._astarPinnedTargetType);
-        return;
-    }
-    u._astarPinnedTarget = null;
-    u._astarPinnedTargetType = null;
-
-    let origin = _astarCollectorGetSearchOrigin(u);
-    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    let anchorSpawner =
-        (u._astarNextSpawner
-            && u._astarNextSpawner.type === 'astar_spawner'
-            && u._astarNextSpawner.owner === u.owner
-            && u._astarNextSpawner.energy > 0
-            && !u._astarNextSpawner.underConstruction)
-            ? u._astarNextSpawner
-            : _findClosestSpawner(u, 'astar_spawner');
-
-    let candidates = [];
-
-    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
-        if (!tileRef || !cell) return false;
-
-        let x = tileRef.x;
-        let y = tileRef.y;
-        let worldX = x * TILE + TILE * 0.5;
-        let worldY = y * TILE + TILE * 0.5;
-        let dx = worldX - origin.x;
-        let dy = worldY - origin.y;
-        let originDistSq = dx * dx + dy * dy;
-
-        let mine = getAstarMineAt(x, y);
-        let item = cell.item;
-
-        let candidate = null;
-        let candidateType = null;
-
-        if (mine && mine.astar > 0) {
-            candidate = mine;
-            candidateType = 'astar_mine';
-        } else if (item && item.type === 'astar_farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
-            candidate = item;
-            candidateType = 'astar_farm';
-        }
-
-        if (!candidate) return false;
-        if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
-
-        let originDist = Math.sqrt(originDistSq);
-        let spawnerDist = anchorSpawner
-            ? Math.hypot(candidate.x - anchorSpawner.x, candidate.y - anchorSpawner.y)
-            : Math.hypot(candidate.x - u.x, candidate.y - u.y);
-
-        candidates.push({
-            target: candidate,
-            targetType: candidateType,
-            dist: spawnerDist + originDist * 0.22,
-            worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
-        });
-        return false;
-    });
-
-    let picked = _pickDistributedWorkerCandidate(u, candidates);
-    if (picked && picked.target) {
-        _astarCollectorAssignTarget(u, picked.target, picked.targetType !== undefined ? picked.targetType : null);
-        return;
-    }
-
-    if (anchorSpawner) u._astarNextSpawner = anchorSpawner;
-    u.workerState = 'IDLE';
-    u.commandState = CMD_IDLE;
-}
-
-// Salvager: find nearest marked building
-function _salvagerFindTarget(u, myGx, myGy) {
-    let owner = u.owner;
-    let maxSearch = _getWorkerAutoSearchDistancePx(u);
-    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    let bestDist = 99999, bestItem = null;
-    let spawnerSet = new Set(collectorSpawners);
-    for (let t of towers) { if (t.owner === owner && t.markedForSalvage && _canAssignWorkerTargetExclusive(u, t, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, t, maxSearchArea)) continue; let d = Math.hypot(t.x - u.x, t.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = t; } } }
-    for (let b of barracks) { if (b.owner === owner && b.markedForSalvage && _canAssignWorkerTargetExclusive(u, b, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, b, maxSearchArea)) continue; let d = Math.hypot(b.x - u.x, b.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = b; } } }
-    for (let s of collectorSpawners) { if (s.owner === owner && s.markedForSalvage && _canAssignWorkerTargetExclusive(u, s, null)) { if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, s, maxSearchArea)) continue; let d = Math.hypot(s.x - u.x, s.y - u.y); if (d > maxSearch) continue; if (d < bestDist) { bestDist = d; bestItem = s; } } }
-    forEachGridCellInAreaRange(u.x, u.y, maxSearchArea, (tileRef, c) => {
-        if (!tileRef || !c || !c.item) return false;
-        if (c.owner !== owner || !c.item.markedForSalvage) return false;
-        if (c.item instanceof Barrack || spawnerSet.has(c.item)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, c.item, null)) return false;
-        let d = Math.hypot(c.item.x - u.x, c.item.y - u.y);
-        if (d > maxSearch) return false;
-        if (d < bestDist) {
-            bestDist = d;
-            bestItem = c.item;
-        }
-        return false;
-    });
-    if (bestItem) {
-        if (!_setWorkerTarget(u, bestItem, null)) {
-            u.workerState = 'IDLE';
-            u.commandState = CMD_IDLE;
-            return;
-        }
-        let canWalk = (nx, ny) => nx === bestItem.gx && ny === bestItem.gy;
-        let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-        u.path = _requestWorkerPath(u, startGx, startGy, bestItem.gx, bestItem.gy, canWalk, null, true);
-        if (u.path) { u.workerState = 'MOVING_TO'; u.pathIndex = 0; u.commandState = CMD_MOVING; }
-        else if (_workerHasPendingAutoRouteToTarget(u, bestItem)) { u.workerState = 'MOVING_TO'; }
-        else { _clearWorkerAutoRoute(u); _clearWorkerTarget(u); u.workerState = 'IDLE'; u.commandState = CMD_IDLE; }
-    } else {
-        u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
-    }
 }
 
 // Builder: find nearest building under construction
@@ -2528,28 +2571,22 @@ function _findClosestSpawner(u, type) {
 
 function _workerReturnPath(u) {
     if (!u) return;
-    let needsReturnPayload = (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager');
+    let resourceCollector = getResourceCollectorConfigByWorkerType(u.workerType);
+    let needsReturnPayload = (!!resourceCollector || u.workerType === 'salvager');
     if (needsReturnPayload && !(Number(u.carryingValue) > 0)) {
         _clearWorkerAutoRoute(u);
         return;
     }
-    let type = u.workerType === 'collector'
-        ? 'spawner'
-        : (u.workerType === 'astar_collector' ? 'astar_spawner' : 'salvager');
-    let canWalk = u.workerType === 'collector'
-        ? _collectorCanWalk
-        : (u.workerType === 'astar_collector' ? _astarCollectorCanWalk : null);
+    let type = resourceCollector
+        ? resourceCollector.collectorBuildingKey
+        : (u.workerType === 'salvager' ? 'salvager' : null);
+    let canWalk = resourceCollector ? _resourceCollectorCanWalk : null;
     let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
-    let forceImmediateRoute = (u.workerType === 'collector' || u.workerType === 'astar_collector')
-        && (Number(u.carryingValue) > 0);
+    let forceImmediateRoute = !!resourceCollector && (Number(u.carryingValue) > 0);
     let cacheOnly = !forceImmediateRoute && (((gameTime + u.id) % workerAiTickDelay) !== 0);
     let route = _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: cacheOnly });
     if (route) {
-        if (u.workerType === 'collector' && route.spawner) {
-            u._collectorNextSpawner = route.spawner;
-        } else if (u.workerType === 'astar_collector' && route.spawner) {
-            u._astarNextSpawner = route.spawner;
-        }
+        if (resourceCollector && route.spawner) _setResourceCollectorNextSpawner(u, route.spawner);
         u.path = route.path || [];
         u.pathIndex = 0; u.commandState = CMD_MOVING;
     } else {
@@ -2601,33 +2638,15 @@ function queueAction(action) {
 
 function clearWorkerTaskMemoryForFreeRetarget(u) {
     if (!u || !u.workerState) return;
-    if (u.workerType === 'collector') {
-        u._collectorPinnedTarget = null;
-        u._collectorPinnedTargetType = null;
-        u._collectorLastGatherX = null;
-        u._collectorLastGatherY = null;
-        u._collectorLastGatherGx = null;
-        u._collectorLastGatherGy = null;
-        u._collectorLastGatherType = null;
-        u._collectorNextSpawner = null;
-        u._collectorLastDropoffSpawner = null;
-        u._lastMineTarget = null;
-    } else if (u.workerType === 'astar_collector') {
-        u._astarLastGatherX = null;
-        u._astarLastGatherY = null;
-        u._astarLastGatherGx = null;
-        u._astarLastGatherGy = null;
-        u._astarPinnedTarget = null;
-        u._astarPinnedTargetType = null;
-        u._astarNextSpawner = null;
-        u._astarLastMineTarget = null;
-        u._astarLastMineTargetType = null;
+    if (isResourceCollectorWorkerType(u.workerType)) {
+        _clearResourceCollectorTaskMemory(u);
     } else if (u.workerType === 'builder') {
         u._builderLastWorkX = null;
         u._builderLastWorkY = null;
         u._builderLastWorkGx = null;
         u._builderLastWorkGy = null;
         u._builderSpawnerTarget = null;
+        u.builderHasMaterial = false;
     } else if (u.workerType === 'healer') {
         u._healerPinnedQueueTarget = null;
         _clearHealerQueueCommit(u);
@@ -2637,12 +2656,30 @@ function clearWorkerTaskMemoryForFreeRetarget(u) {
         u._healerLastWorkGy = null;
         u._healerSpawnerTarget = null;
         u._healerQueueTripCost = 0;
+        u.healerHasMaterial = false;
     } else if (u.workerType === 'researcher') {
         u._researchSpawnerTarget = null;
         u._researcherTripWork = 0;
         u._researcherTripCost = 0;
+        u._researcherMaterialReadyTick = 0;
+        u.researcherHasMaterial = false;
     }
     u._workerNextIdleRetargetTick = gameTime;
+}
+
+function interruptWorkerForManualMove(u) {
+    if (!u || u.dead || !u.workerState) return;
+    _clearWorkerTarget(u, 'manual_rally_change');
+    clearWorkerTaskMemoryForFreeRetarget(u);
+    u.targetUnit = null;
+    u.targetBuilding = null;
+    u.forcedAttackTarget = false;
+    u._forcedTargetLastSeenX = null;
+    u._forcedTargetLastSeenY = null;
+    u.path = null;
+    u.pathIndex = 0;
+    u._pendingPathTarget = null;
+    u.workerState = 'MANUAL_MOVE';
 }
 
 function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
@@ -2652,15 +2689,8 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
     let targetX = gx * TILE + TILE / 2;
     let targetY = gy * TILE + TILE / 2;
 
-    u.targetUnit = null;
-    u.targetBuilding = null;
-    u.forcedAttackTarget = false;
-    u._forcedTargetLastSeenX = null;
-    u._forcedTargetLastSeenY = null;
+    interruptWorkerForManualMove(u);
     u.commandState = CMD_MOVING;
-    _clearWorkerTarget(u);
-    Object.assign(u, { workerState: 'MANUAL_MOVE' });
-    clearWorkerTaskMemoryForFreeRetarget(u);
 
     if (_canUsePathfindRequestBudget(u.owner)) {
         _consumePathfindRequestBudget(u.owner);
