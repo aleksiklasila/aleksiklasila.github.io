@@ -232,8 +232,7 @@ function screenToWorld(sx, sy) {
 function _isCollectorGatherTargetType(targetType) {
     if (!targetType) return false;
     if (targetType === 'drop') return true;
-    for (let resourceKey of RESOURCE_TYPE_LIST) {
-        let cfg = getResourceTypeConfig(resourceKey);
+    for (let cfg of RESOURCE_TYPE_LIST) {
         if (cfg && (targetType === cfg.mineTileType || targetType === cfg.farmKey)) return true;
     }
     return false;
@@ -986,10 +985,9 @@ function initInput() {
                 let forceManualWorkerMove = issuedStructureCommand;
                 // --- Worker targeting logic ---
                 let builderUnits = activeUnits.filter(u => u.workerType === 'builder');
-                let collectorUnitGroups = RESOURCE_TYPE_LIST.map(resourceKey => {
-                    let cfg = getResourceTypeConfig(resourceKey);
+                let collectorUnitGroups = RESOURCE_TYPE_LIST.map(cfg => {
                     return cfg ? {
-                        resourceKey,
+                        resourceKey: cfg.key,
                         cfg,
                         units: activeUnits.filter(u => u.workerType === cfg.collectorUnitKey)
                     } : null;

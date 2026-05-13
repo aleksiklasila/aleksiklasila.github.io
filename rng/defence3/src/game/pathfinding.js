@@ -733,8 +733,8 @@ function canUnitOccupyTile(unit, gx, gy) {
 
     // Collector variants can stand on both active mine types.
     if (isResourceCollectorWorkerType(unit.workerType)) {
-        for (let resourceKey of RESOURCE_TYPE_LIST) {
-            if (hasActiveResourceMineAt(resourceKey, gx, gy)) return true;
+        for (let cfg of RESOURCE_TYPE_LIST) {
+            if (hasActiveResourceMineAt(cfg.key, gx, gy)) return true;
         }
     }
 
