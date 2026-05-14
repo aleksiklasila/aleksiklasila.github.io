@@ -11,7 +11,7 @@ function _researcherTryPickupMaterial(u, target, owner) {
     if (remainingWork <= 0) return false;
 
     let workerBaseFallback = Math.max(1, Math.round(Number((BASE_UNIT_STATS.researcher_unit || {}).researcherDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1));
-    let dps = u.researcherDps || target.getResearcherDps() || workerBaseFallback;
+    let dps = Number((u.preComputed && u.preComputed.researcherDps) || 0) || target.getResearcherDps() || workerBaseFallback;
     let efficiency = getResearchBuildingEfficiency(target);
     let researchWorkPerTrip = Math.max(0.1, dps * efficiency);
     let tripWork = Math.min(remainingWork, researchWorkPerTrip);
@@ -264,7 +264,7 @@ function updateWorkerAI(u) {
                     if (u.workerTransferCooldown > 0) return;
                     // Add Energy to building
                     let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
-                    let dps = u.builderDps || baseBuild;
+                    let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
                     let t = u.workerTarget;
                     let didWork = false;
                     if (t.underConstruction) {
@@ -430,7 +430,7 @@ function updateWorkerAI(u) {
             }
 
             let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
-            let dps = u.builderDps || baseBuild;
+            let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
             let buildStep = 0;
             if (u.builderHasMaterial) {
                 buildStep = dps;
@@ -567,7 +567,7 @@ function updateWorkerAI(u) {
                     let effLvl = getThingEffectiveLevel(sp);
                     let front = getQueuedSpawnInfo(sp.spawnQueue[0], fallbackType, effLvl, owner);
                     let didWork = false;
-                    let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number(u.healerDps) || 1)));
+                    let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1))));
 
                     if (front.energyPaid < front.energyRequired) {
                         front.energyPaid = Math.min(front.energyRequired, front.energyPaid + healWork);
@@ -614,7 +614,7 @@ function updateWorkerAI(u) {
 
                 u.workerState = 'HEALING';
                 let baseHeal = Number((BASE_UNIT_STATS[u.unitType] || {}).healerDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
-                let dps = u.healerDps || baseHeal;
+                let dps = Number((u.preComputed && u.preComputed.healerDps) || 0) || baseHeal;
                 u.workerTarget.energy = Math.min(u.workerTarget.maxEnergy, u.workerTarget.energy + dps);
                 u.healerHasMaterial = false;
                 u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
@@ -767,7 +767,7 @@ function updateWorkerAI(u) {
                     return;
                 }
 
-                let fallbackDps = Math.max(0.1, Number(u.researcherDps || target.getResearcherDps() || 0));
+                let fallbackDps = Math.max(0.1, Number((u.preComputed && u.preComputed.researcherDps) || target.getResearcherDps() || 0));
                 let fallbackWork = Math.max(0.1, fallbackDps * getResearchBuildingEfficiency(target));
                 let tripWork = Number.isFinite(u._researcherTripWork) && u._researcherTripWork > 0 ? u._researcherTripWork : fallbackWork;
                 let remainingWork = Math.max(0, (task.workRequired || 0) - (task.workDone || 0));
@@ -890,10 +890,10 @@ function _getResourceCollectorPinnedTarget(u, resourceCfg = null) {
 }
 
 function _resourceCollectorGetGatherPerTrip(u, owner) {
-    let gatherPerTrip = Number(u.gatherPerTrip);
+    let gatherPerTrip = Number(u && u.preComputed && u.preComputed.gatherPerTrip);
     if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) {
         let effLvl = getUnitEffectiveLevel(u, getUnitBaseLevel(u));
-        gatherPerTrip = getUnitStatForOwner(owner, u.unitType, effLvl, 'gatherPerTrip');
+        gatherPerTrip = Number(u && u.preComputed && u.preComputed.gatherPerTrip);
     }
     if (!Number.isFinite(gatherPerTrip) || gatherPerTrip <= 0) gatherPerTrip = 1;
     return gatherPerTrip;
@@ -1498,7 +1498,7 @@ function _builderCanWalk(owner) {
 }
 
 function getBuilderTripGoldCost(u) {
-    let dps = Number(u && u.builderDps);
+    let dps = Number(u && u.preComputed && u.preComputed.builderDps);
     if (!Number.isFinite(dps) || dps <= 0) dps = 5;
     return Math.max(1, Math.round(dps));
 }
@@ -1602,7 +1602,7 @@ function getWorkerTransferCooldownSeconds(workerType, unit = null) {
     let unitType = (unit && unit.unitType) ? unit.unitType : getWorkerUnitTypeFromWorkerType(workerType);
     let owner = (unit && Number.isFinite(unit.owner)) ? unit.owner : localPlayerId;
     let lvl = unit ? getUnitEffectiveLevel(unit) : 1;
-    let sec = Number.isFinite(lvl) ? getUnitStatForOwner(owner, unitType, lvl, 'transferCooldown') : NaN;
+    let sec = (unit && unit.preComputed) ? Number(unit.preComputed.transferCooldownSec) : NaN;
     if (!Number.isFinite(sec) || sec <= 0) sec = Number((BASE_UNIT_STATS[unitType] || {}).transferCooldown);
     if (!Number.isFinite(sec) || sec <= 0) sec = 0.01;
     return Math.max(0.01, sec);
@@ -1642,7 +1642,7 @@ function shouldRunWorkerIdleRetarget(u, canRunHeavyAi) {
 }
 
 function _getWorkerVisionRangePx(u) {
-    let visTiles = Number(u && u.visionRange);
+    let visTiles = Number(u && u.preComputed && u.preComputed.visionRange);
     if (!Number.isFinite(visTiles) || visTiles <= 0) visTiles = 4;
     return Math.max(TILE, visTiles * TILE);
 }
@@ -2177,7 +2177,7 @@ function _getHealerQueueTripCost(u, target) {
     let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
     let remaining = Math.max(0, Math.floor((front.energyRequired || 0) - (front.energyPaid || 0)));
     if (remaining <= 0) return 0;
-    let healWork = Math.max(1, Math.round(Number(u.healerDps) || 1));
+    let healWork = Math.max(1, Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1)));
     return Math.max(0, Math.min(healWork, remaining));
 }
 

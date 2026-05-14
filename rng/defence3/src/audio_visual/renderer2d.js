@@ -244,6 +244,24 @@ function _getFloorItemEnergyBucket(item) {
     return Math.round(pct * 20);
 }
 
+function _drawTrapMineVisual(g, cx, cy, scale = 1, options = null) {
+    let isDepleted = !!(options && options.isDepleted);
+    let outerColor = isDepleted ? '#565656' : '#666';
+    let innerColor = isDepleted ? '#8c3a3a' : '#c22';
+    let outerRadius = 11 * scale;
+    let innerRadius = 4.5 * scale;
+
+    g.fillStyle = outerColor;
+    g.beginPath();
+    g.arc(cx, cy, outerRadius, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = innerColor;
+    g.beginPath();
+    g.arc(cx, cy, innerRadius, 0, Math.PI * 2);
+    g.fill();
+}
+
 function _buildFloorItemSprite(type, bucket) {
     let c = document.createElement('canvas');
     c.width = TILE;
@@ -274,16 +292,7 @@ function _buildFloorItemSprite(type, bucket) {
         g.fillStyle = '#222';
         g.fillRect(x - 2, y + 1, 4, 7);
     } else if (type === 'mine') {
-        g.fillStyle = '#da0';
-        g.fillRect(2, 2, TILE - 4, TILE - 4);
-        g.fillStyle = '#fff7c2';
-        g.strokeStyle = '#7a5b00';
-        g.lineWidth = 1.25;
-        g.font = 'bold 14px Arial';
-        g.textAlign = 'center';
-        g.textBaseline = 'middle';
-        g.strokeText('\u26A1', x, y + 1);
-        g.fillText('\u26A1', x, y + 1);
+        _drawTrapMineVisual(g, x, y, 1);
     }
     return c;
 }
@@ -522,15 +531,7 @@ function getItemThumbnail(key, size) {
             ctx.fillStyle = '#222';
             ctx.fillRect(cx - 2 * s, cy + 1 * s, 4 * s, 7 * s);
         } else if (key === 'mine') {
-            ctx.fillStyle = '#fd0'; ctx.fillRect(cx - 10 * s, cy - 10 * s, 20 * s, 20 * s);
-            ctx.fillStyle = '#fff7c2';
-            ctx.strokeStyle = '#7a5b00';
-            ctx.lineWidth = Math.max(1, s * 0.9);
-            ctx.font = `${Math.max(11, Math.round(15 * s))}px Arial`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.strokeText('\u26A1', cx, cy + 1 * s);
-            ctx.fillText('\u26A1', cx, cy + 1 * s);
+            _drawTrapMineVisual(ctx, cx, cy, s * 0.95);
         }
     } else if (us) {
         // Unit type

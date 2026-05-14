@@ -95,7 +95,7 @@ function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = nu
 
 function _resolveUnitAstarTileCost(u) {
     if (!u) return 0.1;
-    let unitCost = Number(u.astarCost);
+    let unitCost = Number(u.preComputed && u.preComputed.astarCost);
     if (Number.isFinite(unitCost) && unitCost > 0) return Math.max(0.1, unitCost);
 
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;

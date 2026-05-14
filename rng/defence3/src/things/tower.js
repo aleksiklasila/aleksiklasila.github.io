@@ -15,7 +15,10 @@ class Tower {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         this.baseStats = BASE_CARD_TYPES[type];
-        this.currentStats = { ...this.baseStats };
+        this.preComputedBase = null;
+        this.preComputedEffective = null;
+        this.preComputed = null;
+        this.currentStats = this.baseStats;
 
         // ENERGY
         let baseEnergy = calculateItemStats(type, this.level, owner).maxEnergy;
@@ -46,9 +49,12 @@ class Tower {
 
     updateStats() {
         let effLevel = getThingEffectiveLevel(this);
-        this.currentStats = this.calcStats(effLevel);
+        this.preComputedBase = calculateItemStats(this.type, Math.max(1, this.level), this.owner);
+        this.preComputedEffective = calculateItemStats(this.type, effLevel, this.owner);
+        this.preComputed = this.preComputedEffective;
+        this.currentStats = this.preComputedEffective || this.baseStats;
 
-        let newmaxEnergy = getBuildingStatForOwner(this.owner, this.type, effLevel, 'maxEnergy');
+        let newmaxEnergy = Number(this.preComputedEffective && this.preComputedEffective.maxEnergy);
         if (!Number.isFinite(newmaxEnergy)) newmaxEnergy = this.maxEnergy || 1;
         newmaxEnergy = Math.max(1, Math.floor(newmaxEnergy));
         if (this.isUpgrading && this.upgrademaxEnergy > 0) {
@@ -64,19 +70,7 @@ class Tower {
     }
 
     calcStats(lvl) {
-        let s = { ...this.baseStats };
-        let effLvl = Math.max(1, clampThingLevel(lvl));
-        let dmg = getBuildingStatForOwner(this.owner, this.type, effLvl, 'damage');
-        let blastDamage = getBuildingStatForOwner(this.owner, this.type, effLvl, 'blastDamage');
-        let blastRadius = getBuildingStatForOwner(this.owner, this.type, effLvl, 'blastRadius');
-        let cd = getBuildingStatForOwner(this.owner, this.type, effLvl, 'cd');
-        let vr = getBuildingStatForOwner(this.owner, this.type, effLvl, 'visionRange');
-        if (Number.isFinite(dmg)) s.damage = dmg;
-        if (Number.isFinite(blastDamage)) s.blastDamage = blastDamage;
-        if (Number.isFinite(blastRadius)) s.blastRadius = Math.max(0, blastRadius);
-        if (Number.isFinite(cd)) s.cd = Math.max(0.15, cd);
-        if (Number.isFinite(vr)) s.visionRange = vr;
-        return s;
+        return calculateItemStats(this.type, lvl, this.owner);
     }
 
     update() {

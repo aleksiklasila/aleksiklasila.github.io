@@ -2422,37 +2422,38 @@ function renderUnitInfo(u) {
     let effLvl = getUnitEffectiveLevel(u, lvl);
     let stacks = getUnitStackCount(u);
     let effStacks = Math.max(1, Math.floor(u.effectiveStacks || stacks));
-    let basemaxEnergy = Math.max(1, Math.floor(u.baseLevelmaxEnergy || u.maxEnergy || 1));
-    let energyRatio = u.maxEnergy > 0 ? (u.energy / u.maxEnergy) : 1;
+    let baseStats = u.basePreComputed || u.preComputed || {};
+    let effStats = u.preComputed || baseStats;
+    let basemaxEnergy = Math.max(1, Math.floor(Number(baseStats.maxEnergy) || 1));
+    let effmaxEnergy = Math.max(1, Math.floor(Number(effStats.maxEnergy) || basemaxEnergy));
+    let energyRatio = effmaxEnergy > 0 ? (u.energy / effmaxEnergy) : 1;
     let baseEnergyNow = Math.max(1, Math.floor(basemaxEnergy * energyRatio));
 
-    let baseAtk = Math.max(0, Number(u.baseLevelAttackDamage ?? u.attackDamage) || 0);
-    let baseCd = Math.max(1, Number(u.baseLevelAttackCooldown ?? u.attackCooldown) || 1);
-    let effAtk = Math.max(0, Number(u.attackDamage) || 0);
-    let effCd = Math.max(1, Number(u.attackCooldown) || 1);
+    let baseAtk = Math.max(0, Number(baseStats.attackDamage) || 0);
+    let baseCd = Math.max(1, Number(baseStats.attackCooldown) || 1);
+    let effAtk = Math.max(0, Number(effStats.attackDamage) || 0);
+    let effCd = Math.max(1, Number(effStats.attackCooldown) || 1);
     let baseDps = baseCd > 0 ? (baseAtk / baseCd * TICK_RATE).toFixed(1) : '0';
     let effDps = effCd > 0 ? (effAtk / effCd * TICK_RATE).toFixed(1) : '0';
 
     let slowMul = 1;
     if (u.frozen > 0) slowMul *= 0.5;
     if (u.sandy > 0) slowMul *= 0.5;
-    let baseSpd = (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
-    let effSpd = (Number(u.speed) || 0) * slowMul;
-    let baseAttackRangeRaw = Number(u.baseLevelAttackRange);
-    if (Number.isFinite(baseAttackRangeRaw) && baseAttackRangeRaw > 8) baseAttackRangeRaw = baseAttackRangeRaw / TILE;
-    let baseAttackRange = Math.max(0, Number.isFinite(baseAttackRangeRaw) ? baseAttackRangeRaw : ((Number(u.attackRange) || 0) / TILE));
-    let effAttackRange = Math.max(0, (Number(u.attackRange) || 0) / TILE);
-    let baseVisionRange = Math.max(0, Number(u.baseLevelVisionRangeArea ?? u.baseVisionRangeArea) || (((Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0)) / AREA_UNIT_TILE_EQUIVALENT));
-    let effVisionRange = Math.max(0, Number(u.visionRangeArea) || ((Number(u.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
+    let baseSpd = (Number(baseStats.speed) || 0) * slowMul;
+    let effSpd = (Number(effStats.speed) || 0) * slowMul;
+    let baseAttackRange = Math.max(0, (Number(baseStats.attackRange) || 0) / TILE);
+    let effAttackRange = Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
+    let baseVisionRange = Math.max(0, Number(baseStats.visionRangeArea) || ((Number(baseStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
+    let effVisionRange = Math.max(0, Number(effStats.visionRangeArea) || ((Number(effStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
 
-    html += infoRow(withInfoPanelStatMatrixButton('Energy', { title: `${u.unitType} / Energy`, kind: 'unit', key: u.unitType, statKey: 'energy' }), formatInfoFraction(baseEnergyNow, basemaxEnergy), formatInfoFraction(Math.floor(u.energy), u.maxEnergy));
+    html += infoRow(withInfoPanelStatMatrixButton('Energy', { title: `${u.unitType} / Energy`, kind: 'unit', key: u.unitType, statKey: 'energy' }), formatInfoFraction(baseEnergyNow, basemaxEnergy), formatInfoFraction(Math.floor(u.energy), effmaxEnergy));
     html += infoRow('Level', `L${lvl}`, `L${effLvl}`);
     html += infoRowStacks(stacks, lvl, effStacks, effLvl, stacks);
     html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), formatRangeStatTiles(effAttackRange));
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Visibility`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatAreaDistanceStat(baseVisionRange), formatAreaDistanceStat(effVisionRange));
     if (u.workerType === 'builder') {
-        let baseBuild = Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
-        let effBuild = Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
+        let baseBuild = Number(baseStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
+        let effBuild = Number(effStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
         let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
@@ -2461,8 +2462,8 @@ function renderUnitInfo(u) {
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
         if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'healer') {
-        let baseHeal = Number(u.baseLevelhealerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0;
-        let effHeal = Number(u.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0;
+        let baseHeal = Number(baseStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0;
+        let effHeal = Number(effStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
         let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
@@ -2471,8 +2472,8 @@ function renderUnitInfo(u) {
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
         if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'researcher') {
-        let baseResearch = Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
-        let effResearch = Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
+        let baseResearch = Number(baseStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
+        let effResearch = Number(effStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
         let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
@@ -2481,8 +2482,8 @@ function renderUnitInfo(u) {
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
         if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
-        let baseGather = Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
-        let effGather = Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
+        let baseGather = Number(baseStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
+        let effGather = Number(effStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
         let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
@@ -2569,21 +2570,24 @@ function renderUnitGroupInfo(group) {
         let effLvl = getUnitEffectiveLevel(u, lvl);
         let stacks = getUnitStackCount(u);
         let effStacks = Math.max(1, Math.floor(u.effectiveStacks || stacks));
-        let ratio = u.maxEnergy > 0 ? (u.energy / u.maxEnergy) : 1;
-        let basemaxEnergy = Math.max(1, Math.floor(u.baseLevelmaxEnergy || u.maxEnergy || 1));
+        let baseStats = u.basePreComputed || u.preComputed || {};
+        let effStats = u.preComputed || baseStats;
+        let effmaxEnergy = Math.max(1, Math.floor(Number(effStats.maxEnergy) || 1));
+        let ratio = effmaxEnergy > 0 ? (u.energy / effmaxEnergy) : 1;
+        let basemaxEnergy = Math.max(1, Math.floor(Number(baseStats.maxEnergy) || effmaxEnergy));
         let baseCurEnergy = Math.max(1, Math.floor(basemaxEnergy * ratio));
 
-        let baseAtk = Math.max(0, Number(u.baseLevelAttackDamage ?? u.attackDamage) || 0);
-        let baseCd = Math.max(1, Number(u.baseLevelAttackCooldown ?? u.attackCooldown) || 1);
-        let effAtk = Math.max(0, Number(u.attackDamage) || 0);
-        let effCd = Math.max(1, Number(u.attackCooldown) || 1);
+        let baseAtk = Math.max(0, Number(baseStats.attackDamage) || 0);
+        let baseCd = Math.max(1, Number(baseStats.attackCooldown) || 1);
+        let effAtk = Math.max(0, Number(effStats.attackDamage) || 0);
+        let effCd = Math.max(1, Number(effStats.attackCooldown) || 1);
 
         let slowMul = 1;
         if (u.frozen > 0) slowMul *= 0.5;
         if (u.sandy > 0) slowMul *= 0.5;
 
         totalEnergy += u.energy;
-        totalmaxEnergy += u.maxEnergy;
+        totalmaxEnergy += effmaxEnergy;
         totalbaseEnergy += baseCurEnergy;
         totalBasemaxEnergy += basemaxEnergy;
         totalStacks += stacks;
@@ -2592,37 +2596,35 @@ function renderUnitGroupInfo(group) {
         totalEffAttack += effAtk;
         totalBaseDps += baseCd > 0 ? (baseAtk / baseCd * TICK_RATE) : 0;
         totalEffDps += effCd > 0 ? (effAtk / effCd * TICK_RATE) : 0;
-        totalBaseSpeed += (Number(u.baseLevelSpeed ?? u.speed) || 0) * slowMul;
-        totalEffSpeed += (Number(u.speed) || 0) * slowMul;
-        let baseAttackRangeRaw = Number(u.baseLevelAttackRange);
-        if (Number.isFinite(baseAttackRangeRaw) && baseAttackRangeRaw > 8) baseAttackRangeRaw = baseAttackRangeRaw / TILE;
-        totalBaseRange += Math.max(0, Number.isFinite(baseAttackRangeRaw) ? baseAttackRangeRaw : ((Number(u.attackRange) || 0) / TILE));
-        totalEffRange += Math.max(0, (Number(u.attackRange) || 0) / TILE);
-        totalBaseVision += Math.max(0, Number(u.baseLevelVisionRange ?? u.baseVisionRange ?? u.visionRange) || 0);
-        totalEffVision += Math.max(0, Number(u.visionRange) || 0);
+        totalBaseSpeed += (Number(baseStats.speed) || 0) * slowMul;
+        totalEffSpeed += (Number(effStats.speed) || 0) * slowMul;
+        totalBaseRange += Math.max(0, (Number(baseStats.attackRange) || 0) / TILE);
+        totalEffRange += Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
+        totalBaseVision += Math.max(0, Number(baseStats.visionRange) || 0);
+        totalEffVision += Math.max(0, Number(effStats.visionRange) || 0);
         totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
         totalEffNextStacks += getRequiredStacksForLevel(effLvl + 1);
         baseLevels.add(lvl);
         effLevels.add(effLvl);
 
         if (u.workerType === 'builder') {
-            totalBuildSpeed += (Number(u.baseLevelBuilderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0);
-            totalEffBuildSpeed += (Number(u.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0);
+            totalBuildSpeed += (Number(baseStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0);
+            totalEffBuildSpeed += (Number(effStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0);
             totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
             totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'healer') {
-            totalHealSpeed += (Number(u.baseLevelhealerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0);
-            totalEffHealSpeed += (Number(u.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0);
+            totalHealSpeed += (Number(baseStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0);
+            totalEffHealSpeed += (Number(effStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0);
             totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
             totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'researcher') {
-            totalBuildSpeed += (Number(u.baseLevelResearcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0);
-            totalEffBuildSpeed += (Number(u.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
+            totalBuildSpeed += (Number(baseStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0);
+            totalEffBuildSpeed += (Number(effStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
             totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
             totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
-            totalCollectorPerTrip += (Number(u.baseLevelGatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
-            totalEffCollectorPerTrip += (Number(u.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
+            totalCollectorPerTrip += (Number(baseStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
+            totalEffCollectorPerTrip += (Number(effStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
             totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
             totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'salvager') {
