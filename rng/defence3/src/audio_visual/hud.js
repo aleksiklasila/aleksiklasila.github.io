@@ -10,10 +10,12 @@ const ENERGY_DELTA_WINDOW_OPTIONS = [1, 10, 30, 60];
 const ENERGY_DELTA_DEFAULT_WINDOW_SECONDS = 10;
 const ENERGY_DELTA_LOG_MAX_SECONDS = 70;
 const ASTAR_USAGE_LOG_MAX_SECONDS = 70;
+const PLAYER_STATUS_WORKER_UNIT_ORDER = ['collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit'];
 let infoPanelSectionCollapsed = {
-    energyDelta: false,
-    astarBudget: false,
-    idleWorkers: false
+    energyDelta: true,
+    astarDelta: true,
+    units: true,
+    buildings: true
 };
 let infoPanelEnergyDeltaWindowSecByMetric = {
     total: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
@@ -25,6 +27,7 @@ let infoPanelEnergyDeltaWindowSecByMetric = {
 };
 let infoPanelAstarWindowSecByMetric = {
     total: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
+    astarCollector: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
     king: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
     collector: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
     salvager: ENERGY_DELTA_DEFAULT_WINDOW_SECONDS,
@@ -214,6 +217,34 @@ function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
     return sum / sec;
 }
 
+function recordAstarDelta(owner, delta, unit = null, sourceTag = null) {
+    let d = Number(delta);
+    if (!Number.isFinite(d) || Math.abs(d) <= 1e-9) return;
+
+    let pid = _normalizeOwnerId(owner);
+    if (pid < 0) return;
+
+    let bucket = _ensureAstarLogPlayer(pid);
+    if (!bucket) return;
+
+    let unitType = String((unit && unit.unitType) || 'other');
+    let unitMetric = _astarMetricKeyForUnitType(unitType);
+    let unitId = (unit && Number.isFinite(Number(unit.id))) ? Math.floor(Number(unit.id)) : null;
+    bucket.push({
+        tick: gameTime,
+        owner: pid,
+        unitType,
+        unitMetric,
+        unitId,
+        source: String(sourceTag || ''),
+        used: d < 0 ? Math.abs(d) : 0,
+        delta: d,
+    });
+
+    let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
+    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+}
+
 function buildInfoPanelEnergyDeltaHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
@@ -236,7 +267,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
             + `</div>`;
     };
 
-    let html = _buildCollapsibleInfoSectionTitle('energyDelta', 'Energy Delta');
+    let html = _buildCollapsibleInfoSectionTitle('energyDelta', '⚡ Delta');
     if (!_isInfoSectionCollapsed('energyDelta')) {
         html += row('total', 'Total', '');
         html += row('collect', 'Collect', 'collect');
@@ -249,7 +280,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
     return html;
 }
 
-function _getPlayerAstarUsageRate(owner, windowSeconds, matcherFn) {
+function _getPlayerAstarDeltaRate(owner, windowSeconds, matcherFn) {
     let bucket = _ensureAstarLogPlayer(owner);
     if (!bucket || bucket.length === 0) return 0;
     let sec = Math.max(1, Number(windowSeconds) || ENERGY_DELTA_DEFAULT_WINDOW_SECONDS);
@@ -262,7 +293,8 @@ function _getPlayerAstarUsageRate(owner, windowSeconds, matcherFn) {
         let ev = bucket[i];
         if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoffTick) continue;
         if (matcherFn && !matcherFn(ev)) continue;
-        sum += Math.max(0, Number(ev.used) || 0);
+        let delta = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
+        sum += delta;
     }
     return sum / sec;
 }
@@ -281,58 +313,47 @@ function _prettyUnitTypeLabel(unitType) {
 function buildInfoPanelAstarBudgetHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
-    let fmtBudget = (v) => {
+    let fmtDelta = (v) => {
         if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '0.0';
         return `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
     };
-    let fmtUsage = (v) => {
-        if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '-0.0';
-        return `-${formatBigNumber(Math.abs(v), 1)}`;
-    };
-    let colorBudget = (v) => {
-        if (v < -0.05) return '#f88';
+    let colorDelta = (v) => {
         if (v > 0.05) return '#8f8';
-        return '#9aa';
-    };
-    let colorUsage = (v) => {
-        if (v > 0.05) return '#8cf';
+        if (v < -0.05) return '#f88';
         return '#9aa';
     };
     let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
 
-    let usageRow = (metric, label, matcherFn) => {
+    let deltaRow = (metric, label, matcherFn) => {
         let sec = getAstarWindowSeconds(metric);
-        let value = _getPlayerAstarUsageRate(owner, sec, matcherFn);
+        let value = _getPlayerAstarDeltaRate(owner, sec, matcherFn);
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + secBtn(metric, sec)
             + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
-            + `<span class="info-value" style="color:${colorUsage(value)}">${fmtUsage(value)} ★/s</span>`
+            + `<span class="info-value" style="color:${colorDelta(value)}">${fmtDelta(value)} ★/s</span>`
             + `</div>`;
     };
 
-    let html = _buildCollapsibleInfoSectionTitle('astarBudget', '★ Budget');
-    if (!_isInfoSectionCollapsed('astarBudget')) {
+    let html = _buildCollapsibleInfoSectionTitle('astarDelta', '★ Delta');
+    if (!_isInfoSectionCollapsed('astarDelta')) {
         let totalSec = getAstarWindowSeconds('total');
-        let totalUsedRate = _getPlayerAstarUsageRate(owner, totalSec, null);
-        let stockCur = Math.max(0, Number(_getPlayerAstarBudgetRemaining(owner)) || 0);
-        html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-            + `<span class="info-label" style="color:#bbb;min-width:68px">Stock:</span>`
-            + `<span class="info-value" style="color:#ddd">${formatBigNumber(stockCur, 1)} ★</span>`
-            + `</div>`;
+        let totalDeltaRate = _getPlayerAstarDeltaRate(owner, totalSec, null);
+        let stockCur = Number(_getPlayerAstarBudgetRemaining(owner)) || 0;
         html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + secBtn('total', totalSec)
-            + `<span class="info-label" style="color:#bbb;min-width:68px">Spend:</span>`
-            + `<span class="info-value" style="color:${colorBudget(-totalUsedRate)}">${fmtBudget(-totalUsedRate)} ★/s</span>`
+            + `<span class="info-label" style="color:#bbb;min-width:68px">Total:</span>`
+            + `<span class="info-value" style="color:${colorDelta(totalDeltaRate)}">${fmtDelta(totalDeltaRate)} ★/s</span>`
             + `</div>`;
 
-        html += usageRow('king', 'King', ev => ev.unitMetric === 'king');
-        html += usageRow('collector', 'Collector', ev => ev.unitMetric === 'collector');
-        html += usageRow('salvager', 'Salvager', ev => ev.unitMetric === 'salvager');
-        html += usageRow('builder', 'Builder', ev => ev.unitMetric === 'builder');
-        html += usageRow('healer', 'Healer', ev => ev.unitMetric === 'healer');
-        html += usageRow('researcher', 'Researcher', ev => ev.unitMetric === 'researcher');
+        html += deltaRow('astarCollector', 'A*er', ev => ev.unitType === 'astar_collector');
+        html += deltaRow('king', 'King', ev => ev.unitMetric === 'king');
+        html += deltaRow('collector', 'Collector', ev => ev.unitMetric === 'collector');
+        html += deltaRow('salvager', 'Salvager', ev => ev.unitMetric === 'salvager');
+        html += deltaRow('builder', 'Builder', ev => ev.unitMetric === 'builder');
+        html += deltaRow('healer', 'Healer', ev => ev.unitMetric === 'healer');
+        html += deltaRow('researcher', 'Researcher', ev => ev.unitMetric === 'researcher');
 
-        let special = new Set(['king', 'collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
+        let special = new Set(['king', 'collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
         let otherTypes = new Set();
         for (let u of units) {
             if (!u || u.dead || u.owner !== owner) continue;
@@ -342,99 +363,166 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let sortedOtherTypes = Array.from(otherTypes).sort();
         for (let unitType of sortedOtherTypes) {
             let metric = `u_${unitType}`;
-            html += usageRow(metric, _prettyUnitTypeLabel(unitType), ev => ev.unitType === unitType);
+            html += deltaRow(metric, _prettyUnitTypeLabel(unitType), ev => ev.unitType === unitType);
         }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
 }
 
+function _isInfoPanelUnitIdleLike(u) {
+    if (!u || u.dead) return false;
+    let pathDone = (!u.path || u.pathIndex >= u.path.length);
+    if (u.workerType) return (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING) || (!u.workerTarget && pathDone);
+    if (u.commandState === CMD_IDLE || u.commandState === CMD_HOLDING) return true;
+    return !u.target && pathDone;
+}
+
+function _getOwnedInfoPanelUnits(owner) {
+    let out = [];
+    for (let u of units) {
+        if (!u || u.dead || u.owner !== owner) continue;
+        out.push(u);
+    }
+    return out;
+}
+
+function _compareInfoPanelUnitTypes(a, b) {
+    let ai = PLAYER_STATUS_WORKER_UNIT_ORDER.indexOf(a);
+    let bi = PLAYER_STATUS_WORKER_UNIT_ORDER.indexOf(b);
+    if (ai >= 0 || bi >= 0) return (ai < 0 ? 1e9 : ai) - (bi < 0 ? 1e9 : bi);
+    return _prettyUnitTypeLabel(a).localeCompare(_prettyUnitTypeLabel(b));
+}
+
+function _getOwnedInfoPanelBuildings(owner) {
+    let out = [];
+    let seen = new Set();
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            let cell = grid[y] && grid[y][x];
+            if (!cell || cell.owner !== owner || !cell.item) continue;
+            let item = cell.item;
+            if (seen.has(item)) continue;
+            if (_isGoldMineLikeEntity(item) || _isAstarMineLikeEntity(item)) continue;
+            if (!(Number(item.energy) > 0) && !item.underConstruction) continue;
+            seen.add(item);
+            out.push(item);
+        }
+    }
+    return out;
+}
+
+function _getInfoPanelBuildingTypeKey(e) {
+    if (!e) return 'unknown';
+    if (e.type === 'barrack') return `barrack:${String(e.unitType || '')}`;
+    if (e instanceof Tower) return `tower:${String(e.type || '')}`;
+    return String(e.type || 'unknown');
+}
+
+function _isInfoPanelBuildingIdleLike(e) {
+    if (!e) return false;
+    if (e.underConstruction || e.isUpgrading || e.isStacking || e.isResearching) return false;
+    if (Array.isArray(e.spawnQueue) && e.spawnQueue.length > 0) return false;
+    return true;
+}
+
+function _buildInfoPanelRosterRow(domain, filterKey, label, idleValue, totalValue, noun) {
+    let titleBase = `${String(label).toLowerCase()} ${noun}`;
+    return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
+        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="all" style="cursor:pointer;color:#bbb;width:88px;min-width:88px;max-width:88px;text-align:left;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 6px;font:inherit" title="Select all ${titleBase}">${label}</button>`
+        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="idle" style="cursor:pointer;color:#ddd;width:22px;min-width:35px;max-width:35px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 0;font:inherit" title="Select idle ${titleBase}">Idle</button>`
+        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="one" style="cursor:pointer;color:#ddd;width:22px;min-width:22px;max-width:22px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 0;font:inherit" title="Select one ${titleBase} (prefer idle)">1</button>`
+        + `<span class="info-value" style="color:#ddd;flex:1 1 auto;text-align:right;font-variant-numeric:tabular-nums">${idleValue} / ${totalValue}</span>`
+        + `</div>`;
+}
+
+function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlayerId) {
+    let which = String(domain || '').toLowerCase();
+    let filter = String(filterKey || 'total').toLowerCase();
+    let selectMode = String(mode || 'all').toLowerCase();
+
+    let nextUnits = [];
+    let nextEntities = [];
+    if (which === 'units') {
+        let pool = _getOwnedInfoPanelUnits(owner);
+        if (filter !== 'total') pool = pool.filter(u => String(u.unitType || '').toLowerCase() === filter);
+        let idlePool = pool.filter(_isInfoPanelUnitIdleLike);
+        if (selectMode === 'idle') nextUnits = idlePool;
+        else if (selectMode === 'one') nextUnits = [(idlePool.length > 0 ? idlePool : pool)[Math.floor(Math.random() * (idlePool.length > 0 ? idlePool.length : pool.length))]].filter(Boolean);
+        else nextUnits = pool;
+    } else if (which === 'buildings') {
+        let pool = _getOwnedInfoPanelBuildings(owner);
+        if (filter !== 'total') pool = pool.filter(e => _getInfoPanelBuildingTypeKey(e).toLowerCase() === filter);
+        let idlePool = pool.filter(_isInfoPanelBuildingIdleLike);
+        if (selectMode === 'idle') nextEntities = idlePool;
+        else if (selectMode === 'one') nextEntities = [(idlePool.length > 0 ? idlePool : pool)[Math.floor(Math.random() * (idlePool.length > 0 ? idlePool.length : pool.length))]].filter(Boolean);
+        else nextEntities = pool;
+    }
+
+    if (nextUnits.length <= 0 && nextEntities.length <= 0) return false;
+    selectedUnits = nextUnits;
+    selectedEntities = nextEntities;
+    activeSubGroups = {};
+    updateInfoPanel();
+    return true;
+}
+
 function buildInfoPanelIdleWorkersHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
-    let idleCounts = {
-        total: 0,
-        collector: 0,
-        astarCollector: 0,
-        salvager: 0,
-        researcher: 0,
-        builder: 0,
-        healer: 0
-    };
+    let ownedUnits = _getOwnedInfoPanelUnits(owner);
+    let ownedBuildings = _getOwnedInfoPanelBuildings(owner);
 
-    let totalCounts = {
-        total: 0,
-        collector: 0,
-        astarCollector: 0,
-        salvager: 0,
-        researcher: 0,
-        builder: 0,
-        healer: 0
-    };
-    let hasFastWorkerTotals = false;
-
-    if (owner >= 0 && owner < spatialUnitsComplexPlayerCount && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0 && spatialUnitsComplex.length > 0) {
-        hasFastWorkerTotals = true;
-        let collectorIdx = spatialUnitTypeToIndex.collector;
-        let astarCollectorIdx = spatialUnitTypeToIndex.astar_collector;
-        let salvagerIdx = spatialUnitTypeToIndex.salvager_unit;
-        let researcherIdx = spatialUnitTypeToIndex.researcher_unit;
-        let builderIdx = spatialUnitTypeToIndex.builder_unit;
-        let healerIdx = spatialUnitTypeToIndex.healer_unit;
-
-        let chunkCount = CHUNKS_W * CHUNKS_H;
-        for (let chunkKey = 0; chunkKey < chunkCount; chunkKey++) {
-            let playerBase = (chunkKey * spatialUnitsComplexStridePerChunk) + (owner * spatialUnitsComplexStridePerPlayer);
-            totalCounts.total += spatialUnitsComplex[playerBase] || 0;
-            if (Number.isFinite(collectorIdx)) totalCounts.collector += spatialUnitsComplex[playerBase + 1 + collectorIdx] || 0;
-            if (Number.isFinite(astarCollectorIdx)) totalCounts.astarCollector += spatialUnitsComplex[playerBase + 1 + astarCollectorIdx] || 0;
-            if (Number.isFinite(salvagerIdx)) totalCounts.salvager += spatialUnitsComplex[playerBase + 1 + salvagerIdx] || 0;
-            if (Number.isFinite(researcherIdx)) totalCounts.researcher += spatialUnitsComplex[playerBase + 1 + researcherIdx] || 0;
-            if (Number.isFinite(builderIdx)) totalCounts.builder += spatialUnitsComplex[playerBase + 1 + builderIdx] || 0;
-            if (Number.isFinite(healerIdx)) totalCounts.healer += spatialUnitsComplex[playerBase + 1 + healerIdx] || 0;
+    let unitGroups = new Map();
+    for (let u of ownedUnits) {
+        let key = String(u.unitType || 'other');
+        let entry = unitGroups.get(key);
+        if (!entry) {
+            entry = { label: _prettyUnitTypeLabel(key), total: 0, idle: 0 };
+            unitGroups.set(key, entry);
         }
+        entry.total++;
+        if (_isInfoPanelUnitIdleLike(u)) entry.idle++;
     }
 
-    for (let u of units) {
-        if (!u || u.dead || u.owner !== owner || !u.workerType) continue;
-
-        if (!hasFastWorkerTotals) {
-            totalCounts.total++;
-            if (u.workerType === 'collector') totalCounts.collector++;
-            else if (u.workerType === 'astar_collector') totalCounts.astarCollector++;
-            else if (u.workerType === 'salvager') totalCounts.salvager++;
-            else if (u.workerType === 'researcher') totalCounts.researcher++;
-            else if (u.workerType === 'builder') totalCounts.builder++;
-            else if (u.workerType === 'healer') totalCounts.healer++;
+    let buildingGroups = new Map();
+    for (let e of ownedBuildings) {
+        let key = _getInfoPanelBuildingTypeKey(e);
+        let entry = buildingGroups.get(key);
+        if (!entry) {
+            entry = { label: getEntityGroupLabel(e), total: 0, idle: 0 };
+            buildingGroups.set(key, entry);
         }
-
-        let isIdleLike = (u.workerState === 'IDLE') || (u.commandState === CMD_HOLDING);
-        if (!isIdleLike) continue;
-        idleCounts.total++;
-        if (u.workerType === 'collector') idleCounts.collector++;
-        else if (u.workerType === 'astar_collector') idleCounts.astarCollector++;
-        else if (u.workerType === 'salvager') idleCounts.salvager++;
-        else if (u.workerType === 'researcher') idleCounts.researcher++;
-        else if (u.workerType === 'builder') idleCounts.builder++;
-        else if (u.workerType === 'healer') idleCounts.healer++;
+        entry.total++;
+        if (_isInfoPanelBuildingIdleLike(e)) entry.idle++;
     }
 
-    let row = (filterKey, label, idleValue, totalValue) => {
-        return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-            + `<button type="button" class="info-idle-worker-select-btn" data-filter="${filterKey}" style="cursor:pointer;color:#bbb;width:88px;min-width:88px;max-width:88px;text-align:left;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 6px;font:inherit" title="Select all ${String(label).toLowerCase()} idle workers">${label}</button>`
-            + `<span class="info-value" style="color:#ddd;flex:0 0 84px;min-width:84px;max-width:84px;text-align:right;font-variant-numeric:tabular-nums">${idleValue} / ${totalValue}</span>`
-            + `</div>`;
-    };
+    let unitIdleTotal = ownedUnits.filter(_isInfoPanelUnitIdleLike).length;
+    let buildingIdleTotal = ownedBuildings.filter(_isInfoPanelBuildingIdleLike).length;
 
-    let html = _buildCollapsibleInfoSectionTitle('idleWorkers', 'Idle Workers');
-    if (!_isInfoSectionCollapsed('idleWorkers')) {
-        html += row('total', 'Total', idleCounts.total, totalCounts.total);
-        html += row('collector', 'Collector', idleCounts.collector, totalCounts.collector);
-        html += row('astar_collector', 'A*er', idleCounts.astarCollector, totalCounts.astarCollector);
-        html += row('salvager', 'Salvager', idleCounts.salvager, totalCounts.salvager);
-        html += row('researcher', 'Researcher', idleCounts.researcher, totalCounts.researcher);
-        html += row('builder', 'Builder', idleCounts.builder, totalCounts.builder);
-        html += row('healer', 'Healer', idleCounts.healer, totalCounts.healer);
+    let html = _buildCollapsibleInfoSectionTitle('units', 'Units');
+    if (!_isInfoSectionCollapsed('units')) {
+        html += _buildInfoPanelRosterRow('units', 'total', 'All', unitIdleTotal, ownedUnits.length, 'units');
+        let sortedUnitTypes = Array.from(unitGroups.keys()).sort(_compareInfoPanelUnitTypes);
+        for (let unitType of sortedUnitTypes) {
+            let entry = unitGroups.get(unitType);
+            html += _buildInfoPanelRosterRow('units', unitType, entry.label, entry.idle, entry.total, 'units');
+        }
+    }
+    html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+
+    html += _buildCollapsibleInfoSectionTitle('buildings', 'Buildings');
+    if (!_isInfoSectionCollapsed('buildings')) {
+        html += _buildInfoPanelRosterRow('buildings', 'total', 'All', buildingIdleTotal, ownedBuildings.length, 'buildings');
+        let sortedBuildingTypes = Array.from(buildingGroups.keys()).sort((a, b) => {
+            let aLabel = (buildingGroups.get(a) || {}).label || a;
+            let bLabel = (buildingGroups.get(b) || {}).label || b;
+            return String(aLabel).localeCompare(String(bLabel));
+        });
+        for (let typeKey of sortedBuildingTypes) {
+            let entry = buildingGroups.get(typeKey);
+            html += _buildInfoPanelRosterRow('buildings', typeKey, entry.label, entry.idle, entry.total, 'buildings');
+        }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
@@ -4884,7 +4972,7 @@ function renderGameGraph(metric = graphMetric) {
         },
         yaxis: {
             title: metricDef.yTitle,
-            rangemode: 'tozero',
+            rangemode: 'normal',
             gridcolor: '#2a2a2a',
             zerolinecolor: '#333'
         },

@@ -1135,7 +1135,7 @@ function sampleGameStats() {
     }
     for (let pid of teams) {
         sample.energy[pid] = players[pid] ? players[pid].energy : 0;
-        sample.astar[pid] = players[pid] ? Math.max(0, Number(players[pid].astar) || 0) : 0;
+        sample.astar[pid] = players[pid] ? (Number(players[pid].astar) || 0) : 0;
         sample.pop[pid] = players[pid] ? players[pid].popCount : 0;
         sample.units[pid] = countTeamUnits(pid);
         sample.workers[pid] = workersByTeam[pid] || 0;
@@ -1201,7 +1201,7 @@ function renderGameGraph(metric = graphMetric) {
         },
         yaxis: {
             title: metricDef.yTitle,
-            rangemode: 'tozero',
+            rangemode: 'normal',
             gridcolor: '#2a2a2a',
             zerolinecolor: '#333'
         },

@@ -882,6 +882,8 @@ function _depositResourceCollectorPayload(u, owner, resourceCfg) {
     addPlayerResource(owner, resourceCfg.stockpileKey, amount);
     if (resourceCfg.stockpileKey === 'energy') {
         recordEnergyDelta(owner, 'collect', amount);
+    } else if (resourceCfg.stockpileKey === 'astar' && typeof recordAstarDelta === 'function') {
+        recordAstarDelta(owner, amount, u, 'collect');
     }
     if (owner === localPlayerId && resourceCfg.dropoffSound) playSound(resourceCfg.dropoffSound, u.x, u.y);
 }
