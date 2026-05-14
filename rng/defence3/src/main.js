@@ -102,6 +102,7 @@ function gameTick() {
     }
 
     recalculateUnitEffectiveStats();
+    recalculateThingPrecomputedStats();
 
     // Towers
     for (let t of towers) t.update();
@@ -2584,11 +2585,17 @@ function startGame() {
     for (let p of players) {
         p.energy = STARTING_MONEY;
         p.astar = STARTING_ASTAR;
+        p.resourceMaxValues = {};
+        p.resourceStatMultipliers = {};
         p.popCount = 0;
         p.researchLevels = {};
         p.researchMultipliers = {};
         p.researchQueue = [];
         p.researchTask = null;
+    }
+    for (let playerId = 0; playerId < players.length; playerId++) {
+        _ensurePlayerResourceState(playerId);
+        _updatePlayerResourcePenaltyMultipliers(playerId);
     }
 
     rng = mulberry32(gameSeed);

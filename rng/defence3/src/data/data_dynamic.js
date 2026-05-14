@@ -25,6 +25,136 @@ function refreshStartingResourcesPreviewPrecomputedStats() {
     for (let playerId = 0; playerId < players.length; playerId++) rebuildPrecomputedStatsMapPlayer(playerId);
 }
 
+function _ensurePlayerResourceState(playerId) {
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    if (!players[pid]) return null;
+    let player = players[pid];
+    if (!player.resourceMaxValues || typeof player.resourceMaxValues !== 'object') player.resourceMaxValues = {};
+    if (!PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || typeof PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] !== 'object') PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {};
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
+        if (!stockpileKey) continue;
+        let currentValue = Number(player[stockpileKey]);
+        if (!Number.isFinite(currentValue)) currentValue = 0;
+        let currentMax = Number(player.resourceMaxValues[stockpileKey]);
+        if (!Number.isFinite(currentMax)) currentMax = Math.max(1, currentValue);
+        player.resourceMaxValues[stockpileKey] = Math.max(1, currentMax, currentValue);
+        let multiplier = PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey];
+        if (!Number.isFinite(multiplier) || multiplier < 1) PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey] = 1;
+    }
+    return player;
+}
+
+function _getResourcePenaltySteps(currentValue, maxValue) {
+    let cur = Number(currentValue);
+    let maxSeen = Math.max(1, Number(maxValue) || 0);
+    if (!Number.isFinite(cur) || cur >= 0) return 0;
+    return Math.max(0, Math.abs(cur) / maxSeen);
+}
+
+function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
+    let player = _ensurePlayerResourceState(playerId);
+    if (!player) return 1;
+    let stockpileKey = String(resourceKey || '');
+    if (!stockpileKey) return 1;
+    let maxSeen = Math.max(1, Number(player.resourceMaxValues && player.resourceMaxValues[stockpileKey]) || 0);
+    let currentValue = Number(player[stockpileKey]);
+    if (!Number.isFinite(currentValue) || currentValue >= 0) return 1;
+    let steps = _getResourcePenaltySteps(currentValue, maxSeen);
+    return Math.max(1, Math.pow(2, steps));
+}
+
+function _hasExplicitResourceStatMapping(resourceKey, kind, statKey) {
+    let mapped = (((RESOURCE_PRECOMPUTED_STAT_MAP || {})[resourceKey] || {})[kind] || null);
+    return Array.isArray(mapped) ? mapped.includes(statKey) : false;
+}
+
+function _getResourceKeyForPrecomputedStat(kind, statKey) {
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
+        if (!stockpileKey || stockpileKey === 'energy') continue;
+        if (_hasExplicitResourceStatMapping(stockpileKey, kind, statKey)) return stockpileKey;
+    }
+    return 'energy';
+}
+
+function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
+    let numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return numericValue;
+    let resourceKey = _getResourceKeyForPrecomputedStat(kind, statKey);
+    let multiplier = _getPlayerResourcePenaltyMultiplier(playerId, resourceKey);
+    if (!(multiplier > 1)) return numericValue;
+    return RESEARCH_DECREASE_STATS[statKey]
+        ? (numericValue * multiplier)
+        : (numericValue / multiplier);
+}
+
+function _updatePlayerResourcePenaltyMultipliers(playerId) {
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    let player = _ensurePlayerResourceState(pid);
+    if (!player) return [];
+    let changedResources = [];
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
+        if (!stockpileKey) continue;
+        let currentValue = Number(player[stockpileKey]);
+        if (!Number.isFinite(currentValue)) currentValue = 0;
+        let prevMax = Math.max(1, Number(player.resourceMaxValues[stockpileKey]) || 0);
+        let nextMax = Math.max(1, prevMax, currentValue);
+        if (nextMax !== prevMax) player.resourceMaxValues[stockpileKey] = nextMax;
+        let prevMultiplier = Math.max(1, Number((PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || {})[stockpileKey]) || 1);
+        let nextMultiplier = _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
+        PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey] = nextMultiplier;
+        if (nextMultiplier !== prevMultiplier) changedResources.push(stockpileKey);
+    }
+    return changedResources;
+}
+
+function _setPlayerResourceValue(playerId, resourceKey, value) {
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    let player = _ensurePlayerResourceState(pid);
+    if (!player) return 0;
+    let stockpileKey = String(resourceKey || '');
+    if (!stockpileKey) return 0;
+    let nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) nextValue = 0;
+    player[stockpileKey] = nextValue;
+    let changedResources = _updatePlayerResourcePenaltyMultipliers(pid);
+    for (let changedResourceKey of changedResources) rebuildPrecomputedStatsMapPlayerResource(pid, changedResourceKey);
+    return player[stockpileKey];
+}
+
+function addPlayerResource(playerId, resourceKey, delta) {
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    let player = _ensurePlayerResourceState(pid);
+    if (!player) return 0;
+    let stockpileKey = String(resourceKey || '');
+    if (!stockpileKey) return 0;
+    let amount = Number(delta);
+    if (!Number.isFinite(amount) || amount === 0) return Number(player[stockpileKey]) || 0;
+    return _setPlayerResourceValue(pid, stockpileKey, (Number(player[stockpileKey]) || 0) + amount);
+}
+
+function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey) {
+    if (!ensurePrecomputedStatsMap()) return;
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    let stockpileKey = String(resourceKey || '');
+    if (!stockpileKey) return;
+
+    for (let unitType in PRECOMPUTED_STATS_MAP.unit) {
+        for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
+            if (_getResourceKeyForPrecomputedStat('unit', statKey) !== stockpileKey) continue;
+            rebuildPrecomputedStatsMapPlayerThingStat(pid, 'unit', unitType, statKey);
+        }
+    }
+    for (let buildingKey in PRECOMPUTED_STATS_MAP.building) {
+        for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
+            if (_getResourceKeyForPrecomputedStat('building', statKey) !== stockpileKey) continue;
+            rebuildPrecomputedStatsMapPlayerThingStat(pid, 'building', buildingKey, statKey);
+        }
+    }
+}
+
 function getStartingThingId(kind, key) {
     return `${kind}:${key}`;
 }
@@ -235,6 +365,7 @@ function createEditableRuntimeConfigSnapshot() {
             CONFIG_MAX_POP,
             TICK_RATE,
             LOCKSTEP_PIPELINE_MIN,
+            THING_STATS_RECALC_INTERVAL_SECONDS,
             UNIT_EFFECTIVE_STATS_RECALC_TICKS,
             UNIT_COLLISION_RECALC_TICKS,
             ASTAR_MAX_ITERS_LIMIT,
@@ -313,6 +444,7 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-map-type', MAP_TYPE);
     setValue('cfg-tick-rate', TICK_RATE);
     setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
+    setValue('cfg-thing-stats-seconds', THING_STATS_RECALC_INTERVAL_SECONDS);
     setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
     setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
     setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
@@ -362,6 +494,9 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     let nextTickRate = Number(cfg.TICK_RATE);
     let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
     applyTimingConfig(nextTickRate, nextPipelineDelay);
+    if (Number.isFinite(Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS))) {
+        THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
+    }
     if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
         UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     }
@@ -527,6 +662,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
+    cfg.THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, getNumber('cfg-thing-stats-seconds', cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
     cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
     cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
@@ -559,6 +695,7 @@ function applyMainMenuControlsToRuntimeState() {
     CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
     MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
     MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
+    THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS) || THING_STATS_RECALC_INTERVAL_SECONDS));
     UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS) || UNIT_EFFECTIVE_STATS_RECALC_TICKS)));
     UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_COLLISION_RECALC_TICKS) || UNIT_COLLISION_RECALC_TICKS)));
     ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
@@ -575,7 +712,7 @@ function createMainMenuSettingsSnapshot() {
     let numberIds = [
         'cfg-tick-rate', 'cfg-pipeline-delay', 'cfg-mapsize', 'cfg-max-pop', 'cfg-starting-energy', 'cfg-starting-astar',
         'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
-        'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
+        'cfg-max-research-level', 'cfg-thing-stats-seconds', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
     ];
     let selectIds = ['cfg-gamemode', 'cfg-map-type'];
     let checkboxIds = ['cfg-full-vis'];
@@ -2772,7 +2909,8 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
     for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'unit', key, statKey);
-        values[statKey] = arr ? arr[rLvl] : normalizePrecomputedUnitStatValue(key, statKey, NaN);
+        let rawValue = arr ? arr[rLvl] : normalizePrecomputedUnitStatValue(key, statKey, NaN);
+        values[statKey] = _applyPlayerResourcePenaltyToStatValue(playerId, 'unit', statKey, rawValue);
     }
 
     let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
@@ -2811,7 +2949,8 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
     for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'building', key, statKey);
-        values[statKey] = arr ? arr[rLvl] : NaN;
+        let rawValue = arr ? arr[rLvl] : NaN;
+        values[statKey] = _applyPlayerResourcePenaltyToStatValue(playerId, 'building', statKey, rawValue);
     }
 
     let maxEnergy = Number(values.maxEnergy);
@@ -2858,6 +2997,8 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
 
     PRECOMPUTED_STATS_MAP_PLAYER.length = Array.isArray(players) ? players.length : PRECOMPUTED_STATS_MAP_PLAYER.length;
     for (let playerId of targetIds) {
+        _ensurePlayerResourceState(playerId);
+        _updatePlayerResourcePenaltyMultipliers(playerId);
         let playerEntry = { unit: {}, building: {} };
         for (let unitType in PRECOMPUTED_STATS_MAP.unit) {
             playerEntry.unit[unitType] = [];
@@ -2960,7 +3101,8 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
 
         let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
         let source = ((((PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [])[lvl] || {})[statKey] || null);
-        let value = source ? source[rLvl] : (branch === 'unit' ? normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN) : NaN);
+        let rawValue = source ? source[rLvl] : (branch === 'unit' ? normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN) : NaN);
+        let value = _applyPlayerResourcePenaltyToStatValue(pid, branch, statKey, rawValue);
         if (branch === 'unit') _applyUnitPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
         else _applyBuildingPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
     }
@@ -3216,9 +3358,8 @@ function getResearchBuildingEfficiency(researchBuilding) {
 }
 
 function getResearchCurrentStatValue(playerId, kind, key, statKey) {
-    let rLevel = getPlayerResearchLevel(playerId, kind, key, statKey);
-    if (kind === 'unit') return getUnitStatFromMap(key, 1, statKey, rLevel);
-    if (kind === 'building') return getBuildingStatFromMap(key, 1, statKey, rLevel);
+    if (kind === 'unit') return getUnitStatForOwner(playerId, key, 1, statKey);
+    if (kind === 'building') return getBuildingStatForOwner(playerId, key, 1, statKey);
     return NaN;
 }
 
@@ -3402,9 +3543,9 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let prevEnergy = b.energy;
         let lvl = getThingEffectiveLevel(b);
         b.preComputedBase = calculateItemStats(`barrack_${b.unitType}`, Math.max(1, b.level || lvl), b.owner);
-        b.preComputedEffective = calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner);
+        b.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(b.preComputedBase, calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner));
         b.preComputed = b.preComputedEffective;
-        b.maxEnergy = Math.max(1, Math.floor((b.preComputedEffective && b.preComputedEffective.maxEnergy) || 1));
+        b.maxEnergy = Math.max(1, Math.floor((b.preComputedBase && b.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') b.energy = Math.max(1, Math.min(prevEnergy, b.maxEnergy));
     }
 
@@ -3413,9 +3554,9 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let prevEnergy = s.energy;
         let lvl = getThingEffectiveLevel(s);
         s.preComputedBase = calculateItemStats(s.type, Math.max(1, s.level || lvl), s.owner);
-        s.preComputedEffective = calculateItemStats(s.type, lvl, s.owner);
+        s.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(s.preComputedBase, calculateItemStats(s.type, lvl, s.owner));
         s.preComputed = s.preComputedEffective;
-        s.maxEnergy = Math.max(1, Math.floor((s.preComputedEffective && s.preComputedEffective.maxEnergy) || 1));
+        s.maxEnergy = Math.max(1, Math.floor((s.preComputedBase && s.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') s.energy = Math.max(1, Math.min(prevEnergy, s.maxEnergy));
     }
 
@@ -3478,6 +3619,14 @@ function computeUnitLevelScaledStats(unit, level) {
     return (((PRECOMPUTED_STATS_MAP_PLAYER[owner] || {}).unit || {})[unitType] || [])[lvl] || _getUnitPlayerPrecomputedEntry(owner, unitType, lvl);
 }
 
+function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
+    if (!effectiveStats || typeof effectiveStats !== 'object') return effectiveStats;
+    let baseMaxEnergy = Number(baseStats && baseStats.maxEnergy);
+    if (!Number.isFinite(baseMaxEnergy)) return effectiveStats;
+    if (Number(effectiveStats.maxEnergy) === baseMaxEnergy) return effectiveStats;
+    return { ...effectiveStats, maxEnergy: baseMaxEnergy };
+}
+
 function applyUnitLevelScaling(unit, level) {
     if (!unit) return;
     let lvl = Math.max(1, Math.floor(level || 1));
@@ -3495,11 +3644,11 @@ function applyUnitLevelScaling(unit, level) {
     let prevEnergyAbs = Number(unit.energy);
     if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
     unit.preComputedBase = scaled;
-    unit.preComputedEffective = scaled;
+    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.basePreComputed = unit.preComputedBase;
     unit.preComputed = unit.preComputedEffective;
-    unit.maxEnergy = unit.preComputedEffective.maxEnergy;
-    unit.energy = Math.max(1, Math.min(unit.preComputedEffective.maxEnergy, Math.floor(prevEnergyAbs)));
+    unit.maxEnergy = unit.preComputedBase.maxEnergy;
+    unit.energy = Math.max(1, Math.min(unit.preComputedBase.maxEnergy, Math.floor(prevEnergyAbs)));
 
     unit.baseLevel = lvl;
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
@@ -3512,11 +3661,11 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     let scaled = computeUnitLevelScaledStats(unit, lvl);
     if (!scaled) return;
 
-    unit.preComputedEffective = scaled;
+    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.preComputed = unit.preComputedEffective;
-    unit.maxEnergy = unit.preComputedEffective.maxEnergy;
-    if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.preComputedEffective.maxEnergy);
-    unit.energy = Math.max(1, Math.min(unit.preComputedEffective.maxEnergy, Math.floor(unit.energy)));
+    unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;
+    if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
+    unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
 
     unit.effectiveLevel = lvl;
 }

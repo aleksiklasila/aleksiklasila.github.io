@@ -25,6 +25,7 @@ let CONFIG_MAX_POP = 200;
 let TICK_RATE = 20; // ticks per second (menu configurable)
 let TICK_MS = 1000 / TICK_RATE;
 let UNIT_EFFECTIVE_STATS_RECALC_TICKS = 5;
+let THING_STATS_RECALC_INTERVAL_SECONDS = 3;
 let UNIT_COLLISION_RECALC_TICKS = 5;
 let ASTAR_MAX_ITERS_LIMIT = 18000;
 let ASTAR_ITER_BUDGET_PER_PLAYER_TICK = 9000;
@@ -620,6 +621,12 @@ const RESEARCHABLE_UNIT_STATS = {
 
 const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
 const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+const RESOURCE_PRECOMPUTED_STAT_MAP = {
+    astar: {
+        unit: ['speed'],
+        building: []
+    }
+};
 
 function getSpawnedUnitTypeForBuildingKey(key) {
     if (!key) return null;
@@ -687,6 +694,7 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
 
 let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
 let PRECOMPUTED_STATS_MAP_PLAYER = [];
+let PLAYER_RESOURCE_STAT_MULTIPLIERS = [];
 let PRECOMPUTED_STATS_READY = false;
 
 // Spatial hash (10x10 tile chunks)

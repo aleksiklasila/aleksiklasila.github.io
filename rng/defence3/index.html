@@ -257,6 +257,10 @@
             <div class="help-mode">Host controls these settings for solo and multiplayer.</div>
             <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
                 <div class="lobby-setting-row" style="margin:0;">
+                    <label for="cfg-thing-stats-seconds">Thing Stats Refresh Interval (seconds)</label>
+                    <input id="cfg-thing-stats-seconds" type="number" min="0.05" max="600" step="0.05" value="3" style="width:72px" title="How often each thing refreshes its precomputed stats reference, staggered across ticks">
+                </div>
+                <div class="lobby-setting-row" style="margin:0;">
                     <label for="cfg-unit-eff-stats-ticks">Unit Stats Update Delay (ticks)</label>
                     <input id="cfg-unit-eff-stats-ticks" type="number" min="1" max="240" value="10" style="width:72px" title="How many ticks between effective-stat recalculations per unit">
                 </div>

@@ -36,6 +36,55 @@ let infoPanelAstarWindowSecByMetric = {
 let energyDeltaEventLogByPlayer = Array.from({ length: 8 }, () => []);
 let astarUsageEventLogByPlayer = Array.from({ length: 8 }, () => []);
 
+function _lerpChannel(a, b, t) {
+    let mix = Math.max(0, Math.min(1, Number(t) || 0));
+    return Math.round(a + ((b - a) * mix));
+}
+
+function _rgbToCss(rgb) {
+    return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+}
+
+function _lerpRgb(a, b, t) {
+    return {
+        r: _lerpChannel(a.r, b.r, t),
+        g: _lerpChannel(a.g, b.g, t),
+        b: _lerpChannel(a.b, b.b, t),
+    };
+}
+
+function _getHudResourceValueColor(owner, resourceKey, value) {
+    let player = players[Math.max(0, Math.floor(Number(owner) || 0))] || null;
+    let maxSeen = Math.max(1, Number(player && player.resourceMaxValues && player.resourceMaxValues[resourceKey]) || 0);
+    let currentValue = Number(value);
+    if (!Number.isFinite(currentValue)) currentValue = 0;
+
+    let red = { r: 255, g: 96, b: 96 };
+    let yellow = { r: 255, g: 220, b: 96 };
+    let green = { r: 112, g: 232, b: 112 };
+
+    if (currentValue < 0) {
+        let debtMix = Math.max(0, Math.min(1, 1 - (Math.abs(currentValue) / maxSeen)));
+        return _rgbToCss(_lerpRgb(red, yellow, debtMix));
+    }
+
+    let gainMix = Math.max(0, Math.min(1, currentValue / maxSeen));
+    return _rgbToCss(_lerpRgb(yellow, green, gainMix));
+}
+
+function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor, value) {
+    if (!el) return;
+    let numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) numericValue = 0;
+    let flooredValue = Math.floor(numericValue);
+    let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
+    let html = `<span style="color:${glyphColor}">${glyph}</span> <span style="color:${valueColor}">${formatBigNumber(flooredValue)}</span>`;
+    if (_hudCache[cacheKey] !== html) {
+        _hudCache[cacheKey] = html;
+        el.innerHTML = html;
+    }
+}
+
 function _normalizeOwnerId(owner) {
     let idx = Math.floor(Number(owner));
     if (!Number.isFinite(idx) || idx < 0 || idx >= players.length) return -1;
@@ -412,7 +461,7 @@ function _getInfoPanelUnitStateHelpText(u) {
 
     if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
         if (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING || u.commandState === CMD_ATTACKING) {
-            return 'Moving slower because your A* stockpile is empty. While out of A*, movement speed is reduced to 33% until A* income recovers.';
+            return 'Moving under A* debt. Negative A* now reduces unit speed through the owner precomputed stat map until the stockpile recovers.';
         }
     }
 
@@ -682,10 +731,9 @@ function updateHUD() {
     }
     let p = players[localPlayerId];
     let energy = Math.floor(p.energy);
-    if (_hudCache.energy !== energy) { _hudCache.energy = energy; _hudEls.energy.textContent = `⚡ ${formatBigNumber(energy)}`; }
-    let astarCur = Math.max(0, Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId)));
-    let astarText = `★ ${formatBigNumber(astarCur)}`;
-    if (_hudCache.astarText !== astarText && _hudEls.astar) { _hudCache.astarText = astarText; _hudEls.astar.textContent = astarText; }
+    _renderHudResource(_hudEls.energy, 'energy', localPlayerId, 'energy', '⚡', '#da0', energy);
+    let astarCur = Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId));
+    _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur);
     let playerCap = getPlayerPopCap(localPlayerId);
     let cfgCap = getConfiguredMaxPop();
     let popText = `Pop: ${String(p.popCount)}/${String(playerCap)}/${String(cfgCap)}`;
@@ -1746,7 +1794,7 @@ function renderResearchWorkProgressRow(workDone, workRequired) {
 }
 
 function getLevelHtml(obj) {
-    let actualLvl = stackCountToLevel(obj.stacks || 1);
+    let actualLvl = getThingBaseLevel(obj, stackCountToLevel(obj && obj.stacks || 1));
     if (obj.underConstruction) actualLvl = 0;
     let effLvl = getDisplayLevel(obj);
     let potLvl = obj.underConstruction

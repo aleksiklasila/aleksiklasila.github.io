@@ -255,17 +255,22 @@ function _runAdjacencyRecalculation() {
                 obj.effectiveGroupSize = groupSize;
                 obj.effectiveAreaMult = areaMult;
                 let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
-                let stats = calculateItemStats(statsType, obj.effectiveLevel, obj.owner);
+                let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
+                let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner));
+                obj.preComputedBase = baseStats;
+                obj.preComputedEffective = stats;
+                obj.preComputed = obj.preComputedEffective;
                 if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
                     obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
                     if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
                     obj.energy = Math.min(obj.energy, obj.maxEnergy);
                     if (stats.damage) obj.damage = stats.damage;
                 } else {
-                    let ratio = obj.maxEnergy > 0 ? obj.energy / obj.maxEnergy : 1;
-                    obj.maxEnergy = stats.maxEnergy;
+                    let prevEnergy = Number(obj.energy);
+                    if (!Number.isFinite(prevEnergy)) prevEnergy = Number(baseStats.maxEnergy) || 1;
+                    obj.maxEnergy = baseStats.maxEnergy;
                     if (stats.damage) obj.damage = stats.damage;
-                    obj.energy = obj.maxEnergy * ratio;
+                    obj.energy = Math.max(1, Math.min(obj.maxEnergy, Math.floor(prevEnergy)));
                 }
                 updateItemTextCache(obj);
             }
@@ -304,8 +309,107 @@ function getUnitEffectiveStatsRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_EFFECTIVE_STATS_RECALC_TICKS) || 1)));
 }
 
+function getThingStatsRecalcIntervalTicks() {
+    let seconds = Number(THING_STATS_RECALC_INTERVAL_SECONDS);
+    if (!Number.isFinite(seconds)) seconds = 3;
+    return Math.max(1, Math.min(36000, Math.floor(seconds * TICK_RATE) || 1));
+}
+
 function getUnitCollisionRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
+}
+
+function _seedThingStatsRecalcCounter(item, intervalTicks, fallbackSeed = 0) {
+    let seed = 0;
+    if (item && Number.isFinite(item.id)) seed = (Math.floor(item.id) * 1103515245) >>> 0;
+    else if (item && Number.isFinite(item.gx) && Number.isFinite(item.gy)) seed = (((Math.floor(item.gx) + 1) * 73856093) ^ ((Math.floor(item.gy) + 1) * 19349663)) >>> 0;
+    else seed = (Math.floor(fallbackSeed) * 83492791) >>> 0;
+    return intervalTicks > 1 ? (seed % intervalTicks) : 0;
+}
+
+function _refreshThingPrecomputedStats(item) {
+    if (!item || item.dead) return;
+
+    if (item.unitType && Number.isFinite(item.owner)) {
+        let baseLevel = getUnitBaseLevel(item);
+        let effectiveLevel = getUnitEffectiveLevel(item, baseLevel);
+        applyUnitLevelScaling(item, baseLevel);
+        applyUnitEffectiveScaling(item, effectiveLevel);
+        return;
+    }
+
+    if (item.updateStats) {
+        item.updateStats();
+        return;
+    }
+
+    let statsType = (item.type === 'barrack' && item.unitType) ? ('barrack_' + item.unitType) : item.type;
+    if (!statsType) return;
+
+    let baseLevel = getThingBaseLevel(item);
+    let effectiveLevel = getThingEffectiveLevel(item, baseLevel);
+    item.preComputedBase = calculateItemStats(statsType, baseLevel, item.owner);
+    item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, effectiveLevel, item.owner));
+    item.preComputed = item.preComputedEffective;
+
+    if (item.isUpgrading && item.upgrademaxEnergy > 0) {
+        item.maxEnergy = Math.max(1, Math.floor(item.upgrademaxEnergy));
+        if (!Number.isFinite(item.energy) || item.energy < 1) item.energy = 1;
+        item.energy = Math.min(item.energy, item.maxEnergy);
+        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
+    } else {
+        let prevEnergy = Number(item.energy);
+        if (!Number.isFinite(prevEnergy)) prevEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || 1;
+        item.maxEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || item.maxEnergy;
+        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
+        item.energy = Math.max(1, Math.min(item.maxEnergy, Math.floor(prevEnergy)));
+    }
+
+    updateItemTextCache(item);
+}
+
+function recalculateThingPrecomputedStats() {
+    let intervalTicks = getThingStatsRecalcIntervalTicks();
+    let selectedUnitSet = (selectedUnits && selectedUnits.length > 0) ? new Set(selectedUnits) : null;
+    let selectedEntitySet = (selectedEntities && selectedEntities.length > 0) ? new Set(selectedEntities) : null;
+    let seen = new Set();
+    let seedCursor = 0;
+
+    let processThing = (item, isSelected = false) => {
+        if (!item || item.dead || seen.has(item)) return;
+        seen.add(item);
+
+        if (!Number.isFinite(item._thingStatsRecalcCounter)) {
+            item._thingStatsRecalcCounter = _seedThingStatsRecalcCounter(item, intervalTicks, ++seedCursor);
+        } else if (item._thingStatsRecalcCounter > intervalTicks) {
+            item._thingStatsRecalcCounter = intervalTicks;
+        }
+
+        let needsImmediate = !(item.preComputed && Number.isFinite(item.preComputed.maxEnergy));
+        if (!needsImmediate && isSelected) needsImmediate = true;
+
+        if (needsImmediate || item._thingStatsRecalcCounter <= 0) {
+            _refreshThingPrecomputedStats(item);
+            item._thingStatsRecalcCounter = intervalTicks;
+        } else {
+            item._thingStatsRecalcCounter--;
+        }
+    };
+
+    for (let u of units) processThing(u, !!(selectedUnitSet && selectedUnitSet.has(u)));
+    for (let t of towers) processThing(t, !!(selectedEntitySet && selectedEntitySet.has(t)));
+    for (let b of barracks) processThing(b, !!(selectedEntitySet && selectedEntitySet.has(b)));
+    for (let s of collectorSpawners) processThing(s, !!(selectedEntitySet && selectedEntitySet.has(s)));
+
+    for (let y = 0; y < GRID_H; y++) {
+        let row = grid[y];
+        if (!row) continue;
+        for (let x = 0; x < GRID_W; x++) {
+            let cell = row[x];
+            if (!cell || !cell.item) continue;
+            processThing(cell.item, !!(selectedEntitySet && selectedEntitySet.has(cell.item)));
+        }
+    }
 }
 
 function recalculateUnitEffectiveStats() {

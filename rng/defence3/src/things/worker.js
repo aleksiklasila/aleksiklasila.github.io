@@ -20,20 +20,8 @@ function _researcherTryPickupMaterial(u, target, owner) {
     let cost = Math.max(0, Number(task.cost) || 0);
     let costPerWork = required > 0 ? (cost / required) : 0;
     let tripCost = Math.max(0, tripWork * costPerWork);
-    let available = Math.max(0, Number(players[owner].energy) || 0);
-
-    if (tripCost > available + 1e-9) {
-        if (!(costPerWork > 0)) return false;
-        tripWork = Math.min(tripWork, available / costPerWork);
-        if (!(tripWork > 1e-6)) {
-            u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
-            return false;
-        }
-        tripCost = Math.max(0, tripWork * costPerWork);
-    }
-
     if (tripCost > 0) {
-        players[owner].energy = Math.max(0, players[owner].energy - tripCost);
+        addPlayerResource(owner, 'energy', -tripCost);
         recordEnergyDelta(owner, 'research', -tripCost);
     }
 
@@ -170,7 +158,7 @@ function updateWorkerAI(u) {
                 if (u.carryingValue > 0) {
                     if (u.workerTransferCooldown > 0) return;
                     let closest = _findClosestSpawner(u, 'salvager');
-                    players[owner].energy += u.carryingValue;
+                    addPlayerResource(owner, 'energy', u.carryingValue);
                     recordEnergyDelta(owner, 'salvage', u.carryingValue);
                     u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
                     if (owner === localPlayerId) playSound('salvage_collected', u.x, u.y);
@@ -242,17 +230,16 @@ function updateWorkerAI(u) {
                     if (!u.builderHasMaterial) {
                         let route = getSpawnerRoute('builder_spawner', null);
                         let tripCost = getBuilderTripGoldCost(u);
-                        if (route && players[owner].energy >= tripCost) {
+                        if (route) {
                             u.workerState = 'RETURNING_FOR_GOLD';
                             u.path = route.path;
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                             u._builderSpawnerTarget = route.spawner;
                             return;
                         } else {
-                            if (players[owner].energy < tripCost) u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
-                            if (u.workerTransferCooldown <= 0 && players[owner].energy >= tripCost) {
+                            if (u.workerTransferCooldown <= 0) {
                                 // No route available: buy material on-site and keep full builder throughput.
-                                players[owner].energy -= tripCost;
+                                addPlayerResource(owner, 'energy', -tripCost);
                                 recordEnergyDelta(owner, 'builder', -tripCost);
                                 u.builderHasMaterial = true;
                                 u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
@@ -345,13 +332,12 @@ function updateWorkerAI(u) {
                         // Not done yet - loop back to spawner for more gold, then come back
                         let route = getSpawnerRoute('builder_spawner', null);
                         let tripCost = getBuilderTripGoldCost(u);
-                        if (route && players[owner].energy >= tripCost) {
+                        if (route) {
                             u.workerState = 'RETURNING_FOR_GOLD';
                             u.path = route.path;
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                             u._builderSpawnerTarget = route.spawner;
                         } else {
-                            if (players[owner].energy < tripCost) u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                             // No spawner or no energy, just keep building for free (but slower)
                             u.workerState = 'BUILDING_IN_PLACE';
                         }
@@ -371,8 +357,8 @@ function updateWorkerAI(u) {
                 if (!spawner || dist <= 24) {
                     if (u.workerTransferCooldown > 0) return;
                     let tripCost = getBuilderTripGoldCost(u);
-                    if (spawner && players[owner].energy >= tripCost) {
-                        players[owner].energy -= tripCost;
+                    if (spawner) {
+                        addPlayerResource(owner, 'energy', -tripCost);
                         recordEnergyDelta(owner, 'builder', -tripCost);
                         u.builderHasMaterial = true;
                         u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
@@ -419,14 +405,10 @@ function updateWorkerAI(u) {
 
             if (!u.builderHasMaterial && u.workerTransferCooldown <= 0) {
                 let tripCost = getBuilderTripGoldCost(u);
-                if (players[owner].energy >= tripCost) {
-                    players[owner].energy -= tripCost;
-                    recordEnergyDelta(owner, 'builder', -tripCost);
-                    u.builderHasMaterial = true;
-                    u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-                } else {
-                    u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
-                }
+                addPlayerResource(owner, 'energy', -tripCost);
+                recordEnergyDelta(owner, 'builder', -tripCost);
+                u.builderHasMaterial = true;
+                u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
             }
 
             let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
@@ -434,9 +416,9 @@ function updateWorkerAI(u) {
             let buildStep = 0;
             if (u.builderHasMaterial) {
                 buildStep = dps;
-            } else if (gameTime % 20 === 0 && players[owner].energy >= 1) {
+            } else if (gameTime % 20 === 0) {
                 // Last-resort slow trickle when no full material transfer is possible.
-                players[owner].energy -= 1;
+                addPlayerResource(owner, 'energy', -1);
                 buildStep = 1;
             }
 
@@ -509,14 +491,11 @@ function updateWorkerAI(u) {
             }
             // Check if energy became available - switch back to gold trips
             let route = getSpawnerRoute('builder_spawner', null);
-            let tripCost = getBuilderTripGoldCost(u);
-            if (route && players[owner].energy >= tripCost && u.workerTarget) {
+            if (route && u.workerTarget) {
                 u.workerState = 'RETURNING_FOR_GOLD';
                 u.path = route.path;
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = route.spawner;
-            } else if (u.workerTarget && players[owner].energy < tripCost) {
-                u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
             }
         }
     } else if (u.workerType === 'healer') {
@@ -598,14 +577,13 @@ function updateWorkerAI(u) {
 
                     let route = getSpawnerRoute('healer_spawner', null);
                     let tripCost = _getHealerQueueTripCost(u, sp);
-                    if (route && players[owner].energy >= tripCost && tripCost > 0) {
+                    if (route && tripCost > 0) {
                         u.workerState = 'RETURNING_FOR_GOLD';
                         u.path = route.path;
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._healerSpawnerTarget = route.spawner;
                         u._healerQueueTripCost = tripCost;
                     } else {
-                        if (tripCost > 0 && players[owner].energy < tripCost) u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                     }
@@ -630,13 +608,12 @@ function updateWorkerAI(u) {
                 }
 
                 let route = getSpawnerRoute('healer_spawner', null);
-                if (route && players[owner].energy >= 1) {
+                if (route) {
                     u.workerState = 'RETURNING_FOR_GOLD';
                     u.path = route.path;
                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                     u._healerSpawnerTarget = route.spawner;
                 } else {
-                    u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                     u.workerState = 'IDLE';
                     u.commandState = CMD_IDLE;
                 }
@@ -659,8 +636,8 @@ function updateWorkerAI(u) {
                 if (!spawner || dist <= 24) {
                     if (u.workerTransferCooldown > 0) return;
                     let tripCost = targetIsQueue ? _getHealerQueueTripCost(u, u.workerTarget) : 1;
-                    if (spawner && tripCost > 0 && players[owner].energy >= tripCost) {
-                        players[owner].energy -= tripCost;
+                    if (spawner && tripCost > 0) {
+                        addPlayerResource(owner, 'energy', -tripCost);
                         recordEnergyDelta(owner, 'healer', -tripCost);
                         u.healerHasMaterial = true;
                         u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
@@ -902,12 +879,8 @@ function _resourceCollectorGetGatherPerTrip(u, owner) {
 function _depositResourceCollectorPayload(u, owner, resourceCfg) {
     let amount = Math.max(0, Number(u.carryingValue) || 0);
     if (!(amount > 0) || !resourceCfg) return;
-    if (resourceCfg.stockpileKey === 'astar') {
-        let player = players[owner];
-        let curValue = Math.max(0, Number(player && player[resourceCfg.stockpileKey]) || 0);
-        _setPlayerAstarBudget(owner, curValue + amount);
-    } else {
-        players[owner][resourceCfg.stockpileKey] = Math.max(0, Number(players[owner][resourceCfg.stockpileKey]) || 0) + amount;
+    addPlayerResource(owner, resourceCfg.stockpileKey, amount);
+    if (resourceCfg.stockpileKey === 'energy') {
         recordEnergyDelta(owner, 'collect', amount);
     }
     if (owner === localPlayerId && resourceCfg.dropoffSound) playSound(resourceCfg.dropoffSound, u.x, u.y);
@@ -2441,6 +2414,7 @@ function _findNearestDamagedFriendlyUnit(u, originX = u.x, originY = u.y) {
 function _healerFindTarget(u, myGx, myGy) {
     let origin = _healerGetSearchOrigin(u);
     let maxSearch = _getWorkerAutoSearchDistancePx(u);
+    let hasPinnedQueueTarget = _isHealerQueueAnchorTarget(u._healerPinnedQueueTarget, u.owner);
     let queueTarget = _getHealerCommittedQueueTarget(u);
     if (!queueTarget && _isHealerQueueTarget(u._healerPinnedQueueTarget, u.owner)) {
         queueTarget = u._healerPinnedQueueTarget;
@@ -2448,7 +2422,7 @@ function _healerFindTarget(u, myGx, myGy) {
     if (!queueTarget) queueTarget = _findNearestQueuedSpawnerNeedingWork(u, origin.x, origin.y);
     if (queueTarget) {
         let qd = Math.hypot(queueTarget.x - origin.x, queueTarget.y - origin.y);
-        if (qd > maxSearch) {
+        if (!hasPinnedQueueTarget && qd > maxSearch) {
             queueTarget = null;
             _clearHealerQueueCommit(u);
         }
@@ -2730,4 +2704,97 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
         other.commandState = CMD_IDLE;
         other.workerState = 'IDLE';
     }
+}
+
+function applyWorkerRallyFromSpawner(u, spawner) {
+    if (!u || u.dead || !u.workerType || !spawner) return false;
+    let rallyTarget = getSpawnerRallyTargetWorld(spawner);
+    if (!rallyTarget || !Number.isFinite(rallyTarget.x) || !Number.isFinite(rallyTarget.y)) return false;
+
+    let targetGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(rallyTarget.x / TILE)));
+    let targetGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(rallyTarget.y / TILE)));
+    let myGx = Math.floor(u.x / TILE);
+    let myGy = Math.floor(u.y / TILE);
+
+    if (isResourceCollectorWorkerType(u.workerType)) {
+        let resourceCfg = getResourceCollectorConfigByWorkerType(u.workerType);
+        let gather = resourceCfg ? _getResourceCollectorGatherTargetNear(rallyTarget.x, rallyTarget.y, u.owner, resourceCfg, TILE) : null;
+        if (!(gather && gather.target && _isResourceCollectorTargetValid(gather.target, gather.type, u.owner, resourceCfg))) return false;
+        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
+        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
+        _clearWorkerTarget(u, 'manual_rally_change');
+        _setResourceCollectorPinnedTarget(u, gather.target, gather.type, resourceCfg);
+        _resourceCollectorAssignTarget(u, gather.target, gather.type, resourceCfg);
+        u._workerNextIdleRetargetTick = gameTime;
+        return true;
+    }
+
+    if (u.workerType === 'builder') {
+        let target = _getBuilderWorkTargetAt(targetGx, targetGy, u.owner, true);
+        if (!target) return false;
+        _releaseManualWorkerAssignmentConflicts(u, target, null);
+        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
+        target.buildEnabled = true;
+        _clearWorkerTarget(u, 'manual_rally_change');
+        _builderAssignTarget(u, target, myGx, myGy);
+        u._workerNextIdleRetargetTick = gameTime;
+        return true;
+    }
+
+    if (u.workerType === 'healer') {
+        let qTarget = getTileEntityRef(targetGx, targetGy);
+        if (!_isHealerQueueAnchorTarget(qTarget, u.owner)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
+        if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) return false;
+        _clearWorkerTarget(u, 'manual_rally_change');
+        u._healerPinnedQueueTarget = qTarget;
+        if (_isHealerQueueTarget(qTarget, u.owner)) _setHealerQueueCommit(u, qTarget);
+        else _clearHealerQueueCommit(u);
+        _healerFindTarget(u, myGx, myGy);
+        u._workerNextIdleRetargetTick = gameTime;
+        return true;
+    }
+
+    if (u.workerType === 'researcher') {
+        let rTarget = getTileEntityRef(targetGx, targetGy);
+        if (!_isResearcherTargetBuilding(rTarget, u.owner)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, rTarget, 'research');
+        if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) return false;
+        _clearWorkerTarget(u, 'manual_rally_change');
+        if (!_setWorkerTarget(u, rTarget, 'research')) return false;
+        u.workerState = 'MOVING_TO_RESEARCH';
+        u._researchSpawnerTarget = null;
+        u.path = _requestWorkerPath(u, myGx, myGy, rTarget.gx, rTarget.gy, null, null);
+        u.pathIndex = 0;
+        u.commandState = u.path && u.path.length > 0 ? CMD_MOVING : CMD_IDLE;
+        u._workerNextIdleRetargetTick = gameTime;
+        return true;
+    }
+
+    if (u.workerType === 'salvager') {
+        let target = getTileEntityRef(targetGx, targetGy) || getFloorItemAtTile(targetGx, targetGy);
+        if (!(target && target.owner === u.owner && target.markedForSalvage)) return false;
+        _releaseManualWorkerAssignmentConflicts(u, target, null);
+        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
+        _clearWorkerTarget(u, 'manual_rally_change');
+        if (!_setWorkerTarget(u, target, null)) return false;
+        let canWalk = (nx, ny) => nx === target.gx && ny === target.gy;
+        u.path = _requestWorkerPath(u, myGx, myGy, target.gx, target.gy, canWalk, null, true);
+        if (u.path) {
+            u.workerState = 'MOVING_TO';
+            u.pathIndex = 0;
+            u.commandState = CMD_MOVING;
+        } else if (_workerHasPendingAutoRouteToTarget(u, target)) {
+            u.workerState = 'MOVING_TO';
+        } else {
+            _clearWorkerAutoRoute(u);
+            _clearWorkerTarget(u);
+            u.workerState = 'IDLE';
+            u.commandState = CMD_IDLE;
+        }
+        u._workerNextIdleRetargetTick = gameTime;
+        return true;
+    }
+
+    return false;
 }
