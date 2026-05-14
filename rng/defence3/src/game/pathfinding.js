@@ -194,7 +194,8 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
         unitMetric,
         unitId,
         source: String(sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED),
-        used
+        used,
+        delta: -used,
     });
 
     let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
