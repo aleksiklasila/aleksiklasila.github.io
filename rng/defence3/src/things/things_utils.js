@@ -325,8 +325,8 @@ function recalculateUnitEffectiveStats() {
         }
 
         let needsImmediate = !Number.isFinite(u.baseLevel)
-            || !Number.isFinite(u.baseLevelVisionRange)
-            || !Number.isFinite(u.baseLevelmaxEnergy)
+            || !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange))
+            || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy))
             || !Number.isFinite(u.effectiveLevel)
             || !Number.isFinite(u.effectiveStacks);
 
@@ -418,7 +418,7 @@ function recalculateUnitEffectiveStats() {
         let baseStacks = getUnitStackCount(u);
         let baseLevel = stackCountToLevel(baseStacks);
         let needsRefresh = !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
-            !Number.isFinite(u.baseLevelVisionRange) || !Number.isFinite(u.baseLevelmaxEnergy);
+            !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange)) || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy));
 
         u.stackCount = baseStacks;
         u.unitLevel = baseLevel;
@@ -428,12 +428,6 @@ function recalculateUnitEffectiveStats() {
             u.stackCount = baseStacks;
         }
 
-        if (!Number.isFinite(u.baseLevelVisionRange)) u.baseLevelVisionRange = Math.max(1, Number(u.visionRange) || 1);
-        if (!Number.isFinite(u.baseLevelmaxEnergy)) u.baseLevelmaxEnergy = Math.max(1, Number(u.maxEnergy) || 1);
-        if (!Number.isFinite(u.baseLevelAttackDamage)) u.baseLevelAttackDamage = Math.max(0, Number(u.attackDamage) || 0);
-        if (!Number.isFinite(u.baseLevelAttackCooldown)) u.baseLevelAttackCooldown = Math.max(1, Number(u.attackCooldown) || 1);
-        if (!Number.isFinite(u.baseLevelSpeed)) u.baseLevelSpeed = Math.max(0.1, Number(u.speed) || 0.1);
-
         u.effectiveStacks = baseStacks;
         u.effectiveLevel = baseLevel;
         dueInfo.push({ u, baseStacks, needsRefresh });
@@ -441,7 +435,7 @@ function recalculateUnitEffectiveStats() {
 
     for (let info of dueInfo) {
         let u = info.u;
-        let radiusPx = Math.max(0.5, Number(u.baseLevelVisionRange) || Number(u.visionRange) || 0.5) * TILE;
+        let radiusPx = Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
         let similarCount = 0;
         if (canUseSpatialCounts) {
             let owner = Math.floor(Number(u.owner));
@@ -1001,14 +995,12 @@ function recomputePlayerPopCaps() {
 
 function getEntityVisibilityRangeArea(e) {
     if (!e) return null;
+    if (e.preComputed && Number.isFinite(e.preComputed.visionRangeArea)) return e.preComputed.visionRangeArea;
     if (e.currentStats && Number.isFinite(e.currentStats.visionRangeArea)) return e.currentStats.visionRangeArea;
-    if (Number.isFinite(e.visionRangeArea)) return e.visionRangeArea;
-    if (Number.isFinite(e.baseLevelVisionRangeArea)) return e.baseLevelVisionRangeArea;
-    if (Number.isFinite(e.baseVisionRangeArea)) return e.baseVisionRangeArea;
+    if (e.basePreComputed && Number.isFinite(e.basePreComputed.visionRangeArea)) return e.basePreComputed.visionRangeArea;
     if (e.currentStats && Number.isFinite(e.currentStats.visionRange)) return e.currentStats.visionRange;
-    if (Number.isFinite(e.baseLevelVisionRange)) return Number(e.baseLevelVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
-    if (Number.isFinite(e.baseVisionRange)) return Number(e.baseVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
-    if (Number.isFinite(e.visionRange)) return Number(e.visionRange) / AREA_UNIT_TILE_EQUIVALENT;
+    if (e.preComputed && Number.isFinite(e.preComputed.visionRange)) return Number(e.preComputed.visionRange) / AREA_UNIT_TILE_EQUIVALENT;
+    if (e.basePreComputed && Number.isFinite(e.basePreComputed.visionRange)) return Number(e.basePreComputed.visionRange) / AREA_UNIT_TILE_EQUIVALENT;
     return null;
 }
 
@@ -1025,8 +1017,7 @@ function getEntityStatsCalcType(e) {
 
 function getEntityBaseVisibilityRangeArea(e) {
     if (!e) return null;
-    if (Number.isFinite(e.baseLevelVisionRangeArea)) return e.baseLevelVisionRangeArea;
-    if (Number.isFinite(e.baseVisionRangeArea)) return e.baseVisionRangeArea;
+    if (e.basePreComputed && Number.isFinite(e.basePreComputed.visionRangeArea)) return e.basePreComputed.visionRangeArea;
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     if (statsType) {
@@ -1039,7 +1030,6 @@ function getEntityBaseVisibilityRangeArea(e) {
         let defVision = Number(BASE_CARD_TYPES && BASE_CARD_TYPES[statsType] && BASE_CARD_TYPES[statsType].visionRange);
         if (Number.isFinite(defVision)) return defVision;
     }
-    if (Number.isFinite(e.baseLevelVisionRange)) return Number(e.baseLevelVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
     return getEntityVisibilityRangeArea(e);
 }
 
@@ -1050,7 +1040,7 @@ function getEntityBaseVisibilityRangeTiles(e) {
 
 function getEntityEffectiveVisibilityRangeArea(e) {
     if (!e) return null;
-    if (Number.isFinite(e.visionRangeArea)) return e.visionRangeArea;
+    if (e.preComputed && Number.isFinite(e.preComputed.visionRangeArea)) return e.preComputed.visionRangeArea;
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     let effLevel = getThingEffectiveLevel(e, baseLevel);
@@ -1100,9 +1090,9 @@ function getUnitRenderActionRangeArea(u) {
     if (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
         return (24 / TILE) / AREA_UNIT_TILE_EQUIVALENT;
     }
-    let atkRange = Math.max(0, Number(u.attackRangeArea) || 0);
-    if (atkRange <= 0 && Number.isFinite(u.attackRange)) {
-        atkRange = ((Number(u.attackRange) || 0) / TILE) / AREA_UNIT_TILE_EQUIVALENT;
+    let atkRange = Math.max(0, Number(u.preComputed && u.preComputed.attackRangeArea) || 0);
+    if (atkRange <= 0 && Number.isFinite(u.preComputed && u.preComputed.attackRange)) {
+        atkRange = ((Number(u.preComputed.attackRange) || 0) / TILE) / AREA_UNIT_TILE_EQUIVALENT;
     }
     return Math.max(0, atkRange);
 }

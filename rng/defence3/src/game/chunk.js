@@ -12,14 +12,15 @@ function _spatialChunkPlayerFlatIndex(chunkKey, owner) {
 function _isDamagedLivingUnitForOwner(u, owner) {
     if (!u || u.dead) return false;
     if (u.owner !== owner) return false;
-    if (!Number.isFinite(u.energy) || !Number.isFinite(u.maxEnergy)) return false;
-    return u.energy > 0 && u.energy < u.maxEnergy;
+    let maxEnergy = Number(u.preComputed && u.preComputed.maxEnergy);
+    if (!Number.isFinite(u.energy) || !Number.isFinite(maxEnergy)) return false;
+    return u.energy > 0 && u.energy < maxEnergy;
 }
 
 function _isUnitHealthLowerThan(a, b) {
     if (!a || !b) return false;
-    let aE = Number(a.energy), aM = Number(a.maxEnergy);
-    let bE = Number(b.energy), bM = Number(b.maxEnergy);
+    let aE = Number(a.energy), aM = Number(a.preComputed && a.preComputed.maxEnergy);
+    let bE = Number(b.energy), bM = Number(b.preComputed && b.preComputed.maxEnergy);
     if (!(aM > 0) || !(bM > 0)) return false;
     return (aE * bM) < (bE * aM);
 }
@@ -70,7 +71,7 @@ function _updateSpatialLowestHealthForUnit(u, chunkKey) {
 
 function _getSpatialUnitVisibilityScaled(u) {
     if (!u || u.dead) return 0;
-    let value = Number(u.visionRange);
+    let value = Number(u.preComputed && u.preComputed.visionRange);
     if (!Number.isFinite(value) || value <= 0) {
         value = Number(u.currentStats && u.currentStats.visionRange);
     }

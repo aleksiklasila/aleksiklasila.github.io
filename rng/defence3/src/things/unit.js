@@ -15,14 +15,11 @@ class Unit {
         this.teleportHideTicks = 0;
 
         let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
-        this.energy = s.energy; this.maxEnergy = s.energy;
-        this.speed = s.speed;
-        this.attackDamage = s.atk;
-        this.attackRangeArea = Math.max(0, Number(s.attackRange) || 0);
-        this.attackRange = this.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
-        this.visionRangeArea = Math.max(0, Number(s.visionRange) || 0);
-        this.visionRange = (this.visionRangeArea || 0.8) * AREA_UNIT_TILE_EQUIVALENT;
-        this.attackCooldown = secondsToTicks(s.atkCd);
+        this.energy = Math.max(1, Math.floor(Number(s.energy) || 1));
+        this.preComputedBase = null;
+        this.preComputedEffective = null;
+        this.basePreComputed = null;
+        this.preComputed = null;
         this.attackTimer = 0;
         this.color = s.color; this.r = s.r;
         this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
@@ -56,27 +53,7 @@ class Unit {
         this.stackCount = 1;
         this.effectiveStacks = 1;
         this.effectiveLevel = 1;
-
-        this.baseEnergy = this.maxEnergy;
-        this.baseAttackDamage = this.attackDamage;
-        this.baseSpeed = this.speed;
-        this.baseAttackCooldown = this.attackCooldown;
-        this.baseVisionRangeArea = this.visionRangeArea;
-        this.baseVisionRange = this.visionRange;
-        this.baseAttackRangeArea = this.attackRangeArea;
-        this.baseAttackRange = this.attackRange / TILE;
-
         this.baseLevel = 1;
-        this.baseLevelmaxEnergy = this.maxEnergy;
-        this.baseLevelAttackDamage = this.attackDamage;
-        this.baseLevelAttackCooldown = this.attackCooldown;
-        this.baseLevelSpeed = this.speed;
-        this.baseLevelVisionRangeArea = this.visionRangeArea;
-        this.baseLevelVisionRange = this.visionRange;
-        this.baseLevelAttackRangeArea = this.attackRangeArea;
-        this.baseLevelGatherPerTrip = 0;
-        this.baseLevelBuilderDps = 0;
-        this.baseLevelhealerDps = 0;
 
         // Status effects
         this.poisoned = 0; this.poisonTickDamage = 0;
@@ -90,6 +67,8 @@ class Unit {
         if (this.isSnake) { this.snakeHistory = []; this.snakeRecordTimer = 0; }
 
         this._spatialKey = undefined;
+        applyUnitLevelScaling(this, 1);
+        this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
         updateUnitSpatial(this);
     }
 
@@ -203,7 +182,7 @@ class Unit {
         }
 
         // Speed modifier
-        let spd = this.speed;
+        let spd = this.preComputed.speed;
         if (this.frozen > 0) spd *= 0.5;
         if (this.sandy > 0) spd *= 0.5;
         spd *= _getUnitAstarSpeedMultiplier(this);
@@ -300,7 +279,7 @@ class Unit {
             return;
         }
         // Auto-aggro nearby enemies
-        let aggroRange = Math.max(TILE, this.visionRange * TILE);
+        let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
             this.targetUnit = closest;
@@ -401,7 +380,7 @@ class Unit {
 
     doAttackMoving(spd) {
         // Check for nearby enemies first
-        let aggroRange = Math.max(TILE, this.visionRange * TILE);
+        let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
         if (closest) {
             this.targetUnit = closest;
@@ -477,19 +456,19 @@ class Unit {
 
     _performAttackOnUnit(target) {
         let targetEnergyBefore = target.energy;
-        target.energy -= this.attackDamage;
+        target.energy -= this.preComputed.attackDamage;
         pushHostileDamageAlert(target, targetEnergyBefore - target.energy, this.owner);
         recordDamageVisual(target, targetEnergyBefore - target.energy, this.owner);
         if (targetEnergyBefore > target.energy) playSound('melee_hit', target.x, target.y);
         tryAutoRetaliateOnHostileDamage(target, this, this.x, this.y);
-        this.attackTimer = this.attackCooldown;
+        this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = target;
         this.attackFlash = 8;
         let style = this.attackStyle;
         if (style === 'fire') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#f50', 3);
             target.burning = Math.max(target.burning, 45);
-            target.burnTickDamage = Math.max(target.burnTickDamage, this.attackDamage * 0.04);
+            target.burnTickDamage = Math.max(target.burnTickDamage, this.preComputed.attackDamage * 0.04);
         } else if (style === 'water') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#4af', 3);
             target.wet = Math.max(target.wet, 60);
@@ -499,7 +478,7 @@ class Unit {
         } else if (style === 'poison') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#2d2', 3);
             target.poisoned = Math.max(target.poisoned, 50);
-            target.poisonTickDamage = Math.max(target.poisonTickDamage, this.attackDamage * 0.04);
+            target.poisonTickDamage = Math.max(target.poisonTickDamage, this.preComputed.attackDamage * 0.04);
         } else if (style === 'laser') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#f0f', 2);
         } else if (style === 'swoop') {
@@ -507,7 +486,7 @@ class Unit {
         } else if (style === 'ram') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#0f0', 3);
             createDirectedParticles(target.x, target.y, this.x, this.y, '#f00', 2);
-            this.energy -= this.maxEnergy * 0.03;
+            this.energy -= this.preComputed.maxEnergy * 0.03;
             if (this.energy <= 0) { this.dead = true; }
         } else {
             // Default melee
@@ -519,41 +498,41 @@ class Unit {
 
     _performAttackOnBuilding(tb) {
         let buildingEnergyBefore = tb.energy;
-        this.attackTimer = this.attackCooldown;
+        this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = tb;
         this.attackFlash = 8;
         let style = this.attackStyle;
         if (style === 'fire') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f50', 3);
-            applyStatusEffect(tb, 'fire', getUnitBaseLevel(this), this.attackDamage * 0.04);
-            if (!isEffectImmune(tb, 'fire')) tb.energy -= this.attackDamage;
+            applyStatusEffect(tb, 'fire', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.04);
+            if (!isEffectImmune(tb, 'fire')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'water') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#4af', 3);
             applyStatusEffect(tb, 'water', getUnitBaseLevel(this));
-            if (!isEffectImmune(tb, 'water')) tb.energy -= this.attackDamage;
+            if (!isEffectImmune(tb, 'water')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'ice') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#afe', 3);
-            applyStatusEffect(tb, 'ice', getUnitBaseLevel(this), this.attackDamage * 0.2);
-            if (!isEffectImmune(tb, 'ice')) tb.energy -= this.attackDamage;
+            applyStatusEffect(tb, 'ice', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.2);
+            if (!isEffectImmune(tb, 'ice')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'poison') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#2d2', 3);
-            applyStatusEffect(tb, 'poison', getUnitBaseLevel(this), this.attackDamage * 0.04);
-            if (!isEffectImmune(tb, 'poison')) tb.energy -= this.attackDamage;
+            applyStatusEffect(tb, 'poison', getUnitBaseLevel(this), this.preComputed.attackDamage * 0.04);
+            if (!isEffectImmune(tb, 'poison')) tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'laser') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f0f', 2);
-            tb.energy -= this.attackDamage;
+            tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'swoop') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#dd0', 2);
-            tb.energy -= this.attackDamage;
+            tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'ram') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#0f0', 3);
             createDirectedParticles(tb.x, tb.y, this.x, this.y, '#f00', 2);
-            tb.energy -= this.attackDamage;
-            this.energy -= this.maxEnergy * 0.03;
+            tb.energy -= this.preComputed.attackDamage;
+            this.energy -= this.preComputed.maxEnergy * 0.03;
             if (this.energy <= 0) { this.dead = true; }
         } else {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#f88', 2);
-            tb.energy -= this.attackDamage;
+            tb.energy -= this.preComputed.attackDamage;
         }
         pushHostileDamageAlert(tb, buildingEnergyBefore - tb.energy, this.owner);
         recordDamageVisual(tb, buildingEnergyBefore - tb.energy, this.owner);
@@ -611,7 +590,7 @@ class Unit {
                 this._forcedTargetLastSeenY = this.targetUnit.y;
             }
             let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
-            if (d <= this.attackRange + this.r + this.targetUnit.r) {
+            if (d <= this.preComputed.attackRange + this.r + this.targetUnit.r) {
                 this.attackTarget = this.targetUnit;
                 this.path = null;
                 // In range - attack
@@ -655,7 +634,7 @@ class Unit {
             let tb = this.targetBuilding;
             if (tb.energy <= 0) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
             let d = Math.hypot(tb.x - this.x, tb.y - this.y);
-            if (d <= this.attackRange + this.r + 16) {
+            if (d <= this.preComputed.attackRange + this.r + 16) {
                 this.attackTarget = tb;
                 this.path = null;
                 if (this.attackTimer <= 0) {
@@ -693,7 +672,7 @@ class Unit {
     }
 
     doHolding() {
-        forEachUnitInAreaRange(this.x, this.y, this.attackRangeArea, (u) => {
+        forEachUnitInAreaRange(this.x, this.y, this.preComputed.attackRangeArea, (u) => {
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
             if (this.attackTimer <= 0) {
@@ -903,10 +882,10 @@ class Unit {
         ctx.beginPath(); ctx.arc(this.x, this.y - this.r - 3, 2, 0, 6.28); ctx.fill();
 
         // Energy bar
-        if (this.energy < this.maxEnergy) {
+        if (this.energy < this.preComputed.maxEnergy) {
             let bw = this.r * 2 + 4, bh = 2, bx = this.x - bw / 2, by = this.y - this.r - 7;
             ctx.fillStyle = '#600'; ctx.fillRect(bx, by, bw, bh);
-            ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * Math.max(0, this.energy / this.maxEnergy), bh);
+            ctx.fillStyle = '#0f0'; ctx.fillRect(bx, by, bw * Math.max(0, this.energy / this.preComputed.maxEnergy), bh);
         }
         // Attack visual effects
         if (this.attackTarget && this.attackFlash > 0) {
@@ -1072,8 +1051,8 @@ function canUnitAutoRetaliate(unit) {
         !unit.dead &&
         !unit.workerState &&
         (unit.commandState === CMD_IDLE || unit.commandState === CMD_HOLDING) &&
-        Number(unit.attackDamage) > 0 &&
-        Number(unit.attackRange) > 0
+        Number(unit.preComputed && unit.preComputed.attackDamage) > 0 &&
+        Number(unit.preComputed && unit.preComputed.attackRange) > 0
     );
 }
 
@@ -1331,7 +1310,7 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
     }
 
     // Preserve total Energy as much as possible without exceeding new total max Energy.
-    let maxEnergyCaps = survivors.map(u => Math.max(1, Number(u.maxEnergy) || 1));
+    let maxEnergyCaps = survivors.map(u => Math.max(1, Number(u.preComputed && u.preComputed.maxEnergy) || 1));
     let energyTarget = Math.min(sumEnergy, maxEnergyCaps.reduce((s, v) => s + v, 0));
     let energyShares = distributeEvenWithCaps(energyTarget, maxEnergyCaps);
     for (let i = 0; i < survivors.length; i++) {

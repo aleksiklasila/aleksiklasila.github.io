@@ -686,6 +686,7 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
 };
 
 let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
+let PRECOMPUTED_STATS_MAP_PLAYER = [];
 let PRECOMPUTED_STATS_READY = false;
 
 // Spatial hash (10x10 tile chunks)

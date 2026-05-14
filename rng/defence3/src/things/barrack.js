@@ -210,6 +210,9 @@ class Barrack {
         this.rallyX = null; this.rallyY = null; // rally point in world coords
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -281,6 +284,9 @@ class CollectorSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('spawner', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -343,6 +349,9 @@ class AstarSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('astar_spawner', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -402,6 +411,9 @@ class SalvagerSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('salvager', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -459,6 +471,9 @@ class BuilderSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('builder_spawner', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
@@ -525,6 +540,9 @@ class HealerSpawner {
         this.isStacking = false;
         this.stackingWorkDone = 0;
         let stats = calculateItemStats('healer_spawner', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
@@ -594,6 +612,9 @@ class ResearchSpawner {
         this.rallyX = null; this.rallyY = null;
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('research', this.level, this.owner);
+        this.preComputedBase = stats;
+        this.preComputedEffective = stats;
+        this.preComputed = this.preComputedEffective;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;

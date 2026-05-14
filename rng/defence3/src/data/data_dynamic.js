@@ -20,11 +20,31 @@ function parseStartingThingId(id) {
     return { kind, key };
 }
 
+function refreshStartingResourcesPreviewPrecomputedStats() {
+    if (gameStarted || !ensurePrecomputedStatsMap()) return;
+    for (let playerId = 0; playerId < players.length; playerId++) rebuildPrecomputedStatsMapPlayer(playerId);
+}
+
 function getStartingThingId(kind, key) {
     return `${kind}:${key}`;
 }
 
+function ensureResearchThingsReady() {
+    if (RESEARCH_THINGS.length > 0) return true;
+    if (!ensurePrecomputedStatsMap()) return false;
+    rebuildResearchThings();
+    return RESEARCH_THINGS.length > 0;
+}
+
+function ensureMainMenuPrecomputedStateReady() {
+    if (!ensurePrecomputedStatsMap()) rebuildPrecomputedStatsMap();
+    else ensureResearchThingsReady();
+    startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
+    ensureStartingResourcesSelectedThing();
+}
+
 function normalizeStartingResourcesConfig(rawCfg) {
+    ensureResearchThingsReady();
     let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
     let out = makeDefaultStartingResourcesConfig();
 
@@ -71,9 +91,14 @@ function normalizeStartingResourcesConfig(rawCfg) {
 
 function resetStartingResourcesConfig() {
     startingResourcesConfig = normalizeStartingResourcesConfig(makeDefaultStartingResourcesConfig());
+    refreshStartingResourcesPreviewPrecomputedStats();
 }
 
 function ensureStartingResourcesSelectedThing() {
+    if (!ensureResearchThingsReady()) {
+        startingResourcesSelectedThingId = '';
+        return;
+    }
     let parsed = parseStartingThingId(startingResourcesSelectedThingId);
     if (parsed && getResearchThing(parsed.kind, parsed.key)) return;
     let first = RESEARCH_THINGS[0];
@@ -86,15 +111,26 @@ function ensureStartingResourcesSelectedThing() {
 
 function setStartingResearchLevel(thingId, statKey, value) {
     let lvl = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(value) || 0)));
+    let parsed = parseStartingThingId(thingId);
     if (!startingResourcesConfig.researchLevels[thingId]) startingResourcesConfig.researchLevels[thingId] = {};
     if (lvl <= 0) {
         delete startingResourcesConfig.researchLevels[thingId][statKey];
         if (Object.keys(startingResourcesConfig.researchLevels[thingId]).length <= 0) {
             delete startingResourcesConfig.researchLevels[thingId];
         }
+        if (!gameStarted && parsed) {
+            for (let playerId = 0; playerId < players.length; playerId++) {
+                rebuildPrecomputedStatsMapPlayerThingStat(playerId, parsed.kind, parsed.key, statKey);
+            }
+        }
         return;
     }
     startingResourcesConfig.researchLevels[thingId][statKey] = lvl;
+    if (!gameStarted && parsed) {
+        for (let playerId = 0; playerId < players.length; playerId++) {
+            rebuildPrecomputedStatsMapPlayerThingStat(playerId, parsed.kind, parsed.key, statKey);
+        }
+    }
 }
 
 function setStartingSpawnCount(thingId, level, value) {
@@ -252,6 +288,7 @@ function serializeEditableRuntimeConfigForTransport() {
 }
 
 function ensureDefaultEditableRuntimeConfigSnapshot() {
+    ensureMainMenuPrecomputedStateReady();
     if (defaultEditableRuntimeConfigSnapshot) return;
     defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
 }
@@ -410,6 +447,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     PRECOMPUTED_STATS_READY = false;
     if (!opts.deferPrecompute) rebuildPrecomputedStatsMap();
     startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
+    refreshStartingResourcesPreviewPrecomputedStats();
     syncMainMenuFromRuntimeConfig();
 }
 
@@ -598,6 +636,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
     MAX_THING_LEVEL = importedMaxThingLevel;
     MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
     startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+    refreshStartingResourcesPreviewPrecomputedStats();
     applyMainMenuControlsToRuntimeState();
     let appliedAdvancedConfig = false;
     if (data.editableConfig && typeof data.editableConfig === 'object') {
@@ -1359,6 +1398,10 @@ function resetStartingResourcesConfig() {
 }
 
 function ensureStartingResourcesSelectedThing() {
+    if (!ensureResearchThingsReady()) {
+        startingResourcesSelectedThingId = '';
+        return;
+    }
     let parsed = parseStartingThingId(startingResourcesSelectedThingId);
     if (parsed && getResearchThing(parsed.kind, parsed.key)) return;
     let first = RESEARCH_THINGS[0];
@@ -1847,6 +1890,7 @@ function serializeEditableRuntimeConfigForTransport() {
 }
 
 function ensureDefaultEditableRuntimeConfigSnapshot() {
+    ensureMainMenuPrecomputedStateReady();
     if (defaultEditableRuntimeConfigSnapshot) return;
     defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
 }
@@ -2193,6 +2237,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
     MAX_THING_LEVEL = importedMaxThingLevel;
     MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
     startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
+    refreshStartingResourcesPreviewPrecomputedStats();
     applyMainMenuControlsToRuntimeState();
     let appliedAdvancedConfig = false;
     if (data.editableConfig && typeof data.editableConfig === 'object') {
@@ -2704,7 +2749,223 @@ function rebuildPrecomputedStatsMap() {
     }
 
     PRECOMPUTED_STATS_READY = true;
+    rebuildPrecomputedStatsMapPlayer();
     rebuildResearchThings();
+}
+
+function _normalizePlayerPrecomputedUnitKey(unitType) {
+    return PRECOMPUTED_STATS_MAP.unit[unitType] ? unitType : 'norm';
+}
+
+function _normalizePlayerPrecomputedBuildingKey(buildingKey) {
+    if (!buildingKey) return 'farm';
+    if (buildingKey === 'barrack') return 'barrack_norm';
+    return PRECOMPUTED_STATS_MAP.building[buildingKey] ? buildingKey : 'farm';
+}
+
+function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
+    let key = _normalizePlayerPrecomputedUnitKey(unitType);
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    let levelEntry = (PRECOMPUTED_STATS_MAP.unit[key] || [])[lvl] || {};
+    let values = {};
+
+    for (let statKey of PRECOMPUTED_UNIT_STAT_KEYS) {
+        let arr = levelEntry[statKey] || null;
+        let rLvl = getPlayerResearchLevel(playerId, 'unit', key, statKey);
+        values[statKey] = arr ? arr[rLvl] : normalizePrecomputedUnitStatValue(key, statKey, NaN);
+    }
+
+    let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
+    let attackCooldownSec = Math.max(0.01, Number(values.atkCd) || 0.01);
+    let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
+    let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05);
+    let transferCooldownSec = Math.max(0.01, Number(values.transferCooldown) || 0.01);
+
+    return {
+        maxEnergy,
+        attackDamage: Math.max(0, Number(values.atk) || 0),
+        attackCooldownSec,
+        attackCooldown: secondsToTicks(attackCooldownSec),
+        speed: Math.max(0.1, Number(values.speed) || 0.1),
+        visionRangeArea,
+        visionRange: visionRangeArea * AREA_UNIT_TILE_EQUIVALENT,
+        attackRangeArea,
+        attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
+        workerSearchDistance: Math.max(0, Number(values.workerSearchDistance) || 0),
+        gatherPerTrip: Math.max(0, Number(values.gatherPerTrip) || 0),
+        builderDps: Math.max(0, Number(values.builderDps) || 0),
+        healerDps: Math.max(0, Number(values.healerDps) || 0),
+        researcherDps: Math.max(0, Number(values.researcherDps) || 0),
+        transferCooldownSec,
+        transferCooldownTicks: secondsToTicks(transferCooldownSec),
+        astarCost: Math.max(0.1, Number(values.astarCost) || 0.1),
+    };
+}
+
+function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
+    let key = _normalizePlayerPrecomputedBuildingKey(buildingKey);
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    let levelEntry = (PRECOMPUTED_STATS_MAP.building[key] || [])[lvl] || {};
+    let values = {};
+
+    for (let statKey of PRECOMPUTED_BUILDING_STAT_KEYS) {
+        let arr = levelEntry[statKey] || null;
+        let rLvl = getPlayerResearchLevel(playerId, 'building', key, statKey);
+        values[statKey] = arr ? arr[rLvl] : NaN;
+    }
+
+    let maxEnergy = Number(values.maxEnergy);
+    let cd = Number(values.cd);
+    let spawnCd = Number(values.spawnCd);
+    let visionRange = Number(values.visionRange);
+
+    return {
+        maxEnergy: Number.isFinite(maxEnergy) ? Math.max(1, Math.floor(maxEnergy)) : NaN,
+        damage: Number(values.damage),
+        blastDamage: Number(values.blastDamage),
+        blastRadius: Number.isFinite(values.blastRadius) ? Math.max(0, Number(values.blastRadius)) : NaN,
+        cd,
+        cdTicks: Number.isFinite(cd) ? secondsToTicks(Math.max(0.001, cd)) : 0,
+        spawnCd,
+        spawnCdTicks: Number.isFinite(spawnCd) ? secondsToTicks(Math.max(0.001, spawnCd)) : 0,
+        unitPrice: Number(values.unitPrice),
+        visionRange: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
+        visionRangeArea: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
+        multiplier: Number(values.multiplier),
+        popCap: Number(values.popCap),
+        burnDps: Number(values.burnDps),
+        burnDuration: Number(values.burnDuration),
+        poisonDps: Number(values.poisonDps),
+        poisonDuration: Number(values.poisonDuration),
+        freezeDps: Number(values.freezeDps),
+        freezeDuration: Number(values.freezeDuration),
+        wetDuration: Number(values.wetDuration),
+        sandDuration: Number(values.sandDuration),
+        watchDuration: Number(values.watchDuration),
+        efficiency: Number(values.efficiency),
+    };
+}
+
+function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
+    if (!ensurePrecomputedStatsMap()) return [];
+
+    let targetIds = [];
+    if (Number.isFinite(targetPlayerId)) {
+        targetIds.push(Math.max(0, Math.floor(targetPlayerId)));
+    } else if (Array.isArray(players)) {
+        for (let playerId = 0; playerId < players.length; playerId++) targetIds.push(playerId);
+    }
+
+    PRECOMPUTED_STATS_MAP_PLAYER.length = Array.isArray(players) ? players.length : PRECOMPUTED_STATS_MAP_PLAYER.length;
+    for (let playerId of targetIds) {
+        let playerEntry = { unit: {}, building: {} };
+        for (let unitType in PRECOMPUTED_STATS_MAP.unit) {
+            playerEntry.unit[unitType] = [];
+            for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+                playerEntry.unit[unitType][lvl] = _getUnitPlayerPrecomputedEntry(playerId, unitType, lvl);
+            }
+        }
+        for (let buildingKey in PRECOMPUTED_STATS_MAP.building) {
+            playerEntry.building[buildingKey] = [];
+            for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+                playerEntry.building[buildingKey][lvl] = _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, lvl);
+            }
+        }
+        PRECOMPUTED_STATS_MAP_PLAYER[playerId] = playerEntry;
+    }
+
+    return PRECOMPUTED_STATS_MAP_PLAYER;
+}
+
+function _ensurePrecomputedStatsMapPlayerEntry(playerId) {
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    if (!PRECOMPUTED_STATS_MAP_PLAYER[pid]) PRECOMPUTED_STATS_MAP_PLAYER[pid] = { unit: {}, building: {} };
+    return PRECOMPUTED_STATS_MAP_PLAYER[pid];
+}
+
+function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
+    if (!entry) return entry;
+    if (statKey === 'energy') entry.maxEnergy = Math.max(1, Math.floor(Number(value) || 1));
+    else if (statKey === 'atk') entry.attackDamage = Math.max(0, Number(value) || 0);
+    else if (statKey === 'atkCd') {
+        entry.attackCooldownSec = Math.max(0.01, Number(value) || 0.01);
+        entry.attackCooldown = secondsToTicks(entry.attackCooldownSec);
+    }
+    else if (statKey === 'speed') entry.speed = Math.max(0.1, Number(value) || 0.1);
+    else if (statKey === 'visionRange') {
+        entry.visionRangeArea = Math.max(0.05, Number(value) || 0.05);
+        entry.visionRange = entry.visionRangeArea * AREA_UNIT_TILE_EQUIVALENT;
+    }
+    else if (statKey === 'attackRange') {
+        entry.attackRangeArea = Math.max(0, Number(value) || 0);
+        entry.attackRange = entry.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
+    }
+    else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.max(0, Number(value) || 0);
+    else if (statKey === 'gatherPerTrip') entry.gatherPerTrip = Math.max(0, Number(value) || 0);
+    else if (statKey === 'builderDps') entry.builderDps = Math.max(0, Number(value) || 0);
+    else if (statKey === 'healerDps') entry.healerDps = Math.max(0, Number(value) || 0);
+    else if (statKey === 'researcherDps') entry.researcherDps = Math.max(0, Number(value) || 0);
+    else if (statKey === 'transferCooldown') {
+        entry.transferCooldownSec = Math.max(0.01, Number(value) || 0.01);
+        entry.transferCooldownTicks = secondsToTicks(entry.transferCooldownSec);
+    }
+    else if (statKey === 'astarCost') entry.astarCost = Math.max(0.1, Number(value) || 0.1);
+    return entry;
+}
+
+function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
+    if (!entry) return entry;
+    if (statKey === 'maxEnergy') entry.maxEnergy = Number.isFinite(value) ? Math.max(1, Math.floor(Number(value))) : NaN;
+    else if (statKey === 'cd') {
+        entry.cd = Number(value);
+        entry.cdTicks = Number.isFinite(entry.cd) ? secondsToTicks(Math.max(0.001, entry.cd)) : 0;
+    }
+    else if (statKey === 'spawnCd') {
+        entry.spawnCd = Number(value);
+        entry.spawnCdTicks = Number.isFinite(entry.spawnCd) ? secondsToTicks(Math.max(0.001, entry.spawnCd)) : 0;
+    }
+    else if (statKey === 'visionRange') {
+        entry.visionRange = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
+        entry.visionRangeArea = entry.visionRange;
+    }
+    else if (statKey === 'blastRadius') entry.blastRadius = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
+    else entry[statKey] = Number(value);
+    return entry;
+}
+
+function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey = null) {
+    if (!ensurePrecomputedStatsMap()) return null;
+    let pid = Math.max(0, Math.floor(playerId || 0));
+    let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
+    let branch = kind === 'building' ? 'building' : 'unit';
+    let normalizedKey = branch === 'unit'
+        ? _normalizePlayerPrecomputedUnitKey(key)
+        : _normalizePlayerPrecomputedBuildingKey(key);
+
+    if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
+    for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
+        if (!playerEntry[branch][normalizedKey][lvl]) {
+            playerEntry[branch][normalizedKey][lvl] = branch === 'unit'
+                ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
+                : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
+            continue;
+        }
+
+        if (!statKey) {
+            playerEntry[branch][normalizedKey][lvl] = branch === 'unit'
+                ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
+                : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
+            continue;
+        }
+
+        let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
+        let source = ((((PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [])[lvl] || {})[statKey] || null);
+        let value = source ? source[rLvl] : (branch === 'unit' ? normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN) : NaN);
+        if (branch === 'unit') _applyUnitPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
+        else _applyBuildingPlayerPrecomputedStat(playerEntry[branch][normalizedKey][lvl], statKey, value);
+    }
+
+    return playerEntry[branch][normalizedKey];
 }
 
 function ensurePrecomputedStatsMap() {
@@ -2732,11 +2993,35 @@ function getBuildingStatFromMap(buildingKey, level, statKey, researchLevel = 0) 
 }
 
 function getUnitStatForOwner(playerId, unitType, level, statKey) {
+    let ownerMap = PRECOMPUTED_STATS_MAP_PLAYER[playerId];
+    let key = _normalizePlayerPrecomputedUnitKey(unitType);
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    let entry = ownerMap && ownerMap.unit && ownerMap.unit[key] ? ownerMap.unit[key][lvl] : null;
+    if (entry) {
+        if (statKey === 'energy') return entry.maxEnergy;
+        if (statKey === 'atk') return entry.attackDamage;
+        if (statKey === 'atkCd') return entry.attackCooldownSec;
+        if (statKey === 'speed') return entry.speed;
+        if (statKey === 'visionRange') return entry.visionRangeArea;
+        if (statKey === 'attackRange') return entry.attackRangeArea;
+        if (statKey === 'workerSearchDistance') return entry.workerSearchDistance;
+        if (statKey === 'gatherPerTrip') return entry.gatherPerTrip;
+        if (statKey === 'builderDps') return entry.builderDps;
+        if (statKey === 'healerDps') return entry.healerDps;
+        if (statKey === 'researcherDps') return entry.researcherDps;
+        if (statKey === 'transferCooldown') return entry.transferCooldownSec;
+        if (statKey === 'astarCost') return entry.astarCost;
+    }
     let rLevel = getPlayerResearchLevel(playerId, 'unit', unitType, statKey);
     return getUnitStatFromMap(unitType, level, statKey, rLevel);
 }
 
 function getBuildingStatForOwner(playerId, buildingKey, level, statKey) {
+    let ownerMap = PRECOMPUTED_STATS_MAP_PLAYER[playerId];
+    let key = _normalizePlayerPrecomputedBuildingKey(buildingKey);
+    let lvl = Math.max(1, clampThingLevel(level || 1));
+    let entry = ownerMap && ownerMap.building && ownerMap.building[key] ? ownerMap.building[key][lvl] : null;
+    if (entry && Object.prototype.hasOwnProperty.call(entry, statKey)) return entry[statKey];
     let rLevel = getPlayerResearchLevel(playerId, 'building', buildingKey, statKey);
     return getBuildingStatFromMap(buildingKey, level, statKey, rLevel);
 }
@@ -2869,6 +3154,11 @@ function ensurePlayerResearchMultipliers(playerId) {
 }
 
 function getPlayerResearchLevel(playerId, kind, key, statKey) {
+    if (!gameStarted) {
+        let thingId = getStartingThingId(kind, key);
+        let previewLevel = Number((((startingResourcesConfig || {}).researchLevels || {})[thingId] || {})[statKey]);
+        if (Number.isFinite(previewLevel)) return clampResearchLevel(previewLevel);
+    }
     let levels = ensurePlayerResearchLevels(playerId);
     let id = makeResearchLevelId(kind, key, statKey);
     return clampResearchLevel(levels[id] || 0);
@@ -3089,15 +3379,17 @@ function makeResearchTask(owner, kind, key, statKey, projectedLevel) {
 }
 
 function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
+    rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
     for (let u of units) {
         if (!u || u.dead || u.owner !== owner || u.unitType !== unitType) continue;
         let prevEnergy = u.energy;
         applyUnitLevelScaling(u, getUnitBaseLevel(u));
-        if (statKey === 'energy') u.energy = Math.max(1, Math.min(prevEnergy, u.maxEnergy));
+        if (statKey === 'energy') u.energy = Math.max(1, Math.min(prevEnergy, u.preComputedEffective.maxEnergy));
     }
 }
 
 function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
+    rebuildPrecomputedStatsMapPlayerThingStat(owner, 'building', buildingKey, statKey);
     for (let t of towers) {
         if (!t || t.owner !== owner || t.type !== buildingKey) continue;
         let prevEnergy = t.energy;
@@ -3109,8 +3401,10 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         if (!b || b.owner !== owner || `barrack_${b.unitType}` !== buildingKey) continue;
         let prevEnergy = b.energy;
         let lvl = getThingEffectiveLevel(b);
-        let stats = calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner);
-        b.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy || 1));
+        b.preComputedBase = calculateItemStats(`barrack_${b.unitType}`, Math.max(1, b.level || lvl), b.owner);
+        b.preComputedEffective = calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner);
+        b.preComputed = b.preComputedEffective;
+        b.maxEnergy = Math.max(1, Math.floor((b.preComputedEffective && b.preComputedEffective.maxEnergy) || 1));
         if (statKey === 'maxEnergy') b.energy = Math.max(1, Math.min(prevEnergy, b.maxEnergy));
     }
 
@@ -3118,8 +3412,10 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         if (!s || s.owner !== owner || s.type !== buildingKey) continue;
         let prevEnergy = s.energy;
         let lvl = getThingEffectiveLevel(s);
-        let stats = calculateItemStats(s.type, lvl, s.owner);
-        s.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy || 1));
+        s.preComputedBase = calculateItemStats(s.type, Math.max(1, s.level || lvl), s.owner);
+        s.preComputedEffective = calculateItemStats(s.type, lvl, s.owner);
+        s.preComputed = s.preComputedEffective;
+        s.maxEnergy = Math.max(1, Math.floor((s.preComputedEffective && s.preComputedEffective.maxEnergy) || 1));
         if (statKey === 'maxEnergy') s.energy = Math.max(1, Math.min(prevEnergy, s.maxEnergy));
     }
 
@@ -3150,7 +3446,7 @@ function applyResearchCompletion(owner, task) {
     let nextLevel = clampResearchLevel(prevLevel + 1);
     if (nextLevel <= prevLevel) return;
     levels[id] = nextLevel;
-    mults[id] = Math.pow(getResearchBonusExp(task.kind), nextLevel);
+    mults[id] = Math.pow(getResearchBonusExpForStat(task.kind, task.statKey), nextLevel);
     if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
     if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
     if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {
@@ -3176,45 +3472,10 @@ function getResearchQueueTotalLength(researchBuilding) {
 function computeUnitLevelScaledStats(unit, level) {
     if (!unit) return null;
     let lvl = Math.max(1, clampThingLevel(level || 1));
-    let unitType = unit.unitType || 'norm';
     let owner = Number.isFinite(unit.owner) ? unit.owner : localPlayerId;
-
-    let maxEnergy = getUnitStatForOwner(owner, unitType, lvl, 'energy');
-    let attackDamage = getUnitStatForOwner(owner, unitType, lvl, 'atk');
-    let attackCooldownSec = getUnitStatForOwner(owner, unitType, lvl, 'atkCd');
-    let speed = getUnitStatForOwner(owner, unitType, lvl, 'speed');
-    let visionRangeArea = getUnitStatForOwner(owner, unitType, lvl, 'visionRange');
-    let attackRangeArea = getUnitStatForOwner(owner, unitType, lvl, 'attackRange');
-    let gatherPerTrip = getUnitStatForOwner(owner, unitType, lvl, 'gatherPerTrip');
-    let builderDps = getUnitStatForOwner(owner, unitType, lvl, 'builderDps');
-    let healerDps = getUnitStatForOwner(owner, unitType, lvl, 'healerDps');
-    let researcherDps = getUnitStatForOwner(owner, unitType, lvl, 'researcherDps');
-    let transferCooldownSec = getUnitStatForOwner(owner, unitType, lvl, 'transferCooldown');
-    let astarCost = getUnitStatForOwner(owner, unitType, lvl, 'astarCost');
-
-    let attackCooldown = secondsToTicks(attackCooldownSec);
-    let visionRange = Number(visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-    let attackRange = Number(attackRangeArea) * AREA_UNIT_TILE_EQUIVALENT * TILE;
-    let transferCooldownTicks = unit.workerType ? secondsToTicks(transferCooldownSec) : 0;
-
-    return {
-        level: lvl,
-        maxEnergy,
-        attackDamage,
-        attackCooldown,
-        speed,
-        visionRangeArea,
-        visionRange,
-        attackRangeArea,
-        attackRange,
-        gatherPerTrip,
-        builderDps,
-        healerDps,
-        researcherDps,
-        transferCooldownSec,
-        transferCooldownTicks,
-        astarCost
-    };
+    if (!PRECOMPUTED_STATS_MAP_PLAYER[owner]) rebuildPrecomputedStatsMapPlayer(owner);
+    let unitType = _normalizePlayerPrecomputedUnitKey(unit.unitType || 'norm');
+    return (((PRECOMPUTED_STATS_MAP_PLAYER[owner] || {}).unit || {})[unitType] || [])[lvl] || _getUnitPlayerPrecomputedEntry(owner, unitType, lvl);
 }
 
 function applyUnitLevelScaling(unit, level) {
@@ -3228,54 +3489,19 @@ function applyUnitLevelScaling(unit, level) {
         unit.stackCount = getRequiredStacksForLevel(lvl);
     }
 
-    unit.baseEnergy = unit.baseEnergy || unit.maxEnergy || 1;
-    unit.baseAttackDamage = unit.baseAttackDamage || unit.attackDamage || 0;
-    unit.baseSpeed = unit.baseSpeed || unit.speed || 1;
-    unit.baseAttackCooldown = unit.baseAttackCooldown || unit.attackCooldown || 30;
-    unit.baseVisionRange = unit.baseVisionRange || unit.visionRange || 4;
-    if (!Number.isFinite(unit.baseVisionRangeArea)) unit.baseVisionRangeArea = Number(unit.baseVisionRange) / AREA_UNIT_TILE_EQUIVALENT;
-    if (!Number.isFinite(unit.baseAttackRange)) unit.baseAttackRange = (Number(unit.attackRange) || 0) / TILE;
-    if (!Number.isFinite(unit.baseAttackRangeArea)) unit.baseAttackRangeArea = Number(unit.baseAttackRange) / AREA_UNIT_TILE_EQUIVALENT;
-
     let scaled = computeUnitLevelScaledStats(unit, lvl);
     if (!scaled) return;
 
     let prevEnergyAbs = Number(unit.energy);
     if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
-    unit.maxEnergy = scaled.maxEnergy;
-    unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(prevEnergyAbs)));
-    unit.attackDamage = scaled.attackDamage;
-    unit.attackCooldown = scaled.attackCooldown;
-    unit.speed = scaled.speed;
-    unit.visionRangeArea = scaled.visionRangeArea;
-    unit.visionRange = scaled.visionRange;
-    unit.attackRangeArea = scaled.attackRangeArea;
-    unit.attackRange = scaled.attackRange;
-    unit.astarCost = scaled.astarCost;
-    if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;
-    if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
-    if (unit.workerType === 'healer') unit.healerDps = scaled.healerDps;
-    if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
-    if (unit.workerType) {
-        unit.transferCooldownSec = scaled.transferCooldownSec;
-        unit.transferCooldownTicks = scaled.transferCooldownTicks;
-    }
+    unit.preComputedBase = scaled;
+    unit.preComputedEffective = scaled;
+    unit.basePreComputed = unit.preComputedBase;
+    unit.preComputed = unit.preComputedEffective;
+    unit.maxEnergy = unit.preComputedEffective.maxEnergy;
+    unit.energy = Math.max(1, Math.min(unit.preComputedEffective.maxEnergy, Math.floor(prevEnergyAbs)));
 
     unit.baseLevel = lvl;
-    unit.baseLevelmaxEnergy = scaled.maxEnergy;
-    unit.baseLevelAttackDamage = scaled.attackDamage;
-    unit.baseLevelAttackCooldown = scaled.attackCooldown;
-    unit.baseLevelSpeed = scaled.speed;
-    unit.baseLevelVisionRangeArea = scaled.visionRangeArea;
-    unit.baseLevelVisionRange = scaled.visionRange;
-    unit.baseLevelAttackRangeArea = scaled.attackRangeArea;
-    unit.baseLevelAttackRange = scaled.attackRange / TILE;
-    unit.baseLevelAstarCost = scaled.astarCost;
-    if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.baseLevelGatherPerTrip = scaled.gatherPerTrip;
-    if (unit.workerType === 'builder') unit.baseLevelBuilderDps = scaled.builderDps;
-    if (unit.workerType === 'healer') unit.baseLevelhealerDps = scaled.healerDps;
-    if (unit.workerType === 'researcher') unit.baseLevelResearcherDps = scaled.researcherDps;
-
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
 }
@@ -3286,29 +3512,11 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
     let scaled = computeUnitLevelScaledStats(unit, lvl);
     if (!scaled) return;
 
-    if (!Number.isFinite(unit.maxEnergy) || unit.maxEnergy <= 0) {
-        let baseMaxEnergy = Number(unit.baseLevelmaxEnergy);
-        if (!Number.isFinite(baseMaxEnergy) || baseMaxEnergy <= 0) baseMaxEnergy = Number(scaled.maxEnergy) || 1;
-        unit.maxEnergy = Math.max(1, Math.floor(baseMaxEnergy));
-    }
-    if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
-    unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
-    unit.attackDamage = scaled.attackDamage;
-    unit.attackCooldown = scaled.attackCooldown;
-    unit.speed = scaled.speed;
-    unit.visionRangeArea = scaled.visionRangeArea;
-    unit.visionRange = scaled.visionRange;
-    unit.attackRangeArea = scaled.attackRangeArea;
-    unit.attackRange = scaled.attackRange;
-    unit.astarCost = scaled.astarCost;
-    if (unit.workerType === 'collector' || unit.workerType === 'astar_collector') unit.gatherPerTrip = scaled.gatherPerTrip;
-    if (unit.workerType === 'builder') unit.builderDps = scaled.builderDps;
-    if (unit.workerType === 'healer') unit.healerDps = scaled.healerDps;
-    if (unit.workerType === 'researcher') unit.researcherDps = scaled.researcherDps;
-    if (unit.workerType) {
-        unit.transferCooldownSec = scaled.transferCooldownSec;
-        unit.transferCooldownTicks = scaled.transferCooldownTicks;
-    }
+    unit.preComputedEffective = scaled;
+    unit.preComputed = unit.preComputedEffective;
+    unit.maxEnergy = unit.preComputedEffective.maxEnergy;
+    if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.preComputedEffective.maxEnergy);
+    unit.energy = Math.max(1, Math.min(unit.preComputedEffective.maxEnergy, Math.floor(unit.energy)));
 
     unit.effectiveLevel = lvl;
 }

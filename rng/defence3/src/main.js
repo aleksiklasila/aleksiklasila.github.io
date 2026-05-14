@@ -2772,7 +2772,7 @@ function startGame() {
         let u = new Unit(unitType, pid, spawnTile.gx * TILE + 16, spawnTile.gy * TILE + 16);
         applyWorkerDefaults(u);
         applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
-        u.energy = u.maxEnergy;
+        u.energy = u.preComputed.maxEnergy;
         units.push(u);
         players[pid].popCount++;
         return u;
@@ -2795,6 +2795,8 @@ function startGame() {
             }
         }
     }
+
+    rebuildPrecomputedStatsMapPlayer();
 
     for (let i = 0; i < teams.length; i++) {
         let pid = teams[i];
@@ -2833,18 +2835,15 @@ function startGame() {
         let researchSpawner = teamResearchSpawners[pid];
 
         for (let i = 0; i < 3; i++) {
-            let u = spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingEffectiveLevel(builderSpawner) : 1);
-            if (u && builderSpawner && builderSpawner.getBuilderDps) u.builderDps = builderSpawner.getBuilderDps();
+            spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingEffectiveLevel(builderSpawner) : 1);
         }
         for (let i = 0; i < 3; i++) {
-            let u = spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
-            if (u && healerSpawner && healerSpawner.gethealerDps) u.healerDps = healerSpawner.gethealerDps();
+            spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
         }
 
         // Requested starter replacements: give each team one collector + one researcher.
         spawnStartingUnit(pid, pos, 'collector', collectorSpawner ? getThingEffectiveLevel(collectorSpawner) : 1);
-        let starterResearcher = spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingEffectiveLevel(researchSpawner) : 1);
-        if (starterResearcher && researchSpawner && researchSpawner.getResearcherDps) starterResearcher.researcherDps = researchSpawner.getResearcherDps();
+        spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingEffectiveLevel(researchSpawner) : 1);
     }
 
     for (let pid of teams) {

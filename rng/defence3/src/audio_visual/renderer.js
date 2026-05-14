@@ -120,7 +120,7 @@ function recordDamageVisual(target, amount, sourceOwner = null) {
     if (!target) return;
     let dmg = Math.max(0, Number(amount) || 0);
     if (dmg <= 0.01) return;
-    let maxEnergy = Math.max(1, Number(target.maxEnergy) || 0);
+    let maxEnergy = Math.max(1, Number(target.maxEnergy) || Number(target.preComputed && target.preComputed.maxEnergy) || 0);
     let scaledStrength = Math.min(1, 0.28 + (dmg / maxEnergy) * 3.5);
     target._damageFlashStart = gameTime;
     target._damageFlashUntil = Math.max(Number(target._damageFlashUntil) || 0, gameTime + DAMAGE_FLASH_TICKS);
@@ -276,8 +276,9 @@ function get3DUnitStatusGlyph(unit) {
 
 function get3DUnitTextureStatus(unit) {
     let bars = [];
-    if (unit && unit.energy < unit.maxEnergy) {
-        bars.push({ pct: Math.max(0, unit.energy / Math.max(1, unit.maxEnergy)), bgColor: '#600', fillColor: '#0f0' });
+    let maxEnergy = Number(unit && unit.preComputed && unit.preComputed.maxEnergy);
+    if (unit && unit.energy < maxEnergy) {
+        bars.push({ pct: Math.max(0, unit.energy / Math.max(1, maxEnergy)), bgColor: '#600', fillColor: '#0f0' });
     }
     let status = build3DStatusTextureOptions(shouldShowUnitLevels() ? getUnitLevelLabelText(unit) : '', bars);
     let glyph = get3DUnitStatusGlyph(unit);
@@ -846,8 +847,9 @@ function build3DOverlayData(bounds, alpha) {
         let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
         if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
-        if (u.energy < u.maxEnergy) {
-            pushBar(ux, uy, 0.72, -2, (Number(u.r) || 8) * 2 + 4, 2, Math.max(0, u.energy / Math.max(1, u.maxEnergy)), '#600', '#0f0');
+        let maxEnergy = Number(u.preComputed && u.preComputed.maxEnergy);
+        if (u.energy < maxEnergy) {
+            pushBar(ux, uy, 0.72, -2, (Number(u.r) || 8) * 2 + 4, 2, Math.max(0, u.energy / Math.max(1, maxEnergy)), '#600', '#0f0');
         }
         if (shouldShowUnitLevels()) {
             pushText(ux, uy, 0.84, -16, getUnitLevelLabelText(u));
@@ -892,13 +894,12 @@ function push3DRenderObject(target, object) {
             let sharedTiles = Number(getEntityVisibilityRangeTiles(source));
             if (Number.isFinite(sharedTiles)) return sharedTiles;
         }
+        if (source.preComputed && Number.isFinite(source.preComputed.visionRangeArea)) return Number(source.preComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
         if (source.currentStats && Number.isFinite(source.currentStats.visionRangeArea)) return Number(source.currentStats.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (Number.isFinite(source.visionRangeArea)) return Number(source.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (Number.isFinite(source.baseLevelVisionRangeArea)) return Number(source.baseLevelVisionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (Number.isFinite(source.baseVisionRangeArea)) return Number(source.baseVisionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+        if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRangeArea)) return Number(source.basePreComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
         if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
-        if (Number.isFinite(source.baseLevelVisionRange)) return Number(source.baseLevelVisionRange);
-        if (Number.isFinite(source.visionRange)) return Number(source.visionRange);
+        if (source.preComputed && Number.isFinite(source.preComputed.visionRange)) return Number(source.preComputed.visionRange);
+        if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRange)) return Number(source.basePreComputed.visionRange);
 
         let ownerId = Number(source.owner);
         if (!Number.isFinite(ownerId)) ownerId = 0;
@@ -1997,7 +1998,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     for (let u of units) {
         if (!u || u.dead) continue;
         if (!shouldRevealForPlayer(u.owner, u.watched || 0)) continue;
-        let visionArea = Number.isFinite(u.visionRangeArea) ? Number(u.visionRangeArea) : ((Number(u.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
+        let visionArea = Number.isFinite(u.preComputed && u.preComputed.visionRangeArea) ? Number(u.preComputed.visionRangeArea) : ((Number(u.preComputed && u.preComputed.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
     for (let t of towers) {
@@ -2468,21 +2469,14 @@ function normalizeBuildingResearchKey(type) {
 }
 
 function calculateItemStats(type, level, owner = null) {
-    let stats = { maxEnergy: 0, damage: 0, blastDamage: NaN, blastRadius: NaN, multiplier: NaN };
     let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
     let bKey = normalizeBuildingResearchKey(type);
     let lvl = Math.max(1, clampThingLevel(level));
-    let maxEnergy = getBuildingStatForOwner(ownerId, bKey, lvl, 'maxEnergy');
-    let damage = getBuildingStatForOwner(ownerId, bKey, lvl, 'damage');
-    let blastDamage = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastDamage');
-    let blastRadius = getBuildingStatForOwner(ownerId, bKey, lvl, 'blastRadius');
-    let multiplier = getBuildingStatForOwner(ownerId, bKey, lvl, 'multiplier');
-    if (Number.isFinite(maxEnergy)) stats.maxEnergy = Math.max(1, Math.floor(maxEnergy));
-    if (Number.isFinite(damage)) stats.damage = damage;
-    if (Number.isFinite(blastDamage)) stats.blastDamage = blastDamage;
-    if (Number.isFinite(blastRadius)) stats.blastRadius = Math.max(0, blastRadius);
-    if (Number.isFinite(multiplier)) stats.multiplier = multiplier;
-    return stats;
+    if (!PRECOMPUTED_STATS_MAP_PLAYER[ownerId]) rebuildPrecomputedStatsMapPlayer(ownerId);
+    let playerMap = PRECOMPUTED_STATS_MAP_PLAYER[ownerId];
+    let direct = playerMap && playerMap.building && playerMap.building[bKey] ? playerMap.building[bKey][lvl] : null;
+    if (direct) return direct;
+    return _getBuildingPlayerPrecomputedEntry(ownerId, bKey, lvl);
 }
 
 function ensureStatusState(target) {
