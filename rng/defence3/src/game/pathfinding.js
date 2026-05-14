@@ -1,7 +1,5 @@
 "use strict";
 
-const OUT_OF_ASTAR_SPEED_MULTIPLIER = 1 / 3;
-
 function _ensurePathBudgetArrays() {
     let count = Math.max(0, players.length || 0);
     if (pathfindBudgetByPlayer.length !== count) pathfindBudgetByPlayer = new Int32Array(count);
@@ -25,19 +23,19 @@ function _resetPathBudgetTrackingPerTick() {
 function _setPlayerAstarBudget(owner, value) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return;
-    players[pid].astar = Math.max(0, Number(value) || 0);
+    _setPlayerResourceValue(pid, 'astar', Number(value) || 0);
 }
 
 function _getPlayerAstarBudgetAvailable(owner) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return 0;
-    return Math.max(0, Number(players[pid].astar) || 0);
+    return Number(players[pid].astar) || 0;
 }
 
 function _getPlayerAstarBudgetRemaining(owner) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return 0;
-    return Math.max(0, Number(players[pid].astar) || 0);
+    return Number(players[pid].astar) || 0;
 }
 
 function _getPlayerAstarBudgetUsed(owner) {
@@ -89,7 +87,7 @@ function _consumePlayerAstarStockpile(owner, amount, unit = null, sourceTag = nu
     if (!(delta > 0)) return;
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return;
-    players[pid].astar = Math.max(0, (Number(players[pid].astar) || 0) - delta);
+    addPlayerResource(pid, 'astar', -delta);
     _recordAstarUsage(pid, delta, unit, sourceTag);
 }
 
@@ -118,23 +116,13 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (pid < 0) return true;
     if (_getPlayerAstarBudgetRemaining(u.owner) < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
-        // Out of A*: do not hard-stop movement. Unit speed is reduced elsewhere.
-        return true;
     }
     _consumePlayerAstarStockpile(u.owner, amount, u, 'movement');
     return true;
 }
 
 function _getUnitAstarSpeedMultiplier(u) {
-    if (!u) return 1;
-    let pid = _normalizeOwnerId(u.owner);
-    if (pid < 0 || !players[pid]) return 1;
-    let astarCost = _resolveUnitAstarTileCost(u);
-    if (astarCost <= 0) return 1;
-    // Slow down whenever we cannot afford even one tile of movement A* cost.
-    return _getPlayerAstarBudgetRemaining(u.owner) < astarCost
-        ? OUT_OF_ASTAR_SPEED_MULTIPLIER
-        : 1;
+    return 1;
 }
 
 function _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks = null) {

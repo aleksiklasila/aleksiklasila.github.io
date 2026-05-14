@@ -50,11 +50,11 @@ class Tower {
     updateStats() {
         let effLevel = getThingEffectiveLevel(this);
         this.preComputedBase = calculateItemStats(this.type, Math.max(1, this.level), this.owner);
-        this.preComputedEffective = calculateItemStats(this.type, effLevel, this.owner);
+        this.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(this.preComputedBase, calculateItemStats(this.type, effLevel, this.owner));
         this.preComputed = this.preComputedEffective;
         this.currentStats = this.preComputedEffective || this.baseStats;
 
-        let newmaxEnergy = Number(this.preComputedEffective && this.preComputedEffective.maxEnergy);
+        let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy);
         if (!Number.isFinite(newmaxEnergy)) newmaxEnergy = this.maxEnergy || 1;
         newmaxEnergy = Math.max(1, Math.floor(newmaxEnergy));
         if (this.isUpgrading && this.upgrademaxEnergy > 0) {
@@ -62,9 +62,10 @@ class Tower {
             if (!Number.isFinite(this.energy) || this.energy < 1) this.energy = 1;
             this.energy = Math.min(this.energy, this.maxEnergy);
         } else {
-            let ratio = this.maxEnergy > 0 ? this.energy / this.maxEnergy : 1;
+            let prevEnergy = Number(this.energy);
+            if (!Number.isFinite(prevEnergy)) prevEnergy = newmaxEnergy;
             this.maxEnergy = newmaxEnergy;
-            this.energy = Math.floor(newmaxEnergy * ratio);
+            this.energy = Math.max(1, Math.min(this.maxEnergy, Math.floor(prevEnergy)));
         }
         this.updateTextCache();
     }
