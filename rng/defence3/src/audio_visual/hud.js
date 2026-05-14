@@ -38,6 +38,7 @@ let infoPanelAstarWindowSecByMetric = {
 };
 let energyDeltaEventLogByPlayer = Array.from({ length: 8 }, () => []);
 let astarUsageEventLogByPlayer = Array.from({ length: 8 }, () => []);
+let activeResourcePenaltyPopupKey = '';
 
 function _lerpChannel(a, b, t) {
     let mix = Math.max(0, Math.min(1, Number(t) || 0));
@@ -81,11 +82,203 @@ function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor,
     if (!Number.isFinite(numericValue)) numericValue = 0;
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
-    let html = `<span style="color:${glyphColor}">${glyph}</span> <span style="color:${valueColor}">${formatBigNumber(flooredValue)}</span>`;
+    let html = `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" title="Show ${resourceKey} stat effect details" style="color:${glyphColor};cursor:pointer;user-select:none">${glyph}</span> <span style="color:${valueColor}">${formatBigNumber(flooredValue)}</span>`;
     if (_hudCache[cacheKey] !== html) {
         _hudCache[cacheKey] = html;
         el.innerHTML = html;
     }
+}
+
+function _getResourcePopupCfg(resourceKey) {
+    let stockpileKey = String(resourceKey || '').toLowerCase();
+    for (let cfg of RESOURCE_TYPE_LIST) {
+        if (String(cfg.stockpileKey || cfg.key || '').toLowerCase() === stockpileKey) return cfg;
+    }
+    return null;
+}
+
+function _getResourcePenaltyPercent(resourceKey, owner = localPlayerId) {
+    let multiplier = Math.max(1, Number(_getPlayerResourcePenaltyMultiplier(owner, resourceKey)) || 1);
+    return 100 / multiplier;
+}
+
+function _getResourcePenaltyStatsSummary(resourceKey) {
+    let stockpileKey = String(resourceKey || '').toLowerCase();
+    if (stockpileKey === 'astar') {
+        return {
+            primaryLabel: 'Unit speed',
+            primaryText: 'Only unit speed uses A*. Positive A* has no penalty; negative A* slows units.',
+            degradePercentLabel: 'Unit speed',
+            worsenPercentLabel: '',
+        };
+    }
+    return {
+        primaryLabel: 'All other stats',
+        primaryText: 'Energy is the fallback resource for all precomputed stats not explicitly mapped to another resource.',
+        degradePercentLabel: 'Most affected stats',
+        worsenPercentLabel: 'Cooldown / time / cost stats',
+    };
+}
+
+function _getResourcePenaltyMarkerSpecs(maxSeen) {
+    let safeMax = Math.max(1, Number(maxSeen) || 0);
+    let out = [{ value: 0, percent: 100 }];
+    let negativePercents = [50, 25, 12.5, 6.25, 3.125, 1.5625];
+    for (let pct of negativePercents) {
+        let steps = Math.log2(100 / pct);
+        out.push({ value: -(steps * safeMax), percent: pct });
+    }
+    for (let steps = 1; steps <= 6; steps++) out.push({ value: steps * safeMax, percent: 100 });
+    return out;
+}
+
+function _formatResourcePenaltyMarkerValue(value) {
+    let numeric = Number(value) || 0;
+    let prefix = numeric > 0 ? '+' : '';
+    return `${prefix}${formatBigNumber(Math.floor(numeric), 1, 1000)}`;
+}
+
+function _buildResourcePenaltyBarHtml(currentValue, maxSeen) {
+    let safeMax = Math.max(1, Number(maxSeen) || 0);
+    let markers = _getResourcePenaltyMarkerSpecs(safeMax);
+    let minValue = -6 * safeMax;
+    let maxValue = 6 * safeMax;
+    let span = Math.max(1, maxValue - minValue);
+    let zeroPct = ((0 - minValue) / span) * 100;
+    let currentPct = ((Math.max(minValue, Math.min(maxValue, Number(currentValue) || 0)) - minValue) / span) * 100;
+    let markerHtml = markers.map((marker) => {
+        let pct = ((marker.value - minValue) / span) * 100;
+        return `<div style="position:absolute;left:${pct}%;top:0;bottom:0;transform:translateX(-50%);pointer-events:none">`
+            + `<div style="position:absolute;top:8px;bottom:20px;width:1px;background:${marker.value === 0 ? 'rgba(255,245,180,0.78)' : 'rgba(255,255,255,0.18)'}"></div>`
+            + `<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);font-size:9px;color:${marker.value > 0 ? '#8fe28f' : marker.value < 0 ? '#ffbf9f' : '#f0df8d'};white-space:nowrap">${_formatResourcePenaltyMarkerValue(marker.value)}</div>`
+            + `<div style="position:absolute;top:36px;left:50%;transform:translateX(-50%);font-size:9px;color:${marker.percent >= 100 ? '#8fe28f' : '#d8d1aa'};white-space:nowrap">${Math.max(1, Math.round(marker.percent))}%</div>`
+            + `</div>`;
+    }).join('');
+    return `<div style="position:relative;margin:10px 6px 34px 6px;padding-top:14px">`
+        + `<div style="position:relative;height:16px;border-radius:999px;overflow:hidden;border:1px solid #3a4b5a;background:linear-gradient(90deg,#8f1d1d 0%,#c4532f 18%,#d0b347 48%,#d0b347 52%,#7dbb55 76%,#3ea64d 100%)">`
+        + `<div style="position:absolute;left:${zeroPct}%;top:-1px;bottom:-1px;width:2px;background:#f0df8d;opacity:0.9"></div>`
+        + `<div style="position:absolute;left:${currentPct}%;top:-3px;bottom:-3px;width:3px;background:#f5f8ff;box-shadow:0 0 8px rgba(255,255,255,0.65)"></div>`
+        + `</div>`
+        + markerHtml
+        + `</div>`;
+}
+
+function ensureResourcePenaltyPopupElements() {
+    let popup = document.getElementById('resource-penalty-popup');
+    if (popup) return popup;
+    popup = document.createElement('div');
+    popup.id = 'resource-penalty-popup';
+    popup.className = 'hidden';
+    popup.setAttribute('role', 'dialog');
+    popup.setAttribute('aria-modal', 'true');
+    popup.setAttribute('aria-labelledby', 'resource-penalty-title');
+    popup.innerHTML = `<div id="resource-penalty-popup-card" style="width:min(520px, calc(100vw - 32px));max-width:520px;background:#10161d;border:1px solid #3c5368;border-radius:8px;box-shadow:0 18px 48px rgba(0,0,0,0.45);padding:14px 16px;color:#d8ecff;display:flex;flex-direction:column;gap:10px;max-height:min(82vh, 760px);overflow:auto">`
+        + `<div class="help-title-row" style="display:flex;align-items:center;justify-content:space-between;gap:10px">`
+        + `<h3 id="resource-penalty-title" style="color:#8dc6ff; font-size:18px; margin:0">Resource Details</h3>`
+        + `<button id="btn-resource-penalty-close" style="background:#252525; border:1px solid #555; color:#ddd; cursor:pointer; font-size:12px; padding:4px 8px; border-radius:4px;">Close</button>`
+        + `</div>`
+        + `<div id="resource-penalty-content"></div>`
+        + `</div>`;
+    popup.style.position = 'fixed';
+    popup.style.inset = '0';
+    popup.style.background = 'rgba(0,0,0,0.52)';
+    popup.style.display = 'none';
+    popup.style.alignItems = 'center';
+    popup.style.justifyContent = 'center';
+    popup.style.zIndex = '2200';
+    document.body.appendChild(popup);
+
+    let closeBtn = popup.querySelector('#btn-resource-penalty-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => setResourcePenaltyPopupOpen(false));
+    popup.addEventListener('click', (ev) => {
+        if (ev.target === popup) setResourcePenaltyPopupOpen(false);
+    });
+    return popup;
+}
+
+function buildResourcePenaltyPopupHtml(resourceKey, owner = localPlayerId) {
+    let cfg = _getResourcePopupCfg(resourceKey);
+    if (!cfg) return '<div style="color:#f99">Unknown resource.</div>';
+    let player = players[Math.max(0, Math.floor(Number(owner) || 0))] || null;
+    let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
+    let currentValue = Number(player && player[stockpileKey]);
+    if (!Number.isFinite(currentValue)) currentValue = 0;
+    let maxSeen = Math.max(1, Number(player && player.resourceMaxValues && player.resourceMaxValues[stockpileKey]) || 0);
+    let penaltyPercent = _getResourcePenaltyPercent(stockpileKey, owner);
+    let penaltyMultiplier = Math.max(1, Number(_getPlayerResourcePenaltyMultiplier(owner, stockpileKey)) || 1);
+    let summary = _getResourcePenaltyStatsSummary(stockpileKey);
+    let isPenaltyActive = currentValue < 0;
+    let worsenPercent = penaltyMultiplier * 100;
+    let currentColor = _getHudResourceValueColor(owner, stockpileKey, currentValue);
+    let statusText = isPenaltyActive
+        ? `${cfg.icon} ${cfg.label} is below 0, so its mapped stat penalties are active.`
+        : `${cfg.icon} ${cfg.label} is at or above 0, so it currently has no stat penalty.`;
+    let explanation = stockpileKey === 'astar'
+        ? 'Negative values of this resource cause unit movement speed to get worse according to the above bar. e.g, 50% as good as normal at - max resource'
+        : 'Negative values of this resource cause things to get worse according to the above bar. e.g, 50% as good as normal at - max resource';
+
+    let html = `<div style="display:flex;flex-direction:column;gap:10px">`;
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">`
+        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div><div style="font-size:18px;color:#dff3ff;font-weight:600">${_escapeHtml(cfg.label)} Penalty</div><div style="font-size:11px;color:#8fb1c7">${_escapeHtml(summary.primaryText)}</div></div></div>`
+        + `<div style="display:flex;gap:10px;flex-wrap:wrap">`
+        + `<div style="min-width:96px;padding:6px 8px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">Current</div><div style="font-size:18px;color:${currentColor}">${formatBigNumber(currentValue, 1)}</div></div>`
+        + `<div style="min-width:96px;padding:6px 8px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">Was Max In Current Game</div><div style="font-size:18px;color:#dfe9f5">${formatBigNumber(maxSeen, 1)}</div></div>`
+        + `</div>`
+        + `</div>`;
+    html += `<div style="padding:8px 10px;border-radius:6px;border:1px solid ${isPenaltyActive ? '#6a3f3f' : '#35553a'};background:${isPenaltyActive ? 'rgba(96,24,24,0.25)' : 'rgba(24,72,28,0.22)'};color:${isPenaltyActive ? '#ffb3b3' : '#b8f0bb'}">${_escapeHtml(statusText)}</div>`;
+    html += _buildResourcePenaltyBarHtml(currentValue, maxSeen);
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">`;
+    html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">${_escapeHtml(summary.degradePercentLabel)}</div><div style="font-size:20px;color:${isPenaltyActive ? '#ffd782' : '#9ae69a'}">${formatBigNumber(penaltyPercent, 1)}%</div></div>`;
+    if (summary.worsenPercentLabel) {
+        html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">${_escapeHtml(summary.worsenPercentLabel)}</div><div style="font-size:20px;color:${isPenaltyActive ? '#ffad93' : '#9ae69a'}">${formatBigNumber(isPenaltyActive ? worsenPercent : 100, 1)}%</div></div>`;
+    }
+    html += `</div>`;
+    html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b">`
+        + `<div style="font-size:11px;color:#8fb1c7;margin-bottom:4px">Affected stats</div>`
+        + `<div style="font-size:13px;color:#dce9f7">${_escapeHtml(summary.primaryLabel)}</div>`
+        + `</div>`;
+    html += `<div style="font-size:12px;line-height:1.45;color:#a7bed0">${_escapeHtml(explanation)}</div>`;
+    html += `</div>`;
+    return html;
+}
+
+function setResourcePenaltyPopupOpen(open, resourceKey = activeResourcePenaltyPopupKey, owner = localPlayerId) {
+    let popup = ensureResourcePenaltyPopupElements();
+    if (!popup) return false;
+    let wasOpen = popup.style.display !== 'none';
+    if (open) {
+        activeResourcePenaltyPopupKey = String(resourceKey || activeResourcePenaltyPopupKey || 'energy');
+        let titleEl = document.getElementById('resource-penalty-title');
+        let cfg = _getResourcePopupCfg(activeResourcePenaltyPopupKey);
+        if (titleEl) titleEl.textContent = `${cfg ? cfg.label : 'Resource'} Effects`;
+        let contentEl = document.getElementById('resource-penalty-content');
+        if (contentEl) contentEl.innerHTML = buildResourcePenaltyPopupHtml(activeResourcePenaltyPopupKey, owner);
+    }
+    popup.style.display = open ? 'flex' : 'none';
+    if (!open) activeResourcePenaltyPopupKey = '';
+    return wasOpen !== open;
+}
+
+function refreshResourcePenaltyPopupContent(owner = localPlayerId) {
+    let popup = document.getElementById('resource-penalty-popup');
+    if (!popup || popup.style.display === 'none' || !activeResourcePenaltyPopupKey) return;
+    let titleEl = document.getElementById('resource-penalty-title');
+    let cfg = _getResourcePopupCfg(activeResourcePenaltyPopupKey);
+    if (titleEl) titleEl.textContent = `${cfg ? cfg.label : 'Resource'} Effects`;
+    let contentEl = document.getElementById('resource-penalty-content');
+    if (contentEl) contentEl.innerHTML = buildResourcePenaltyPopupHtml(activeResourcePenaltyPopupKey, owner);
+}
+
+function _bindHudResourcePopupTrigger(el, resourceKey) {
+    if (!el || el.dataset.resourcePopupBound === '1') return;
+    el.dataset.resourcePopupBound = '1';
+    el.addEventListener('click', (ev) => {
+        let glyph = ev.target instanceof Element ? ev.target.closest('.hud-resource-glyph-btn') : null;
+        if (!glyph) return;
+        let key = String(glyph.getAttribute('data-resource-key') || resourceKey || '');
+        if (!key) return;
+        setResourcePenaltyPopupOpen(true, key, localPlayerId);
+    });
 }
 
 function _normalizeOwnerId(owner) {
@@ -426,13 +619,37 @@ function _isInfoPanelBuildingIdleLike(e) {
     return true;
 }
 
+function _getInfoPanelRosterThumbSpec(domain, filterKey) {
+    let which = String(domain || '').toLowerCase();
+    let key = String(filterKey || '').toLowerCase();
+    if (!key || key === 'total') return null;
+    if (which === 'units') {
+        return { thumbKey: filterKey, isUnit: true };
+    }
+    if (which !== 'buildings') return null;
+    if (key.startsWith('barrack:')) {
+        return { thumbKey: `barrack_${filterKey.slice(8)}`, isUnit: false };
+    }
+    if (key.startsWith('tower:')) {
+        return { thumbKey: filterKey.slice(6), isUnit: false };
+    }
+    return { thumbKey: filterKey, isUnit: false };
+}
+
 function _buildInfoPanelRosterRow(domain, filterKey, label, idleValue, totalValue, noun) {
     let titleBase = `${String(label).toLowerCase()} ${noun}`;
-    return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
-        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="all" style="cursor:pointer;color:#bbb;width:88px;min-width:88px;max-width:88px;text-align:left;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 6px;font:inherit" title="Select all ${titleBase}">${label}</button>`
-        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="idle" style="cursor:pointer;color:#ddd;width:22px;min-width:35px;max-width:35px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 0;font:inherit" title="Select idle ${titleBase}">Idle</button>`
-        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="one" style="cursor:pointer;color:#ddd;width:22px;min-width:22px;max-width:22px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:1px 0;font:inherit" title="Select one ${titleBase} (prefer idle)">1</button>`
-        + `<span class="info-value" style="color:#ddd;flex:1 1 auto;text-align:right;font-variant-numeric:tabular-nums">${idleValue} / ${totalValue}</span>`
+    let thumb = _getInfoPanelRosterThumbSpec(domain, filterKey);
+    let borderRadius = thumb && thumb.isUnit ? '50%' : '4px';
+    let mainButtonHtml = thumb
+        ? `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="all" style="width:22px;height:22px;padding:0;border:1px solid #333;border-radius:${borderRadius};background:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:0 0 auto" title="Select all ${titleBase}"><img src="${getItemThumbnail(thumb.thumbKey, 18)}" width="18" height="18" style="display:block;${thumb.isUnit ? 'border-radius:50%;' : 'border-radius:3px;'}"></button>`
+        : `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="all" style="cursor:pointer;color:#bbb;width:40px;min-width:40px;max-width:40px;height:22px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:0;font:inherit;line-height:1" title="Select all ${titleBase}">${label}</button>`;
+    return `<div class="info-row" style="margin:0;gap:4px;align-items:center">`
+        + `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 103px;min-width:103px;max-width:103px">`
+        + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px">${mainButtonHtml}</span>`
+        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="idle" style="cursor:pointer;color:#ddd;width:35px;min-width:35px;max-width:35px;height:20px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:0;font:inherit;line-height:1" title="Select idle ${titleBase}">Idle</button>`
+        + `<button type="button" class="info-player-status-select-btn" data-domain="${domain}" data-filter="${filterKey}" data-mode="one" style="cursor:pointer;color:#ddd;width:20px;min-width:20px;max-width:20px;height:20px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:0;font:inherit;line-height:1" title="Select one ${titleBase} (prefer idle)">1</button>`
+        + `</span>`
+        + `<span class="info-value" style="color:#ddd;flex:0 0 72px;min-width:72px;padding-left:6px;text-align:right;font-variant-numeric:tabular-nums">${idleValue} / ${totalValue}</span>`
         + `</div>`;
 }
 
@@ -816,12 +1033,15 @@ function updateHUD() {
         _hudEls.pop = document.getElementById('hud-pop');
         _hudEls.time = document.getElementById('hud-time');
         _hudEls.fps = document.getElementById('hud-fps');
+        _bindHudResourcePopupTrigger(_hudEls.energy, 'energy');
+        _bindHudResourcePopupTrigger(_hudEls.astar, 'astar');
     }
     let p = players[localPlayerId];
     let energy = Math.floor(p.energy);
     _renderHudResource(_hudEls.energy, 'energy', localPlayerId, 'energy', '⚡', '#da0', energy);
     let astarCur = Math.floor(_getPlayerAstarBudgetRemaining(localPlayerId));
     _renderHudResource(_hudEls.astar, 'astarText', localPlayerId, 'astar', '★', '#9aa', astarCur);
+    refreshResourcePenaltyPopupContent(localPlayerId);
     let playerCap = getPlayerPopCap(localPlayerId);
     let cfgCap = getConfiguredMaxPop();
     let popText = `Pop: ${String(p.popCount)}/${String(playerCap)}/${String(cfgCap)}`;
