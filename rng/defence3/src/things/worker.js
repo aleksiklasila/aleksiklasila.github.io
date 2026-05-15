@@ -278,10 +278,13 @@ function updateWorkerAI(u) {
                         t.energy = Math.min(requiredEnergy, t.energy + dps);
                         didWork = true;
                         if (t.energy >= requiredEnergy) {
+                            let prevStacked = getThingStackedStacks(t);
+                            let prevManual = getThingManualStacks(t);
+                            let remainingBeforeUpgrade = Math.max(0, prevManual - prevStacked);
                             let nextLevel = getThingBaseLevel(t) + 1;
                             t.level = nextLevel;
-                            t.stacks = Math.max(getThingStackedStacks(t), getRequiredStacksForLevel(nextLevel));
-                            t.manualStacks = Math.max(getThingManualStacks(t), t.stacks);
+                            t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(nextLevel));
+                            t.manualStacks = Math.max(prevManual, t.stacks + remainingBeforeUpgrade);
 
                             t.isUpgrading = false;
                             t.upgrademaxEnergy = 0;
@@ -452,10 +455,13 @@ function updateWorkerAI(u) {
                     t.maxEnergy = requiredEnergy;
                     t.energy = Math.min(requiredEnergy, t.energy + buildStep);
                     if (t.energy >= requiredEnergy) {
+                        let prevStacked = getThingStackedStacks(t);
+                        let prevManual = getThingManualStacks(t);
+                        let remainingBeforeUpgrade = Math.max(0, prevManual - prevStacked);
                         let nextLevel = getThingBaseLevel(t) + 1;
                         t.level = nextLevel;
-                        t.stacks = Math.max(getThingStackedStacks(t), getRequiredStacksForLevel(nextLevel));
-                        t.manualStacks = Math.max(getThingManualStacks(t), t.stacks);
+                        t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(nextLevel));
+                        t.manualStacks = Math.max(prevManual, t.stacks + remainingBeforeUpgrade);
 
                         t.isUpgrading = false;
                         t.upgrademaxEnergy = 0;
