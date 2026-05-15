@@ -867,6 +867,7 @@
             padding: 8px;
             font-size: 11px;
             overflow-y: auto;
+            overflow-x: visible;
             flex: 1;
             min-height: 0;
             display: none;
@@ -903,6 +904,8 @@
         #starting-resources-content .info-row {
             display: flex;
             padding: 1px 0;
+            flex-wrap: nowrap;
+            white-space: nowrap;
         }
 
         #info-panel .info-label,
@@ -911,6 +914,8 @@
             color: #888;
             flex: 1;
             text-align: left;
+            white-space: nowrap;
+            overflow: visible;
         }
 
         #info-panel .info-base,
@@ -935,6 +940,8 @@
             color: #fff;
             flex: 0 0 100px;
             text-align: center;
+            white-space: nowrap;
+            overflow: visible;
         }
 
         /* BUILD MENU (inside left panel) */
