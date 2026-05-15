@@ -544,13 +544,12 @@ function updateWorkerAI(u) {
                 }
                 if (!u.healerHasMaterial) {
                     let route = getSpawnerRoute('healer_spawner', null);
-                    if (route && players[owner].energy >= 1) {
+                    if (route) {
                         u.workerState = 'RETURNING_FOR_GOLD';
                         u.path = route.path;
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._healerSpawnerTarget = route.spawner;
                     } else {
-                        u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
                     }
@@ -2507,7 +2506,7 @@ function _healerFindTarget(u, myGx, myGy) {
 
         let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
         let tripCost = _getHealerQueueTripCost(u, queueTarget);
-        if (route && players[u.owner].energy >= tripCost && tripCost > 0) {
+        if (route && tripCost > 0) {
             u.workerState = 'RETURNING_FOR_GOLD';
             u.path = route.path;
             u.pathIndex = 0;
@@ -2546,7 +2545,7 @@ function _healerFindTarget(u, myGx, myGy) {
         }
 
         let route = _findBestSpawnerRoute(u, 'healer_spawner', null);
-        if (route && players[u.owner].energy >= 1) {
+        if (route) {
             u.workerState = 'RETURNING_FOR_GOLD';
             u.path = route.path;
             u.pathIndex = 0;

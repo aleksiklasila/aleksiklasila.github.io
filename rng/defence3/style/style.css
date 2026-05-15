@@ -727,7 +727,7 @@
 
         /* RIGHT PANEL (info/unit menu) */
         #right-panel {
-            width: 245px;
+            width: 280px;
             background: rgba(0, 0, 0, 0.95);
             border-left: 2px solid #333;
             display: flex;
@@ -942,6 +942,39 @@
             text-align: center;
             white-space: nowrap;
             overflow: visible;
+        }
+
+        /* Compact action pills in building/unit info rows so controls fit on one line. */
+        #info-panel .info-salvage-btn,
+        #info-panel .info-salvage-group-btn,
+        #info-panel .info-auto-upgrade-btn,
+        #info-panel .info-auto-upgrade-group-btn,
+        #info-panel .info-auto-research-btn,
+        #info-panel .info-auto-research-group-btn,
+        #info-panel .info-auto-stack-btn,
+        #info-panel .info-auto-stack-group-btn,
+        #info-panel .info-build-toggle-btn,
+        #info-panel .info-build-toggle-group-btn,
+        #info-panel .info-queue-toggle-btn,
+        #info-panel .info-queue-toggle-group-btn,
+        #info-panel .info-disabled-pill,
+        #research-popup-info-panel .info-salvage-btn,
+        #research-popup-info-panel .info-salvage-group-btn,
+        #research-popup-info-panel .info-auto-upgrade-btn,
+        #research-popup-info-panel .info-auto-upgrade-group-btn,
+        #research-popup-info-panel .info-auto-research-btn,
+        #research-popup-info-panel .info-auto-research-group-btn,
+        #research-popup-info-panel .info-auto-stack-btn,
+        #research-popup-info-panel .info-auto-stack-group-btn,
+        #research-popup-info-panel .info-build-toggle-btn,
+        #research-popup-info-panel .info-build-toggle-group-btn,
+        #research-popup-info-panel .info-queue-toggle-btn,
+        #research-popup-info-panel .info-queue-toggle-group-btn,
+        #research-popup-info-panel .info-disabled-pill {
+            padding: 1px 5px !important;
+            font-size: 8px !important;
+            line-height: 1.05 !important;
+            letter-spacing: -0.1px;
         }
 
         /* BUILD MENU (inside left panel) */

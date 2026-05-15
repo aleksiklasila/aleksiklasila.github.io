@@ -314,6 +314,8 @@ let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
 let UNIT_COLLECTOR_GATHER_LEVEL_EXP = 1;
 let UNIT_WORKER_SPECIALIST_BASE_RATE = 5;
 let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.22;
+let BUILDING_UPKEEP_EXP = 1.85;
+let UNIT_UPKEEP_EXP = 1.45;
 
 const BUILDING_FORMULA_CONFIG = {
     levelMultExp: 1.6,
@@ -368,7 +370,7 @@ const BUILDING_FORMULA_CONFIG = {
     sandDurationFallback: 0.5,
     watchDurationLevelAdd: 1,
     watchDurationFallbackBase: 4,
-    upKeepExp: 1.16,
+    upKeepExp: BUILDING_UPKEEP_EXP,
 };
 
 const UNIT_FORMULA_CONFIG = {
