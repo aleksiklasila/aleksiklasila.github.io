@@ -1039,6 +1039,7 @@ function buildInfoPanelPlayerStatusHtml() {
 
     let baseHtml = buildInfoPanelEnergyDeltaHtml(localPlayerId)
         + buildInfoPanelAstarBudgetHtml(localPlayerId)
+        + buildInfoPanelMaintenanceHtml(localPlayerId)
         + buildInfoPanelIdleWorkersHtml(localPlayerId);
     if (!isMultiplayer || !Array.isArray(lobbyPlayers) || lobbyPlayers.length === 0) return baseHtml;
 

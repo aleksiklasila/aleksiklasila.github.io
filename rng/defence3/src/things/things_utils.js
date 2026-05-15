@@ -696,10 +696,12 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
     let useDefaultBuild = defaultAutoBuildEnabled;
     let silentPlace = false;
+    let ignorePlacementRules = false;
     if (defaults && typeof defaults === 'object') {
         if (defaults.autoUpgradeEnabled !== undefined) useDefaultAutoUpgrade = !!defaults.autoUpgradeEnabled;
         if (defaults.buildEnabled !== undefined) useDefaultBuild = !!defaults.buildEnabled;
         if (defaults.silent !== undefined) silentPlace = !!defaults.silent;
+        if (defaults.ignorePlacementRules !== undefined) ignorePlacementRules = !!defaults.ignorePlacementRules;
     }
 
     if (itemKey.startsWith('cloud_')) {
@@ -741,8 +743,12 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         return true;
     }
 
-    // Allow stacking on existing same-type buildings, otherwise check canBuildAt
-    if (!canStackAt(gx, gy, itemKey, playerId) && !canBuildAt(gx, gy, playerId)) return false;
+    // Allow startup/bootstrap spawns to bypass visibility/normal placement gates.
+    // This keeps configured starter spawns deterministic even under fog/contested checks.
+    if (!ignorePlacementRules) {
+        // Allow stacking on existing same-type buildings, otherwise check canBuildAt
+        if (!canStackAt(gx, gy, itemKey, playerId) && !canBuildAt(gx, gy, playerId)) return false;
+    }
 
     if (cardDef.target === 'wall') {
         // Tower - check if same type exists for stacking
