@@ -269,7 +269,10 @@ class Tower {
                 ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(this.x - 14, this.y - 14, 28, 28);
             }
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 11, 20, 3);
-            if (!isUpg) return;
+            if (!isUpg) {
+                if (shouldShowBuildingLevels()) drawLevelTextCache(ctx, this, this.x, this.y);
+                return;
+            }
         } else {
             if (this.type === 'laser') {
                 if (this.laserState === 1) {
