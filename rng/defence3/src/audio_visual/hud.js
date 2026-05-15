@@ -454,12 +454,12 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         if (v < -0.05) return '#f88';
         return '#dd6';
     };
-    let row = (metric, sourceKey, thumbSpec = null, label = '') => {
+    let row = (metric, sourceKey, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
         let sec = getEnergyDeltaWindowSeconds(metric);
         let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec);
         let thingHtml = label
-            ? _buildInfoPanelThingLabelHtml(label, thumbSpec)
-            : _buildInfoPanelThingVisualOnlyHtml(thumbSpec);
+            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
+            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + `<button class="info-energy-delta-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
             + thingHtml
@@ -469,12 +469,12 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
 
     let html = _buildCollapsibleInfoSectionTitle('energyDelta', '⚡ Delta');
     if (!_isInfoSectionCollapsed('energyDelta')) {
-        html += row('total', '', { thumbKey: 'collector', isUnit: true }, 'Total');
-        html += row('collect', 'collect', { thumbKey: 'collector', isUnit: true });
-        html += row('salvage', 'salvage', { thumbKey: 'salvager_unit', isUnit: true });
-        html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true });
-        html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true });
-        html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true });
+        html += row('total', '', null, 'Total', 'total', 'units');
+        html += row('collect', 'collect', { thumbKey: 'collector', isUnit: true }, '', 'collector', 'units');
+        html += row('salvage', 'salvage', { thumbKey: 'salvager_unit', isUnit: true }, '', 'salvager_unit', 'units');
+        html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
+        html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
+        html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
@@ -550,6 +550,39 @@ function _buildInfoPanelThingVisualOnlyHtml(thumbSpec = null, width = 40) {
         + `</span>`;
 }
 
+function _buildInfoPanelThingSelectButtonHtml(domain, filterKey, label, thumbSpec = null, title = '') {
+    let safeDomain = _escapeHtml(String(domain || 'units'));
+    let safeFilter = _escapeHtml(String(filterKey || 'total'));
+    let safeLabel = _escapeHtml(String(label || ''));
+    let safeTitle = _escapeHtml(String(title || `Select all ${safeLabel || safeFilter}`));
+    if (thumbSpec && thumbSpec.thumbKey) {
+        let isUnit = !!thumbSpec.isUnit;
+        let borderRadius = isUnit ? '50%' : '4px';
+        let thumbKey = String(thumbSpec.thumbKey || '');
+        return `<button type="button" class="info-player-status-select-btn" data-domain="${safeDomain}" data-filter="${safeFilter}" data-mode="all" title="${safeTitle}" style="width:22px;height:22px;padding:0;border:1px solid #333;border-radius:${borderRadius};background:#111;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:0 0 auto"><img src="${getItemThumbnail(thumbKey, 18)}" width="18" height="18" style="display:block;${isUnit ? 'border-radius:50%;' : 'border-radius:3px;'}"></button>`;
+    }
+    return `<button type="button" class="info-player-status-select-btn" data-domain="${safeDomain}" data-filter="${safeFilter}" data-mode="all" title="${safeTitle}" style="cursor:pointer;color:#bbb;width:40px;min-width:40px;max-width:40px;height:22px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:0;font:inherit;line-height:1">${safeLabel}</button>`;
+}
+
+function _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec = null, labelWidth = 103, title = '') {
+    let safeLabel = _escapeHtml(String(label || ''));
+    let buttonHtml = _buildInfoPanelThingSelectButtonHtml(domain, filterKey, label, thumbSpec, title);
+    if (!thumbSpec || !thumbSpec.thumbKey) {
+        return `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 ${labelWidth}px;min-width:${labelWidth}px;max-width:${labelWidth}px">`
+            + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px">${buttonHtml}</span>`
+            + `</span>`;
+    }
+    return `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 ${labelWidth}px;min-width:${labelWidth}px;max-width:${labelWidth}px">`
+        + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px">${buttonHtml}</span>`
+        + `<span class="info-label" style="color:#bbb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${safeLabel}</span>`
+        + `</span>`;
+}
+
+function _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec = null, width = 40, title = '') {
+    let buttonHtml = _buildInfoPanelThingSelectButtonHtml(domain, filterKey, '', thumbSpec, title);
+    return `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 ${width}px;min-width:${width}px;max-width:${width}px">${buttonHtml}</span>`;
+}
+
 function buildInfoPanelAstarBudgetHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
@@ -564,12 +597,12 @@ function buildInfoPanelAstarBudgetHtml(owner) {
     };
     let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
 
-    let deltaRow = (metric, matcherFn, thumbSpec = null, label = '') => {
+    let deltaRow = (metric, matcherFn, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
         let sec = getAstarWindowSeconds(metric);
         let value = _getPlayerAstarDeltaRate(owner, sec, matcherFn);
         let thingHtml = label
-            ? _buildInfoPanelThingLabelHtml(label, thumbSpec)
-            : _buildInfoPanelThingVisualOnlyHtml(thumbSpec);
+            ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
+            : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + secBtn(metric, sec)
             + thingHtml
@@ -579,15 +612,15 @@ function buildInfoPanelAstarBudgetHtml(owner) {
 
     let html = _buildCollapsibleInfoSectionTitle('astarDelta', '★ Delta');
     if (!_isInfoSectionCollapsed('astarDelta')) {
-        html += deltaRow('total', null, { thumbKey: 'astar_collector', isUnit: true }, 'All');
+        html += deltaRow('total', null, null, 'Total', 'total', 'units');
 
-        html += deltaRow('astarCollector', ev => ev.unitType === 'astar_collector', { thumbKey: 'astar_collector', isUnit: true });
-        html += deltaRow('king', ev => ev.unitMetric === 'king', { thumbKey: 'king', isUnit: true });
-        html += deltaRow('collector', ev => ev.unitMetric === 'collector', { thumbKey: 'collector', isUnit: true });
-        html += deltaRow('salvager', ev => ev.unitMetric === 'salvager', { thumbKey: 'salvager_unit', isUnit: true });
-        html += deltaRow('builder', ev => ev.unitMetric === 'builder', { thumbKey: 'builder_unit', isUnit: true });
-        html += deltaRow('healer', ev => ev.unitMetric === 'healer', { thumbKey: 'healer_unit', isUnit: true });
-        html += deltaRow('researcher', ev => ev.unitMetric === 'researcher', { thumbKey: 'researcher_unit', isUnit: true });
+        html += deltaRow('astarCollector', ev => ev.unitType === 'astar_collector', { thumbKey: 'astar_collector', isUnit: true }, '', 'astar_collector', 'units');
+        html += deltaRow('king', ev => ev.unitMetric === 'king', { thumbKey: 'king', isUnit: true }, '', 'king', 'units');
+        html += deltaRow('collector', ev => ev.unitMetric === 'collector', { thumbKey: 'collector', isUnit: true }, '', 'collector', 'units');
+        html += deltaRow('salvager', ev => ev.unitMetric === 'salvager', { thumbKey: 'salvager_unit', isUnit: true }, '', 'salvager_unit', 'units');
+        html += deltaRow('builder', ev => ev.unitMetric === 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
+        html += deltaRow('healer', ev => ev.unitMetric === 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
+        html += deltaRow('researcher', ev => ev.unitMetric === 'researcher', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
 
         let special = new Set(['king', 'collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
         let otherTypes = new Set();
@@ -599,7 +632,7 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let sortedOtherTypes = Array.from(otherTypes).sort();
         for (let unitType of sortedOtherTypes) {
             let metric = `u_${unitType}`;
-            html += deltaRow(metric, ev => ev.unitType === unitType, { thumbKey: unitType, isUnit: true });
+            html += deltaRow(metric, ev => ev.unitType === unitType, { thumbKey: unitType, isUnit: true }, '', unitType, 'units');
         }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
@@ -614,11 +647,11 @@ function buildInfoPanelUpKeepHtml(owner) {
         : { total: 0, units: 0, buildings: 0, turrets: 0, unitTypes: {}, buildingTypes: {} };
     let fmt = (v) => formatBigNumber(Math.max(0, Number(v) || 0), 2);
     let totalRow = (value) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-        + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px;color:#bbb">Total</span>`
+        + _buildInfoPanelThingSelectableLabelHtml('upkeep-total', 'total', 'Total', null, 40, 'Select all upkeep things')
         + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
-    let typedRow = (label, value, thumbSpec) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
-        + _buildInfoPanelThingVisualOnlyHtml(thumbSpec)
+    let typedRow = (value, thumbSpec, domain, filterKey) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+        + _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`)
         + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
         + `</div>`;
 
@@ -629,7 +662,7 @@ function buildInfoPanelUpKeepHtml(owner) {
         let unitTypes = breakdown.unitTypes || {};
         let unitKeys = Object.keys(unitTypes).filter(k => (Number(unitTypes[k]) || 0) > 0).sort(_compareInfoPanelUnitTypes);
         for (let unitType of unitKeys) {
-            html += typedRow(_prettyUnitTypeLabel(unitType), unitTypes[unitType], { thumbKey: unitType, isUnit: true });
+            html += typedRow(unitTypes[unitType], { thumbKey: unitType, isUnit: true }, 'upkeep-units', unitType);
         }
         if (unitKeys.length > 0) {
             html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
@@ -638,7 +671,7 @@ function buildInfoPanelUpKeepHtml(owner) {
         let buildingTypes = breakdown.buildingTypes || {};
         let buildingKeys = Object.keys(buildingTypes).filter(k => (Number(buildingTypes[k]) || 0) > 0).sort((a, b) => _prettyBuildingTypeLabel(a).localeCompare(_prettyBuildingTypeLabel(b)));
         for (let buildingType of buildingKeys) {
-            html += typedRow(_prettyBuildingTypeLabel(buildingType), buildingTypes[buildingType], { thumbKey: buildingType, isUnit: false });
+            html += typedRow(buildingTypes[buildingType], { thumbKey: buildingType, isUnit: false }, 'upkeep-buildings', buildingType);
         }
 
         if (unitKeys.length <= 0 && buildingKeys.length <= 0) {
@@ -760,6 +793,27 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
         if (selectMode === 'idle') nextEntities = idlePool;
         else if (selectMode === 'one') nextEntities = [(idlePool.length > 0 ? idlePool : pool)[Math.floor(Math.random() * (idlePool.length > 0 ? idlePool.length : pool.length))]].filter(Boolean);
         else nextEntities = pool;
+    } else if (which === 'upkeep-total') {
+        nextUnits = _getOwnedInfoPanelUnits(owner);
+        nextEntities = _getOwnedInfoPanelBuildings(owner);
+    } else if (which === 'upkeep-units') {
+        let pool = _getOwnedInfoPanelUnits(owner);
+        if (filter !== 'total') pool = pool.filter(u => String(u.unitType || '').toLowerCase() === filter);
+        nextUnits = pool;
+    } else if (which === 'upkeep-buildings') {
+        let pool = _getOwnedInfoPanelBuildings(owner);
+        if (filter !== 'total') {
+            pool = pool.filter(e => {
+                let typeKey = String(e && e.type || '').toLowerCase();
+                if (typeKey === filter) return true;
+                if (typeKey === 'barrack') {
+                    let barrackKey = `barrack_${String(e && e.unitType || '').toLowerCase()}`;
+                    if (barrackKey === filter) return true;
+                }
+                return false;
+            });
+        }
+        nextEntities = pool;
     }
 
     if (nextUnits.length <= 0 && nextEntities.length <= 0) return false;
@@ -1747,7 +1801,7 @@ function queueToggleGroupBtn(coordStr, allEnabled, anyEnabled) {
 }
 
 function disabledInfoPill(label) {
-    return `<span style="cursor:default;background:#1a1a1a;padding:2px 8px;border:1px solid #333;border-radius:3px;font-size:9px;color:#555;">${label}</span>`;
+    return `<span class="info-disabled-pill" style="cursor:default;background:#1a1a1a;padding:2px 8px;border:1px solid #333;border-radius:3px;font-size:9px;color:#555;">${label}</span>`;
 }
 
 function formatInfoCurrency(n, d = 0) {
@@ -3694,6 +3748,25 @@ function getResearchQueueDepthForStatInGroup(group, kind, key, statKey) {
     return getResearchQueuedDepthForPlayer(group[0].owner, kind, key, statKey);
 }
 
+function getResearchSpentEnergyForAppliedLevels(kind, key, statKey, appliedLevel) {
+    let level = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(appliedLevel) || 0)));
+    let total = 0;
+    for (let i = 0; i < level; i++) {
+        total += Math.max(0, Number(getResearchCost(kind, key, statKey, i)) || 0);
+    }
+    return total;
+}
+
+function getResearchQueuedEnergyForStat(kind, key, statKey, startLevel, queuedDepth) {
+    let level = Math.max(0, Math.min(MAX_RESEARCH_LEVEL, Math.floor(Number(startLevel) || 0)));
+    let depth = Math.max(0, Math.floor(Number(queuedDepth) || 0));
+    let total = 0;
+    for (let i = 0; i < depth && (level + i) < MAX_RESEARCH_LEVEL; i++) {
+        total += Math.max(0, Number(getResearchCost(kind, key, statKey, level + i)) || 0);
+    }
+    return total;
+}
+
 function renderResearchThingRowsForPanel(owner, scope, targetArg) {
     let html = '';
     let scopeKey = getResearchPanelScopeKey(owner, scope);
@@ -3749,15 +3822,32 @@ function renderResearchThingRowsForPanel(owner, scope, targetArg) {
         let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(projectedValue))
             ? (projectedValue / baseValue)
             : NaN;
+        let currentMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(currentValue))
+            ? (currentValue / baseValue)
+            : NaN;
+        let nextPreviewLevel = atMax ? displayToLevel : Math.min(MAX_RESEARCH_LEVEL, displayToLevel + 1);
+        let nextPreviewValue = getResearchStatValueAtLevel(selectedThing.kind, selectedThing.key, stat.statKey, nextPreviewLevel, selectedThingLevel);
+        if (!Number.isFinite(nextPreviewValue)) nextPreviewValue = projectedValue;
+        let nextPreviewMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(nextPreviewValue))
+            ? (nextPreviewValue / baseValue)
+            : NaN;
+        let queuedEnergy = getResearchQueuedEnergyForStat(selectedThing.kind, selectedThing.key, stat.statKey, currentLevel, globalQueuedDepth);
+        let currentMultiplierLabel = `x${formatResearchMultiplierValue(currentMultiplier)}`;
+        let projectedMultiplierLabel = `x${formatResearchMultiplierValue(projectedMultiplier)}`;
+        let nextPreviewMultiplierLabel = `x${formatResearchMultiplierValue(nextPreviewMultiplier)}`;
 
         html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
         html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${stat.label}</span></span>`;
-        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
-        html += `<span style="color:#9cf">Q:${queuedDepth}</span>`;
+        html += `<span style="color:#fd0">⚡${formatBigNumber(queuedEnergy, 0)}</span>`;
+        html += `<span class="info-research-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="color:#8fc;cursor:pointer;flex:0 0 auto;text-align:right;display:inline-block;">${currentMultiplierLabel}->${projectedMultiplierLabel}</span>`;
         html += `</div>`;
-        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
-        html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)} <span style="color:#9cf">R${displayToLevel}/${MAX_RESEARCH_LEVEL}</span></span>`;
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;white-space:nowrap">`;
+        html += `<span style="display:flex;align-items:center;gap:8px;color:#9cf">`;
+        html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}</span>`;
+        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${nextPreviewMultiplierLabel}</span>`;
+        html += `<span>Q:${queuedDepth}</span>`;
+        html += `</span>`;
         if (scope.startsWith('single:')) {
             html += `<div style="display:flex;align-items:center;gap:4px">`;
             html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
@@ -4548,6 +4638,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.querySelectorAll('.info-assigned-target-btn').forEach(btn => {
         bindInstantPress(btn, () => {
             _selectInfoPanelAssignedTarget(btn.dataset.targetGx, btn.dataset.targetGy, btn.dataset.targetType || '');
+        });
+    });
+
+    panel.querySelectorAll('.info-player-status-select-btn').forEach(btn => {
+        bindInstantPress(btn, () => {
+            selectInfoPanelPlayerRoster(btn.dataset.domain, btn.dataset.filter, btn.dataset.mode || 'all', localPlayerId);
         });
     });
 

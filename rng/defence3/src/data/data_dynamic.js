@@ -81,7 +81,7 @@ function _getResourceKeyForPrecomputedStat(kind, statKey) {
 function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
     let numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return numericValue;
-    if (statKey === 'upKeep') return numericValue;
+    if (statKey === 'upKeep' || statKey === 'popCap' || statKey === 'workerSearchDistance' || statKey === 'visionRange' || statKey === 'visionRangeArea' || statKey === 'attackRange' || statKey === 'attackRangeArea' || statKey === 'blastRadius') return numericValue;
     let resourceKey = _getResourceKeyForPrecomputedStat(kind, statKey);
     let multiplier = _getPlayerResourcePenaltyMultiplier(playerId, resourceKey);
     if (!(multiplier > 1)) return numericValue;
@@ -393,8 +393,8 @@ function createEditableRuntimeConfigSnapshot() {
             UNIT_COLLECTOR_GATHER_LEVEL_EXP,
             UNIT_WORKER_SPECIALIST_BASE_RATE,
             UNIT_WORKER_SPECIALIST_LEVEL_EXP,
-            BUILDING_UPKEEP_EXP: Number(BUILDING_FORMULA_CONFIG.upKeepExp) || 1.16,
-            UNIT_UPKEEP_EXP_DEFAULT: Number((UNIT_LEVEL_SCALING._default || {}).upKeepExp) || 1,
+            BUILDING_UPKEEP_EXP,
+            UNIT_UPKEEP_EXP,
         },
         tables: {
             BASE_CARD_TYPES: makeEditorCardTypesTable(),
@@ -538,11 +538,10 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_FORMULA_CONFIG.upKeepExp = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
-    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) {
-        if (!UNIT_LEVEL_SCALING._default || typeof UNIT_LEVEL_SCALING._default !== 'object') UNIT_LEVEL_SCALING._default = {};
-        UNIT_LEVEL_SCALING._default.upKeepExp = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
-    }
+    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_UPKEEP_EXP = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
+    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP));
+    // Backward compatibility for older config payloads.
+    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
 
     BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
@@ -552,6 +551,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
+    BUILDING_FORMULA_CONFIG.upKeepExp = BUILDING_UPKEEP_EXP;
     UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
     UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
     UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
@@ -582,6 +582,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
     RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
     RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
+    BUILDING_UPKEEP_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.upKeepExp) || BUILDING_UPKEEP_EXP);
     UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
     UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
     UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
@@ -2008,6 +2009,8 @@ function createEditableRuntimeConfigSnapshot() {
             UNIT_COLLECTOR_GATHER_LEVEL_EXP,
             UNIT_WORKER_SPECIALIST_BASE_RATE,
             UNIT_WORKER_SPECIALIST_LEVEL_EXP,
+            BUILDING_UPKEEP_EXP,
+            UNIT_UPKEEP_EXP,
         },
         tables: {
             BASE_CARD_TYPES: makeEditorCardTypesTable(),
@@ -2147,6 +2150,10 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
+    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_UPKEEP_EXP = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
+    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP));
+    // Backward compatibility for older config payloads.
+    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) UNIT_UPKEEP_EXP = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
 
     BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.levelMultExp = BUILDING_LEVEL_MULT_EXP;
@@ -2156,6 +2163,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     BUILDING_FORMULA_CONFIG.sandGunCdLevelExp = SAND_GUN_CD_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp = RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP;
     BUILDING_FORMULA_CONFIG.researchEfficiencyCap = RESEARCH_BUILDING_EFFICIENCY_CAP;
+    BUILDING_FORMULA_CONFIG.upKeepExp = BUILDING_UPKEEP_EXP;
     UNIT_FORMULA_CONFIG.collectorGatherLevelExp = UNIT_COLLECTOR_GATHER_LEVEL_EXP;
     UNIT_FORMULA_CONFIG.workerSpecialistBaseRate = UNIT_WORKER_SPECIALIST_BASE_RATE;
     UNIT_FORMULA_CONFIG.workerSpecialistLevelExp = UNIT_WORKER_SPECIALIST_LEVEL_EXP;
@@ -2186,6 +2194,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     SAND_GUN_CD_LEVEL_EXP = Math.max(0.01, Number(BUILDING_FORMULA_CONFIG.sandGunCdLevelExp) || 0.01);
     RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyLevelExp) || 1);
     RESEARCH_BUILDING_EFFICIENCY_CAP = Math.max(0, Number(BUILDING_FORMULA_CONFIG.researchEfficiencyCap) || 0);
+    BUILDING_UPKEEP_EXP = Math.max(1, Number(BUILDING_FORMULA_CONFIG.upKeepExp) || BUILDING_UPKEEP_EXP);
     UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(UNIT_FORMULA_CONFIG.collectorGatherLevelExp) || 0);
     UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 0);
     UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(UNIT_FORMULA_CONFIG.workerSpecialistLevelExp) || 1);
@@ -2637,7 +2646,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
     let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
     let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
-    let upKeepLevelExp = Math.max(1, Number(cfg.upKeepExp) || 1);
+    let upKeepLevelExp = Math.max(1, Number(UNIT_UPKEEP_EXP) || 1);
     let baseUpKeep = Math.max(0.01, Number(s.upKeep) || 1);
     let upKeep = Math.max(0.01, baseUpKeep * Math.pow(upKeepLevelExp, lvl - 1));
     let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * Math.pow(astarCostLevelExp, lvl - 1));
@@ -2665,7 +2674,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     let sandGunCdExp = Math.max(0.01, Number(bCfg.sandGunCdLevelExp) || 0.01);
     let researchEfficiencyExp = Math.max(1, Number(bCfg.researchEfficiencyLevelExp) || 1);
     let researchEfficiencyCap = Math.max(0, Number(bCfg.researchEfficiencyCap) || 0);
-    let upKeepLevelExp = Math.max(1, Number(bCfg.upKeepExp) || 1.16);
+    let upKeepLevelExp = Math.max(1, Number(BUILDING_UPKEEP_EXP) || 1.16);
     let mult = Math.pow(multExp, lvl - 1);
     let energyMult = Math.pow(energyExp, lvl - 1);
     let out = {
