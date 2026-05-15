@@ -97,7 +97,7 @@ const RESOURCE_TYPES = {
         farmName: 'A* Farm',
         farmIcon: '★',
         farmColor: '#9aa',
-        farmDescription: 'A* collectors can harvest here; farm level multiplies A* gather speed.',
+        farmDescription: 'A* collectors can harvest here; farm level multiplies A* Gather Speed.',
         collectorBuildingKey: 'astar_spawner',
         collectorBuildingName: 'A*',
         collectorBuildingIcon: '★',
