@@ -62,6 +62,16 @@ function getSpawnerFallbackUnitType(spawner) {
     return 'norm';
 }
 
+function _shouldWaitForConstruction(self) {
+    if (!self || !self.underConstruction) return false;
+    let requiredEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(self, 1) || self.maxEnergy || 1));
+    if ((Number(self.energy) || 0) >= requiredEnergy) {
+        markConstructionComplete(self);
+        return false;
+    }
+    return true;
+}
+
 let globalSpawnerReadyOrderCounter = 1;
 
 function updateSpawnerProductionProgress(spawner) {
@@ -229,7 +239,8 @@ class Barrack {
 
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -304,7 +315,8 @@ class CollectorSpawner {
     }
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl, this.owner, 'spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -369,7 +381,8 @@ class AstarSpawner {
     }
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('astar_collector', effLvl, this.owner, 'astar_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -431,7 +444,8 @@ class SalvagerSpawner {
     }
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl, this.owner, 'salvager') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -499,7 +513,8 @@ class BuilderSpawner {
     }
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl, this.owner, 'builder_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -567,7 +582,8 @@ class HealerSpawner {
     }
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl, this.owner, 'healer_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
@@ -642,7 +658,8 @@ class ResearchSpawner {
 
     update() {
         tickStatusEffects(this);
-        if (this.energy <= 0 || this.underConstruction) return;
+        if (this.energy <= 0) return;
+        if (_shouldWaitForConstruction(this)) return;
 
         let effLvl = getThingEffectiveLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', effLvl, this.owner, 'research') * TICK_RATE);

@@ -717,6 +717,10 @@ function canUnitOccupyTile(unit, gx, gy) {
     if (unit && unit.isFlying) return true;
     if (grid[gy][gx].type !== TYPE_WALL) return true;
 
+    // Allow units to walk through tiles where the building is still under construction (L0)
+    let tileEntity = getTileEntityRef(gx, gy);
+    if (tileEntity && tileEntity.underConstruction) return true;
+
     if (!!getCloudTowerAt(gx, gy, unit ? unit.owner : null)) return true;
     if (!unit) return false;
 

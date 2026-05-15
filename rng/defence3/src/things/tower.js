@@ -78,7 +78,11 @@ class Tower {
         if (this.energy <= 0) return;
         tickStatusEffects(this);
         if (this.energy <= 0) return;
-        if (this.underConstruction) return;
+        if (this.underConstruction) {
+            let requiredEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(this, 1) || this.maxEnergy || 1));
+            if ((Number(this.energy) || 0) >= requiredEnergy) markConstructionComplete(this);
+            if (this.underConstruction) return;
+        }
         if (this.type.startsWith('cloud')) return;
 
         if (this.type === 'laser') {

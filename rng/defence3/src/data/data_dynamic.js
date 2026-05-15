@@ -81,7 +81,7 @@ function _getResourceKeyForPrecomputedStat(kind, statKey) {
 function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
     let numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return numericValue;
-    if (statKey === 'upKeep' || statKey === 'popCap' || statKey === 'workerSearchDistance' || statKey === 'visionRange' || statKey === 'visionRangeArea' || statKey === 'attackRange' || statKey === 'attackRangeArea' || statKey === 'blastRadius') return numericValue;
+    if (statKey === 'upKeep' || statKey === 'popCap' || statKey === 'energy' || statKey === 'maxEnergy' || statKey === 'workerSearchDistance' || statKey === 'visionRange' || statKey === 'visionRangeArea' || statKey === 'attackRange' || statKey === 'attackRangeArea' || statKey === 'blastRadius') return numericValue;
     let resourceKey = _getResourceKeyForPrecomputedStat(kind, statKey);
     let multiplier = _getPlayerResourcePenaltyMultiplier(playerId, resourceKey);
     if (!(multiplier > 1)) return numericValue;
@@ -3241,6 +3241,7 @@ function getResearchStatEntriesForThing(kind, key) {
         out.push({ statKey, label: RESEARCH_STAT_LABELS[statKey] || statKey, baseValue });
     };
 
+    addStat('maxLevel', 1);
     addStat('maxEnergy', getBaseBuildingmaxEnergyForResearch(key));
     let d = BASE_CARD_TYPES[key] || {};
     addStat('popCap', getBuildingStatFromMap(key, 1, 'popCap', 0));
@@ -3274,7 +3275,6 @@ function rebuildResearchThings() {
     for (let key in BASE_CARD_TYPES) {
         let def = BASE_CARD_TYPES[key];
         if (!def || !Number.isFinite(def.price) || def.price <= 0) continue;
-        if (key === 'area_upgrader') continue;
         let stats = getResearchStatEntriesForThing('building', key);
         if (stats.length <= 0) continue;
         things.push({
@@ -3359,6 +3359,7 @@ function formatResearchStatValue(statKey, value) {
     if (!Number.isFinite(value)) return '-';
     let compact = (v, d = 2) => formatBigNumber(v, d);
     let areaCompact = (v) => `${Math.max(0, Math.floor(Number(v) || 0))} areas`;
+    if (statKey === 'maxLevel') return `L${Math.max(1, Math.floor(Number(value) || 1))}`;
     if (statKey === 'burnDuration' || statKey === 'poisonDuration' || statKey === 'freezeDuration' || statKey === 'wetDuration' || statKey === 'sandDuration' || statKey === 'watchDuration') {
         return `${compact(value, 2)}s`;
     }
@@ -3392,6 +3393,10 @@ function getResearchBuildingEfficiency(researchBuilding) {
 }
 
 function getResearchCurrentStatValue(playerId, kind, key, statKey) {
+    if (kind === 'building' && statKey === 'maxLevel') {
+        let researched = Math.max(0, Math.floor(getPlayerResearchLevel(playerId, 'building', key, 'maxLevel') || 0));
+        return Math.max(1, Math.min(MAX_THING_LEVEL, 1 + Math.round(researched * (MAX_THING_LEVEL - 1) / Math.max(1, MAX_RESEARCH_LEVEL))));
+    }
     if (kind === 'unit') return getUnitStatForOwner(playerId, key, 1, statKey);
     if (kind === 'building') return getBuildingStatForOwner(playerId, key, 1, statKey);
     return NaN;
@@ -3608,6 +3613,30 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
                 if (statKey === 'maxEnergy') item.energy = Math.max(1, Math.min(prevEnergy, item.maxEnergy));
             }
             if (Number.isFinite(stats.damage)) item.damage = stats.damage;
+        }
+    }
+
+    if (statKey === 'maxLevel') {
+        for (let t of towers) {
+            if (!t || t.owner !== owner || t.type !== buildingKey) continue;
+            refreshThingProgressState(t);
+        }
+        for (let b of barracks) {
+            if (!b || b.owner !== owner || `barrack_${b.unitType}` !== buildingKey) continue;
+            refreshThingProgressState(b);
+        }
+        for (let s of collectorSpawners) {
+            if (!s || s.owner !== owner || s.type !== buildingKey) continue;
+            refreshThingProgressState(s);
+        }
+        for (let y = 0; y < GRID_H; y++) {
+            for (let x = 0; x < GRID_W; x++) {
+                let cell = grid[y][x];
+                if (!cell || !cell.item || cell.owner !== owner) continue;
+                let item = cell.item;
+                if (item.type !== buildingKey) continue;
+                refreshThingProgressState(item);
+            }
         }
     }
 }

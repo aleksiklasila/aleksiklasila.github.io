@@ -241,7 +241,9 @@ function _runAdjacencyRecalculation() {
             if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
 
             let baseLevel = getThingBaseLevel(obj);
-            if (!passiveRefresh && baseLevel < obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
+            let researchedMaxLevel = getThingResearchedMaxLevel(obj);
+            let maxAutoUpgradeLevel = Math.min(obj.effectiveLevel, researchedMaxLevel);
+            if (!passiveRefresh && baseLevel < maxAutoUpgradeLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
                 beginUpgradeProgress(obj, baseLevel + 1);
             }
 
@@ -976,8 +978,26 @@ function getUpgrademaxEnergy(item, nextLevel) {
     return calculateItemStats(item.type || 'farm', nextLevel, item.owner).maxEnergy;
 }
 
+function getThingResearchBuildingKey(item) {
+    if (!item || !item.type) return '';
+    if (item.type === 'barrack') return `barrack_${item.unitType || 'norm'}`;
+    return String(item.type || '');
+}
+
+function getThingResearchedMaxLevel(item) {
+    if (!item) return Math.max(1, MAX_THING_LEVEL);
+    let key = getThingResearchBuildingKey(item);
+    if (!key) return Math.max(1, MAX_THING_LEVEL);
+    let owner = Number.isFinite(item.owner) ? Math.floor(item.owner) : -1;
+    if (owner < 0 || typeof getPlayerResearchLevel !== 'function') return 1;
+    let researchedLevel = Math.max(0, Math.floor(getPlayerResearchLevel(owner, 'building', key, 'maxLevel') || 0));
+    return Math.max(1, Math.min(MAX_THING_LEVEL, 1 + Math.round(researchedLevel * (MAX_THING_LEVEL - 1) / Math.max(1, MAX_RESEARCH_LEVEL))));
+}
+
 function beginUpgradeProgress(item, nextLevel) {
     if (!item) return;
+    let targetLevel = Math.max(1, clampThingLevel(Math.floor(Number(nextLevel) || 1)));
+    if (targetLevel > getThingResearchedMaxLevel(item)) return;
     let targetmaxEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(item, nextLevel) || (item.maxEnergy || 1)));
     item.isUpgrading = true;
     item.isStacking = false;
@@ -1061,7 +1081,9 @@ function refreshThingProgressState(item) {
 
     let baseLevel = getThingBaseLevel(item);
     let effLevel = getThingEffectiveLevel(item, baseLevel);
-    if (baseLevel < effLevel && isAutoUpgradeEnabled(item)) {
+    let researchedMaxLevel = getThingResearchedMaxLevel(item);
+    let maxAutoUpgradeLevel = Math.min(effLevel, researchedMaxLevel);
+    if (baseLevel < maxAutoUpgradeLevel && isAutoUpgradeEnabled(item)) {
         beginUpgradeProgress(item, baseLevel + 1);
         item.isStacking = false;
         return;
@@ -1360,10 +1382,24 @@ function getLevelLabelText(item) {
     let potentialLevel = item.underConstruction
         ? Math.max(0, Math.floor(getThingPotentialLevel(item, Math.max(0, effectiveLevel)) || effectiveLevel))
         : Math.max(effectiveLevel, Math.floor(getThingPotentialLevel(item, effectiveLevel) || effectiveLevel));
+    let researchedMax = (typeof getThingResearchedMaxLevel === 'function') ? getThingResearchedMaxLevel(item) : MAX_THING_LEVEL;
     let shownLevel = Math.max(effectiveLevel, potentialLevel);
-    return shownLevel > currentLevel
-        ? `L${currentLevel}->L${shownLevel}`
-        : `L${currentLevel}`;
+    
+    if (shownLevel > currentLevel) {
+        // If potential exceeds research max, show differently
+        if (potentialLevel > researchedMax) {
+            // If current is already at max, just show current->potential with blocked marker
+            if (currentLevel === researchedMax) {
+                return `L${currentLevel}->L${potentialLevel}|BLOCKED`;
+            }
+            // Otherwise show current->max->potential with blocked marker
+            return `L${currentLevel}->L${researchedMax}->L${potentialLevel}|BLOCKED`;
+        }
+        // Otherwise cap shown level to researched max
+        shownLevel = Math.min(shownLevel, researchedMax);
+        return `L${currentLevel}->L${shownLevel}`;
+    }
+    return `L${currentLevel}`;
 }
 
 function getUnitLevelLabelText(unit) {

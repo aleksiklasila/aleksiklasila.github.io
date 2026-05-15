@@ -2324,7 +2324,10 @@ function processActions(actions, playerId) {
                     let baseLevel = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey);
                     let queuedDepth = getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
                     let projected = baseLevel + queuedDepth;
-                    if (projected >= MAX_RESEARCH_LEVEL) break;
+                    let capLevel = (a.kind === 'building' && a.statKey === 'maxLevel')
+                        ? Math.max(0, MAX_THING_LEVEL - 1)
+                        : MAX_RESEARCH_LEVEL;
+                    if (projected >= capLevel) break;
                     let task = makeResearchTask(playerId, a.kind, a.key, a.statKey, projected);
                     p.researchQueue.push(task);
                     tryAdvancePlayerResearchTask(playerId);

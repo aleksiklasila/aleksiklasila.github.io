@@ -2650,32 +2650,120 @@ function _trimSpriteCache(cache, maxEntries) {
 
 function _getBuildingLevelTextSprite(label) {
     let txt = String(label || '');
+    let isBlocked = txt.includes('|BLOCKED');
+    let displayText = txt.replace('|BLOCKED', '').trim();
     let scale = _getUiSpriteScale();
-    let key = txt + '|' + scale;
+    let key = displayText + '|' + scale + '|' + (isBlocked ? 'BLOCKED' : '');
     let cached = LEVEL_TEXT_SPRITE_CACHE.get(key);
     if (cached) return cached;
 
-    let width = 32;
+    let width = 40;
     let height = 48;
     let canvas = document.createElement('canvas');
     let c = canvas.getContext('2d');
-    c.font = '700 8px Segoe UI, Arial, sans-serif';
-    width = Math.max(width, Math.ceil(c.measureText(txt).width + 10));
+    
+    // Use smaller font if three-part (with ->) or blocked
+    let isThreePart = (displayText.match(/->/g) || []).length === 2;
+    let fontSize = isThreePart || isBlocked ? 6 : 8;
+    
+    c.font = `700 ${fontSize}px Segoe UI, Arial, sans-serif`;
+    width = Math.max(width, Math.ceil(c.measureText(displayText).width + 10));
     canvas.width = width * scale;
     canvas.height = height * scale;
     c = canvas.getContext('2d');
     c.imageSmoothingEnabled = false;
     c.setTransform(scale, 0, 0, scale, 0, 0);
     c.clearRect(0, 0, width, height);
-    c.textAlign = 'center';
+    c.textAlign = 'left';
     c.textBaseline = 'middle';
-    c.font = '700 8px Segoe UI, Arial, sans-serif';
+    c.font = `700 ${fontSize}px Segoe UI, Arial, sans-serif`;
     c.lineJoin = 'round';
     c.strokeStyle = 'rgba(0,0,0,0.95)';
     c.lineWidth = 2;
-    c.strokeText(txt, width * 0.5, 11);
-    c.fillStyle = '#eee';
-    c.fillText(txt, width * 0.5, 11);
+    
+    if (isBlocked && displayText.includes('->')) {
+        // Parse either L1->L3->L5 or L1->L5 format
+        let parts = displayText.split('->');
+        if (parts.length === 3) {
+            // Three-part: L0->L1->L3
+            let part1 = parts[0]; // L0
+            let part2 = parts[1]; // L1
+            let part3 = parts[2]; // L3
+            let arrow = '->';
+            
+            let fullText = displayText;
+            let startX = (width - c.measureText(fullText).width) * 0.5;
+            
+            let x1 = startX;
+            let x2 = x1 + c.measureText(part1 + arrow).width;
+            let x3 = x2 + c.measureText(part2 + arrow).width;
+            
+            // Stroke all
+            c.strokeText(part1, x1, 11);
+            c.strokeText(arrow, x1 + c.measureText(part1).width, 11);
+            c.strokeText(part2, x2, 11);
+            c.strokeText(arrow, x2 + c.measureText(part2).width, 11);
+            c.strokeText(part3, x3, 11);
+            
+            // Fill - normal for L0->L1, red for L3
+            c.fillStyle = '#eee';
+            c.fillText(part1, x1, 11);
+            c.fillText(arrow, x1 + c.measureText(part1).width, 11);
+            c.fillText(part2, x2, 11);
+            c.fillText(arrow, x2 + c.measureText(part2).width, 11);
+            c.fillStyle = '#ff6666';  // Bright red
+            c.fillText(part3, x3, 11);
+        } else if (parts.length === 2) {
+            // Two-part with blocked (L1->L5|BLOCKED)
+            let currentText = parts[0];
+            let arrow = '->';
+            let potentialText = parts[1];
+            
+            let startX = (width - c.measureText(displayText).width) * 0.5;
+            let x1 = startX;
+            let x2 = x1 + c.measureText(currentText + arrow).width;
+            
+            // Stroke all
+            c.strokeText(currentText, x1, 11);
+            c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
+            c.strokeText(potentialText, x2, 11);
+            
+            // Fill - normal for current and arrow, bright red for potential
+            c.fillStyle = '#eee';
+            c.fillText(currentText, x1, 11);
+            c.fillText(arrow, x1 + c.measureText(currentText).width, 11);
+            c.fillStyle = '#ff6666';  // Bright red
+            c.fillText(potentialText, x2, 11);
+        }
+    } else if (displayText.includes('->')) {
+        // Normal two-part (L1->L3)
+        let arrowIdx = displayText.indexOf('->');
+        let currentText = displayText.substring(0, arrowIdx);
+        let arrow = '->';
+        let nextText = displayText.substring(arrowIdx + 2);
+        
+        let fullWidth = c.measureText(displayText).width;
+        let startX = (width - fullWidth) * 0.5;
+        let x1 = startX;
+        let x2 = x1 + c.measureText(currentText + arrow).width;
+        
+        // Stroke all
+        c.strokeText(currentText, x1, 11);
+        c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
+        c.strokeText(nextText, x2, 11);
+        
+        // Fill - all normal
+        c.fillStyle = '#eee';
+        c.fillText(currentText, x1, 11);
+        c.fillText(arrow, x1 + c.measureText(currentText).width, 11);
+        c.fillText(nextText, x2, 11);
+    } else {
+        // Single level (L1) - use center alignment
+        c.textAlign = 'center';
+        c.strokeText(displayText, width * 0.5, 11);
+        c.fillStyle = '#eee';
+        c.fillText(displayText, width * 0.5, 11);
+    }
 
     cached = { canvas, scale, width, height };
     LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
