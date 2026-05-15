@@ -1731,6 +1731,21 @@ function _getReservedWorkerForTarget(target, workerType) {
     return reservedUnit;
 }
 
+function _findConflictingWorkerOnTargetTile(unit, target) {
+    if (!unit || !target || !unit.workerType) return null;
+    let targetTileIndex = _getWorkerTargetTileIndex(target);
+    if (targetTileIndex < 0) return null;
+    for (let other of units) {
+        if (!other || other === unit || other.dead || !other.workerTarget) continue;
+        if (other.owner !== unit.owner) continue;
+        if (other.workerType !== unit.workerType) continue;
+        let otherTileIndex = _getWorkerTargetTileIndex(other.workerTarget);
+        if (otherTileIndex !== targetTileIndex) continue;
+        return other;
+    }
+    return null;
+}
+
 function _invalidateWorkerTargetLoadCache() {
     workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
 }
@@ -1744,6 +1759,10 @@ function _setWorkerTarget(unit, target, targetType = null) {
     if (nextSlotIndex >= 0) {
         let reservedUnit = workerReservedTiles[nextSlotIndex];
         if (reservedUnit && reservedUnit !== unit && !reservedUnit.dead && reservedUnit.owner === unit.owner && reservedUnit.workerType === unit.workerType) return false;
+        if (!reservedUnit) {
+            let directConflict = _findConflictingWorkerOnTargetTile(unit, target);
+            if (directConflict) return false;
+        }
     }
 
     let prevTarget = unit.workerTarget;
@@ -1792,7 +1811,9 @@ function _canAssignWorkerTargetExclusive(u, target, targetType = null) {
     if (!u || !target || !u.workerType) return false;
     if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
     let reservedUnit = _getReservedWorkerForTarget(target, u.workerType);
-    if (!reservedUnit) return true;
+    if (!reservedUnit) {
+        return !_findConflictingWorkerOnTargetTile(u, target);
+    }
     if (reservedUnit === u) return true;
     return reservedUnit.owner !== u.owner || reservedUnit.workerType !== u.workerType;
 }
