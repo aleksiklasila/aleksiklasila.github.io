@@ -164,8 +164,8 @@ function getCollectorFarmKeyForResource(resourceKey) {
 function buildResourceCollectorCardTypes() {
     let out = {};
     for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.farmKey] = { name: cfg.farmName, price: cfg.key === 'astar' ? 50 : 40, icon: cfg.farmIcon, color: cfg.farmColor, visionRange: 0, multiplier: 0.02, target: 'floor', resourceKey: cfg.key };
-        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, target: 'floor', resourceKey: cfg.key };
+        out[cfg.farmKey] = { name: cfg.farmName, price: cfg.key === 'astar' ? 50 : 40, icon: cfg.farmIcon, color: cfg.farmColor, visionRange: 0, multiplier: 0.02, maintenance: 0.7, target: 'floor', resourceKey: cfg.key };
+        out[cfg.collectorBuildingKey] = { name: cfg.collectorBuildingName, price: cfg.key === 'astar' ? 170 : 150, icon: cfg.collectorBuildingIcon, color: cfg.collectorBuildingColor, visionRange: 0.6, energy: 60, maintenance: 0.7, target: 'floor', resourceKey: cfg.key };
     }
     return out;
 }
@@ -203,6 +203,7 @@ function buildResourceCollectorUnitStats() {
             gatherPerTrip: cfg.gatherPerTrip,
             transferCooldown: 2.0,
             workerSearchDistance: 2.0,
+            maintenance: 0.7,
             color: cfg.collectorUnitColor,
             r: 6,
             vis: cfg.collectorUnitVis,
@@ -216,7 +217,7 @@ function buildResourceCollectorUnitStats() {
 function buildResourceCollectorUnitScaling() {
     let out = {};
     for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = { energyExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 };
+        out[cfg.collectorUnitKey] = { energyExp: 1.13, maintenanceExp: 1.13, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.8, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 };
     }
     return out;
 }
@@ -224,7 +225,7 @@ function buildResourceCollectorUnitScaling() {
 function buildResourceCollectorResearchableStats() {
     let out = {};
     for (let cfg of RESOURCE_TYPE_LIST) {
-        out[cfg.collectorUnitKey] = ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost'];
+        out[cfg.collectorUnitKey] = ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'gatherPerTrip', 'transferCooldown', 'astarCost', 'maintenance'];
     }
     return out;
 }
@@ -246,59 +247,59 @@ const RESOURCE_COLLECTOR_UNIT_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg =>
 // ============================================================
 const BASE_CARD_TYPES = {
     // Towers (target: wall)
-    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 0.6, cd: 2.0, damage: 8, target: 'wall', towerEnergy: 30 },
-    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 0.6, cd: 1.25, damage: 5, target: 'wall', towerEnergy: 25 },
-    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0.6, cd: 1.75, damage: 10, wetDuration: 7, target: 'wall', towerEnergy: 95 },
-    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 0.6, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, target: 'wall', towerEnergy: 200 },
-    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", visionRange: 0.6, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.06, target: 'wall', towerEnergy: 350 },
-    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 0.8, cd: 7.5, damage: 5, sandDuration: 9, target: 'wall', towerEnergy: 180 },
-    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0.6, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, target: 'wall', towerEnergy: 400 },
-    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 1.6, cd: 12.0, damage: 170, target: 'wall', towerEnergy: 1500 },
-    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 0.6, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, target: 'wall', towerEnergy: 150 },
-    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, target: 'wall', towerEnergy: 300 },
-    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 2.0, cd: 1.4, damage: 1, watchDuration: 5, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 4.8 },
+    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 0.6, cd: 2.0, damage: 8, maintenance: 0.5, target: 'wall', towerEnergy: 30 },
+    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 0.6, cd: 1.25, damage: 5, maintenance: 0.4, target: 'wall', towerEnergy: 25 },
+    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0.6, cd: 1.75, damage: 10, wetDuration: 7, maintenance: 0.55, target: 'wall', towerEnergy: 95 },
+    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 0.6, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, maintenance: 0.8, target: 'wall', towerEnergy: 200 },
+    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", visionRange: 0.6, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.06, maintenance: 0.95, target: 'wall', towerEnergy: 350 },
+    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 0.8, cd: 7.5, damage: 5, sandDuration: 9, maintenance: 0.6, target: 'wall', towerEnergy: 180 },
+    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0.6, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, maintenance: 1.2, target: 'wall', towerEnergy: 400 },
+    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 1.6, cd: 12.0, damage: 170, maintenance: 1.4, target: 'wall', towerEnergy: 1500 },
+    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 0.6, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, maintenance: 0.75, target: 'wall', towerEnergy: 150 },
+    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, maintenance: 1, target: 'wall', towerEnergy: 300 },
+    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 2.0, cd: 1.4, damage: 1, watchDuration: 5, maintenance: 0.1, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 4.8 },
 
     // Floor items
-    sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", visionRange: 0, sandDuration: 0.5, target: 'floor' },
-    lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", visionRange: 0, burnDps: 1, burnDuration: 1.5, target: 'floor' },
-    poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", visionRange: 0, poisonDps: 1, poisonDuration: 1.5, target: 'floor' },
-    ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0, freezeDps: 1, freezeDuration: 1.5, target: 'floor' },
-    water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0, wetDuration: 3, target: 'floor' },
-    mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", visionRange: 0, blastDamage: 135, blastRadius: 0.084, target: 'floor' },
+    sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", visionRange: 0, sandDuration: 0.5, maintenance: 0.5, target: 'floor' },
+    lava: { name: "Lava", price: 50, icon: "\uD83C\uDF0B", color: "#d22", visionRange: 0, burnDps: 1, burnDuration: 1.5, maintenance: 0.6, target: 'floor' },
+    poison_puddle: { name: "Poison Puddle", price: 90, icon: "\u2620\uFE0F", color: "#2d2", visionRange: 0, poisonDps: 1, poisonDuration: 1.5, maintenance: 0.5, target: 'floor' },
+    ice_patch: { name: "Ice Patch", price: 60, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0, freezeDps: 1, freezeDuration: 1.5, maintenance: 0.7, target: 'floor' },
+    water_puddle: { name: "Water Puddle", price: 50, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0, wetDuration: 3, maintenance: 0.1, target: 'floor' },
+    mine: { name: "Mine", price: 20, icon: "\uD83D\uDCA3", color: "#666", visionRange: 0, blastDamage: 135, blastRadius: 0.084, maintenance: 0.1, target: 'floor' },
     ...RESOURCE_COLLECTOR_CARD_TYPES,
 
     // Special
-    salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", visionRange: 0.6, energy: 60, target: 'floor' },
-    builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", visionRange: 0.6, energy: 60, target: 'floor' },
-    healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", visionRange: 0.6, energy: 60, target: 'floor' },
-    research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", visionRange: 0.6, energy: 70, efficiency: 1, target: 'floor' },
-    house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", visionRange: 0.4, energy: 30, target: 'floor' },
-    area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", visionRange: 0.2, target: 'area_upgrade' },
+    salvager: { name: "Salvager", price: 150, icon: "\u267B\uFE0F", color: "#543", visionRange: 0.6, energy: 60, maintenance: 0.25, target: 'floor' },
+    builder_spawner: { name: "Builder", price: 180, icon: "\uD83D\uDEA7", color: "#354", visionRange: 0.6, energy: 60, maintenance: 0.25, target: 'floor' },
+    healer_spawner: { name: "Healer", price: 180, icon: "\u25B3\u2695\uFE0F", color: "#355", visionRange: 0.6, energy: 60, maintenance: 0.25, target: 'floor' },
+    research: { name: "Research", price: 260, icon: "\u25B3\uD83E\uDDEA", color: "#446", visionRange: 0.6, energy: 70, efficiency: 1, maintenance: 0.25, target: 'floor' },
+    house: { name: "House", price: 110, icon: "\uD83C\uDFE0", color: "#c95", visionRange: 0.4, energy: 30, maintenance: 0.25, target: 'floor' },
+    area_upgrader: { name: "Area Up", price: 100, icon: "\u2B06\uFE0F", color: "#fd0", visionRange: 0.2, maintenance: 0.25, target: 'area_upgrade' },
 
     // Clouds
-    cloud_0a: { name: "Cloud R1", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_0b: { name: "Cloud R2", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
-    cloud_1a: { name: "Cloud B1", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_1b: { name: "Cloud B2", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
-    cloud_2a: { name: "Cloud G1", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_2b: { name: "Cloud G2", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
-    cloud_3a: { name: "Cloud Y1", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
-    cloud_3b: { name: "Cloud Y2", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
+    cloud_0a: { name: "Cloud R1", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
+    cloud_0b: { name: "Cloud R2", price: 100, icon: "\u2601\uFE0F", color: "#f66", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 0 },
+    cloud_1a: { name: "Cloud B1", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
+    cloud_1b: { name: "Cloud B2", price: 100, icon: "\u2601\uFE0F", color: "#66f", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 1 },
+    cloud_2a: { name: "Cloud G1", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
+    cloud_2b: { name: "Cloud G2", price: 100, icon: "\u2601\uFE0F", color: "#6f6", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 2 },
+    cloud_3a: { name: "Cloud Y1", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
+    cloud_3b: { name: "Cloud Y2", price: 100, icon: "\u2601\uFE0F", color: "#ff6", visionRange: 0, maintenance: 5, target: 'wall', towerEnergy: 200, isCloud: true, pairId: 3 },
 
     // Barracks (one per unit type)
-    barrack_norm: { name: "Barrack", price: 100, icon: "\u26FA", color: "#686", visionRange: 0.8, target: 'floor', unitType: 'norm' },
-    barrack_fast: { name: "Fast Brk", price: 80, icon: "\u26FA", color: "#eee", visionRange: 1.0, target: 'floor', unitType: 'fast' },
-    barrack_tank: { name: "Tank Brk", price: 200, icon: "\u26FA", color: "#555", visionRange: 0.6, target: 'floor', unitType: 'tank' },
-    barrack_boss: { name: "Boss Brk", price: 500, icon: "\u26FA", color: "#222", visionRange: 0.8, target: 'floor', unitType: 'boss' },
-    barrack_flying: { name: "Flying Brk", price: 150, icon: "\u26FA", color: "#dd0", visionRange: 1.0, target: 'floor', unitType: 'flying' },
-    barrack_mole: { name: "Mole Brk", price: 120, icon: "\u26FA", color: "#543", visionRange: 0.8, target: 'floor', unitType: 'mole' },
-    barrack_poison_resistant: { name: "Psn Res Brk", price: 160, icon: "\u26FA", color: "#2d2", visionRange: 0.8, target: 'floor', unitType: 'poison_resistant' },
-    barrack_fire_resistant: { name: "Fire Res Brk", price: 160, icon: "\u26FA", color: "#f50", visionRange: 0.8, target: 'floor', unitType: 'fire_resistant' },
-    barrack_water_resistant: { name: "Wtr Res Brk", price: 160, icon: "\u26FA", color: "#4af", visionRange: 1.0, target: 'floor', unitType: 'water_resistant' },
-    barrack_ice_resistant: { name: "Ice Res Brk", price: 160, icon: "\u26FA", color: "#afe", visionRange: 0.8, target: 'floor', unitType: 'ice_resistant' },
-    barrack_laser_resistant: { name: "Lsr Res Brk", price: 160, icon: "\u26FA", color: "#d0f", visionRange: 0.8, target: 'floor', unitType: 'laser_resistant' },
-    barrack_snake: { name: "Snake Brk", price: 400, icon: "\u26FA", color: "#0f0", visionRange: 0.8, target: 'floor', unitType: 'snake' },
-    barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", visionRange: 1.8, target: 'floor', unitType: 'scout' },
+    barrack_norm: { name: "Barrack", price: 100, icon: "\u26FA", color: "#686", visionRange: 0.8, maintenance: 0.1, target: 'floor', unitType: 'norm' },
+    barrack_fast: { name: "Fast Brk", price: 80, icon: "\u26FA", color: "#eee", visionRange: 1.0, maintenance: 0.1, target: 'floor', unitType: 'fast' },
+    barrack_tank: { name: "Tank Brk", price: 200, icon: "\u26FA", color: "#555", visionRange: 0.6, maintenance: 0.15, target: 'floor', unitType: 'tank' },
+    barrack_boss: { name: "Boss Brk", price: 500, icon: "\u26FA", color: "#222", visionRange: 0.8, maintenance: 0.2, target: 'floor', unitType: 'boss' },
+    barrack_flying: { name: "Flying Brk", price: 150, icon: "\u26FA", color: "#dd0", visionRange: 1.0, maintenance: 0.1, target: 'floor', unitType: 'flying' },
+    barrack_mole: { name: "Mole Brk", price: 120, icon: "\u26FA", color: "#543", visionRange: 0.8, maintenance: 0.1, target: 'floor', unitType: 'mole' },
+    barrack_poison_resistant: { name: "Psn Res Brk", price: 160, icon: "\u26FA", color: "#2d2", visionRange: 0.8, maintenance: 0.28, target: 'floor', unitType: 'poison_resistant' },
+    barrack_fire_resistant: { name: "Fire Res Brk", price: 160, icon: "\u26FA", color: "#f50", visionRange: 0.8, maintenance: 0.28, target: 'floor', unitType: 'fire_resistant' },
+    barrack_water_resistant: { name: "Wtr Res Brk", price: 160, icon: "\u26FA", color: "#4af", visionRange: 1.0, maintenance: 0.28, target: 'floor', unitType: 'water_resistant' },
+    barrack_ice_resistant: { name: "Ice Res Brk", price: 160, icon: "\u26FA", color: "#afe", visionRange: 0.8, maintenance: 0.28, target: 'floor', unitType: 'ice_resistant' },
+    barrack_laser_resistant: { name: "Lsr Res Brk", price: 160, icon: "\u26FA", color: "#d0f", visionRange: 0.8, maintenance: 0.28, target: 'floor', unitType: 'laser_resistant' },
+    barrack_snake: { name: "Snake Brk", price: 400, icon: "\u26FA", color: "#0f0", visionRange: 0.8, maintenance: 0.32, target: 'floor', unitType: 'snake' },
+    barrack_scout: { name: "Scout Brk", price: 90, icon: "\u26FA", color: "#9cf", visionRange: 1.8, maintenance: 0.1, target: 'floor', unitType: 'scout' },
 };
 
 // Single place for building Energy scaling across all building/card types.
@@ -367,6 +368,7 @@ const BUILDING_FORMULA_CONFIG = {
     sandDurationFallback: 0.5,
     watchDurationLevelAdd: 1,
     watchDurationFallbackBase: 4,
+    maintenanceExp: 1.16,
 };
 
 const UNIT_FORMULA_CONFIG = {
@@ -527,40 +529,40 @@ const BARRACK_SPAWN_CONFIG = {
 
 // Unit combat stats
 const BASE_UNIT_STATS = {
-    norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
-    fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.1, visionRange: 1.0, atkCd: 1.0, astarCost: 10, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
-    tank: { energy: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.1, visionRange: 0.6, atkCd: 2.25, astarCost: 10, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
-    boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.1, visionRange: 0.8, atkCd: 3.0, astarCost: 10, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
-    flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 0.3, visionRange: 1.0, atkCd: 1.75, astarCost: 10, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
-    mole: { energy: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.1, visionRange: 0.8, atkCd: 1.25, astarCost: 10, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
-    poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 0.2, visionRange: 0.8, atkCd: 1.75, astarCost: 10, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
-    fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 0.2, visionRange: 0.8, atkCd: 2.0, astarCost: 10, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
-    water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 0.2, visionRange: 1.0, atkCd: 1.5, astarCost: 10, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
-    ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 0.2, visionRange: 0.8, atkCd: 1.75, astarCost: 10, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
-    laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 0.8, atkCd: 1.75, astarCost: 10, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-    snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
-    scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.1, visionRange: 1.8, atkCd: 1.6, astarCost: 10, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+    norm: { energy: 40, price: 400, speed: 2.6, atk: 5, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, maintenance: 0.2, color: '#fff', r: 8, vis: 'circle', attackStyle: 'melee' },
+    fast: { energy: 20, price: 200, speed: 4.8, atk: 3, attackRange: 0.1, visionRange: 1.0, atkCd: 1.0, astarCost: 10, maintenance: 0.2, color: '#eee', r: 6, vis: 'circle', attackStyle: 'melee' },
+    tank: { energy: 80, price: 800, speed: 1.4, atk: 8, attackRange: 0.1, visionRange: 0.6, atkCd: 2.25, astarCost: 10, maintenance: 0.2, color: '#555', r: 10, vis: 'circle', attackStyle: 'melee' },
+    boss: { energy: 400, price: 4000, speed: 1.2, atk: 20, attackRange: 0.1, visionRange: 0.8, atkCd: 3.0, astarCost: 10, maintenance: 0.2, color: '#222', r: 12, vis: 'circle', attackStyle: 'melee' },
+    flying: { energy: 45, price: 450, speed: 3.0, atk: 4, attackRange: 0.3, visionRange: 1.0, atkCd: 1.75, astarCost: 10, maintenance: 0.2, color: '#dd0', r: 7, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
+    mole: { energy: 10, price: 100, speed: 1.6, atk: 2, attackRange: 0.1, visionRange: 0.8, atkCd: 1.25, astarCost: 10, maintenance: 0.2, color: '#543', r: 7.5, vis: 'mole', turretImmune: true },
+    poison_resistant: { energy: 60, price: 600, speed: 2.4, atk: 6, attackRange: 0.2, visionRange: 0.8, atkCd: 1.75, astarCost: 10, maintenance: 0.2, color: '#2d2', r: 9, vis: 'circle', poisonResistant: true, attackStyle: 'poison' },
+    fire_resistant: { energy: 70, price: 700, speed: 2.0, atk: 7, attackRange: 0.2, visionRange: 0.8, atkCd: 2.0, astarCost: 10, maintenance: 0.2, color: '#f50', r: 10, vis: 'circle', fireResistant: true, attackStyle: 'fire' },
+    water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 0.2, visionRange: 1.0, atkCd: 1.5, astarCost: 10, maintenance: 0.2, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
+    ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 0.2, visionRange: 0.8, atkCd: 1.75, astarCost: 10, maintenance: 0.2, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
+    laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 0.8, atkCd: 1.75, astarCost: 10, maintenance: 0.2, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
+    snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, maintenance: 0.2, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+    scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.1, visionRange: 1.8, atkCd: 1.6, astarCost: 10, maintenance: 0.2, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
     ...RESOURCE_COLLECTOR_UNIT_STATS,
-    salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
-    builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
-    healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
-    king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.1, visionRange: 1.0, atkCd: 2.0, astarCost: 10, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
+    salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, maintenance: 0.2, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
+    builder_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, maintenance: 0.2, builderDps: 25, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#8b5', r: 6, vis: 'rect', isWorker: true },
+    healer_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, maintenance: 0.2, healerDps: 5, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#fff', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+    researcher_unit: { energy: 25, price: 18, speed: 1.9, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, maintenance: 0.2, researcherDps: 15, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#6af', r: 6, collisionR: 3, vis: 'triangle', isWorker: true, isFlying: true },
+    king: { energy: 250, price: 1000, speed: 1.8, atk: 12, attackRange: 0.1, visionRange: 1.0, atkCd: 2.0, astarCost: 10, maintenance: 0.2, color: '#ffd700', r: 12, vis: 'king', attackStyle: 'melee' },
 };
 
 const UNIT_LEVEL_SCALING = {
-    _default: { energyExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.04, visionCapBonus: 2.4 },
-    boss: { energyExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.03, visionCapBonus: 2.0 },
-    flying: { energyExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.06, visionCapBonus: 3.6 },
-    snake: { energyExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.04, visionCapBonus: 2.6 },
-    tank: { energyExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.0 },
-    scout: { energyExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.08, visionCapBonus: 6.4 },
+    _default: { energyExp: 1.22, maintenanceExp: 1.22, dmgExp: 1.16, speedExp: 1.03, speedCapMul: 1.8, cdExp: 0.985, minCd: 0.4, visionExp: 1.04, visionCapBonus: 2.4 },
+    boss: { energyExp: 1.36, maintenanceExp: 1.36, dmgExp: 1.14, speedExp: 1.015, speedCapAbs: 2.6, cdExp: 0.99, minCd: 0.9, visionExp: 1.03, visionCapBonus: 2.0 },
+    flying: { energyExp: 1.12, maintenanceExp: 1.12, dmgExp: 1.12, speedExp: 1.06, speedCapAbs: 6.2, cdExp: 0.98, minCd: 0.5, visionExp: 1.06, visionCapBonus: 3.6 },
+    snake: { energyExp: 1.24, maintenanceExp: 1.24, dmgExp: 1.14, speedExp: 1.03, speedCapAbs: 4.8, cdExp: 0.985, minCd: 0.7, visionExp: 1.04, visionCapBonus: 2.6 },
+    tank: { energyExp: 1.25, maintenanceExp: 1.25, dmgExp: 1.15, speedExp: 1.02, speedCapAbs: 3.2, cdExp: 0.985, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.0 },
+    scout: { energyExp: 1.1, maintenanceExp: 1.1, dmgExp: 1.05, speedExp: 1.04, speedCapAbs: 7.4, cdExp: 0.99, minCd: 0.6, visionExp: 1.08, visionCapBonus: 6.4 },
     ...RESOURCE_COLLECTOR_UNIT_SCALING,
-    salvager_unit: { energyExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    builder_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    healer_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    researcher_unit: { energyExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
-    king: { energyExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.4 },
+    salvager_unit: { energyExp: 1.14, maintenanceExp: 1.14, dmgExp: 1.0, speedExp: 1.045, speedCapAbs: 4.6, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    builder_unit: { energyExp: 1.16, maintenanceExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    healer_unit: { energyExp: 1.16, maintenanceExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    researcher_unit: { energyExp: 1.16, maintenanceExp: 1.16, dmgExp: 1.0, speedExp: 1.05, speedCapAbs: 4.7, cdExp: 1.0, minCd: 49.95, visionExp: 1.03, visionCapBonus: 1.6 },
+    king: { energyExp: 1.2, maintenanceExp: 1.2, dmgExp: 1.12, speedExp: 1.025, speedCapAbs: 3.2, cdExp: 0.99, minCd: 0.6, visionExp: 1.04, visionCapBonus: 2.4 },
 };
 
 let RESEARCH_COST_EXP = 3;
@@ -573,7 +575,7 @@ let RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP = 1.5;
 let MAX_THING_LEVEL = 20;
 let MAX_RESEARCH_LEVEL = 10;
 
-const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true };
+const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true, maintenance: true };
 const RESEARCH_STAT_LABELS = {
     maxEnergy: 'Max Energy',
     popCap: 'Pop Cap',
@@ -606,21 +608,22 @@ const RESEARCH_STAT_LABELS = {
     builderDps: 'Build Speed',
     healerDps: 'Heal Speed',
     researcherDps: 'Research Speed',
+    maintenance: 'Maintenance / s',
     unitPrice: 'Unit Energy'
 };
 
 const RESEARCHABLE_UNIT_STATS = {
-    _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost'],
+    _default: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'maintenance'],
     ...RESOURCE_COLLECTOR_RESEARCHABLE_STATS,
-    salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost'],
-    builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost'],
-    healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost'],
-    researcher_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'researcherDps', 'transferCooldown', 'astarCost'],
-    king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost']
+    salvager_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'transferCooldown', 'astarCost', 'maintenance'],
+    builder_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'builderDps', 'transferCooldown', 'astarCost', 'maintenance'],
+    healer_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'healerDps', 'transferCooldown', 'astarCost', 'maintenance'],
+    researcher_unit: ['energy', 'speed', 'visionRange', 'workerSearchDistance', 'researcherDps', 'transferCooldown', 'astarCost', 'maintenance'],
+    king: ['energy', 'speed', 'atk', 'attackRange', 'visionRange', 'atkCd', 'astarCost', 'maintenance']
 };
 
-const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost'];
-const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency'];
+const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'maintenance'];
+const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'maintenance'];
 const RESOURCE_PRECOMPUTED_STAT_MAP = {
     astar: {
         unit: ['speed'],

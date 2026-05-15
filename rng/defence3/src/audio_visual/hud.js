@@ -14,6 +14,9 @@ const PLAYER_STATUS_WORKER_UNIT_ORDER = ['collector', 'astar_collector', 'salvag
 let infoPanelSectionCollapsed = {
     energyDelta: true,
     astarDelta: true,
+    maintenance: true,
+    maintenanceUnits: true,
+    maintenanceBuildings: true,
     units: true,
     buildings: true
 };
@@ -401,6 +404,7 @@ function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
     for (let i = 0; i < bucket.length; i++) {
         let ev = bucket[i];
         if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoffTick) continue;
+        if (ev.source === 'maintenance') continue;
         if (sourceKey && ev.source !== sourceKey) continue;
         let d = Number(ev.delta) || 0;
         sum += d;
@@ -450,24 +454,24 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         if (v < -0.05) return '#f88';
         return '#dd6';
     };
-    let row = (metric, label, sourceKey) => {
+    let row = (metric, sourceKey, thumbSpec = null) => {
         let sec = getEnergyDeltaWindowSeconds(metric);
         let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec);
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + `<button class="info-energy-delta-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
-            + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
+            + _buildInfoPanelThingVisualOnlyHtml(thumbSpec)
             + `<span class="info-value" style="color:${color(value)}">${fmt(value)} ⚡/s</span>`
             + `</div>`;
     };
 
     let html = _buildCollapsibleInfoSectionTitle('energyDelta', '⚡ Delta');
     if (!_isInfoSectionCollapsed('energyDelta')) {
-        html += row('total', 'Total', '');
-        html += row('collect', 'Collect', 'collect');
-        html += row('salvage', 'Salvage', 'salvage');
-        html += row('research', 'Research', 'research');
-        html += row('builder', 'Builder', 'builder');
-        html += row('healer', 'Healer', 'healer');
+        html += row('total', '', { thumbKey: 'collector', isUnit: true });
+        html += row('collect', 'collect', { thumbKey: 'collector', isUnit: true });
+        html += row('salvage', 'salvage', { thumbKey: 'salvager_unit', isUnit: true });
+        html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true });
+        html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true });
+        html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true });
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
@@ -503,6 +507,46 @@ function _prettyUnitTypeLabel(unitType) {
     return String(unitType || 'Other').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+function _prettyBuildingTypeLabel(buildingType) {
+    let key = String(buildingType || 'unknown');
+    if (key.startsWith('barrack_')) {
+        return `${_prettyUnitTypeLabel(key.slice('barrack_'.length))} Barrack`;
+    }
+    let def = BASE_CARD_TYPES[key];
+    if (def && def.name) return String(def.name);
+    return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function _buildInfoPanelThingLabelHtml(label, thumbSpec = null, labelWidth = 103) {
+    let safeLabel = _escapeHtml(String(label || ''));
+    if (!thumbSpec || !thumbSpec.thumbKey) {
+        return `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 ${labelWidth}px;min-width:${labelWidth}px;max-width:${labelWidth}px">`
+            + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px;color:#bbb">${safeLabel}</span>`
+            + `</span>`;
+    }
+    let isUnit = !!thumbSpec.isUnit;
+    let borderRadius = isUnit ? '50%' : '4px';
+    let thumbKey = String(thumbSpec.thumbKey || '');
+    return `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 ${labelWidth}px;min-width:${labelWidth}px;max-width:${labelWidth}px">`
+        + `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;min-width:40px;max-width:40px">`
+        + `<span style="width:22px;height:22px;padding:0;border:1px solid #333;border-radius:${borderRadius};background:#111;display:flex;align-items:center;justify-content:center;flex:0 0 auto"><img src="${getItemThumbnail(thumbKey, 18)}" width="18" height="18" style="display:block;${isUnit ? 'border-radius:50%;' : 'border-radius:3px;'}"></span>`
+        + `</span>`
+        + `<span class="info-label" style="color:#bbb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${safeLabel}</span>`
+        + `</span>`;
+}
+
+function _buildInfoPanelThingVisualOnlyHtml(thumbSpec = null, width = 40) {
+    if (!thumbSpec || !thumbSpec.thumbKey) {
+        return `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 ${width}px;min-width:${width}px;max-width:${width}px"></span>`;
+    }
+    let isUnit = !!thumbSpec.isUnit;
+    let borderRadius = isUnit ? '50%' : '4px';
+    let thumbKey = String(thumbSpec.thumbKey || '');
+    return `<span style="display:inline-flex;align-items:center;justify-content:center;flex:0 0 ${width}px;min-width:${width}px;max-width:${width}px">`
+        + `<span style="width:22px;height:22px;padding:0;border:1px solid #333;border-radius:${borderRadius};background:#111;display:flex;align-items:center;justify-content:center;flex:0 0 auto"><img src="${getItemThumbnail(thumbKey, 18)}" width="18" height="18" style="display:block;${isUnit ? 'border-radius:50%;' : 'border-radius:3px;'}"></span>`
+        + `</span>`;
+}
+
 function buildInfoPanelAstarBudgetHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
@@ -517,12 +561,12 @@ function buildInfoPanelAstarBudgetHtml(owner) {
     };
     let secBtn = (metric, sec) => `<button class="info-astar-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`;
 
-    let deltaRow = (metric, label, matcherFn) => {
+    let deltaRow = (metric, matcherFn, thumbSpec = null) => {
         let sec = getAstarWindowSeconds(metric);
         let value = _getPlayerAstarDeltaRate(owner, sec, matcherFn);
         return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + secBtn(metric, sec)
-            + `<span class="info-label" style="color:#bbb;min-width:68px">${label}:</span>`
+            + _buildInfoPanelThingVisualOnlyHtml(thumbSpec)
             + `<span class="info-value" style="color:${colorDelta(value)}">${fmtDelta(value)} ★/s</span>`
             + `</div>`;
     };
@@ -534,17 +578,17 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let stockCur = Number(_getPlayerAstarBudgetRemaining(owner)) || 0;
         html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
             + secBtn('total', totalSec)
-            + `<span class="info-label" style="color:#bbb;min-width:68px">Total:</span>`
+            + _buildInfoPanelThingVisualOnlyHtml({ thumbKey: 'astar_collector', isUnit: true })
             + `<span class="info-value" style="color:${colorDelta(totalDeltaRate)}">${fmtDelta(totalDeltaRate)} ★/s</span>`
             + `</div>`;
 
-        html += deltaRow('astarCollector', 'A*er', ev => ev.unitType === 'astar_collector');
-        html += deltaRow('king', 'King', ev => ev.unitMetric === 'king');
-        html += deltaRow('collector', 'Collector', ev => ev.unitMetric === 'collector');
-        html += deltaRow('salvager', 'Salvager', ev => ev.unitMetric === 'salvager');
-        html += deltaRow('builder', 'Builder', ev => ev.unitMetric === 'builder');
-        html += deltaRow('healer', 'Healer', ev => ev.unitMetric === 'healer');
-        html += deltaRow('researcher', 'Researcher', ev => ev.unitMetric === 'researcher');
+        html += deltaRow('astarCollector', ev => ev.unitType === 'astar_collector', { thumbKey: 'astar_collector', isUnit: true });
+        html += deltaRow('king', ev => ev.unitMetric === 'king', { thumbKey: 'king', isUnit: true });
+        html += deltaRow('collector', ev => ev.unitMetric === 'collector', { thumbKey: 'collector', isUnit: true });
+        html += deltaRow('salvager', ev => ev.unitMetric === 'salvager', { thumbKey: 'salvager_unit', isUnit: true });
+        html += deltaRow('builder', ev => ev.unitMetric === 'builder', { thumbKey: 'builder_unit', isUnit: true });
+        html += deltaRow('healer', ev => ev.unitMetric === 'healer', { thumbKey: 'healer_unit', isUnit: true });
+        html += deltaRow('researcher', ev => ev.unitMetric === 'researcher', { thumbKey: 'researcher_unit', isUnit: true });
 
         let special = new Set(['king', 'collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
         let otherTypes = new Set();
@@ -556,7 +600,50 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let sortedOtherTypes = Array.from(otherTypes).sort();
         for (let unitType of sortedOtherTypes) {
             let metric = `u_${unitType}`;
-            html += deltaRow(metric, _prettyUnitTypeLabel(unitType), ev => ev.unitType === unitType);
+            html += deltaRow(metric, ev => ev.unitType === unitType, { thumbKey: unitType, isUnit: true });
+        }
+    }
+    html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+    return html;
+}
+
+function buildInfoPanelMaintenanceHtml(owner) {
+    if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
+
+    let breakdown = (typeof getPlayerMaintenanceBreakdown === 'function')
+        ? getPlayerMaintenanceBreakdown(owner)
+        : { total: 0, units: 0, buildings: 0, turrets: 0, unitTypes: {}, buildingTypes: {} };
+    let fmt = (v) => formatBigNumber(Math.max(0, Number(v) || 0), 2);
+    let totalRow = (label, value) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+        + _buildInfoPanelThingLabelHtml(label, null)
+        + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
+        + `</div>`;
+    let typedRow = (label, value, thumbSpec) => `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+        + _buildInfoPanelThingLabelHtml(label, thumbSpec)
+        + `<span class="info-value" style="color:#f88">-${fmt(value)}⚡/ s</span>`
+        + `</div>`;
+
+    let html = _buildCollapsibleInfoSectionTitle('maintenance', 'Maintenace');
+    if (!_isInfoSectionCollapsed('maintenance')) {
+        html += totalRow('Total', breakdown.total);
+
+        let unitTypes = breakdown.unitTypes || {};
+        let unitKeys = Object.keys(unitTypes).filter(k => (Number(unitTypes[k]) || 0) > 0).sort(_compareInfoPanelUnitTypes);
+        for (let unitType of unitKeys) {
+            html += typedRow(_prettyUnitTypeLabel(unitType), unitTypes[unitType], { thumbKey: unitType, isUnit: true });
+        }
+        if (unitKeys.length > 0) {
+            html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+        }
+
+        let buildingTypes = breakdown.buildingTypes || {};
+        let buildingKeys = Object.keys(buildingTypes).filter(k => (Number(buildingTypes[k]) || 0) > 0).sort((a, b) => _prettyBuildingTypeLabel(a).localeCompare(_prettyBuildingTypeLabel(b)));
+        for (let buildingType of buildingKeys) {
+            html += typedRow(_prettyBuildingTypeLabel(buildingType), buildingTypes[buildingType], { thumbKey: buildingType, isUnit: false });
+        }
+
+        if (unitKeys.length <= 0 && buildingKeys.length <= 0) {
+            html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">` + _buildInfoPanelThingLabelHtml('None', null) + `<span class="info-value" style="color:#999">0.00⚡/ s</span></div>`;
         }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
@@ -1260,6 +1347,7 @@ function renderBuildItemDetailedStats(key) {
     let getUnitPreview = (unitType, lvl) => {
         let safeLvl = Math.max(1, clampThingLevel(lvl));
         let energy = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'energy');
+        let maintenance = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'maintenance');
         let atk = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atk');
         let cd = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'atkCd');
         let speed = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'speed');
@@ -1274,6 +1362,7 @@ function renderBuildItemDetailedStats(key) {
         let astarCost = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'astarCost');
         return {
             energy: Math.max(1, Math.floor(Number(energy) || 1)),
+            maintenance: Math.max(0, Number(maintenance) || 0),
             atk: Math.max(0, Math.floor(Number(atk) || 0)),
             cd: Math.max(0.05, Number(cd) || 0.05),
             speed: Math.max(0.1, Number(speed) || 0.1),
@@ -1299,12 +1388,15 @@ function renderBuildItemDetailedStats(key) {
     if (key.startsWith('barrack_')) {
         let unitType = def.unitType || 'norm';
         let bStats = calculateItemStats(key, level, localPlayerId);
+        let buildingMaintenance = getBuildingStatForOwner(localPlayerId, key, level, 'maintenance');
         let up = getUnitPreview(unitType, level);
         let buildingVisibility = getBuildingStatForOwner(localPlayerId, key, level, 'visionRange');
         if (!Number.isFinite(buildingVisibility)) buildingVisibility = Number((BASE_CARD_TYPES[key] || {}).visionRange);
         addRow('Energy', `${fmt(bStats.maxEnergy)}/${fmt(bStats.maxEnergy)}`, { kind: 'building', key, statKey: 'maxEnergy' });
+        if (Number.isFinite(buildingMaintenance)) addRow('Maintenance', `${fmt(buildingMaintenance, 2)}/s`, { kind: 'building', key, statKey: 'maintenance' });
         if (Number.isFinite(buildingVisibility)) addRow('Visibility', formatAreaDistanceStat(buildingVisibility), { kind: 'building', key, statKey: 'visionRange' });
         addRow('Unit Energy', fmt(up.energy), { kind: 'unit', key: unitType, statKey: 'energy' });
+        addRow('Unit Maintenance', `${fmt(up.maintenance, 2)}/s`, { kind: 'unit', key: unitType, statKey: 'maintenance' });
         if (unitType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'builderDps' });
         else if (unitType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerDps, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'healerDps' });
         else if (unitType === 'collector') addRow('Gather Speed', `${fmt(up.gatherPerTrip, 1)}/trip`, { kind: 'unit', key: unitType, statKey: 'gatherPerTrip' });
@@ -1335,9 +1427,12 @@ function renderBuildItemDetailedStats(key) {
                         ? 'builder_unit'
                         : (key === 'healer_spawner' ? 'healer_unit' : 'researcher_unit'))));
         let stats = calculateItemStats(key, level, localPlayerId);
+        let buildingMaintenance = getBuildingStatForOwner(localPlayerId, key, level, 'maintenance');
         let up = getUnitPreview(workerType, level);
         addRow('Energy', `${fmt(stats.maxEnergy)}/${fmt(stats.maxEnergy)}`, { kind: 'building', key, statKey: 'maxEnergy' });
+        if (Number.isFinite(buildingMaintenance)) addRow('Maintenance', `${fmt(buildingMaintenance, 2)}/s`, { kind: 'building', key, statKey: 'maintenance' });
         addRow(key === 'research' ? 'Researcher Energy' : 'Worker Energy', fmt(up.energy), { kind: 'unit', key: workerType, statKey: 'energy' });
+        addRow(key === 'research' ? 'Researcher Maintenance' : 'Worker Maintenance', `${fmt(up.maintenance, 2)}/s`, { kind: 'unit', key: workerType, statKey: 'maintenance' });
         if (workerType === 'builder_unit') addRow('Build Speed', `${fmt(up.builderDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'builderDps' });
         else if (workerType === 'healer_unit') addRow('Heal Speed', `${fmt(up.healerDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'healerDps' });
         else if (workerType === 'researcher_unit') addRow('Research Speed', `${fmt(up.researcherDps, 1)}/trip`, { kind: 'unit', key: workerType, statKey: 'researcherDps' });
@@ -1360,12 +1455,14 @@ function renderBuildItemDetailedStats(key) {
         let energy = getBuildingStatForOwner(localPlayerId, key, level, 'maxEnergy');
         let dmg = getBuildingStatForOwner(localPlayerId, key, level, 'damage');
         let cd = getBuildingStatForOwner(localPlayerId, key, level, 'cd');
+        let maintenance = getBuildingStatForOwner(localPlayerId, key, level, 'maintenance');
         let vision = getBuildingStatForOwner(localPlayerId, key, level, 'visionRange');
         if (!Number.isFinite(energy)) energy = Math.floor((def.towerEnergy || 0) * Math.pow(1.4, level - 1));
         if (!Number.isFinite(dmg)) dmg = null;
         if (!Number.isFinite(cd)) cd = def.cd;
         if (!Number.isFinite(vision)) vision = def.visionRange;
         if (energy > 0) addRow('Energy', `${fmt(energy)}/${fmt(energy)}`, { kind: 'building', key, statKey: 'maxEnergy' });
+        if (Number.isFinite(maintenance)) addRow('Maintenance', `${fmt(maintenance, 2)}/s`, { kind: 'building', key, statKey: 'maintenance' });
         if (dmg !== null) addRow('Attack', fmt(dmg, 1), { kind: 'building', key, statKey: 'damage' });
         if (cd) {
             addRow('Cooldown', `${cd.toFixed(2)}s`, { kind: 'building', key, statKey: 'cd' });
@@ -1433,7 +1530,9 @@ function renderBuildItemDetailedStats(key) {
         }
     } else {
         let stats = calculateItemStats(key, level, localPlayerId);
+        let maintenance = getBuildingStatForOwner(localPlayerId, key, level, 'maintenance');
         if (stats.maxEnergy > 0) addRow('Energy', `${fmt(stats.maxEnergy)}/${fmt(stats.maxEnergy)}`, { kind: 'building', key, statKey: 'maxEnergy' });
+        if (Number.isFinite(maintenance)) addRow('Maintenance', `${fmt(maintenance, 2)}/s`, { kind: 'building', key, statKey: 'maintenance' });
             if (key === 'farm' || key === 'astar_farm') {
                 let multiplier = Number.isFinite(stats.multiplier) ? stats.multiplier : level;
                 let gatherLabel = key === 'astar_farm' ? 'x A* gather' : 'x gather';
@@ -1764,6 +1863,12 @@ function deriveInfoPanelMatrixOptsFromLabel(label) {
 
     if (plain.startsWith('unit energy')) {
         kind = 'unit'; key = unitType || key; statKey = 'energy';
+    } else if (plain.endsWith('maintenance')) {
+        if (plain.startsWith('unit ') || plain.startsWith('worker ') || plain.startsWith('researcher ') || plain.startsWith('collector ') || plain.startsWith('builder ') || plain.startsWith('healer ') || plain.startsWith('salvager ')) {
+            kind = 'unit';
+            key = unitType || key;
+        }
+        statKey = 'maintenance';
     } else if (plain.startsWith('unit atk') || plain === 'attack') {
         if (plain.startsWith('unit atk') || kind === 'unit') {
             kind = 'unit'; key = unitType || key; statKey = 'atk';
@@ -2388,11 +2493,16 @@ function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, manualStacks 
 function renderBarrackInfo(e) {
     let html = '';
     let bKey = 'barrack_' + e.unitType;
-    let uLvl = getThingEffectiveLevel(e);
-    let uEnergy = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'energy');
-    let uAtk = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'atk');
-    let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
-    let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
+    let baseLvl = e.level || stackCountToLevel(e.stacks || 1);
+    let effLvl = getThingEffectiveLevel(e, baseLvl);
+    let uEnergy = getUnitStatForOwner(e.owner, e.unitType, effLvl, 'energy');
+    let uAtk = getUnitStatForOwner(e.owner, e.unitType, effLvl, 'atk');
+    let uRange = getUnitStatForOwner(e.owner, e.unitType, effLvl, 'attackRange');
+    let uSpeed = getUnitStatForOwner(e.owner, e.unitType, effLvl, 'speed');
+    let baseBuildingMaintenance = getBuildingStatForOwner(e.owner, e.type, baseLvl, 'maintenance');
+    let effBuildingMaintenance = getBuildingStatForOwner(e.owner, e.type, effLvl, 'maintenance');
+    let baseUnitMaintenance = getUnitStatForOwner(e.owner, e.unitType, baseLvl, 'maintenance');
+    let effUnitMaintenance = getUnitStatForOwner(e.owner, e.unitType, effLvl, 'maintenance');
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
@@ -2403,8 +2513,14 @@ function renderBarrackInfo(e) {
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
+    if (Number.isFinite(baseBuildingMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(baseBuildingMaintenance, 2)}⚡/ s`, Number.isFinite(effBuildingMaintenance) ? `${formatBigNumber(effBuildingMaintenance, 2)}⚡/ s` : `${formatBigNumber(baseBuildingMaintenance, 2)}⚡/ s`);
+    }
     // // html += infoRow('Upgrade', `${upg.goldCost}g, ENERGY ${upg.energyNow}->${upg.energyNext}`);
     html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
+    if (Number.isFinite(baseUnitMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Unit Maintenance', { title: `${e.unitType} / Maintenance`, kind: 'unit', key: e.unitType, statKey: 'maintenance' }), `${formatBigNumber(baseUnitMaintenance, 2)}⚡/ s`, Number.isFinite(effUnitMaintenance) ? `${formatBigNumber(effUnitMaintenance, 2)}⚡/ s` : `${formatBigNumber(baseUnitMaintenance, 2)}⚡/ s`);
+    }
     html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
     html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
@@ -2448,9 +2564,19 @@ function renderBarrackGroupInfo(group) {
     let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
     let totalBaseVis = 0;
     let totalEffVis = 0;
+    let totalBaseMaintenance = 0;
+    let totalEffMaintenance = 0;
+    let totalBaseUnitMaintenance = 0;
+    let totalEffUnitMaintenance = 0;
     let readyGroup = group.filter(b => !b.underConstruction);
     let totalQueue = 0;
     for (let b of group) {
+        let bBaseLevel = b.level || stackCountToLevel(b.stacks || 1);
+        let bEffLevel = getThingEffectiveLevel(b, bBaseLevel);
+        totalBaseMaintenance += Number(getBuildingStatForOwner(b.owner, b.type, bBaseLevel, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getBuildingStatForOwner(b.owner, b.type, bEffLevel, 'maintenance')) || 0;
+        totalBaseUnitMaintenance += Number(getUnitStatForOwner(b.owner, b.unitType, bBaseLevel, 'maintenance')) || 0;
+        totalEffUnitMaintenance += Number(getUnitStatForOwner(b.owner, b.unitType, bEffLevel, 'maintenance')) || 0;
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(b)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(b)) || 0;
     }
@@ -2463,7 +2589,9 @@ function renderBarrackGroupInfo(group) {
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}⚡/ s`, `${formatBigNumber(totalEffMaintenance, 2)}⚡/ s`);
     html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
+    html += infoRow(withInfoPanelStatMatrixButton('Unit Maintenance', { title: `${e.unitType} / Maintenance`, kind: 'unit', key: e.unitType, statKey: 'maintenance' }), `${formatBigNumber(totalBaseUnitMaintenance, 2)}⚡/ s`, `${formatBigNumber(totalEffUnitMaintenance, 2)}⚡/ s`);
     html += infoRow('Unit Atk', Number.isFinite(uAtk) ? Math.floor(uAtk) : '?');
     html += infoRow('Unit Range', formatRangeStatTiles(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
@@ -2515,6 +2643,8 @@ function renderTowerInfo(e) {
     let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
     let baseVis = Number(getEntityBaseVisibilityRangeTiles(e));
     let effVis = Number(getEntityEffectiveVisibilityRangeTiles(e));
+    let baseMaintenance = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'maintenance');
+    let effMaintenance = getBuildingStatForOwner(e.owner, e.type, effLevel, 'maintenance');
     if (!Number.isFinite(baseVis)) baseVis = 0;
     if (!Number.isFinite(effVis)) effVis = baseVis;
     let energyDisplay = formatThingEnergyDisplay(e);
@@ -2523,6 +2653,9 @@ function renderTowerInfo(e) {
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
+    if (Number.isFinite(baseMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(baseMaintenance, 2)}⚡/ s`, Number.isFinite(effMaintenance) ? `${formatBigNumber(effMaintenance, 2)}⚡/ s` : `${formatBigNumber(baseMaintenance, 2)}⚡/ s`);
+    }
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
         html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
@@ -2590,12 +2723,21 @@ function renderTowerGroupInfo(group) {
     let baseDps = bs && bs.cd > 0 ? (bs.damage / bs.cd).toFixed(1) : '0';
     let baseVis = Number(getEntityBaseVisibilityRangeTiles(e));
     let effVis = Number(getEntityEffectiveVisibilityRangeTiles(e));
+    let totalBaseMaintenance = 0;
+    let totalEffMaintenance = 0;
+    for (let t of group) {
+        let tBaseLevel = t.level || stackCountToLevel(t.stacks || 1);
+        let tEffLevel = getThingEffectiveLevel(t, tBaseLevel);
+        totalBaseMaintenance += Number(getBuildingStatForOwner(t.owner, t.type, tBaseLevel, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getBuildingStatForOwner(t.owner, t.type, tEffLevel, 'maintenance')) || 0;
+    }
     if (!Number.isFinite(baseVis)) baseVis = 0;
     if (!Number.isFinite(effVis)) effVis = baseVis;
     html += infoRow('Count', group.length);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}⚡/ s`, `${formatBigNumber(totalEffMaintenance, 2)}⚡/ s`);
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
     if (e.type !== 'laser') {
         html += infoRow('Range', formatRangeStatTiles(baseVis), formatRangeStatTiles(effVis));
@@ -2670,6 +2812,10 @@ function renderSpawnerInfo(e) {
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+    let baseMaintenance = getBuildingStatForOwner(e.owner, e.type, sLevel, 'maintenance');
+    let effMaintenance = getBuildingStatForOwner(e.owner, e.type, effLevel, 'maintenance');
+    let baseWorkerMaintenance = getUnitStatForOwner(e.owner, workerUnitType, sLevel, 'maintenance');
+    let effWorkerMaintenance = getUnitStatForOwner(e.owner, workerUnitType, effLevel, 'maintenance');
     let energyDisplay = formatThingEnergyDisplay(e);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
@@ -2677,6 +2823,12 @@ function renderSpawnerInfo(e) {
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
+    if (Number.isFinite(baseMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(baseMaintenance, 2)}⚡/ s`, Number.isFinite(effMaintenance) ? `${formatBigNumber(effMaintenance, 2)}⚡/ s` : `${formatBigNumber(baseMaintenance, 2)}⚡/ s`);
+    }
+    if (Number.isFinite(baseWorkerMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton(`${unitLabel} Maintenance`, { title: `${workerUnitType} / Maintenance`, kind: 'unit', key: workerUnitType, statKey: 'maintenance' }), `${formatBigNumber(baseWorkerMaintenance, 2)}⚡/ s`, Number.isFinite(effWorkerMaintenance) ? `${formatBigNumber(effWorkerMaintenance, 2)}⚡/ s` : `${formatBigNumber(baseWorkerMaintenance, 2)}⚡/ s`);
+    }
     let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, sLevel, 'workerSearchDistance');
     let effWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, effLevel, 'workerSearchDistance');
     if (Number.isFinite(baseWorkerSearchDistance)) {
@@ -2724,6 +2876,8 @@ function renderFloorItemInfo(e) {
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+    let baseMaintenance = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'maintenance');
+    let effMaintenance = getBuildingStatForOwner(e.owner, e.type, effLevel, 'maintenance');
     let energyDisplay = formatThingEnergyDisplay(e);
     if (baseStats.maxEnergy > 0) html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
@@ -2731,6 +2885,9 @@ function renderFloorItemInfo(e) {
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
+    if (Number.isFinite(baseMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(baseMaintenance, 2)}/s`, Number.isFinite(effMaintenance) ? `${formatBigNumber(effMaintenance, 2)}/s` : `${formatBigNumber(baseMaintenance, 2)}/s`);
+    }
     if (effStats.damage > 0) {
         let baseDmg = baseStats.damage, effDmg = effStats.damage;
         if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);
@@ -2841,10 +2998,15 @@ function renderUnitInfo(u) {
     let effAttackRange = Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
     let baseVisionRange = Math.max(0, Number(baseStats.visionRangeArea) || ((Number(baseStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
     let effVisionRange = Math.max(0, Number(effStats.visionRangeArea) || ((Number(effStats.visionRange) || 0) / AREA_UNIT_TILE_EQUIVALENT));
+    let baseMaintenance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'maintenance');
+    let effMaintenance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'maintenance');
 
     html += infoRow(withInfoPanelStatMatrixButton('Energy', { title: `${u.unitType} / Energy`, kind: 'unit', key: u.unitType, statKey: 'energy' }), formatInfoFraction(baseEnergyNow, basemaxEnergy), formatInfoFraction(Math.floor(u.energy), effmaxEnergy));
     html += infoRow('Level', `L${lvl}`, `L${effLvl}`);
     html += infoRowStacks(stacks, lvl, effStacks, effLvl, stacks);
+    if (Number.isFinite(baseMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${u.unitType} / Maintenance`, kind: 'unit', key: u.unitType, statKey: 'maintenance' }), `${formatBigNumber(baseMaintenance, 2)}/s`, Number.isFinite(effMaintenance) ? `${formatBigNumber(effMaintenance, 2)}/s` : `${formatBigNumber(baseMaintenance, 2)}/s`);
+    }
     html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), formatRangeStatTiles(effAttackRange));
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Visibility`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatAreaDistanceStat(baseVisionRange), formatAreaDistanceStat(effVisionRange));
     if (u.workerType === 'builder') {
@@ -2958,6 +3120,7 @@ function renderUnitGroupInfo(group) {
     let totalBaseSpeed = 0, totalEffSpeed = 0;
     let totalBaseRange = 0, totalEffRange = 0;
     let totalBaseVision = 0, totalEffVision = 0;
+    let totalBaseMaintenance = 0, totalEffMaintenance = 0;
     let totalBaseNextStacks = 0, totalEffNextStacks = 0;
     let baseLevels = new Set(), effLevels = new Set();
 
@@ -2998,6 +3161,8 @@ function renderUnitGroupInfo(group) {
         totalEffRange += Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
         totalBaseVision += Math.max(0, Number(baseStats.visionRange) || 0);
         totalEffVision += Math.max(0, Number(effStats.visionRange) || 0);
+        totalBaseMaintenance += Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getUnitStatForOwner(u.owner, u.unitType, effLvl, 'maintenance')) || 0;
         totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
         totalEffNextStacks += getRequiredStacksForLevel(effLvl + 1);
         baseLevels.add(lvl);
@@ -3043,6 +3208,7 @@ function renderUnitGroupInfo(group) {
     html += infoRow('Energy', formatInfoFraction(Math.floor(totalbaseEnergy), totalBasemaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
     html += infoRow('Level', levelSummary, effLevelSummary);
     html += infoRow('Stacks', formatStacksValueText(totalStacks), formatStacksValueText(totalEffStacks));
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${u0.unitType} / Maintenance`, kind: 'unit', key: u0.unitType, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}/s`, `${formatBigNumber(totalEffMaintenance, 2)}/s`);
     let avgBaseRange = totalBaseRange / Math.max(1, group.length);
     let avgEffRange = totalEffRange / Math.max(1, group.length);
     let avgBaseVision = totalBaseVision / Math.max(1, group.length);
@@ -3157,15 +3323,30 @@ function renderSpawnerGroupInfo(group) {
     let e = group[0];
     let label = e.type === 'spawner' ? 'Collector' : e.type === 'astar_spawner' ? 'A*er' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
     let unitLabel = e.type === 'spawner' ? 'Collector' : e.type === 'astar_spawner' ? 'A*er' : e.type === 'builder_spawner' ? 'Builder' : e.type === 'healer_spawner' ? 'Healer' : 'Salvager';
+    let workerUnitType = e.type === 'spawner' ? 'collector'
+        : e.type === 'astar_spawner' ? 'astar_collector'
+        : e.type === 'builder_spawner' ? 'builder_unit'
+        : e.type === 'healer_spawner' ? 'healer_unit'
+        : 'salvager_unit';
     let baseStacks = e.stacks || 1;
     let sLevel = stackCountToLevel(baseStacks);
     let effStacks = e.effectiveStacks || baseStacks;
     let effLevel = getThingEffectiveLevel(e, sLevel);
     let totalBaseVis = 0;
     let totalEffVis = 0;
+    let totalBaseMaintenance = 0;
+    let totalEffMaintenance = 0;
+    let totalBaseWorkerMaintenance = 0;
+    let totalEffWorkerMaintenance = 0;
     let readyGroup = group.filter(s => !s.underConstruction);
     let totalQueue = 0;
     for (let s of group) {
+        let sBaseLevel = s.level || stackCountToLevel(s.stacks || 1);
+        let sEffLevel = getThingEffectiveLevel(s, sBaseLevel);
+        totalBaseMaintenance += Number(getBuildingStatForOwner(s.owner, s.type, sBaseLevel, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getBuildingStatForOwner(s.owner, s.type, sEffLevel, 'maintenance')) || 0;
+        totalBaseWorkerMaintenance += Number(getUnitStatForOwner(s.owner, workerUnitType, sBaseLevel, 'maintenance')) || 0;
+        totalEffWorkerMaintenance += Number(getUnitStatForOwner(s.owner, workerUnitType, sEffLevel, 'maintenance')) || 0;
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(s)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(s)) || 0;
     }
@@ -3178,6 +3359,8 @@ function renderSpawnerGroupInfo(group) {
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}/s`, `${formatBigNumber(totalEffMaintenance, 2)}/s`);
+    html += infoRow(withInfoPanelStatMatrixButton(`${unitLabel} Maintenance`, { title: `${workerUnitType} / Maintenance`, kind: 'unit', key: workerUnitType, statKey: 'maintenance' }), `${formatBigNumber(totalBaseWorkerMaintenance, 2)}/s`, `${formatBigNumber(totalEffWorkerMaintenance, 2)}/s`);
     html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
     html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
     if (e.owner === localPlayerId) {
@@ -3602,6 +3785,12 @@ function renderResearchInfo(e) {
     let queueCap = getResearchQueueCapacityForPlayer(e.owner);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
+    let baseLevel = e.level || stackCountToLevel(e.stacks || 1);
+    let effLevel = getThingEffectiveLevel(e, baseLevel);
+    let baseMaintenance = getBuildingStatForOwner(e.owner, e.type, baseLevel, 'maintenance');
+    let effMaintenance = getBuildingStatForOwner(e.owner, e.type, effLevel, 'maintenance');
+    let baseResearcherMaintenance = getUnitStatForOwner(e.owner, 'researcher_unit', baseLevel, 'maintenance');
+    let effResearcherMaintenance = getUnitStatForOwner(e.owner, 'researcher_unit', effLevel, 'maintenance');
     let energyDisplay = formatThingEnergyDisplay(e);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e, true), _getInfoPanelEntityStateLabel(e, true));
@@ -3609,6 +3798,12 @@ function renderResearchInfo(e) {
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
+    if (Number.isFinite(baseMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(baseMaintenance, 2)}/s`, Number.isFinite(effMaintenance) ? `${formatBigNumber(effMaintenance, 2)}/s` : `${formatBigNumber(baseMaintenance, 2)}/s`);
+    }
+    if (Number.isFinite(baseResearcherMaintenance)) {
+        html += infoRow(withInfoPanelStatMatrixButton('Researcher Maintenance', { title: `researcher_unit / Maintenance`, kind: 'unit', key: 'researcher_unit', statKey: 'maintenance' }), `${formatBigNumber(baseResearcherMaintenance, 2)}/s`, Number.isFinite(effResearcherMaintenance) ? `${formatBigNumber(effResearcherMaintenance, 2)}/s` : `${formatBigNumber(baseResearcherMaintenance, 2)}/s`);
+    }
     let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', e.level || 1, 'workerSearchDistance');
     let effWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', getThingEffectiveLevel(e), 'workerSearchDistance');
     if (Number.isFinite(baseWorkerSearchDistance)) {
@@ -3674,8 +3869,16 @@ function renderResearchGroupInfo(group) {
     let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
     let totalEnergy = 0;
     let totalBaseVis = 0, totalEffVis = 0;
+    let totalBaseMaintenance = 0, totalEffMaintenance = 0;
+    let totalBaseResearcherMaintenance = 0, totalEffResearcherMaintenance = 0;
     for (let r of group) {
         totalEnergy += r.energy;
+        let rBaseLevel = r.level || stackCountToLevel(r.stacks || 1);
+        let rEffLevel = getThingEffectiveLevel(r, rBaseLevel);
+        totalBaseMaintenance += Number(getBuildingStatForOwner(r.owner, r.type, rBaseLevel, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getBuildingStatForOwner(r.owner, r.type, rEffLevel, 'maintenance')) || 0;
+        totalBaseResearcherMaintenance += Number(getUnitStatForOwner(r.owner, 'researcher_unit', rBaseLevel, 'maintenance')) || 0;
+        totalEffResearcherMaintenance += Number(getUnitStatForOwner(r.owner, 'researcher_unit', rEffLevel, 'maintenance')) || 0;
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(r)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(r)) || 0;
     }
@@ -3689,6 +3892,8 @@ function renderResearchGroupInfo(group) {
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}/s`, `${formatBigNumber(totalEffMaintenance, 2)}/s`);
+    html += infoRow(withInfoPanelStatMatrixButton('Researcher Maintenance', { title: `researcher_unit / Maintenance`, kind: 'unit', key: 'researcher_unit', statKey: 'maintenance' }), `${formatBigNumber(totalBaseResearcherMaintenance, 2)}/s`, `${formatBigNumber(totalEffResearcherMaintenance, 2)}/s`);
     if (e.owner === localPlayerId) {
         let rallyTokens = new Set(group.map(r => (r.rallyX !== null && r.rallyY !== null)
             ? `${Math.floor(r.rallyX / TILE)},${Math.floor(r.rallyY / TILE)}`
@@ -3889,10 +4094,16 @@ function renderFloorItemGroupInfo(group) {
     let effLevel = getThingEffectiveLevel(e, baseLevel);
     let totalBaseVis = 0;
     let totalEffVis = 0;
+    let totalBaseMaintenance = 0;
+    let totalEffMaintenance = 0;
     let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
     let effStats = calculateItemStats(e.type, effLevel, e.owner);
     let totalEnergy = 0;
     for (let f of group) {
+        let fBaseLevel = f.level || stackCountToLevel(f.stacks || 1);
+        let fEffLevel = getThingEffectiveLevel(f, fBaseLevel);
+        totalBaseMaintenance += Number(getBuildingStatForOwner(f.owner, f.type, fBaseLevel, 'maintenance')) || 0;
+        totalEffMaintenance += Number(getBuildingStatForOwner(f.owner, f.type, fEffLevel, 'maintenance')) || 0;
         totalEnergy += (f.energy || 0);
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(f)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(f)) || 0;
@@ -3905,6 +4116,7 @@ function renderFloorItemGroupInfo(group) {
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Maintenance', { title: `${e.type} / Maintenance`, kind: 'building', key: e.type, statKey: 'maintenance' }), `${formatBigNumber(totalBaseMaintenance, 2)}/s`, `${formatBigNumber(totalEffMaintenance, 2)}/s`);
     if (effStats.damage > 0) {
         let baseDmg = baseStats.damage, effDmg = effStats.damage;
         if (e.type === 'mine') html += infoRow('Explode Dmg', Math.floor(baseDmg), baseDmg !== effDmg ? Math.floor(effDmg) : undefined);

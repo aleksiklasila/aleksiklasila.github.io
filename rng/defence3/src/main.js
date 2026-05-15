@@ -17,6 +17,98 @@ function _buildDeterministicUnitUpdateOrderForTick() {
     return order;
 }
 
+function _createEmptyMaintenanceBreakdown() {
+    return {
+        total: 0,
+        units: 0,
+        buildings: 0,
+        turrets: 0,
+        unitTypes: Object.create(null),
+        buildingTypes: Object.create(null),
+    };
+}
+
+let _maintenanceRateByPlayer = [];
+
+function _ensureMaintenanceRateCacheSize() {
+    let targetLen = Array.isArray(players) ? players.length : 0;
+    while (_maintenanceRateByPlayer.length < targetLen) _maintenanceRateByPlayer.push(_createEmptyMaintenanceBreakdown());
+    if (_maintenanceRateByPlayer.length > targetLen) _maintenanceRateByPlayer.length = targetLen;
+}
+
+function _getPlayerMaintenanceBreakdown(owner) {
+    let pid = Math.max(0, Math.floor(Number(owner) || 0));
+    let b = _maintenanceRateByPlayer[pid];
+    if (!b) return _createEmptyMaintenanceBreakdown();
+    return {
+        total: Number(b.total) || 0,
+        units: Number(b.units) || 0,
+        buildings: Number(b.buildings) || 0,
+        turrets: Number(b.turrets) || 0,
+        unitTypes: { ...(b.unitTypes || {}) },
+        buildingTypes: { ...(b.buildingTypes || {}) },
+    };
+}
+
+function _getThingMaintenancePerSecond(thing) {
+    if (!thing) return 0;
+    let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
+    if (owner < 0 || owner >= players.length) return 0;
+
+    // No maintenance for dead/disabled/under-construction things.
+    if (!(Number(thing.energy) > 0)) return 0;
+    if (thing.underConstruction) return 0;
+
+    if (thing.unitType) {
+        let lvl = Math.max(1, getUnitEffectiveLevel(thing));
+        let maintenance = Number(getUnitStatForOwner(owner, thing.unitType, lvl, 'maintenance'));
+        if (Number.isFinite(maintenance)) return Math.max(0, maintenance);
+        let uDef = BASE_UNIT_STATS[thing.unitType] || BASE_UNIT_STATS.norm || {};
+        return Math.max(0, Number(uDef.maintenance) || 1);
+    }
+
+    let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : (thing.type || '');
+    if (!statsType) return 0;
+    let lvl = Math.max(1, getThingEffectiveLevel(thing));
+    let maintenance = Number(getBuildingStatForOwner(owner, statsType, lvl, 'maintenance'));
+    if (Number.isFinite(maintenance)) return Math.max(0, maintenance);
+
+    let def = BASE_CARD_TYPES[statsType] || {};
+    let baseMaintenance = Number(def.maintenance);
+    if (Number.isFinite(baseMaintenance)) return Math.max(0, baseMaintenance);
+    return def.target === 'wall' ? 3 : 1;
+}
+
+function _accumulateMaintenanceForThing(breakdowns, thing, isUnit) {
+    if (!thing || !breakdowns) return;
+    let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
+    if (owner < 0 || owner >= breakdowns.length) return;
+    let perSecond = _getThingMaintenancePerSecond(thing);
+    if (!(perSecond > 0)) return;
+
+    let row = breakdowns[owner];
+    row.total += perSecond;
+    if (isUnit) {
+        row.units += perSecond;
+        let unitType = String((thing && thing.unitType) || 'other');
+        row.unitTypes[unitType] = (Number(row.unitTypes[unitType]) || 0) + perSecond;
+    } else {
+        row.buildings += perSecond;
+        let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : (thing.type || 'unknown');
+        let buildingType = String(statsType || thing.type || 'unknown');
+        row.buildingTypes[buildingType] = (Number(row.buildingTypes[buildingType]) || 0) + perSecond;
+    }
+
+    let type = thing.type || '';
+    let isTurret = thing instanceof Tower;
+    if (!isTurret && !isUnit && type) {
+        let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : type;
+        let def = BASE_CARD_TYPES[statsType] || BASE_CARD_TYPES[type] || {};
+        isTurret = def.target === 'wall';
+    }
+    if (isTurret) row.turrets += perSecond;
+}
+
 // ============================================================
 // GAME TICK
 // ============================================================
@@ -25,6 +117,8 @@ function gameTick() {
     gameTime++;
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
+    _ensureMaintenanceRateCacheSize();
+    let maintenanceTickBreakdown = Array.from({ length: players.length }, () => _createEmptyMaintenanceBreakdown());
 
     let floorChanged = false;
     for (let y = 0; y < GRID_H; y++) {
@@ -32,6 +126,7 @@ function gameTick() {
             let cell = grid[y][x];
             let item = cell.item;
             if (!item) continue;
+            _accumulateMaintenanceForThing(maintenanceTickBreakdown, item, false);
             if (tickStatusEffects(item)) {
                 clearTileEntity(item.gx, item.gy, item);
                 cell.item = null;
@@ -150,6 +245,8 @@ function gameTick() {
             selectedUnits = selectedUnits.filter(su => su !== u);
             units.splice(i, 1);
             if (gameOver) return;
+        } else {
+            _accumulateMaintenanceForThing(maintenanceTickBreakdown, u, true);
         }
     }
 
@@ -204,6 +301,18 @@ function gameTick() {
 
     if (_adjacencyNeedsRecalc && _adjacencyLastRecalcTick !== gameTime) {
         _runAdjacencyRecalculation();
+    }
+
+    // Keep a live per-second maintenance breakdown for the right-side info panel.
+    _maintenanceRateByPlayer = maintenanceTickBreakdown;
+
+    // Deduct maintenance once per second in a centralized, batched way.
+    if (gameTime % TICK_RATE === 0) {
+        for (let pid = 0; pid < maintenanceTickBreakdown.length; pid++) {
+            let totalPerSecond = Number(maintenanceTickBreakdown[pid].total) || 0;
+            if (!(totalPerSecond > 0)) continue;
+            addPlayerResource(pid, 'energy', -totalPerSecond);
+        }
     }
 
     updateVisibility(localPlayerId);
@@ -2621,20 +2730,40 @@ function startGame() {
     startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
 
     let findStarterBuildSpot = (origin, maxRadius = 12) => {
-        for (let r = 1; r <= maxRadius; r++) {
+        let radiusLimit = Math.max(1, Math.min(Math.max(GRID_W, GRID_H), Math.floor(Number(maxRadius) || 12)));
+        let isBuildableStarterTile = (gx, gy) => {
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+            let cell = grid[gy][gx];
+            if (!cell || cell.type === TYPE_WALL || cell.item) return false;
+            if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
+            return true;
+        };
+
+        for (let r = 1; r <= radiusLimit; r++) {
             for (let dy = -r; dy <= r; dy++) {
                 for (let dx = -r; dx <= r; dx++) {
                     let fx = origin.gx + dx, fy = origin.gy + dy;
-                    if (fx < 0 || fx >= GRID_W || fy < 0 || fy >= GRID_H) continue;
                     if (Math.abs(dx) + Math.abs(dy) > r) continue;
-                    let cell = grid[fy][fx];
-                    if (!cell || cell.type === TYPE_WALL || cell.item) continue;
-                    let blockedByMine = !!getGoldMineAt(fx, fy) || !!getAstarMineAt(fx, fy);
-                    if (blockedByMine) continue;
+                    if (!isBuildableStarterTile(fx, fy)) continue;
                     return { gx: fx, gy: fy };
                 }
             }
         }
+
+        // Fallback: if local rings are blocked, scan entire map and pick the closest buildable tile.
+        let best = null;
+        let bestScore = Infinity;
+        for (let gy = 0; gy < GRID_H; gy++) {
+            for (let gx = 0; gx < GRID_W; gx++) {
+                if (!isBuildableStarterTile(gx, gy)) continue;
+                let score = Math.abs(gx - origin.gx) + Math.abs(gy - origin.gy);
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = { gx, gy };
+                }
+            }
+        }
+        if (best) return best;
         return null;
     };
 
@@ -2704,9 +2833,14 @@ function startGame() {
     };
 
     let spawnStartingBuilding = (pid, origin, itemKey, level) => {
-        let spot = findStarterBuildSpot(origin, 16);
+        let spot = findStarterBuildSpot(origin, 64);
         if (!spot) return null;
-        let ok = placeBuilding(spot.gx, spot.gy, itemKey, pid, { autoUpgradeEnabled: true, buildEnabled: true, silent: true });
+        let ok = placeBuilding(spot.gx, spot.gy, itemKey, pid, {
+            autoUpgradeEnabled: true,
+            buildEnabled: true,
+            silent: true,
+            ignorePlacementRules: true,
+        });
         if (!ok) return null;
         let placed = getPlacedBuildingEntityAt(spot.gx, spot.gy, itemKey, pid);
         if (!placed) return null;
@@ -3886,4 +4020,5 @@ Object.assign(globalThis, {
     initInput,
     startGame,
     runOneTick,
+    getPlayerMaintenanceBreakdown: _getPlayerMaintenanceBreakdown,
 });
