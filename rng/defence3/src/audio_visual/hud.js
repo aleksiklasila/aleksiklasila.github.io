@@ -2132,7 +2132,7 @@ function infoRowLevel(label, obj) {
         title: `${obj && (obj.type || obj.unitType || 'Thing')} / Level`,
         getValue: (thingLevel, researchLevel) => getInfoPanelLevelMatrixEnergyText(obj, thingLevel, researchLevel)
     });
-    return `<div class="info-row"><span class="info-label">${matrixLabel}</span><span class="info-value" style="text-align:right" class="level-display">${valueHtml}</span></div>`;
+    return `<div class="info-row"><span class="info-label">${matrixLabel}</span><span class="info-value level-display">${valueHtml}</span></div>`;
 }
 
 function infoHeader(name, obj, opts = null) {
@@ -2292,14 +2292,52 @@ function getEntityLevelToken(e) {
 
 function getEntityEnergyDisplayMax(e) {
     if (!e) return 1;
-    let currentMax = Math.max(1, Math.floor(e.maxEnergy || 1));
-    let effectiveLevel = getThingEffectiveLevel(e);
-    let potentialLevel = getThingPotentialLevel(e, effectiveLevel);
+    let effectiveMax = Math.max(1, Math.floor(getEntityEffectiveEnergyMax(e) || 1));
+    let potentialMax = Math.max(effectiveMax, Math.floor((typeof getEntityPotentialEnergyMax === 'function' ? getEntityPotentialEnergyMax(e) : effectiveMax) || effectiveMax));
+    return potentialMax;
+}
 
-    let canUpgrade = potentialLevel > effectiveLevel;
-    if (!canUpgrade) return currentMax;
-    let nextMax = Math.max(1, Math.floor(getUpgrademaxEnergy(e, effectiveLevel + 1) || currentMax));
-    return Math.max(currentMax, nextMax);
+function getThingEnergyDisplayValues(e) {
+    if (!e) return { currentEnergy: 0, upgradeTriggerMax: 1, effectiveMax: 1 };
+    let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+    let effectiveLevel = getThingEffectiveLevel(e, baseLevel);
+    let baseMax = Math.max(1, Math.floor(getEntityBaseEnergyMax(e) || 1));
+    let upgradeTriggerMax = baseMax;
+    if (effectiveLevel > baseLevel) {
+        let nextLevel = Math.max(1, baseLevel + 1);
+        upgradeTriggerMax = Math.max(1, Math.floor(getUpgrademaxEnergy(e, nextLevel) || baseMax));
+    }
+    let effectiveMax = Math.max(1, Math.floor(getEntityEffectiveEnergyMax(e) || upgradeTriggerMax));
+    let currentEnergy = Number(e.energy);
+    if (!Number.isFinite(currentEnergy)) currentEnergy = effectiveMax;
+    currentEnergy = Math.max(0, currentEnergy);
+    return { currentEnergy, upgradeTriggerMax, effectiveMax };
+}
+
+function formatThingEnergyDisplay(e) {
+    let energyView = getThingEnergyDisplayValues(e);
+    let current = Math.floor(energyView.currentEnergy);
+    return {
+        base: formatInfoFraction(current, energyView.upgradeTriggerMax),
+        effective: formatInfoFraction(current, energyView.effectiveMax)
+    };
+}
+
+function formatThingGroupEnergyDisplay(group) {
+    let totalEnergy = 0;
+    let totalUpgradeTriggerMax = 0;
+    let totalEffectiveMax = 0;
+    for (let e of (group || [])) {
+        let energyView = getThingEnergyDisplayValues(e);
+        totalEnergy += energyView.currentEnergy;
+        totalUpgradeTriggerMax += energyView.upgradeTriggerMax;
+        totalEffectiveMax += energyView.effectiveMax;
+    }
+    let totalCurrent = Math.floor(totalEnergy);
+    return {
+        base: formatInfoFraction(totalCurrent, Math.max(1, Math.floor(totalUpgradeTriggerMax || 1))),
+        effective: formatInfoFraction(totalCurrent, Math.max(1, Math.floor(totalEffectiveMax || 1)))
+    };
 }
 
 function getEntityStatusText(e, includeResearch = false) {
@@ -2320,15 +2358,20 @@ function getStackProgressText(stackedStacks, manualStacks) {
     return `${formatBigNumber(stacked)}/${formatBigNumber(manual)}`;
 }
 
+function formatStacksValueText(stacks) {
+    let value = Math.max(1, Number(stacks) || 1);
+    return value.toFixed(1);
+}
+
 function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, manualStacks = baseStacks) {
-    let baseText = getStackProgressText(baseStacks, manualStacks);
+    let baseText = formatStacksValueText(baseStacks);
     let hasEff = Number.isFinite(effStacks) && Number.isFinite(effLevel);
     let matrixOpts = {
         title: 'Stacks',
         getValue: (thingLevel) => `x${getRequiredStacksForLevel(Math.max(1, Math.floor(Number(thingLevel) || 1)))}`
     };
     if (!hasEff) return infoRow('Stacks', baseText, undefined, matrixOpts);
-    let effText = getStackProgressText(effStacks, manualStacks);
+    let effText = formatStacksValueText(effStacks);
     return infoRow('Stacks', baseText, effText, matrixOpts);
 }
 
@@ -2343,9 +2386,8 @@ function renderBarrackInfo(e) {
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
-    let baseMaxEnergy = getEntityBaseEnergyMax(e);
-    let effMaxEnergy = getEntityEffectiveEnergyMax(e);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
+    let energyDisplay = formatThingEnergyDisplay(e);
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
@@ -2394,22 +2436,18 @@ function renderBarrackGroupInfo(group) {
     let uAtk = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'atk');
     let uRange = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'attackRange');
     let uSpeed = getUnitStatForOwner(e.owner, e.unitType, uLvl, 'speed');
-    let totalBaseMaxEnergy = 0;
-    let totalEffMaxEnergy = 0;
     let totalBaseVis = 0;
     let totalEffVis = 0;
     let readyGroup = group.filter(b => !b.underConstruction);
-    let totalEnergy = 0, totalQueue = 0;
+    let totalQueue = 0;
     for (let b of group) {
-        totalEnergy += b.energy;
-        totalBaseMaxEnergy += getEntityBaseEnergyMax(b);
-        totalEffMaxEnergy += getEntityEffectiveEnergyMax(b);
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(b)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(b)) || 0;
     }
     for (let b of readyGroup) totalQueue += b.spawnQueue.length;
+    let energyDisplay = formatThingGroupEnergyDisplay(group);
     html += infoRow('Count', group.length);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
@@ -2469,9 +2507,8 @@ function renderTowerInfo(e) {
     let effVis = Number(getEntityEffectiveVisibilityRangeTiles(e));
     if (!Number.isFinite(baseVis)) baseVis = 0;
     if (!Number.isFinite(effVis)) effVis = baseVis;
-    let baseMaxEnergy = getEntityBaseEnergyMax(e);
-    let effMaxEnergy = getEntityEffectiveEnergyMax(e);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
+    let energyDisplay = formatThingEnergyDisplay(e);
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
@@ -2534,12 +2571,7 @@ function renderTowerInfo(e) {
 function renderTowerGroupInfo(group) {
     let html = '';
     let e = group[0];
-    let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
-    for (let t of group) {
-        totalEnergy += t.energy;
-        totalBaseMaxEnergy += getEntityBaseEnergyMax(t);
-        totalEffMaxEnergy += getEntityEffectiveEnergyMax(t);
-    }
+    let energyDisplay = formatThingGroupEnergyDisplay(group);
     let s = e.currentStats || e.baseStats;
     let bs = e.baseStats;
     let baseLevel = stackCountToLevel(e.stacks || 1);
@@ -2551,7 +2583,7 @@ function renderTowerGroupInfo(group) {
     if (!Number.isFinite(baseVis)) baseVis = 0;
     if (!Number.isFinite(effVis)) effVis = baseVis;
     html += infoRow('Count', group.length);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
@@ -2628,9 +2660,8 @@ function renderSpawnerInfo(e) {
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
-    let baseMaxEnergy = getEntityBaseEnergyMax(e);
-    let effMaxEnergy = getEntityEffectiveEnergyMax(e);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
+    let energyDisplay = formatThingEnergyDisplay(e);
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
@@ -2683,9 +2714,8 @@ function renderFloorItemInfo(e) {
     let upg = getNextLevelUpgradeInfo(e);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
-    let baseMaxEnergy = getEntityBaseEnergyMax(e);
-    let effMaxEnergy = getEntityEffectiveEnergyMax(e);
-    if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy || baseStats.maxEnergy), effMaxEnergy));
+    let energyDisplay = formatThingEnergyDisplay(e);
+    if (baseStats.maxEnergy > 0) html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
@@ -3002,7 +3032,7 @@ function renderUnitGroupInfo(group) {
     html += infoRow('Count', group.length);
     html += infoRow('Energy', formatInfoFraction(Math.floor(totalbaseEnergy), totalBasemaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalmaxEnergy));
     html += infoRow('Level', levelSummary, effLevelSummary);
-    html += infoRow('Stacks', `${formatBigNumber(totalStacks)}/${formatBigNumber(Math.max(totalStacks, totalBaseNextStacks))}`, `${formatBigNumber(totalEffStacks)}/${formatBigNumber(Math.max(totalEffStacks, totalEffNextStacks))}`);
+    html += infoRow('Stacks', formatStacksValueText(totalStacks), formatStacksValueText(totalEffStacks));
     let avgBaseRange = totalBaseRange / Math.max(1, group.length);
     let avgEffRange = totalEffRange / Math.max(1, group.length);
     let avgBaseVision = totalBaseVision / Math.max(1, group.length);
@@ -3121,22 +3151,18 @@ function renderSpawnerGroupInfo(group) {
     let sLevel = stackCountToLevel(baseStacks);
     let effStacks = e.effectiveStacks || baseStacks;
     let effLevel = getThingEffectiveLevel(e, sLevel);
-    let totalBaseMaxEnergy = 0;
-    let totalEffMaxEnergy = 0;
     let totalBaseVis = 0;
     let totalEffVis = 0;
     let readyGroup = group.filter(s => !s.underConstruction);
-    let totalEnergy = 0, totalQueue = 0;
+    let totalQueue = 0;
     for (let s of group) {
-        totalEnergy += s.energy;
-        totalBaseMaxEnergy += getEntityBaseEnergyMax(s);
-        totalEffMaxEnergy += getEntityEffectiveEnergyMax(s);
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(s)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(s)) || 0;
     }
     for (let s of readyGroup) totalQueue += (s.spawnQueue || []).length;
+    let energyDisplay = formatThingGroupEnergyDisplay(group);
     html += infoRow('Count', group.length);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
@@ -3566,9 +3592,8 @@ function renderResearchInfo(e) {
     let queueCap = getResearchQueueCapacityForPlayer(e.owner);
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
-    let baseMaxEnergy = getEntityBaseEnergyMax(e);
-    let effMaxEnergy = getEntityEffectiveEnergyMax(e);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(e.energy), baseMaxEnergy), formatInfoFraction(Math.floor(e.energy), effMaxEnergy));
+    let energyDisplay = formatThingEnergyDisplay(e);
+    html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRow(_buildInfoPanelEntityStateLabel(e, true), _getInfoPanelEntityStateLabel(e, true));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
@@ -3637,19 +3662,18 @@ function renderResearchGroupInfo(group) {
     let e = group[0];
     let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
     let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
-    let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
+    let totalEnergy = 0;
     let totalBaseVis = 0, totalEffVis = 0;
     for (let r of group) {
         totalEnergy += r.energy;
-        totalBaseMaxEnergy += getEntityBaseEnergyMax(r);
-        totalEffMaxEnergy += getEntityEffectiveEnergyMax(r);
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(r)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(r)) || 0;
     }
+    let groupEnergyDisplay = formatThingGroupEnergyDisplay(group);
     let totalQueue = getResearchQueueTotalLength(e);
     let queueCap = getResearchQueueCapacityForPlayer(e.owner);
     html += infoRow('Count', group.length);
-    html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
+    html += infoRow('Energy', groupEnergyDisplay.base, groupEnergyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
@@ -3857,16 +3881,15 @@ function renderFloorItemGroupInfo(group) {
     let totalEffVis = 0;
     let baseStats = calculateItemStats(e.type, baseLevel, e.owner);
     let effStats = calculateItemStats(e.type, effLevel, e.owner);
-    let totalEnergy = 0, totalBaseMaxEnergy = 0, totalEffMaxEnergy = 0;
+    let totalEnergy = 0;
     for (let f of group) {
         totalEnergy += (f.energy || 0);
-        totalBaseMaxEnergy += getEntityBaseEnergyMax(f);
-        totalEffMaxEnergy += getEntityEffectiveEnergyMax(f);
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(f)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(f)) || 0;
     }
+    let energyDisplay = formatThingGroupEnergyDisplay(group);
     html += infoRow('Count', group.length);
-    if (baseStats.maxEnergy > 0) html += infoRow('Energy', formatInfoFraction(Math.floor(totalEnergy), totalBaseMaxEnergy), formatInfoFraction(Math.floor(totalEnergy), totalEffMaxEnergy));
+    if (baseStats.maxEnergy > 0) html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
@@ -4467,7 +4490,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
                 queueAction({ action: 'killUnit', unitId: parseInt(btn.dataset.unitId) });
             } else {
                 let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
-                queueAction({ action: 'markSalvage', gx, gy });
+                let marked = (btn.textContent || '').includes('✕');
+                queueAction({ action: 'setSalvage', gx, gy, marked: !marked });
             }
             setTimeout(updateInfoPanel, 50);
         });
@@ -4475,8 +4499,9 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Wire up salvage group buttons
     panel.querySelectorAll('.info-salvage-group-btn').forEach(btn => {
         bindInstantPress(btn, () => {
+            let marked = (btn.textContent || '').includes('✕');
             let coords = btn.dataset.coords.split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'markSalvage', gx: c.gx, gy: c.gy });
+            for (let c of coords) queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked });
             setTimeout(updateInfoPanel, 50);
         });
     });

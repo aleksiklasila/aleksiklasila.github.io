@@ -2069,6 +2069,10 @@ function computeVisibilityGridForPlayer(playerId, vis) {
 
 function getVisibilityGridForPlayer(playerId) {
     if (fullVisibility) return null;
+    return getActualVisibilityGridForPlayer(playerId);
+}
+
+function getActualVisibilityGridForPlayer(playerId) {
     if (visibilityCacheTick !== gameTime) {
         visibilityGridByPlayerCache.clear();
         visibilityCacheTick = gameTime;
@@ -2082,12 +2086,18 @@ function getVisibilityGridForPlayer(playerId) {
     return smoothedVis;
 }
 
+function isTileActuallyVisibleToPlayer(playerId, gx, gy) {
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    let vis = getActualVisibilityGridForPlayer(playerId);
+    return !!(vis[gy] && vis[gy][gx] > 0);
+}
+
 function isTileVisibleToPlayer(playerId, gx, gy) {
     if (fullVisibility) return true;
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
 
     if (playerId === localPlayerId) return isTileVisible(gx, gy);
-    let vis = getVisibilityGridForPlayer(playerId);
+    let vis = getActualVisibilityGridForPlayer(playerId);
     return !!(vis[gy] && vis[gy][gx] > 0);
 }
 
@@ -2648,9 +2658,12 @@ function _getBuildingLevelTextSprite(label) {
     let width = 32;
     let height = 48;
     let canvas = document.createElement('canvas');
+    let c = canvas.getContext('2d');
+    c.font = '700 8px Segoe UI, Arial, sans-serif';
+    width = Math.max(width, Math.ceil(c.measureText(txt).width + 10));
     canvas.width = width * scale;
     canvas.height = height * scale;
-    let c = canvas.getContext('2d');
+    c = canvas.getContext('2d');
     c.imageSmoothingEnabled = false;
     c.setTransform(scale, 0, 0, scale, 0, 0);
     c.clearRect(0, 0, width, height);
@@ -2660,11 +2673,11 @@ function _getBuildingLevelTextSprite(label) {
     c.lineJoin = 'round';
     c.strokeStyle = 'rgba(0,0,0,0.95)';
     c.lineWidth = 2;
-    c.strokeText(txt, 16, 11);
+    c.strokeText(txt, width * 0.5, 11);
     c.fillStyle = '#eee';
-    c.fillText(txt, 16, 11);
+    c.fillText(txt, width * 0.5, 11);
 
-    cached = { canvas, scale };
+    cached = { canvas, scale, width, height };
     LEVEL_TEXT_SPRITE_CACHE.set(key, cached);
     _trimSpriteCache(LEVEL_TEXT_SPRITE_CACHE, LEVEL_TEXT_SPRITE_CACHE_MAX);
     return cached;
@@ -2676,6 +2689,9 @@ function _bindBuildingLevelTextSprite(target, label) {
     target.textCanvas = sprite.canvas;
     target.textCtx = null;
     target._textCanvasScale = sprite.scale;
+    target._textCanvasWidth = sprite.width;
+    target._textCanvasHeight = sprite.height;
+    target._levelTextLabel = String(label || '');
 }
 
 function _getUnitLevelTextSprite(label) {
@@ -2991,9 +3007,13 @@ function build3DLayerFrameData() {
 
 function drawLevelTextCache(ctx, target, x, y) {
     if (!target || !target.textCanvas || !target._textCanvasScale) return;
-    let dx = Math.round(x - 16);
+    let label = String(getLevelLabelText(target) || '');
+    if (target._levelTextLabel !== label) updateItemTextCache(target);
+    let width = Math.max(32, Math.floor(Number(target._textCanvasWidth) || 32));
+    let height = Math.max(48, Math.floor(Number(target._textCanvasHeight) || 48));
+    let dx = Math.round(x - width * 0.5);
     let dy = Math.round(y - 24);
-    queueDrawImage(ctx, target.textCanvas, dx, dy, 32, 48);
+    queueDrawImage(ctx, target.textCanvas, dx, dy, width, height);
 }
 
 function updateItemTextCache(item) {
