@@ -906,6 +906,7 @@
             padding: 1px 0;
             flex-wrap: nowrap;
             white-space: nowrap;
+            column-gap: 4px;
         }
 
         #info-panel .info-label,

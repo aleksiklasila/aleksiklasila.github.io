@@ -78,7 +78,7 @@ const RESOURCE_TYPES = {
         collectorUnitColor: '#aaa',
         collectorUnitVis: 'star',
         collectorUnitDescription: 'Resource worker. Mines energy tiles and refills the shared energy stockpile.',
-        gatherPerTrip: 23,
+        gatherPerTrip: 38,
         dropoffSound: 'gold_collected',
         carryGlyph: '⚡',
         emptyCarryGlyph: '⚡',
@@ -108,7 +108,7 @@ const RESOURCE_TYPES = {
         collectorUnitColor: '#bbb',
         collectorUnitVis: 'star',
         collectorUnitDescription: 'Resource worker. Mines gray A* tiles and refills the shared A* stockpile used by pathfinding.',
-        gatherPerTrip: 30,
+        gatherPerTrip: 40,
         dropoffSound: 'astar_collected',
         carryGlyph: '★',
         emptyCarryGlyph: '☆',
@@ -199,7 +199,7 @@ function buildResourceCollectorUnitStats() {
             attackRange: 0,
             visionRange: 0.6,
             atkCd: 49.95,
-            astarCost: 10,
+            astarCost: 3,
             gatherPerTrip: cfg.gatherPerTrip,
             transferCooldown: 2.0,
             workerSearchDistance: 2.0,
@@ -579,6 +579,7 @@ let MAX_RESEARCH_LEVEL = 10;
 
 const RESEARCH_DECREASE_STATS = { cd: true, atkCd: true, transferCooldown: true, astarCost: true, baseTime: true, spawnCd: true, upKeep: true };
 const RESEARCH_STAT_LABELS = {
+    maxLevel: 'Max Level',
     maxEnergy: 'Max Energy',
     popCap: 'Pop Cap',
     damage: 'Damage',

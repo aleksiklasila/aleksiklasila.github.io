@@ -445,6 +445,20 @@ function recordAstarDelta(owner, delta, unit = null, sourceTag = null) {
 function buildInfoPanelEnergyDeltaHtml(owner) {
     if (!Number.isFinite(owner) || owner < 0 || owner >= players.length) return '';
 
+    let upkeepBreakdown = (typeof getPlayerUpKeepBreakdown === 'function')
+        ? getPlayerUpKeepBreakdown(owner)
+        : { total: 0, unitTypes: {} };
+    let upkeepUnitTypes = upkeepBreakdown && upkeepBreakdown.unitTypes ? upkeepBreakdown.unitTypes : {};
+    let getUpkeepForMetric = (metric) => {
+        if (metric === 'total') return Math.max(0, Number(upkeepBreakdown && upkeepBreakdown.total) || 0);
+        if (metric === 'collect') return Math.max(0, Number(upkeepUnitTypes.collector) || 0);
+        if (metric === 'salvage') return Math.max(0, Number(upkeepUnitTypes.salvager_unit) || 0);
+        if (metric === 'research') return Math.max(0, Number(upkeepUnitTypes.researcher_unit) || 0);
+        if (metric === 'builder') return Math.max(0, Number(upkeepUnitTypes.builder_unit) || 0);
+        if (metric === 'healer') return Math.max(0, Number(upkeepUnitTypes.healer_unit) || 0);
+        return 0;
+    };
+
     let fmt = (v) => {
         if (!Number.isFinite(v) || Math.abs(v) < 0.05) return '0.0';
         return `${v > 0 ? '+' : ''}${formatBigNumber(v, 1)}`;
@@ -456,7 +470,7 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
     };
     let row = (metric, sourceKey, thumbSpec = null, label = '', filterKey = 'total', domain = 'units') => {
         let sec = getEnergyDeltaWindowSeconds(metric);
-        let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec);
+        let value = getPlayerEnergyDeltaRate(owner, sourceKey, sec) - getUpkeepForMetric(metric);
         let thingHtml = label
             ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
             : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
@@ -972,17 +986,34 @@ function _getInfoPanelEntityStateLabel(e, includeResearch = false) {
 
 function _getInfoPanelEntityStateHelpText(e, includeResearch = false) {
     if (!e) return 'Current thing state and why it is happening.';
-    if (e.underConstruction) return 'Under construction. Builders are still delivering and applying build progress.';
-    if (includeResearch && e.isResearching) return 'Actively running research work right now.';
-    if (e.isUpgrading) return 'Upgrading to a higher level. This consumes build progress/resources until complete.';
-    if (e.isStacking) return 'Stacking toward higher level requirements.';
-    if (Array.isArray(e.spawnQueue) && e.spawnQueue.length > 0) return `Ready, with ${e.spawnQueue.length} unit(s) waiting in the spawn queue.`;
-    if (Number.isFinite(e.energy) && e.energy <= 0) return 'Not operational because energy is empty.';
-    return 'Ready and operational.';
+    let baseMsg = '';
+    if (e.underConstruction) baseMsg = 'Under construction. Builders are still delivering and applying build progress.';
+    else if (includeResearch && e.isResearching) baseMsg = 'Actively running research work right now.';
+    else if (e.isUpgrading) baseMsg = 'Upgrading to a higher level. This consumes build progress/resources until complete.';
+    else if (e.isStacking) baseMsg = 'Stacking toward higher level requirements.';
+    else if (Array.isArray(e.spawnQueue) && e.spawnQueue.length > 0) baseMsg = `Ready, with ${e.spawnQueue.length} unit(s) waiting in the spawn queue.`;
+    else if (Number.isFinite(e.energy) && e.energy <= 0) baseMsg = 'Not operational because energy is empty.';
+    else baseMsg = 'Ready and operational.';
+    
+    let maxLevelMsg = _getMaxLevelBlockedMessage(e);
+    if (maxLevelMsg) baseMsg += ' ' + maxLevelMsg;
+    return baseMsg;
 }
 
 function _buildInfoPanelEntityStateLabel(e, includeResearch = false) {
     return _buildInfoPanelStateLabelButton(_getInfoPanelEntityStateLabel(e, includeResearch), _getInfoPanelEntityStateHelpText(e, includeResearch));
+}
+
+function _getMaxLevelBlockedMessage(e) {
+    if (!e) return '';
+    let currentLevel = e.level || stackCountToLevel(e.stacks || 1);
+    let potLevel = getThingPotentialLevel(e, Math.max(1, getThingEffectiveLevel(e)));
+    let researchMax = getThingResearchedMaxLevel(e);
+    // Show message if: potential exceeds research max, and we're at or near max already
+    if (potLevel > researchMax && currentLevel >= researchMax) {
+        return 'Cannot upgrade further. Increase Max Level in the Research building.';
+    }
+    return '';
 }
 
 function _buildInfoPanelAssignedLabelButton(mode, dataAttrs = {}) {
@@ -1437,6 +1468,8 @@ function renderBuildItemDetailedStats(key) {
     addRow('Level', `L${level}`, {
         getValue: (thingLevel, researchLevel) => getLevelMatrixCostWorkText(thingLevel, researchLevel)
     });
+    let shopMaxLevel = getResearchCurrentStatValue(localPlayerId, 'building', key, 'maxLevel');
+    if (Number.isFinite(shopMaxLevel)) addRow('Max Level', `L${Math.floor(shopMaxLevel)}`, { kind: 'building', key, statKey: 'maxLevel' });
 
     if (key.startsWith('barrack_')) {
         let unitType = def.unitType || 'norm';
@@ -2270,6 +2303,8 @@ function getLevelHtml(obj) {
         ? actualLvl
         : stackCountToLevel(getThingManualStacks(obj));
     potLvl = Math.max(potLvl, manualLvl);
+    let researchedMax = (typeof getThingResearchedMaxLevel === 'function') ? getThingResearchedMaxLevel(obj) : MAX_THING_LEVEL;
+    let potExceedsMax = potLvl > researchedMax;
 
     let html = `<span style="color:#888">L${actualLvl}</span>`;
     if (effLvl !== actualLvl && effLvl > 0) {
@@ -2278,7 +2313,8 @@ function getLevelHtml(obj) {
     if (potLvl > Math.max(actualLvl, effLvl)) {
         let arrowFrom = (effLvl !== actualLvl && effLvl > 0) ? effLvl : actualLvl;
         if (arrowFrom > 0) {
-            html += `<span style="color:#aaa">-></span><span style="color:#f44">L${potLvl}</span>`;
+            let potColor = potExceedsMax ? '#d88' : '#f44'; // Muted red if blocked by max level
+            html += `<span style="color:#aaa">-></span><span style="color:${potColor};text-decoration:${potExceedsMax ? 'line-through' : 'none'}">L${potLvl}</span>`;
         }
     }
     return html;
@@ -2564,6 +2600,7 @@ function renderBarrackInfo(e) {
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
     if (Number.isFinite(baseBuildingUpKeep)) {
@@ -2638,6 +2675,7 @@ function renderBarrackGroupInfo(group) {
     html += infoRow('Count', group.length);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
@@ -2705,6 +2743,7 @@ function renderTowerInfo(e) {
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     if (Number.isFinite(baseUpKeep)) {
         html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), `${formatBigNumber(baseUpKeep, 2)}⚡/ s`, Number.isFinite(effUpKeep) ? `${formatBigNumber(effUpKeep, 2)}⚡/ s` : `${formatBigNumber(baseUpKeep, 2)}⚡/ s`);
@@ -2789,6 +2828,7 @@ function renderTowerGroupInfo(group) {
     html += infoRow('Count', group.length);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), `${formatBigNumber(totalBaseUpKeep, 2)}⚡/ s`, `${formatBigNumber(totalEffUpKeep, 2)}⚡/ s`);
     html += infoRow('Damage', bs ? formatBigNumber(bs.damage, 1) : formatBigNumber(s.damage, 1), formatBigNumber(s.damage, 1));
@@ -2874,6 +2914,7 @@ function renderSpawnerInfo(e) {
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
     if (Number.isFinite(baseUpKeep)) {
@@ -2936,6 +2977,7 @@ function renderFloorItemInfo(e) {
     html += infoRow(_buildInfoPanelEntityStateLabel(e), _getInfoPanelEntityStateLabel(e));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
     if (Number.isFinite(baseUpKeep)) {
@@ -3408,6 +3450,7 @@ function renderSpawnerGroupInfo(group) {
     html += infoRow('Count', group.length);
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
@@ -3481,6 +3524,9 @@ function getResearchStatValueAtLevel(kind, key, statKey, researchLevel, thingLev
     let rLvl = Math.max(0, Math.floor(researchLevel || 0));
     let tLvl = Math.max(1, Math.min(MAX_THING_LEVEL, Math.floor(Number(thingLevel) || 1)));
     if (kind === 'unit') return getUnitStatFromMap(key, tLvl, statKey, rLvl);
+    if (kind === 'building' && statKey === 'maxLevel') {
+        return Math.max(1, Math.min(MAX_THING_LEVEL, 1 + Math.round(rLvl * (MAX_THING_LEVEL - 1) / Math.max(1, MAX_RESEARCH_LEVEL))));
+    }
     if (kind === 'building') return getBuildingStatFromMap(key, tLvl, statKey, rLvl);
     return NaN;
 }
@@ -3658,13 +3704,16 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
         let projectedMultiplier = (Number.isFinite(baseValue) && Math.abs(baseValue) > 1e-9 && Number.isFinite(preview.toValue))
             ? (preview.toValue / baseValue)
             : NaN;
+        let queueItemValueLabel = t.statKey === 'maxLevel'
+            ? formatResearchStatValue('maxLevel', preview.toValue)
+            : `x${formatResearchMultiplierValue(projectedMultiplier)}`;
 
         let pendingIndex = t.isActiveTask ? -1 : (i - ((orderedTasks[0] && orderedTasks[0].isActiveTask) ? 1 : 0));
 
         html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
         html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
-        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
+        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${queueItemValueLabel}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
         html += `<span style="display:flex;align-items:center;gap:4px;color:#fd0"><button type="button" class="info-research-move-top-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to first in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↑</button><button type="button" class="info-research-move-bottom-btn" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" title="Move to last in queue" style="cursor:pointer;color:#9cf;background:#141414;border:1px solid #355;border-radius:3px;padding:0 4px;line-height:12px;font-size:10px;">↓</button><span>${preview.atMax ? 'MAX' : formatInfoCurrency(preview.cost)} <span style="color:#9cf">R${preview.toLevel}</span></span></span>`;
@@ -3835,6 +3884,11 @@ function renderResearchThingRowsForPanel(owner, scope, targetArg) {
         let currentMultiplierLabel = `x${formatResearchMultiplierValue(currentMultiplier)}`;
         let projectedMultiplierLabel = `x${formatResearchMultiplierValue(projectedMultiplier)}`;
         let nextPreviewMultiplierLabel = `x${formatResearchMultiplierValue(nextPreviewMultiplier)}`;
+        if (stat.statKey === 'maxLevel') {
+            currentMultiplierLabel = formatResearchStatValue('maxLevel', currentValue);
+            projectedMultiplierLabel = formatResearchStatValue('maxLevel', projectedValue);
+            nextPreviewMultiplierLabel = formatResearchStatValue('maxLevel', nextPreviewValue);
+        }
 
         html += `<div style="margin:2px 0 6px 0;padding:3px 4px;border:1px solid #242424;border-radius:4px;background:#101010">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
@@ -3885,6 +3939,7 @@ function renderResearchInfo(e) {
     html += infoRow(_buildInfoPanelEntityStateLabel(e, true), _getInfoPanelEntityStateLabel(e, true));
     html += infoRow(_buildInfoPanelAssignedLabelButton('entity', { gx: e.gx, gy: e.gy, targetType: e.type || '' }), _buildInfoPanelAssignedWorkersHtml(e));
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     html += infoRow('Visibility', formatRangeStatTiles(baseVisTiles), formatRangeStatTiles(effVisTiles));
     if (Number.isFinite(baseUpKeep)) {
@@ -3977,6 +4032,7 @@ function renderResearchGroupInfo(group) {
     html += infoRow('Count', group.length);
     html += infoRow('Energy', groupEnergyDisplay.base, groupEnergyDisplay.effective);
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
@@ -4201,6 +4257,7 @@ function renderFloorItemGroupInfo(group) {
     html += infoRow('Count', group.length);
     if (baseStats.maxEnergy > 0) html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
+    html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
     let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
     let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;

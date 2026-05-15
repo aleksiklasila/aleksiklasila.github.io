@@ -371,14 +371,6 @@ function updateWorkerAI(u) {
                         recordEnergyDelta(owner, 'builder', -tripCost);
                         u.builderHasMaterial = true;
                         u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-                        if (canRunHeavyAi) {
-                            // Material just picked up: re-check nearest active build target from current position.
-                            let bestNow = _findNearestUnderConstruction(u, u.x, u.y);
-                            if (bestNow) {
-                                _builderAssignTarget(u, bestNow, myGx, myGy);
-                                return;
-                            }
-                        }
                     } else {
                         u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                     }
@@ -659,11 +651,6 @@ function updateWorkerAI(u) {
                         u.healerHasMaterial = true;
                         u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
                         u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
-                        if (canRunHeavyAi) {
-                            // After pickup, re-evaluate best heal target (queue or unit) from current location.
-                            _healerFindTarget(u, myGx, myGy);
-                            return;
-                        }
                     } else if (tripCost > 0) {
                         u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
                     }
@@ -805,20 +792,6 @@ function updateWorkerAI(u) {
                 if (!spawner || dist <= 24) {
                     if (u.workerTransferCooldown > 0) return;
                     if (spawner) _researcherTryPickupMaterial(u, u.workerTarget, owner);
-                    if (u.researcherHasMaterial && canRunHeavyAi) {
-                        // After pickup, re-evaluate nearest active lab so researchers follow changing demand.
-                        let retarget = _findNearestResearchBuildingNeedingWork(u);
-                        if (retarget && _setWorkerTarget(u, retarget, 'research')) {
-                            u.workerState = 'MOVING_TO_RESEARCH';
-                            let startGx2 = Math.floor(u.x / TILE), startGy2 = Math.floor(u.y / TILE);
-                            let targetGx2 = Math.floor(retarget.x / TILE), targetGy2 = Math.floor(retarget.y / TILE);
-                            u.path = _requestWorkerPath(u, startGx2, startGy2, targetGx2, targetGy2, null, null);
-                            u.pathIndex = 0;
-                            u.commandState = CMD_MOVING;
-                            u._researchSpawnerTarget = null;
-                            return;
-                        }
-                    }
                     u._researchSpawnerTarget = null;
                     u.workerState = 'MOVING_TO_RESEARCH';
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -1977,7 +1950,9 @@ function _isBuilderUpgradeCandidate(target) {
     if (!target || target.underConstruction || target.isUpgrading || target.isStacking) return false;
     let baseLevel = getThingBaseLevel(target, stackCountToLevel((target.stacks || 1)));
     let effectiveLevel = getThingEffectiveLevel(target, baseLevel);
-    return effectiveLevel > baseLevel && isAutoUpgradeEnabled(target);
+    let researchedMaxLevel = getThingResearchedMaxLevel(target);
+    let maxAllowedUpgradeLevel = Math.min(effectiveLevel, researchedMaxLevel);
+    return maxAllowedUpgradeLevel > baseLevel && isAutoUpgradeEnabled(target);
 }
 
 function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
@@ -2329,7 +2304,6 @@ function _isResearcherTargetBuilding(target, owner) {
     if (!target || target.type !== 'research') return false;
     if (target.owner !== owner) return false;
     if (target.energy <= 0 || target.underConstruction || target.markedForSalvage) return false;
-    if (target.isUpgrading) return false;
     let task = target.researchTask;
     if (!task) {
         // Only auto-start new research when auto-research is enabled.
