@@ -81,7 +81,7 @@ function _getResourceKeyForPrecomputedStat(kind, statKey) {
 function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
     let numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return numericValue;
-    if (statKey === 'maintenance') return numericValue;
+    if (statKey === 'upKeep') return numericValue;
     let resourceKey = _getResourceKeyForPrecomputedStat(kind, statKey);
     let multiplier = _getPlayerResourcePenaltyMultiplier(playerId, resourceKey);
     if (!(multiplier > 1)) return numericValue;
@@ -393,8 +393,8 @@ function createEditableRuntimeConfigSnapshot() {
             UNIT_COLLECTOR_GATHER_LEVEL_EXP,
             UNIT_WORKER_SPECIALIST_BASE_RATE,
             UNIT_WORKER_SPECIALIST_LEVEL_EXP,
-            BUILDING_MAINTENANCE_EXP: Number(BUILDING_FORMULA_CONFIG.maintenanceExp) || 1.16,
-            UNIT_MAINTENANCE_EXP_DEFAULT: Number((UNIT_LEVEL_SCALING._default || {}).maintenanceExp) || 1,
+            BUILDING_UPKEEP_EXP: Number(BUILDING_FORMULA_CONFIG.upKeepExp) || 1.16,
+            UNIT_UPKEEP_EXP_DEFAULT: Number((UNIT_LEVEL_SCALING._default || {}).upKeepExp) || 1,
         },
         tables: {
             BASE_CARD_TYPES: makeEditorCardTypesTable(),
@@ -538,10 +538,10 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP))) UNIT_COLLECTOR_GATHER_LEVEL_EXP = Math.max(0, Number(prog.UNIT_COLLECTOR_GATHER_LEVEL_EXP));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE))) UNIT_WORKER_SPECIALIST_BASE_RATE = Math.max(0, Number(prog.UNIT_WORKER_SPECIALIST_BASE_RATE));
     if (Number.isFinite(Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP))) UNIT_WORKER_SPECIALIST_LEVEL_EXP = Math.max(1, Number(prog.UNIT_WORKER_SPECIALIST_LEVEL_EXP));
-    if (Number.isFinite(Number(prog.BUILDING_MAINTENANCE_EXP))) BUILDING_FORMULA_CONFIG.maintenanceExp = Math.max(1, Number(prog.BUILDING_MAINTENANCE_EXP));
-    if (Number.isFinite(Number(prog.UNIT_MAINTENANCE_EXP_DEFAULT))) {
+    if (Number.isFinite(Number(prog.BUILDING_UPKEEP_EXP))) BUILDING_FORMULA_CONFIG.upKeepExp = Math.max(1, Number(prog.BUILDING_UPKEEP_EXP));
+    if (Number.isFinite(Number(prog.UNIT_UPKEEP_EXP_DEFAULT))) {
         if (!UNIT_LEVEL_SCALING._default || typeof UNIT_LEVEL_SCALING._default !== 'object') UNIT_LEVEL_SCALING._default = {};
-        UNIT_LEVEL_SCALING._default.maintenanceExp = Math.max(1, Number(prog.UNIT_MAINTENANCE_EXP_DEFAULT));
+        UNIT_LEVEL_SCALING._default.upKeepExp = Math.max(1, Number(prog.UNIT_UPKEEP_EXP_DEFAULT));
     }
 
     BUILDING_FORMULA_CONFIG.energyLevelExp = BUILDING_ENERGY_LEVEL_EXP;
@@ -2557,7 +2557,7 @@ function getUnitStatFallbackValue(unitType, statKey) {
     if (statKey === 'researcherDps') return Math.max(0, Number(s.researcherDps) || 0);
     if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(s.transferCooldown) || 0.01) : 0;
     if (statKey === 'astarCost') return Math.max(0.1, Number(s.astarCost) || 1);
-    if (statKey === 'maintenance') return Math.max(0.01, Number(s.maintenance) || 1);
+    if (statKey === 'upKeep') return Math.max(0.01, Number(s.upKeep) || 1);
     return NaN;
 }
 
@@ -2589,7 +2589,7 @@ function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
     }
     if (statKey === 'transferCooldown') return s.isWorker ? Math.max(0.01, Number(v) || 0.01) : 0;
     if (statKey === 'astarCost') return Math.max(0.1, Number(v) || 1);
-    if (statKey === 'maintenance') return Math.max(0.01, Number(v) || 0.01);
+    if (statKey === 'upKeep') return Math.max(0.01, Number(v) || 0.01);
     return v;
 }
 
@@ -2637,9 +2637,9 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let builderBase = Math.max(0, Number(s.builderDps) || workerBaseRate);
     let healerBase = Math.max(0, Number(s.healerDps) || workerBaseRate);
     let researcherBase = Math.max(0, Number(s.researcherDps) || workerBaseRate);
-    let maintenanceLevelExp = Math.max(1, Number(cfg.maintenanceExp) || 1);
-    let baseMaintenance = Math.max(0.01, Number(s.maintenance) || 1);
-    let maintenance = Math.max(0.01, baseMaintenance * Math.pow(maintenanceLevelExp, lvl - 1));
+    let upKeepLevelExp = Math.max(1, Number(cfg.upKeepExp) || 1);
+    let baseUpKeep = Math.max(0.01, Number(s.upKeep) || 1);
+    let upKeep = Math.max(0.01, baseUpKeep * Math.pow(upKeepLevelExp, lvl - 1));
     let astarCost = Math.max(0.1, (Number(s.astarCost) || 1) * Math.pow(astarCostLevelExp, lvl - 1));
     let builderDps = unitType === 'builder_unit' ? Math.max(1, Math.round(builderBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
     let healerDps = unitType === 'healer_unit' ? Math.max(1, Math.round(healerBase * Math.pow(workerGrowthExp, lvl - 1))) : 0;
@@ -2650,7 +2650,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
         transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
     }
 
-    return { energy, atk, atkCd, speed, visionRange, attackRange, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, maintenance };
+    return { energy, atk, atkCd, speed, visionRange, attackRange, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
 }
 
 function computeBaseBuildingStatsAtLevel(type, level) {
@@ -2665,7 +2665,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     let sandGunCdExp = Math.max(0.01, Number(bCfg.sandGunCdLevelExp) || 0.01);
     let researchEfficiencyExp = Math.max(1, Number(bCfg.researchEfficiencyLevelExp) || 1);
     let researchEfficiencyCap = Math.max(0, Number(bCfg.researchEfficiencyCap) || 0);
-    let maintenanceLevelExp = Math.max(1, Number(bCfg.maintenanceExp) || 1.16);
+    let upKeepLevelExp = Math.max(1, Number(bCfg.upKeepExp) || 1.16);
     let mult = Math.pow(multExp, lvl - 1);
     let energyMult = Math.pow(energyExp, lvl - 1);
     let out = {
@@ -2689,13 +2689,13 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         sandDuration: NaN,
         watchDuration: NaN,
         efficiency: NaN,
-        maintenance: NaN,
+        upKeep: NaN,
     };
 
     let def = BASE_CARD_TYPES[key] || {};
-    let baseMaintenance = Math.max(0.01, Number(def.maintenance));
-    if (!Number.isFinite(baseMaintenance)) baseMaintenance = def.target === 'wall' ? 3 : 1;
-    out.maintenance = Math.max(0.01, baseMaintenance * Math.pow(maintenanceLevelExp, lvl - 1));
+    let baseUpKeep = Math.max(0.01, Number(def.upKeep));
+    if (!Number.isFinite(baseUpKeep)) baseUpKeep = def.target === 'wall' ? 3 : 1;
+    out.upKeep = Math.max(0.01, baseUpKeep * Math.pow(upKeepLevelExp, lvl - 1));
     if (Number.isFinite(def.energy) && def.energy > 0) {
         out.maxEnergy = Math.floor(def.energy * energyMult);
     }
@@ -2955,7 +2955,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
         transferCooldownSec,
         transferCooldownTicks: secondsToTicks(transferCooldownSec),
         astarCost: Math.max(0.1, Number(values.astarCost) || 0.1),
-        maintenance: Math.max(0.01, Number(values.maintenance) || 0.01),
+        upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
     };
 }
 
@@ -3001,7 +3001,7 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
         sandDuration: Number(values.sandDuration),
         watchDuration: Number(values.watchDuration),
         efficiency: Number(values.efficiency),
-        maintenance: Math.max(0.01, Number(values.maintenance) || 0.01),
+        upKeep: Math.max(0.01, Number(values.upKeep) || 0.01),
     };
 }
 
@@ -3071,7 +3071,7 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
         entry.transferCooldownTicks = secondsToTicks(entry.transferCooldownSec);
     }
     else if (statKey === 'astarCost') entry.astarCost = Math.max(0.1, Number(value) || 0.1);
-    else if (statKey === 'maintenance') entry.maintenance = Math.max(0.01, Number(value) || 0.01);
+    else if (statKey === 'upKeep') entry.upKeep = Math.max(0.01, Number(value) || 0.01);
     return entry;
 }
 
@@ -3174,7 +3174,7 @@ function getUnitStatForOwner(playerId, unitType, level, statKey) {
         if (statKey === 'researcherDps') return entry.researcherDps;
         if (statKey === 'transferCooldown') return entry.transferCooldownSec;
         if (statKey === 'astarCost') return entry.astarCost;
-        if (statKey === 'maintenance') return entry.maintenance;
+        if (statKey === 'upKeep') return entry.upKeep;
     }
     let rLevel = getPlayerResearchLevel(playerId, 'unit', unitType, statKey);
     return getUnitStatFromMap(unitType, level, statKey, rLevel);
@@ -3253,7 +3253,7 @@ function getResearchStatEntriesForThing(kind, key) {
     addStat('sandDuration', getBuildingStatFromMap(key, 1, 'sandDuration', 0));
     addStat('watchDuration', getBuildingStatFromMap(key, 1, 'watchDuration', 0));
     addStat('efficiency', getBuildingStatFromMap(key, 1, 'efficiency', 0));
-    addStat('maintenance', getBuildingStatFromMap(key, 1, 'maintenance', 0));
+    addStat('upKeep', getBuildingStatFromMap(key, 1, 'upKeep', 0));
     return out;
 }
 
@@ -3362,7 +3362,7 @@ function formatResearchStatValue(statKey, value) {
     if (statKey === 'efficiency') return compact(value, 2);
     if (statKey === 'spawnCd') return `${compact(value, 2)}s`;
     if (statKey === 'builderDps' || statKey === 'healerDps' || statKey === 'researcherDps' || statKey === 'gatherPerTrip') return compact(value, 1);
-    if (statKey === 'maintenance') return `${compact(value, 2)}⚡/ s`;
+    if (statKey === 'upKeep') return `${compact(value, 2)}⚡/ s`;
     if (statKey === 'cd' || statKey === 'atkCd' || statKey === 'transferCooldown') return `${compact(value, 2)}s`;
     return compact(value, 0);
 }
