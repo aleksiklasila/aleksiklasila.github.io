@@ -30,6 +30,7 @@ let _adjacencyDirtyTiles = new Set();
 let _adjacencyNeedsRecalc = true;
 let _adjacencyDirtyAll = true;
 let _adjacencyLastRecalcTick = -1;
+let _adjacencyPassiveRefreshMode = false;
 
 function resetAreaDistanceCaches() {
     areaNeighborIds = [];

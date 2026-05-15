@@ -69,9 +69,11 @@ function _runAdjacencyRecalculation() {
     if (!_adjacencyNeedsRecalc) return;
     if (!_adjacencyDirtyAll && _adjacencyDirtyTiles.size <= 0) {
         _adjacencyNeedsRecalc = false;
+        _adjacencyPassiveRefreshMode = false;
         return;
     }
 
+    let passiveRefresh = !!_adjacencyPassiveRefreshMode;
     let runFull = _adjacencyDirtyAll || _adjacencyDirtyTiles.size > 1200;
     let prevAreaActive = areas.map(a => !!(a && a.active));
     let areaVisualsChanged = false;
@@ -213,52 +215,65 @@ function _runAdjacencyRecalculation() {
             let nextManualStacks = getThingManualStacks(obj);
             let actualStacks = nextStacks || 1;
             let nextEffectiveStacks = actualStacks * groupSize * areaMult;
-            let nextPotentialLevel = stackCountToLevel(nextEffectiveStacks);
-            let nextEffectiveLevel = (obj.effectiveLevel === undefined)
-                ? 1
-                : Math.max(1, Math.floor(obj.effectiveLevel));
+            let nextPotentialStacks = Math.max(actualStacks, nextManualStacks) * groupSize * areaMult;
+            let nextPotentialLevel = stackCountToLevel(nextPotentialStacks);
+            let nextEffectiveLevel = stackCountToLevel(nextEffectiveStacks);
             let nextIsUpgrading = !!obj.isUpgrading;
 
-            if (nextPotentialLevel < nextEffectiveLevel) {
-                nextEffectiveLevel = nextPotentialLevel;
-                nextIsUpgrading = false;
+            if (!passiveRefresh) {
+                if (nextEffectiveLevel < Math.max(1, Math.floor(Number(obj.effectiveLevel) || 1))) {
+                    nextIsUpgrading = false;
+                }
+
+                if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
+                    nextIsUpgrading = false;
+                }
             }
 
-            if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
-                nextIsUpgrading = false;
+            // Passive area refresh should only affect adjacency-derived values.
+            if (!passiveRefresh) {
+                obj.stacks = nextStacks;
+                obj.manualStacks = nextManualStacks;
             }
-
-            // Commit effective values only after deriving final state to avoid transient flicker.
-            obj.stacks = nextStacks;
-            obj.manualStacks = nextManualStacks;
             obj.effectiveStacks = nextEffectiveStacks;
             obj.potentialEffectiveLevel = nextPotentialLevel;
             obj.effectiveLevel = nextEffectiveLevel;
-            obj.isUpgrading = nextIsUpgrading;
+            if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
 
-            if (obj.potentialEffectiveLevel > obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
-                beginUpgradeProgress(obj, obj.effectiveLevel + 1);
+            let baseLevel = getThingBaseLevel(obj);
+            if (!passiveRefresh && baseLevel < obj.effectiveLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
+                beginUpgradeProgress(obj, baseLevel + 1);
             }
 
-            if (!obj.underConstruction && !obj.isUpgrading) {
-                obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
-                if (!obj.isStacking) obj.stackingWorkDone = 0;
-            } else if (obj.isUpgrading) {
-                obj.isStacking = false;
+            if (!passiveRefresh) {
+                if (!obj.underConstruction && !obj.isUpgrading) {
+                    obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
+                    if (!obj.isStacking) obj.stackingWorkDone = 0;
+                } else if (obj.isUpgrading) {
+                    obj.isStacking = false;
+                }
             }
 
             if (obj.updateStats) {
                 obj.effectiveGroupSize = groupSize;
                 obj.effectiveAreaMult = areaMult;
                 obj.updateStats();
+                let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
+                if (statsType) {
+                    let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
+                    let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
+                    obj.preComputedPotential = potentialStats;
+                }
             } else {
                 obj.effectiveGroupSize = groupSize;
                 obj.effectiveAreaMult = areaMult;
                 let statsType = (obj.type === 'barrack' && obj.unitType) ? ('barrack_' + obj.unitType) : obj.type;
                 let baseStats = calculateItemStats(statsType, getThingBaseLevel(obj), obj.owner);
-                let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner));
+                let stats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, obj.effectiveLevel, obj.owner), false);
+                let potentialStats = clonePrecomputedWithBaseMaxEnergy(baseStats, calculateItemStats(statsType, nextPotentialLevel, obj.owner), false);
                 obj.preComputedBase = baseStats;
                 obj.preComputedEffective = stats;
+                obj.preComputedPotential = potentialStats;
                 obj.preComputed = obj.preComputedEffective;
                 if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
                     obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
@@ -281,7 +296,7 @@ function _runAdjacencyRecalculation() {
         let a = getAreaById(aId);
         if (!a) continue;
         let nextActive = !!getAreaSignatureKey(aId);
-        if (!nextActive && a.multiplierLevel > 0) {
+        if (!passiveRefresh && !nextActive && a.multiplierLevel > 0) {
             a.multiplierLevel = 0;
             areaVisualsChanged = true;
         }
@@ -296,10 +311,16 @@ function _runAdjacencyRecalculation() {
     _adjacencyDirtyAll = false;
     _adjacencyDirtyTiles.clear();
     _adjacencyLastRecalcTick = gameTime;
+    _adjacencyPassiveRefreshMode = false;
 }
 
-function recalculateAdjacency(forceFull = false) {
+function recalculateAdjacency(forceFull = false, options = null) {
+    if (forceFull && typeof forceFull === 'object') {
+        options = forceFull;
+        forceFull = !!options.forceFull;
+    }
     if (forceFull) _adjacencyDirtyAll = true;
+    _adjacencyPassiveRefreshMode = !!(options && options.passiveRefresh);
     _adjacencyNeedsRecalc = true;
     if (_adjacencyLastRecalcTick === gameTime) return;
     _runAdjacencyRecalculation();
@@ -338,18 +359,24 @@ function _refreshThingPrecomputedStats(item) {
         return;
     }
 
-    if (item.updateStats) {
-        item.updateStats();
-        return;
-    }
-
     let statsType = (item.type === 'barrack' && item.unitType) ? ('barrack_' + item.unitType) : item.type;
     if (!statsType) return;
 
+    if (item.updateStats) {
+        item.updateStats();
+        let baseLevelForPotential = getThingBaseLevel(item);
+        let potentialLevelForPotential = getThingPotentialLevel(item, getThingEffectiveLevel(item, baseLevelForPotential));
+        let baseStatsForPotential = calculateItemStats(statsType, baseLevelForPotential, item.owner);
+        item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(baseStatsForPotential, calculateItemStats(statsType, potentialLevelForPotential, item.owner), false);
+        return;
+    }
+
     let baseLevel = getThingBaseLevel(item);
     let effectiveLevel = getThingEffectiveLevel(item, baseLevel);
+    let potentialLevel = getThingPotentialLevel(item, effectiveLevel);
     item.preComputedBase = calculateItemStats(statsType, baseLevel, item.owner);
-    item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, effectiveLevel, item.owner));
+    item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, effectiveLevel, item.owner), false);
+    item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, potentialLevel, item.owner), false);
     item.preComputed = item.preComputedEffective;
 
     if (item.isUpgrading && item.upgrademaxEnergy > 0) {
@@ -577,8 +604,37 @@ function recalculateUnitEffectiveStats() {
 // ============================================================
 // BUILDING PLACEMENT & DESTRUCTION
 // ============================================================
+function _areaHasForeignBuildPresence(areaId, playerId) {
+    let aId = Math.floor(Number(areaId));
+    if (!(aId >= 0)) return false;
+
+    let unitBucket = spatialUnitsByArea[aId];
+    if (unitBucket instanceof Set) {
+        for (let u of unitBucket) {
+            if (!u || u.dead || u.owner === playerId) continue;
+            return true;
+        }
+    }
+
+    let area = getAreaById(aId);
+    if (!area || !Array.isArray(area.cells)) return false;
+    for (let cellPos of area.cells) {
+        let ref = getTileEntityRef(cellPos.x, cellPos.y);
+        if (!ref) continue;
+        if (!Number.isFinite(ref.owner) || ref.owner < 0 || ref.owner === playerId) continue;
+        return true;
+    }
+    return false;
+}
+
+function _isBuildAreaContested(gx, gy, playerId) {
+    return _areaHasForeignBuildPresence(getAreaIdAtTile(gx, gy), playerId);
+}
+
 function canBuildAt(gx, gy, playerId) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
+    if (_isBuildAreaContested(gx, gy, playerId)) return false;
     if (grid[gy][gx].type === TYPE_WALL) return false;
     if (grid[gy][gx].item) return false;
     // Don't allow building on gold mines
@@ -602,6 +658,8 @@ function canBuildAt(gx, gy, playerId) {
 function canStackAt(gx, gy, itemKey, playerId) {
     // Check if we can stack on an existing same-type building
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
+    if (_isBuildAreaContested(gx, gy, playerId)) return false;
     let cardDef = BASE_CARD_TYPES[itemKey];
     if (!cardDef) return false;
     if (cardDef.target === 'wall') {
@@ -653,6 +711,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     if (itemKey === 'area_upgrader') {
         let aId = grid[gy][gx].areaId;
         if (aId === -1) return false;
+        if (_areaHasForeignBuildPresence(aId, playerId)) return false;
         let area = getAreaById(aId);
         if (!area) return false;
         // Check if ALL cells in area are occupied by any building/item (any owner)
@@ -671,10 +730,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         });
         if (!allFilled) return false;
         if ((area.multiplierLevel || 0) >= 5) return false;
+        let upgradeCost = getAreaUpgradeCost(area.multiplierLevel || 0);
+        addPlayerResource(playerId, 'energy', -upgradeCost);
+        recordEnergyDelta(playerId, 'builder', -upgradeCost);
         area.multiplierLevel = (area.multiplierLevel || 0) + 1;
         _markCombinedBgAreaDirty(aId, 1);
         for (let cp of area.cells) requestAdjacencyRecalc(cp.x, cp.y, 0);
-        recalculateAdjacency();
+        recalculateAdjacency({ passiveRefresh: true });
+        if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
         return true;
     }
 
@@ -843,7 +906,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             addManualStackToThing(cell.item, 1);
         } else {
             let stats = calculateItemStats(itemKey, 1, playerId);
-            let item = { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
+            let item = { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild };
             cell.item = item;
             cell.owner = playerId;
             setTileEntity(gx, gy, itemKey, item);
@@ -990,10 +1053,10 @@ function refreshThingProgressState(item) {
         return;
     }
 
-    let effLevel = getThingEffectiveLevel(item);
-    let potLevel = getThingPotentialLevel(item, effLevel);
-    if (potLevel > effLevel && isAutoUpgradeEnabled(item)) {
-        beginUpgradeProgress(item, effLevel + 1);
+    let baseLevel = getThingBaseLevel(item);
+    let effLevel = getThingEffectiveLevel(item, baseLevel);
+    if (baseLevel < effLevel && isAutoUpgradeEnabled(item)) {
+        beginUpgradeProgress(item, baseLevel + 1);
         item.isStacking = false;
         return;
     }
@@ -1016,6 +1079,10 @@ function addManualStackToThing(item, amount = 1) {
     item.stacks = getThingStackedStacks(item);
     item.manualStacks = getThingManualStacks(item) + addCount;
     item.level = stackCountToLevel(item.stacks);
+    if (Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
+        _requestAdjacencyRecalcForThing(item, 1);
+        recalculateAdjacency();
+    }
     refreshThingProgressState(item);
     if (item.updateTextCache) item.updateTextCache();
     else updateItemTextCache(item);
@@ -1040,6 +1107,7 @@ function getThingPotentialLevel(item, fallback = 1) {
     if (Number.isFinite(item.potentialEffectiveLevel)) lvl = Math.max(lvl, Math.max(1, clampThingLevel(item.potentialEffectiveLevel)));
     if (Number.isFinite(item.level)) lvl = Math.max(lvl, Math.max(1, clampThingLevel(item.level)));
     if (Number.isFinite(item.stacks)) lvl = Math.max(lvl, stackCountToLevel(item.stacks || 1));
+    if (Number.isFinite(item.manualStacks)) lvl = Math.max(lvl, stackCountToLevel(item.manualStacks || 1));
     return lvl;
 }
 
@@ -1168,17 +1236,32 @@ function getEntityEffectiveVisibilityRangeTiles(e) {
 
 function getEntityBaseEnergyMax(e) {
     if (!e) return 0;
+    if (e.basePreComputed && Number.isFinite(e.basePreComputed.maxEnergy)) {
+        return Math.max(1, Math.floor(e.basePreComputed.maxEnergy));
+    }
+    if (e.preComputedBase && Number.isFinite(e.preComputedBase.maxEnergy)) {
+        return Math.max(1, Math.floor(e.preComputedBase.maxEnergy));
+    }
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     if (statsType) {
         let s = calculateItemStats(statsType, baseLevel, e.owner);
         if (s && Number.isFinite(s.maxEnergy)) return Math.max(1, Math.floor(s.maxEnergy));
     }
-    return getEntityEnergyDisplayMax(e);
+    return 1;
 }
 
 function getEntityEffectiveEnergyMax(e) {
     if (!e) return 0;
+    if (e.preComputedEffective && Number.isFinite(e.preComputedEffective.maxEnergy)) {
+        return Math.max(1, Math.floor(e.preComputedEffective.maxEnergy));
+    }
+    if (e.preComputed && Number.isFinite(e.preComputed.maxEnergy)) {
+        return Math.max(1, Math.floor(e.preComputed.maxEnergy));
+    }
+    if (e.currentStats && Number.isFinite(e.currentStats.maxEnergy)) {
+        return Math.max(1, Math.floor(e.currentStats.maxEnergy));
+    }
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     let effLevel = getThingEffectiveLevel(e, baseLevel);
@@ -1186,7 +1269,22 @@ function getEntityEffectiveEnergyMax(e) {
         let s = calculateItemStats(statsType, effLevel, e.owner);
         if (s && Number.isFinite(s.maxEnergy)) return Math.max(1, Math.floor(s.maxEnergy));
     }
-    return getEntityEnergyDisplayMax(e);
+    return Math.max(1, getEntityBaseEnergyMax(e));
+}
+
+function getEntityPotentialEnergyMax(e) {
+    if (!e) return 0;
+    if (e.preComputedPotential && Number.isFinite(e.preComputedPotential.maxEnergy)) {
+        return Math.max(1, Math.floor(e.preComputedPotential.maxEnergy));
+    }
+    let statsType = getEntityStatsCalcType(e);
+    let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
+    let potentialLevel = getThingPotentialLevel(e, getThingEffectiveLevel(e, baseLevel));
+    if (statsType) {
+        let s = calculateItemStats(statsType, potentialLevel, e.owner);
+        if (s && Number.isFinite(s.maxEnergy)) return Math.max(1, Math.floor(s.maxEnergy));
+    }
+    return Math.max(1, getEntityEffectiveEnergyMax(e));
 }
 
 function getUnitRenderActionRangeArea(u) {
@@ -1246,21 +1344,24 @@ function isAutoResearchEnabled(item) {
 
 
 function getLevelLabelText(item) {
-    let currentLevel = Math.max(0, Math.floor(getDisplayLevel(item) || 0));
-    let potentialLevel = item && item.potentialEffectiveLevel !== undefined
-        ? Math.max(0, Math.floor(item.potentialEffectiveLevel || 0))
-        : currentLevel;
-    if (item && !item.underConstruction) {
-        let manualLevel = stackCountToLevel(getThingManualStacks(item));
-        potentialLevel = Math.max(potentialLevel, manualLevel);
-    }
-    return potentialLevel !== currentLevel
-        ? `L${currentLevel}->L${potentialLevel}`
+    if (!item) return 'L1';
+    let currentLevel = item.underConstruction
+        ? 0
+        : Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
+    let effectiveLevel = item.underConstruction
+        ? Math.max(0, Math.floor(getThingEffectiveLevel(item, currentLevel || 1) || 0))
+        : Math.max(1, Math.floor(getThingEffectiveLevel(item, currentLevel) || currentLevel));
+    let potentialLevel = item.underConstruction
+        ? Math.max(0, Math.floor(getThingPotentialLevel(item, Math.max(0, effectiveLevel)) || effectiveLevel))
+        : Math.max(effectiveLevel, Math.floor(getThingPotentialLevel(item, effectiveLevel) || effectiveLevel));
+    let shownLevel = Math.max(effectiveLevel, potentialLevel);
+    return shownLevel > currentLevel
+        ? `L${currentLevel}->L${shownLevel}`
         : `L${currentLevel}`;
 }
 
 function getUnitLevelLabelText(unit) {
-    let lvl = getUnitBaseLevel(unit);
+    let lvl = getUnitEffectiveLevel(unit, getUnitBaseLevel(unit));
     return `L${lvl}`;
 }
 

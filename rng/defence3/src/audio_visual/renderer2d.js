@@ -670,10 +670,13 @@ function getCurrentBuildPreviewData() {
         areaCenterY: gy + 0.5,
     };
 
+    let buildTileVisible = isTileActuallyVisibleToPlayer(localPlayerId, gx, gy);
+
     if (selectedBuildItem === 'area_upgrader') {
         let aId = grid[gy][gx].areaId;
         let area = getAreaById(aId);
         if (!area) return preview;
+        let areaContested = _areaHasForeignBuildPresence(aId, localPlayerId);
         let filledCount = 0;
         let cells = [];
         for (let cp of area.cells) {
@@ -693,9 +696,9 @@ function getCurrentBuildPreviewData() {
         preview.areaUpgradeCost = getAreaUpgradeCost(preview.areaMultiplierLevel);
         preview.areaCenterX = area.cells.reduce((sum, cell) => sum + cell.x + 0.5, 0) / Math.max(1, area.cells.length);
         preview.areaCenterY = area.cells.reduce((sum, cell) => sum + cell.y + 0.5, 0) / Math.max(1, area.cells.length);
-        preview.canBuild = filledCount === area.cells.length && preview.areaMultiplierLevel < 5;
+        preview.canBuild = buildTileVisible && !areaContested && filledCount === area.cells.length && preview.areaMultiplierLevel < 5;
     } else {
-        preview.canBuild = isTileVisible(gx, gy) && (canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId));
+        preview.canBuild = buildTileVisible && (canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId));
     }
 
     let def = BASE_CARD_TYPES[selectedBuildItem];

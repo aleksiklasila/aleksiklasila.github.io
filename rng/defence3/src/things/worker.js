@@ -255,9 +255,11 @@ function updateWorkerAI(u) {
                     let t = u.workerTarget;
                     let didWork = false;
                     if (t.underConstruction) {
-                        t.energy = Math.min(t.maxEnergy, t.energy + dps);
+                        let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
+                        t.maxEnergy = requiredEnergy;
+                        t.energy = Math.min(requiredEnergy, t.energy + dps);
                         didWork = true;
-                        if (t.energy >= t.maxEnergy) {
+                        if (t.energy >= requiredEnergy) {
                             markConstructionComplete(t);
                             refreshThingProgressState(t);
                             if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
@@ -270,11 +272,16 @@ function updateWorkerAI(u) {
                             }
                         }
                     } else if (t.isUpgrading) {
-                        t.energy = Math.min(t.maxEnergy, t.energy + dps);
+                        let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
+                        t.upgrademaxEnergy = requiredEnergy;
+                        t.maxEnergy = requiredEnergy;
+                        t.energy = Math.min(requiredEnergy, t.energy + dps);
                         didWork = true;
-                        if (t.energy >= t.maxEnergy) {
-                            if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
-                            t.effectiveLevel++;
+                        if (t.energy >= requiredEnergy) {
+                            let nextLevel = getThingBaseLevel(t) + 1;
+                            t.level = nextLevel;
+                            t.stacks = Math.max(getThingStackedStacks(t), getRequiredStacksForLevel(nextLevel));
+                            t.manualStacks = Math.max(getThingManualStacks(t), t.stacks);
 
                             t.isUpgrading = false;
                             t.upgrademaxEnergy = 0;
@@ -298,7 +305,6 @@ function updateWorkerAI(u) {
                         while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
                             t.stackingWorkDone -= stackCost;
                             t.stacks = getThingStackedStacks(t) + 1;
-                            t.level = stackCountToLevel(t.stacks);
                             stackedAny = true;
                         }
                         if (stackedAny) {
@@ -425,8 +431,10 @@ function updateWorkerAI(u) {
             if (buildStep > 0) {
                 let t = u.workerTarget;
                 if (t.underConstruction) {
-                    t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
-                    if (t.energy >= t.maxEnergy) {
+                    let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
+                    t.maxEnergy = requiredEnergy;
+                    t.energy = Math.min(requiredEnergy, t.energy + buildStep);
+                    if (t.energy >= requiredEnergy) {
                         markConstructionComplete(t);
                         refreshThingProgressState(t);
                         if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
@@ -439,10 +447,15 @@ function updateWorkerAI(u) {
                         }
                     }
                 } else if (t.isUpgrading) {
-                    t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
-                    if (t.energy >= t.maxEnergy) {
-                        if (t.effectiveLevel === undefined) t.effectiveLevel = 1;
-                        t.effectiveLevel++;
+                    let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
+                    t.upgrademaxEnergy = requiredEnergy;
+                    t.maxEnergy = requiredEnergy;
+                    t.energy = Math.min(requiredEnergy, t.energy + buildStep);
+                    if (t.energy >= requiredEnergy) {
+                        let nextLevel = getThingBaseLevel(t) + 1;
+                        t.level = nextLevel;
+                        t.stacks = Math.max(getThingStackedStacks(t), getRequiredStacksForLevel(nextLevel));
+                        t.manualStacks = Math.max(getThingManualStacks(t), t.stacks);
 
                         t.isUpgrading = false;
                         t.upgrademaxEnergy = 0;
@@ -464,7 +477,6 @@ function updateWorkerAI(u) {
                     while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
                         t.stackingWorkDone -= stackCost;
                         t.stacks = getThingStackedStacks(t) + 1;
-                        t.level = stackCountToLevel(t.stacks);
                         stackedAny = true;
                     }
                     if (stackedAny) {
@@ -1478,6 +1490,18 @@ function getBuilderTripGoldCost(u) {
     return Math.max(1, Math.round(dps));
 }
 
+function _getBuilderProgressRequiredEnergy(target) {
+    if (!target) return 1;
+    if (target.underConstruction) {
+        return Math.max(1, Math.floor(getUpgrademaxEnergy(target, 1) || target.maxEnergy || 1));
+    }
+    if (target.isUpgrading) {
+        let nextLevel = Math.max(1, getThingBaseLevel(target) + 1);
+        return Math.max(1, Math.floor(getUpgrademaxEnergy(target, nextLevel) || target.upgrademaxEnergy || target.maxEnergy || 1));
+    }
+    return Math.max(1, Math.floor(Number(target.maxEnergy) || 1));
+}
+
 function isResourceCollectorWorkerType(workerType) {
     return !!getResourceTypeByCollectorUnit(workerType);
 }
@@ -1923,11 +1947,18 @@ function _isBuilderRepairTarget(target) {
         && !target.isStacking;
 }
 
+function _isBuilderUpgradeCandidate(target) {
+    if (!target || target.underConstruction || target.isUpgrading || target.isStacking) return false;
+    let baseLevel = getThingBaseLevel(target, stackCountToLevel((target.stacks || 1)));
+    let effectiveLevel = getThingEffectiveLevel(target, baseLevel);
+    return effectiveLevel > baseLevel && isAutoUpgradeEnabled(target);
+}
+
 function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
     if (!target) return false;
     if (target.owner !== owner) return false;
     if (target.markedForSalvage) return false;
-    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target)) return false;
+    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target) && !_isBuilderUpgradeCandidate(target)) return false;
     if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
     return true;
 }

@@ -3543,7 +3543,7 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let prevEnergy = b.energy;
         let lvl = getThingEffectiveLevel(b);
         b.preComputedBase = calculateItemStats(`barrack_${b.unitType}`, Math.max(1, b.level || lvl), b.owner);
-        b.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(b.preComputedBase, calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner));
+        b.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(b.preComputedBase, calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner), false);
         b.preComputed = b.preComputedEffective;
         b.maxEnergy = Math.max(1, Math.floor((b.preComputedBase && b.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') b.energy = Math.max(1, Math.min(prevEnergy, b.maxEnergy));
@@ -3554,7 +3554,7 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let prevEnergy = s.energy;
         let lvl = getThingEffectiveLevel(s);
         s.preComputedBase = calculateItemStats(s.type, Math.max(1, s.level || lvl), s.owner);
-        s.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(s.preComputedBase, calculateItemStats(s.type, lvl, s.owner));
+        s.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(s.preComputedBase, calculateItemStats(s.type, lvl, s.owner), false);
         s.preComputed = s.preComputedEffective;
         s.maxEnergy = Math.max(1, Math.floor((s.preComputedBase && s.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') s.energy = Math.max(1, Math.min(prevEnergy, s.maxEnergy));
@@ -3620,11 +3620,13 @@ function computeUnitLevelScaledStats(unit, level) {
 }
 
 function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
-    if (!effectiveStats || typeof effectiveStats !== 'object') return effectiveStats;
-    let baseMaxEnergy = Number(baseStats && baseStats.maxEnergy);
-    if (!Number.isFinite(baseMaxEnergy)) return effectiveStats;
-    if (Number(effectiveStats.maxEnergy) === baseMaxEnergy) return effectiveStats;
-    return { ...effectiveStats, maxEnergy: baseMaxEnergy };
+        let preserveBaseMaxEnergy = arguments.length < 3 ? true : !!arguments[2];
+        if (!effectiveStats || typeof effectiveStats !== 'object') return effectiveStats;
+        if (!preserveBaseMaxEnergy) return effectiveStats;
+        let baseMaxEnergy = Number(baseStats && baseStats.maxEnergy);
+        if (!Number.isFinite(baseMaxEnergy)) return effectiveStats;
+        if (Number(effectiveStats.maxEnergy) === baseMaxEnergy) return effectiveStats;
+        return { ...effectiveStats, maxEnergy: baseMaxEnergy };
 }
 
 function applyUnitLevelScaling(unit, level) {

@@ -817,6 +817,7 @@ function initInput() {
         let _cd = BASE_CARD_TYPES[selectedBuildItem];
         if (selectedBuildItem === 'area_upgrader') {
             let aId = grid[gy][gx].areaId;
+            if (_areaHasForeignBuildPresence(aId, localPlayerId)) return false;
             let area = getAreaById(aId);
             if (!area) return false;
             let filledCount = 0;
@@ -835,7 +836,7 @@ function initInput() {
 
     function tryPlaceSelectedBuildAt(gx, gy, playCantPlaceSound = true) {
         if (!selectedBuildItem) return false;
-        if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || !isTileVisible(gx, gy)) {
+        if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || !isTileActuallyVisibleToPlayer(localPlayerId, gx, gy)) {
             if (playCantPlaceSound) playSound('cant_place');
             return false;
         }
@@ -2414,6 +2415,11 @@ function processActions(actions, playerId) {
             let target = getTileEntityRef(a.gx, a.gy);
             if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
                 target.markedForSalvage = !target.markedForSalvage;
+            }
+        } else if (a.action === 'setSalvage') {
+            let target = getTileEntityRef(a.gx, a.gy);
+            if (target && target.owner === playerId && target.markedForSalvage !== undefined) {
+                target.markedForSalvage = !!a.marked;
             }
         } else if (a.action === 'setAutoUpgrade') {
             let target = getTileEntityRef(a.gx, a.gy);
