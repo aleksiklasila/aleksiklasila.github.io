@@ -2358,20 +2358,30 @@ function getStackProgressText(stackedStacks, manualStacks) {
     return `${formatBigNumber(stacked)}/${formatBigNumber(manual)}`;
 }
 
-function formatStacksValueText(stacks) {
-    let value = Math.max(1, Number(stacks) || 1);
+function formatStacksValueText(stacks, allowZero = false) {
+    let minValue = allowZero ? 0 : 1;
+    let fallback = allowZero ? 0 : 1;
+    let value = Math.max(minValue, Number(stacks) || fallback);
     return value.toFixed(1);
 }
 
 function infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, manualStacks = baseStacks) {
-    let baseText = formatStacksValueText(baseStacks);
+    let stacked = Math.max(1, Number(baseStacks) || 1);
+    let manual = Math.max(stacked, Number(manualStacks) || stacked);
+    let remaining = getThingRemainingStacks({ stacks: stacked, manualStacks: manual });
+    if (!Number.isFinite(remaining)) remaining = Math.max(0, manual - stacked);
+    remaining = Math.max(0, remaining);
+    let remainingText = remaining > 0
+        ? ` <span style="color:#7f7">+</span> <span style="color:#49c0ff">${formatStacksValueText(remaining, true)}</span>`
+        : '';
+    let baseText = `<span style="display:inline-block;min-width:72px;white-space:nowrap">${formatStacksValueText(stacked)}${remainingText}</span>`;
     let hasEff = Number.isFinite(effStacks) && Number.isFinite(effLevel);
     let matrixOpts = {
         title: 'Stacks',
         getValue: (thingLevel) => `x${getRequiredStacksForLevel(Math.max(1, Math.floor(Number(thingLevel) || 1)))}`
     };
     if (!hasEff) return infoRow('Stacks', baseText, undefined, matrixOpts);
-    let effText = formatStacksValueText(effStacks);
+    let effText = `<span style="display:inline-block;min-width:52px;white-space:nowrap">${formatStacksValueText(effStacks)}</span>`;
     return infoRow('Stacks', baseText, effText, matrixOpts);
 }
 
