@@ -64,7 +64,15 @@ function getSpawnerFallbackUnitType(spawner) {
 
 function _shouldWaitForConstruction(self) {
     if (!self || !self.underConstruction) return false;
-    let requiredEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(self, 1) || self.maxEnergy || 1));
+    let targetEnergy = Number(getUpgrademaxEnergy(self, 1));
+    let visibleMax = Number(self.maxEnergy);
+    // Use the visible construction cap as an upper bound to avoid impossible L0 completion thresholds.
+    if (Number.isFinite(visibleMax) && visibleMax > 0) {
+        targetEnergy = Number.isFinite(targetEnergy) && targetEnergy > 0
+            ? Math.min(targetEnergy, visibleMax)
+            : visibleMax;
+    }
+    let requiredEnergy = Math.max(1, Math.floor(Number.isFinite(targetEnergy) && targetEnergy > 0 ? targetEnergy : 1));
     if ((Number(self.energy) || 0) >= requiredEnergy) {
         markConstructionComplete(self);
         return false;

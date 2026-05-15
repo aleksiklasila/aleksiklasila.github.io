@@ -1471,7 +1471,14 @@ function getBuilderTripGoldCost(u) {
 function _getBuilderProgressRequiredEnergy(target) {
     if (!target) return 1;
     if (target.underConstruction) {
-        return Math.max(1, Math.floor(getUpgrademaxEnergy(target, 1) || target.maxEnergy || 1));
+        let upgradeEnergy = Number(getUpgrademaxEnergy(target, 1));
+        let visibleMax = Number(target.maxEnergy);
+        if (Number.isFinite(visibleMax) && visibleMax > 0) {
+            upgradeEnergy = Number.isFinite(upgradeEnergy) && upgradeEnergy > 0
+                ? Math.min(upgradeEnergy, visibleMax)
+                : visibleMax;
+        }
+        return Math.max(1, Math.floor(Number.isFinite(upgradeEnergy) && upgradeEnergy > 0 ? upgradeEnergy : 1));
     }
     if (target.isUpgrading) {
         let nextLevel = Math.max(1, getThingBaseLevel(target) + 1);
@@ -1959,7 +1966,12 @@ function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
     if (!target) return false;
     if (target.owner !== owner) return false;
     if (target.markedForSalvage) return false;
-    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target) && !_isBuilderUpgradeCandidate(target)) return false;
+    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target)) {
+        if (_isBuilderUpgradeCandidate(target)) {
+            beginUpgradeProgress(target, Math.max(1, getThingBaseLevel(target) + 1));
+        }
+    }
+    if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target)) return false;
     if (!allowDisabledBuild && target.underConstruction && !isBuildEnabled(target)) return false;
     return true;
 }
