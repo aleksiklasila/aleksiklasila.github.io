@@ -1060,21 +1060,22 @@
         #shop-stats-container .build-stat-row {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 3px;
             padding: 1px 0;
             font-size: 9px;
+            min-width: 0;
         }
 
         #shop-stats-container .build-stat-matrix-btn {
             flex: 0 0 auto;
-            width: 14px;
-            height: 14px;
-            line-height: 12px;
+            width: 12px;
+            height: 12px;
+            line-height: 10px;
             border: 1px solid #35516a;
             background: #121a21;
             color: #9ec7e8;
             border-radius: 3px;
-            font-size: 9px;
+            font-size: 8px;
             text-align: center;
             padding: 0;
             cursor: pointer;
@@ -1089,12 +1090,18 @@
         #shop-stats-container .build-stat-label {
             color: #888;
             flex: 1 1 auto;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         #shop-stats-container .build-stat-value {
             color: #fff;
             text-align: right;
             margin-left: auto;
+            flex: 0 0 auto;
+            white-space: nowrap;
         }
 
         #shop-stats-container .shop-stats-desc {

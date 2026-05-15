@@ -17,7 +17,7 @@ function _buildDeterministicUnitUpdateOrderForTick() {
     return order;
 }
 
-function _createEmptyMaintenanceBreakdown() {
+function _createEmptyUpKeepBreakdown() {
     return {
         total: 0,
         units: 0,
@@ -28,18 +28,18 @@ function _createEmptyMaintenanceBreakdown() {
     };
 }
 
-let _maintenanceRateByPlayer = [];
+let _upKeepRateByPlayer = [];
 
-function _ensureMaintenanceRateCacheSize() {
+function _ensureUpKeepRateCacheSize() {
     let targetLen = Array.isArray(players) ? players.length : 0;
-    while (_maintenanceRateByPlayer.length < targetLen) _maintenanceRateByPlayer.push(_createEmptyMaintenanceBreakdown());
-    if (_maintenanceRateByPlayer.length > targetLen) _maintenanceRateByPlayer.length = targetLen;
+    while (_upKeepRateByPlayer.length < targetLen) _upKeepRateByPlayer.push(_createEmptyUpKeepBreakdown());
+    if (_upKeepRateByPlayer.length > targetLen) _upKeepRateByPlayer.length = targetLen;
 }
 
-function _getPlayerMaintenanceBreakdown(owner) {
+function _getPlayerUpKeepBreakdown(owner) {
     let pid = Math.max(0, Math.floor(Number(owner) || 0));
-    let b = _maintenanceRateByPlayer[pid];
-    if (!b) return _createEmptyMaintenanceBreakdown();
+    let b = _upKeepRateByPlayer[pid];
+    if (!b) return _createEmptyUpKeepBreakdown();
     return {
         total: Number(b.total) || 0,
         units: Number(b.units) || 0,
@@ -50,40 +50,40 @@ function _getPlayerMaintenanceBreakdown(owner) {
     };
 }
 
-function _getThingMaintenancePerSecond(thing) {
+function _getThingUpKeepPerSecond(thing) {
     if (!thing) return 0;
     let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
     if (owner < 0 || owner >= players.length) return 0;
 
-    // No maintenance for dead/disabled/under-construction things.
+    // No upKeep for dead/disabled/under-construction things.
     if (!(Number(thing.energy) > 0)) return 0;
     if (thing.underConstruction) return 0;
 
     if (thing.unitType) {
         let lvl = Math.max(1, getUnitEffectiveLevel(thing));
-        let maintenance = Number(getUnitStatForOwner(owner, thing.unitType, lvl, 'maintenance'));
-        if (Number.isFinite(maintenance)) return Math.max(0, maintenance);
+        let upKeep = Number(getUnitStatForOwner(owner, thing.unitType, lvl, 'upKeep'));
+        if (Number.isFinite(upKeep)) return Math.max(0, upKeep);
         let uDef = BASE_UNIT_STATS[thing.unitType] || BASE_UNIT_STATS.norm || {};
-        return Math.max(0, Number(uDef.maintenance) || 1);
+        return Math.max(0, Number(uDef.upKeep) || 1);
     }
 
     let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : (thing.type || '');
     if (!statsType) return 0;
     let lvl = Math.max(1, getThingEffectiveLevel(thing));
-    let maintenance = Number(getBuildingStatForOwner(owner, statsType, lvl, 'maintenance'));
-    if (Number.isFinite(maintenance)) return Math.max(0, maintenance);
+    let upKeep = Number(getBuildingStatForOwner(owner, statsType, lvl, 'upKeep'));
+    if (Number.isFinite(upKeep)) return Math.max(0, upKeep);
 
     let def = BASE_CARD_TYPES[statsType] || {};
-    let baseMaintenance = Number(def.maintenance);
-    if (Number.isFinite(baseMaintenance)) return Math.max(0, baseMaintenance);
+    let baseUpKeep = Number(def.upKeep);
+    if (Number.isFinite(baseUpKeep)) return Math.max(0, baseUpKeep);
     return def.target === 'wall' ? 3 : 1;
 }
 
-function _accumulateMaintenanceForThing(breakdowns, thing, isUnit) {
+function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
     if (!thing || !breakdowns) return;
     let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
     if (owner < 0 || owner >= breakdowns.length) return;
-    let perSecond = _getThingMaintenancePerSecond(thing);
+    let perSecond = _getThingUpKeepPerSecond(thing);
     if (!(perSecond > 0)) return;
 
     let row = breakdowns[owner];
@@ -117,8 +117,8 @@ function gameTick() {
     gameTime++;
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
-    _ensureMaintenanceRateCacheSize();
-    let maintenanceTickBreakdown = Array.from({ length: players.length }, () => _createEmptyMaintenanceBreakdown());
+    _ensureUpKeepRateCacheSize();
+    let upKeepTickBreakdown = Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown());
 
     let floorChanged = false;
     for (let y = 0; y < GRID_H; y++) {
@@ -126,7 +126,7 @@ function gameTick() {
             let cell = grid[y][x];
             let item = cell.item;
             if (!item) continue;
-            _accumulateMaintenanceForThing(maintenanceTickBreakdown, item, false);
+            _accumulateUpKeepForThing(upKeepTickBreakdown, item, false);
             if (tickStatusEffects(item)) {
                 clearTileEntity(item.gx, item.gy, item);
                 cell.item = null;
@@ -246,7 +246,7 @@ function gameTick() {
             units.splice(i, 1);
             if (gameOver) return;
         } else {
-            _accumulateMaintenanceForThing(maintenanceTickBreakdown, u, true);
+            _accumulateUpKeepForThing(upKeepTickBreakdown, u, true);
         }
     }
 
@@ -303,13 +303,13 @@ function gameTick() {
         _runAdjacencyRecalculation();
     }
 
-    // Keep a live per-second maintenance breakdown for the right-side info panel.
-    _maintenanceRateByPlayer = maintenanceTickBreakdown;
+    // Keep a live per-second upKeep breakdown for the right-side info panel.
+    _upKeepRateByPlayer = upKeepTickBreakdown;
 
-    // Deduct maintenance once per second in a centralized, batched way.
+    // Deduct upKeep once per second in a centralized, batched way.
     if (gameTime % TICK_RATE === 0) {
-        for (let pid = 0; pid < maintenanceTickBreakdown.length; pid++) {
-            let totalPerSecond = Number(maintenanceTickBreakdown[pid].total) || 0;
+        for (let pid = 0; pid < upKeepTickBreakdown.length; pid++) {
+            let totalPerSecond = Number(upKeepTickBreakdown[pid].total) || 0;
             if (!(totalPerSecond > 0)) continue;
             addPlayerResource(pid, 'energy', -totalPerSecond);
         }
@@ -4020,5 +4020,5 @@ Object.assign(globalThis, {
     initInput,
     startGame,
     runOneTick,
-    getPlayerMaintenanceBreakdown: _getPlayerMaintenanceBreakdown,
+    getPlayerUpKeepBreakdown: _getPlayerUpKeepBreakdown,
 });
