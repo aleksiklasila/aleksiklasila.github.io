@@ -330,8 +330,8 @@ function applyTimingConfig(nextTickRate, nextPipelineMin) {
     LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN);
     LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
     LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
-    LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
-    LOCKSTEP_HARD_RESYNC_MS = Math.max(3000, Math.floor(TICK_MS * 60));
+    LOCKSTEP_RESEND_REQUEST_MS = getLockstepResendRequestMs();
+    LOCKSTEP_HARD_RESYNC_MS = getLockstepHardResyncMs();
     LOCKSTEP_STATE_CHECK_INTERVAL = Math.max(1, Math.floor(TICK_RATE / 2));
 
     CONTROL_GROUP_ALERT_TICKS = Math.floor(TICK_RATE * 2.2);

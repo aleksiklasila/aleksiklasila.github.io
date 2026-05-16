@@ -117,9 +117,10 @@ class Tower {
                             }
                         }
                     }
-                    // Check Buildings
+                    // Check Buildings - iterate in deterministic ID order
                     for (let list of [towers, barracks, collectorSpawners]) {
-                        for (let b of list) {
+                        let sortedList = [...list].sort((a, b) => (a.id || 0) - (b.id || 0));
+                        for (let b of sortedList) {
                             if (b.owner === this.owner || b.energy <= 0) continue;
                             let hit = false;
                             if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }

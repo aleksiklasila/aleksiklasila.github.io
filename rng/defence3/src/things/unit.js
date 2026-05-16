@@ -4,6 +4,34 @@
 // UNIT CLASS
 // ============================================================
 const CMD_IDLE = 0, CMD_MOVING = 1, CMD_ATTACK_MOVING = 2, CMD_ATTACKING = 3, CMD_HOLDING = 4;
+const UNIT_POSITION_QUANTIZATION = 8;
+
+function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null) {
+    if (!u) return false;
+    if (!fromNode || !toNode || !Number.isFinite(fromNode.x) || !Number.isFinite(fromNode.y) || !Number.isFinite(toNode.x) || !Number.isFinite(toNode.y)) {
+        return _tryConsumeAstarMoveCost(u, 1);
+    }
+    let fromKey = (Math.floor(fromNode.y) * GRID_W) + Math.floor(fromNode.x);
+    let toKey = (Math.floor(toNode.y) * GRID_W) + Math.floor(toNode.x);
+    if (
+        Number(u._astarLastChargedTick) === gameTime &&
+        Number(u._astarLastChargedFromKey) === fromKey &&
+        Number(u._astarLastChargedToKey) === toKey
+    ) {
+        return true;
+    }
+    if (!_tryConsumeAstarMoveCost(u, 1)) return false;
+    u._astarLastChargedTick = gameTime;
+    u._astarLastChargedFromKey = fromKey;
+    u._astarLastChargedToKey = toKey;
+    return true;
+}
+
+function _quantizeUnitWorldCoord(value) {
+    let n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * UNIT_POSITION_QUANTIZATION) / UNIT_POSITION_QUANTIZATION;
+}
 
 class Unit {
     constructor(unitType, owner, x, y) {
@@ -90,8 +118,8 @@ class Unit {
         rgx = Math.max(0, Math.min(GRID_W - 1, rgx));
         rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
         this._scoutTarget = { gx: rgx, gy: rgy };
-        if (_canUsePathfindRequestBudget(this.owner)) {
-            _consumePathfindRequestBudget(this.owner);
+        if (_canUsePathfindRequestBudget(this.owner, this)) {
+            _consumePathfindRequestBudget(this.owner, this);
             this.path = _findPathForUnitTagged('scout_ai', this, ugx, ugy, rgx, rgy, true, null, this.owner);
             this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
         } else {
@@ -204,6 +232,28 @@ class Unit {
         // Worker AI (collector/salvager units)
         if (this.workerState) {
             updateWorkerAI(this);
+            // Keep worker motion state deterministic: movement-oriented worker states must
+            // always execute the movement state machine this tick.
+            if (
+                this.workerState === 'MANUAL_MOVE' ||
+                this.workerState === 'MOVING_TO' ||
+                this.workerState === 'MOVING_TO_ASTAR' ||
+                this.workerState === 'RETURNING' ||
+                this.workerState === 'RETURNING_ASTAR' ||
+                this.workerState === 'MOVING_TO_BUILD' ||
+                this.workerState === 'RETURNING_FOR_GOLD' ||
+                this.workerState === 'MOVING_TO_HEAL' ||
+                this.workerState === 'MOVING_TO_RESEARCH'
+            ) {
+                this.commandState = CMD_MOVING;
+            } else if (
+                this.workerState === 'IDLE' ||
+                this.workerState === 'BUILDING_IN_PLACE' ||
+                this.workerState === 'HEALING' ||
+                this.workerState === 'RESEARCHING'
+            ) {
+                this.commandState = CMD_IDLE;
+            }
             // Workers still follow paths via the normal system
         }
 
@@ -223,11 +273,26 @@ class Unit {
             let sepRange = selfCollisionR * 2;
             let pushX = 0, pushY = 0;
             let myLayer = this.getCollisionLayer();
+            let collisionCandidates = [];
             forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
                 if (other === this || other.dead) return;
                 if (other.getCollisionLayer() !== myLayer) return;
-                dx = -dx; dy = -dy;
-                let d = Math.sqrt(Math.max(0, d2));
+                collisionCandidates.push({ other, d2, dx, dy });
+            });
+            collisionCandidates.sort((a, b) => {
+                let ai = Math.floor(Number(a.other && a.other.id) || 0);
+                let bi = Math.floor(Number(b.other && b.other.id) || 0);
+                if (ai !== bi) return ai - bi;
+                let ax = Number(a.other && a.other.x) || 0, bx = Number(b.other && b.other.x) || 0;
+                if (ax !== bx) return ax - bx;
+                let ay = Number(a.other && a.other.y) || 0, by = Number(b.other && b.other.y) || 0;
+                return ay - by;
+            });
+            for (let entry of collisionCandidates) {
+                let other = entry.other;
+                let dx = -entry.dx;
+                let dy = -entry.dy;
+                let d = Math.sqrt(Math.max(0, entry.d2));
                 let minDist = selfCollisionR + other.getCollisionRadius();
                 if (d < minDist) {
                     hadUnitCollision = true;
@@ -255,7 +320,7 @@ class Unit {
                     pushX += nx * force;
                     pushY += ny * force;
                 }
-            });
+            }
             if (pushX !== 0 || pushY !== 0) {
                 this.x += pushX; this.y += pushY;
                 // Clamp to walkable area
@@ -270,6 +335,8 @@ class Unit {
             _tryUpgradeAstarFallbackPath(this);
         }
         pushUnitOutOfBlockedTile(this);
+        this.x = _quantizeUnitWorldCoord(this.x);
+        this.y = _quantizeUnitWorldCoord(this.y);
         updateUnitSpatial(this);
     }
 
@@ -561,8 +628,8 @@ class Unit {
                         let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
                         let lgx = Math.floor(lockX / TILE), lgy = Math.floor(lockY / TILE);
                         let dest = findNearestWalkable(lgx, lgy, ugx, ugy, this);
-                        if (_canUsePathfindRequestBudget(this.owner)) {
-                            _consumePathfindRequestBudget(this.owner);
+                        if (_canUsePathfindRequestBudget(this.owner, this)) {
+                            _consumePathfindRequestBudget(this.owner, this);
                             this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                             this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
                         } else {
@@ -615,8 +682,8 @@ class Unit {
                     // Need a new path toward target
                     let tgx = Math.floor(this.targetUnit.x / TILE), tgy = Math.floor(this.targetUnit.y / TILE);
                     let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-                    if (_canUsePathfindRequestBudget(this.owner)) {
-                        _consumePathfindRequestBudget(this.owner);
+                    if (_canUsePathfindRequestBudget(this.owner, this)) {
+                        _consumePathfindRequestBudget(this.owner, this);
                         let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
                         this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                         this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
@@ -652,8 +719,8 @@ class Unit {
                 } else {
                     let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
                     let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-                    if (_canUsePathfindRequestBudget(this.owner)) {
-                        _consumePathfindRequestBudget(this.owner);
+                    if (_canUsePathfindRequestBudget(this.owner, this)) {
+                        _consumePathfindRequestBudget(this.owner, this);
                         let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
                         this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
                         this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
@@ -693,7 +760,7 @@ class Unit {
 
             let nextNodeInTile = this.path[this.pathIndex + 1];
             if (nextNodeInTile && isCloudPortalLink(curNode.x, curNode.y, nextNodeInTile.x, nextNodeInTile.y, this.owner)) {
-                if (!_tryConsumeAstarMoveCost(this, 1)) return false;
+                if (!_tryConsumeAstarMoveCostForTransition(this, curNode, nextNodeInTile)) return false;
                 let laneOffsetNow = Math.max(1.5, Math.min(4, this.r * 0.6));
                 let nTx = nextNodeInTile.x * TILE + 16;
                 let nTy = nextNodeInTile.y * TILE + 16;
@@ -710,7 +777,10 @@ class Unit {
                 this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
                 this.pathIndex += 2;
             } else {
-                if (this.pathIndex > 0 && !_tryConsumeAstarMoveCost(this, 1)) return false;
+                if (this.pathIndex > 0) {
+                    let prevNodeForCost = this.path[this.pathIndex - 1] || null;
+                    if (!_tryConsumeAstarMoveCostForTransition(this, prevNodeForCost, curNode)) return false;
+                }
                 this.pathIndex++;
             }
 
@@ -748,8 +818,17 @@ class Unit {
             segDy = nextNodeForDir.y - node.y;
         }
         if (segDx === 0 && segDy === 0) {
-            if (Math.abs(this.vx) >= Math.abs(this.vy)) segDx = (this.vx >= 0 ? 1 : -1);
-            else segDy = (this.vy >= 0 ? 1 : -1);
+            let ugx = Math.floor(this.x / TILE);
+            let ugy = Math.floor(this.y / TILE);
+            if (node.x !== ugx) segDx = node.x - ugx;
+            else if (node.y !== ugy) segDy = node.y - ugy;
+            else if (this.pathIndex + 1 < this.path.length) {
+                let nextNodeForFallback = this.path[this.pathIndex + 1];
+                segDx = nextNodeForFallback.x - node.x;
+                segDy = nextNodeForFallback.y - node.y;
+            } else {
+                segDx = 1;
+            }
         }
 
         // Directional lane rule:
@@ -765,7 +844,7 @@ class Unit {
         if (dist < 4) {
             let nextNode = this.path[this.pathIndex + 1];
             if (nextNode && isCloudPortalLink(node.x, node.y, nextNode.x, nextNode.y, this.owner)) {
-                if (!_tryConsumeAstarMoveCost(this, 1)) return false;
+                if (!_tryConsumeAstarMoveCostForTransition(this, node, nextNode)) return false;
                 let nTx = nextNode.x * TILE + 16;
                 let nTy = nextNode.y * TILE + 16;
                 let postNode = this.path[this.pathIndex + 2] || null;
@@ -783,7 +862,10 @@ class Unit {
                 if (this.pathIndex >= this.path.length) return true;
                 return false;
             }
-            if (this.pathIndex > 0 && !_tryConsumeAstarMoveCost(this, 1)) return false;
+            if (this.pathIndex > 0) {
+                let prevNodeForCost = this.path[this.pathIndex - 1] || null;
+                if (!_tryConsumeAstarMoveCostForTransition(this, prevNodeForCost, node)) return false;
+            }
             this.pathIndex++;
             if (this.pathIndex >= this.path.length) return true;
             return false;
@@ -1076,8 +1158,8 @@ function _issueRetaliationPath(unit, targetGx, targetGy, forcedAttackTarget) {
     unit.path = null;
     unit.pathIndex = 0;
     unit._pendingPathTarget = null;
-    if (_canUsePathfindRequestBudget(unit.owner)) {
-        _consumePathfindRequestBudget(unit.owner);
+    if (_canUsePathfindRequestBudget(unit.owner, unit)) {
+        _consumePathfindRequestBudget(unit.owner, unit);
         unit.path = _findPathForUnitTagged('ai_combat', unit, ugx, ugy, dest.x, dest.y, unit.isFlying, canWalk, unit.owner);
         if (unit.path && unit.path.length > 0) {
             unit.pathIndex = (unit.path.length > 1 && unit.path[0].x === ugx && unit.path[0].y === ugy) ? 1 : 0;

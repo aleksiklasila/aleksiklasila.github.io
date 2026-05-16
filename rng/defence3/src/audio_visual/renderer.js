@@ -2771,6 +2771,22 @@ const LEVEL_TEXT_SPRITE_CACHE_MAX = 512;
 const UNIT_LEVEL_TEXT_SPRITE_CACHE = new Map();
 const UNIT_LEVEL_TEXT_SPRITE_CACHE_MAX = 256;
 
+function clearRendererTransientVisualCaches(options = null) {
+    let preserveTextSprites = !!(options && options.preserveTextSprites);
+    if (!preserveTextSprites) {
+        LEVEL_TEXT_SPRITE_CACHE.clear();
+        UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
+        renderer3dTopTextureCache.clear();
+        if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
+            renderer3dInstance.topTextureCache.clear();
+        }
+    }
+    renderer3dOverlapFadeState.clear();
+    renderer3dSideTextureAngleState.clear();
+    renderer3dSharedAudioTextureCanvases.clear();
+    _litTintCache.clear();
+}
+
 function _getUiSpriteScale() {
     // Render tiny text/glyph sprites at higher internal resolution to reduce color interpolation.
     let dpr = Number(window.devicePixelRatio) || 1;

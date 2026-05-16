@@ -141,8 +141,8 @@ function spawnQueuedUnitFromSpawner(spawner) {
     if (rallyTarget) {
         let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
         let rallyPath = null;
-        if (_canUsePathfindRequestBudget(u.owner)) {
-            _consumePathfindRequestBudget(u.owner);
+        if (_canUsePathfindRequestBudget(u.owner, u)) {
+            _consumePathfindRequestBudget(u.owner, u);
             let rallyCacheKey = _makeSpawnerRallyTemplateKey(spawner, spawnPos.x, spawnPos.y, rgx, rgy, u);
             rallyPath = _getSpawnerRallyTemplatePath(rallyCacheKey);
             if (!rallyPath) {
@@ -163,6 +163,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
             u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
             u.commandState = CMD_MOVING;
             u.workerState = 'MANUAL_MOVE';
+            u._manualMoveIssuedTick = gameTime;
         }
     }
 
