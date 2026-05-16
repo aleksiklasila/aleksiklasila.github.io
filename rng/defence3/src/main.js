@@ -1,10 +1,44 @@
 "use strict";
 
 const MAX_CAMERA_ZOOM = 15;
+const UPKEEP_FIXED_SCALE = 1024;
 
 // ============================================================
+function _stableNumberOr(v, fallback = 0) {
+    let n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function _compareThingsDeterministic(a, b) {
+    if (a === b) return 0;
+    if (!a) return 1;
+    if (!b) return -1;
+
+    let aid = _stableNumberOr(a.id, -1);
+    let bid = _stableNumberOr(b.id, -1);
+    if (aid !== bid) return aid - bid;
+
+    let ao = _stableNumberOr(a.owner, -1);
+    let bo = _stableNumberOr(b.owner, -1);
+    if (ao !== bo) return ao - bo;
+
+    let at = String(a.unitType || a.type || '');
+    let bt = String(b.unitType || b.type || '');
+    if (at !== bt) return at < bt ? -1 : 1;
+
+    let agx = _stableNumberOr(a.gx, Math.floor(_stableNumberOr(a.x, 0) / TILE));
+    let bgx = _stableNumberOr(b.gx, Math.floor(_stableNumberOr(b.x, 0) / TILE));
+    if (agx !== bgx) return agx - bgx;
+
+    let agy = _stableNumberOr(a.gy, Math.floor(_stableNumberOr(a.y, 0) / TILE));
+    let bgy = _stableNumberOr(b.gy, Math.floor(_stableNumberOr(b.y, 0) / TILE));
+    if (agy !== bgy) return agy - bgy;
+
+    return 0;
+}
+
 function _buildDeterministicUnitUpdateOrderForTick() {
-    let order = units.slice();
+    let order = units.slice().sort(_compareThingsDeterministic);
     if (order.length <= 1) return order;
     let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
     for (let i = order.length - 1; i > 0; i--) {
@@ -17,6 +51,22 @@ function _buildDeterministicUnitUpdateOrderForTick() {
     return order;
 }
 
+function _buildDeterministicBuildingUpdateOrderForTick(buildings, seedOffset = 0) {
+    let order = buildings.slice().sort(_compareThingsDeterministic);
+    if (order.length <= 1) return order;
+    // Use same seeding as units but with different offset per building type
+    let s = (((gameTime + 2 + seedOffset) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
+    for (let i = order.length - 1; i > 0; i--) {
+        s = ((s * 1664525) + 1013904223) >>> 0;
+        let j = s % (i + 1);
+        let tmp = order[i];
+        order[i] = order[j];
+        order[j] = tmp;
+    }
+    return order;
+}
+
+
 function _createEmptyUpKeepBreakdown() {
     return {
         total: 0,
@@ -25,7 +75,45 @@ function _createEmptyUpKeepBreakdown() {
         turrets: 0,
         unitTypes: Object.create(null),
         buildingTypes: Object.create(null),
+        _totalFixed: 0,
+        _unitsFixed: 0,
+        _buildingsFixed: 0,
+        _turretsFixed: 0,
+        _unitTypesFixed: Object.create(null),
+        _buildingTypesFixed: Object.create(null),
     };
+}
+
+function _fixedToUpKeep(value) {
+    return (Math.floor(Number(value) || 0)) / UPKEEP_FIXED_SCALE;
+}
+
+function _addUpKeepFixed(row, fixedAmount, bucket) {
+    if (!row || !(fixedAmount > 0)) return;
+    row._totalFixed = (Math.floor(Number(row._totalFixed) || 0) + fixedAmount);
+    row.total = _fixedToUpKeep(row._totalFixed);
+
+    if (bucket === 'units') {
+        row._unitsFixed = (Math.floor(Number(row._unitsFixed) || 0) + fixedAmount);
+        row.units = _fixedToUpKeep(row._unitsFixed);
+        return;
+    }
+    if (bucket === 'buildings') {
+        row._buildingsFixed = (Math.floor(Number(row._buildingsFixed) || 0) + fixedAmount);
+        row.buildings = _fixedToUpKeep(row._buildingsFixed);
+        return;
+    }
+    if (bucket === 'turrets') {
+        row._turretsFixed = (Math.floor(Number(row._turretsFixed) || 0) + fixedAmount);
+        row.turrets = _fixedToUpKeep(row._turretsFixed);
+    }
+}
+
+function _addUpKeepTypeFixed(typeMap, fixedMap, key, fixedAmount) {
+    if (!typeMap || !fixedMap || !key || !(fixedAmount > 0)) return;
+    let nextFixed = (Math.floor(Number(fixedMap[key]) || 0) + fixedAmount);
+    fixedMap[key] = nextFixed;
+    typeMap[key] = _fixedToUpKeep(nextFixed);
 }
 
 let _upKeepRateByPlayer = [];
@@ -85,18 +173,20 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
     if (owner < 0 || owner >= breakdowns.length) return;
     let perSecond = _getThingUpKeepPerSecond(thing);
     if (!(perSecond > 0)) return;
+    let perSecondFixed = Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
+    if (!(perSecondFixed > 0)) return;
 
     let row = breakdowns[owner];
-    row.total += perSecond;
+    _addUpKeepFixed(row, perSecondFixed, null);
     if (isUnit) {
-        row.units += perSecond;
+        _addUpKeepFixed(row, perSecondFixed, 'units');
         let unitType = String((thing && thing.unitType) || 'other');
-        row.unitTypes[unitType] = (Number(row.unitTypes[unitType]) || 0) + perSecond;
+        _addUpKeepTypeFixed(row.unitTypes, row._unitTypesFixed, unitType, perSecondFixed);
     } else {
-        row.buildings += perSecond;
+        _addUpKeepFixed(row, perSecondFixed, 'buildings');
         let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : (thing.type || 'unknown');
         let buildingType = String(statsType || thing.type || 'unknown');
-        row.buildingTypes[buildingType] = (Number(row.buildingTypes[buildingType]) || 0) + perSecond;
+        _addUpKeepTypeFixed(row.buildingTypes, row._buildingTypesFixed, buildingType, perSecondFixed);
     }
 
     let type = thing.type || '';
@@ -106,7 +196,7 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
         let def = BASE_CARD_TYPES[statsType] || BASE_CARD_TYPES[type] || {};
         isTurret = def.target === 'wall';
     }
-    if (isTurret) row.turrets += perSecond;
+    if (isTurret) _addUpKeepFixed(row, perSecondFixed, 'turrets');
 }
 
 // ============================================================
@@ -150,13 +240,14 @@ function gameTick() {
     // Resolve deferred pathfinding from previous ticks fairly.
     // A rotating cursor prevents early-array units from starving later units.
     if (units.length > 0) {
-        let start = pendingPathResolveCursor % units.length;
+        let orderedUnits = units.slice().sort(_compareThingsDeterministic);
+        let start = pendingPathResolveCursor % orderedUnits.length;
         let checked = 0;
         let pendingBuckets = [[], [], [], [], []];
-        while (checked < units.length) {
-            let idx = (start + checked) % units.length;
+        while (checked < orderedUnits.length) {
+            let idx = (start + checked) % orderedUnits.length;
             checked++;
-            let u = units[idx];
+            let u = orderedUnits[idx];
             if (u.dead || !u._pendingPathTarget) continue;
             let src = u._pendingPathTarget && u._pendingPathTarget.src;
             let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
@@ -174,7 +265,7 @@ function gameTick() {
                     continue;
                 }
                 if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) continue;
-                if (!_canUsePathfindRequestBudget(u.owner)) {
+                if (!_canUsePathfindRequestBudget(u.owner, u)) {
                     _markUnitAstarBudgetBlocked(u);
                     continue;
                 }
@@ -182,7 +273,7 @@ function gameTick() {
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                 let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
                 let src = pt && pt.src ? pt.src : 'deferred_resolver';
-                _consumePathfindRequestBudget(u.owner);
+                _consumePathfindRequestBudget(u.owner, u);
                 u.path = _findPathForUnitTagged(src === 'player_commands' ? 'player_commands' : 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                 if (u.path && u.path.length > 0) {
                     u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
@@ -193,14 +284,19 @@ function gameTick() {
                 }
             }
         }
-        pendingPathResolveCursor = (start + checked) % units.length;
+        pendingPathResolveCursor = (start + checked) % orderedUnits.length;
     }
 
     recalculateUnitEffectiveStats();
     recalculateThingPrecomputedStats();
 
-    // Towers
-    for (let t of towers) t.update();
+    // Towers - use deterministic shuffle like units to avoid order-dependent damage
+    let towerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(towers, 10);
+    for (let i = 0; i < towerUpdateOrder.length; i++) {
+        let t = towerUpdateOrder[i];
+        if (!t) continue;
+        t.update();
+    }
 
     // Destroy dead towers
     for (let i = towers.length - 1; i >= 0; i--) {
@@ -250,18 +346,26 @@ function gameTick() {
         }
     }
 
-    // Barracks
-    for (let i = barracks.length - 1; i >= 0; i--) {
-        let b = barracks[i];
-        if (b.energy <= 0) { destroyBuilding(b); continue; }
+    // Barracks - use deterministic shuffle to avoid order-dependent updates
+    let barracksUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(barracks, 20);
+    for (let i = 0; i < barracksUpdateOrder.length; i++) {
+        let b = barracksUpdateOrder[i];
+        if (!b) continue;
         b.update();
     }
+    for (let i = barracks.length - 1; i >= 0; i--) {
+        if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
+    }
 
-    // Collector/Salvager spawners (barrack-like)
-    for (let i = collectorSpawners.length - 1; i >= 0; i--) {
-        let cs = collectorSpawners[i];
-        if (cs.energy <= 0) { destroyBuilding(cs); continue; }
+    // Collector/Salvager spawners (barrack-like) - use deterministic shuffle
+    let spawnerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(collectorSpawners, 30);
+    for (let i = 0; i < spawnerUpdateOrder.length; i++) {
+        let cs = spawnerUpdateOrder[i];
+        if (!cs) continue;
         cs.update();
+    }
+    for (let i = collectorSpawners.length - 1; i >= 0; i--) {
+        if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
     }
 
     processGlobalSpawnerQueue();
@@ -2153,8 +2257,8 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         interruptWorkerForManualMove(u);
                     }
-                    if (_canUsePathfindRequestBudget(u.owner)) {
-                        _consumePathfindRequestBudget(u.owner);
+                    if (_canUsePathfindRequestBudget(u.owner, u)) {
+                        _consumePathfindRequestBudget(u.owner, u);
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
@@ -2183,8 +2287,8 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         interruptWorkerForManualMove(u);
                     }
-                    if (_canUsePathfindRequestBudget(u.owner)) {
-                        _consumePathfindRequestBudget(u.owner);
+                    if (_canUsePathfindRequestBudget(u.owner, u)) {
+                        _consumePathfindRequestBudget(u.owner, u);
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
@@ -2213,8 +2317,8 @@ function processActions(actions, playerId) {
                         u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-                        if (_canUsePathfindRequestBudget(u.owner)) {
-                            _consumePathfindRequestBudget(u.owner);
+                        if (_canUsePathfindRequestBudget(u.owner, u)) {
+                            _consumePathfindRequestBudget(u.owner, u);
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
@@ -2244,8 +2348,8 @@ function processActions(actions, playerId) {
                         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy, u);
-                        if (_canUsePathfindRequestBudget(u.owner)) {
-                            _consumePathfindRequestBudget(u.owner);
+                        if (_canUsePathfindRequestBudget(u.owner, u)) {
+                            _consumePathfindRequestBudget(u.owner, u);
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = 0;
@@ -3318,6 +3422,7 @@ function handleIncomingTickPacket(conn, data) {
 
 function maybeBuildHostBundle(tick) {
     if (!isHost) return null;
+    if (lockstepResyncPauseActive) return null;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return null;
     if (!lockstepHostPacketsByTick[t]) lockstepHostPacketsByTick[t] = {};
@@ -3342,6 +3447,7 @@ function maybeBuildHostBundle(tick) {
 
 function sendHostBundle(tick, force = false) {
     if (!isHost || connections.length === 0) return;
+    if (lockstepResyncPauseActive) return;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
     let bundle = lockstepBundleByTick[t] || maybeBuildHostBundle(t);
@@ -3354,6 +3460,7 @@ function sendHostBundle(tick, force = false) {
 
 function maybeCommitHostTick(tick) {
     if (!isHost) return false;
+    if (lockstepResyncPauseActive) return false;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return false;
     if (lockstepCommittedByTick[t]) return true;
@@ -3366,6 +3473,7 @@ function maybeCommitHostTick(tick) {
 
 function sendHostFinalize(tick, force = false) {
     if (!isHost || connections.length === 0) return;
+    if (lockstepResyncPauseActive) return;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
     let resend = getHostResendBundleForTick(t);
@@ -3425,6 +3533,13 @@ function quantizeLockstepNumber(v) {
     return Math.round(n * 1000) / 1000;
 }
 
+function quantizeLockstepUnitPosition(v) {
+    let n = Number(v);
+    if (!Number.isFinite(n)) return 0;
+    // Unit pathing/interaction logic is tile-based; quarter-pixel precision is enough for desync diagnostics.
+    return Math.round(n * 4) / 4;
+}
+
 function computeLockstepStateDigest(tick) {
     let t = Math.floor(Number(tick));
     let computePopCapFromGrid = (pid) => {
@@ -3450,6 +3565,8 @@ function computeLockstepStateDigest(tick) {
         players: players.map((p, idx) => ({
             idx,
             money: quantizeLockstepNumber(p && p.money),
+            energy: quantizeLockstepNumber(p && p.energy),
+            astar: quantizeLockstepNumber(p && p.astar),
             popCount: Math.floor(Number((p && p.popCount) || 0)),
             popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0))
         })),
@@ -3459,8 +3576,8 @@ function computeLockstepStateDigest(tick) {
                 id: Math.floor(Number(u.id) || 0),
                 owner: Math.floor(Number(u.owner) || 0),
                 type: String(u.unitType || ''),
-                x: quantizeLockstepNumber(u.x),
-                y: quantizeLockstepNumber(u.y),
+                x: quantizeLockstepUnitPosition(u.x),
+                y: quantizeLockstepUnitPosition(u.y),
                 energy: quantizeLockstepNumber(u.energy),
                 cmd: Math.floor(Number(u.commandState) || 0),
                 workerState: String(u.workerState || ''),
@@ -3669,7 +3786,7 @@ function requestHardLockstepResync(tick, reason = 'tick timeout', now = performa
         return false;
     }
 
-    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, 2500);
+    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, getLockstepPostSnapshotGraceMs());
     if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) {
         return false;
     }
@@ -3860,8 +3977,11 @@ function driveStrictLockstep(now, tick) {
         let pmap = lockstepHostPacketsByTick[t] || {};
         let missing = participants.filter(pid => !pmap[pid]);
         if (missing.length > 0) {
-            let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
-            if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS) {
+            if (!waitingForRemoteSince) waitingForRemoteSince = now;
+            let lastReq = lockstepLastResendRequestAtByTick[t];
+            if (!lastReq) {
+                lockstepLastResendRequestAtByTick[t] = now;
+            } else if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS) {
                 for (let pid of missing) {
                     if (pid === myPeerId) {
                         sendLocalTickPacket(t, true);
@@ -3901,8 +4021,15 @@ function driveStrictLockstep(now, tick) {
     processDeferredGuestLockstepWindow(now, t);
 
     if (!lockstepCommittedByTick[t]) {
-        let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
-        if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
+        let hasBundleMaterialInFlight = !!lockstepBundleByTick[t] || !!lockstepPendingBundleByTick[t] || !!lockstepPendingCommitByTick[t] || !!lockstepPendingBundleAckByTick[t];
+        if (hasBundleMaterialInFlight) {
+            if (!waitingForRemoteSince) waitingForRemoteSince = now;
+            return;
+        }
+        let lastReq = lockstepLastResendRequestAtByTick[t];
+        if (!lastReq) {
+            lockstepLastResendRequestAtByTick[t] = now;
+        } else if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
             logLockstepWarning('Tick not committed in time; requesting resend', {
                 tick: t,
                 hasBundle: !!lockstepBundleByTick[t],

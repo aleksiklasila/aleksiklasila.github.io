@@ -1,5 +1,59 @@
 "use strict";
 
+let pathfindAllowedUnitIdSetsByPlayer = [];
+let pathfindConsumedUnitIdSetsByPlayer = [];
+
+function _ensurePathfindRequesterBudgetArrays() {
+    let count = Math.max(0, players.length || 0);
+    while (pathfindAllowedUnitIdSetsByPlayer.length < count) pathfindAllowedUnitIdSetsByPlayer.push(new Set());
+    while (pathfindConsumedUnitIdSetsByPlayer.length < count) pathfindConsumedUnitIdSetsByPlayer.push(new Set());
+    if (pathfindAllowedUnitIdSetsByPlayer.length > count) pathfindAllowedUnitIdSetsByPlayer.length = count;
+    if (pathfindConsumedUnitIdSetsByPlayer.length > count) pathfindConsumedUnitIdSetsByPlayer.length = count;
+}
+
+function _rebuildDeterministicPathfindRequestSlotsPerTick() {
+    _ensurePathfindRequesterBudgetArrays();
+    let byOwner = [];
+    let count = Math.max(0, players.length || 0);
+    for (let pid = 0; pid < count; pid++) {
+        byOwner[pid] = [];
+        pathfindAllowedUnitIdSetsByPlayer[pid].clear();
+        pathfindConsumedUnitIdSetsByPlayer[pid].clear();
+    }
+
+    for (let i = 0; i < units.length; i++) {
+        let u = units[i];
+        if (!u || u.dead) continue;
+        let pid = _normalizeOwnerId(u.owner);
+        if (pid < 0 || pid >= count) continue;
+        let unitId = Math.floor(Number(u.id));
+        if (!Number.isFinite(unitId)) continue;
+        byOwner[pid].push(unitId);
+    }
+
+    let cap = Math.max(0, Math.floor(Number(MAX_PATHS_PER_TICK) || 0));
+    for (let pid = 0; pid < count; pid++) {
+        let ids = byOwner[pid];
+        if (!ids || ids.length <= 0 || cap <= 0) continue;
+        ids.sort((a, b) => a - b);
+        let limit = Math.min(cap, ids.length);
+        if (limit <= 0) continue;
+
+        // Rotate grant order each tick so lower IDs don't permanently monopolize slots.
+        let rotation = Math.max(0, Math.floor(Number(gameTime) || 0)) % ids.length;
+        let allowed = pathfindAllowedUnitIdSetsByPlayer[pid];
+        for (let i = 0; i < limit; i++) {
+            allowed.add(ids[(rotation + i) % ids.length]);
+        }
+    }
+}
+
+function _getRequesterUnitId(requester) {
+    if (!requester) return null;
+    let unitId = Math.floor(Number(requester.id));
+    return Number.isFinite(unitId) ? unitId : null;
+}
+
 function _ensurePathBudgetArrays() {
     let count = Math.max(0, players.length || 0);
     if (pathfindBudgetByPlayer.length !== count) pathfindBudgetByPlayer = new Int32Array(count);
@@ -11,6 +65,7 @@ function _resetPathBudgetTrackingPerTick() {
     _ensurePathBudgetArrays();
     pathfindBudget = 0;
     _updateAdaptivePathBudget();
+    _rebuildDeterministicPathfindRequestSlotsPerTick();
     astarNodeBudgetPerTick = Math.max(0, Math.floor(Number(ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || 0));
     astarNodeBudgetRemaining = astarNodeBudgetPerTick;
     for (let i = 0; i < players.length; i++) {
@@ -48,17 +103,35 @@ function _getPlayerAstarIterationBudgetRemaining(owner) {
     return Math.max(0, Number(astarNodeBudgetRemainingByPlayer[pid]) || 0);
 }
 
-function _canUsePathfindRequestBudget(owner) {
+function _canUsePathfindRequestBudget(owner, requester = null) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0) return pathfindBudget < MAX_PATHS_PER_TICK;
-    return pathfindBudgetByPlayer[pid] < MAX_PATHS_PER_TICK;
+
+    if (pathfindBudgetByPlayer[pid] >= MAX_PATHS_PER_TICK) return false;
+    let requesterId = _getRequesterUnitId(requester);
+    if (!Number.isFinite(requesterId)) return true;
+
+    _ensurePathfindRequesterBudgetArrays();
+    let consumed = pathfindConsumedUnitIdSetsByPlayer[pid];
+    if (consumed && consumed.has(requesterId)) return false;
+
+    let allowed = pathfindAllowedUnitIdSetsByPlayer[pid];
+    if (!allowed || allowed.size <= 0) return true;
+    return allowed.has(requesterId);
 }
 
-function _consumePathfindRequestBudget(owner) {
+function _consumePathfindRequestBudget(owner, requester = null) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0) {
         pathfindBudget++;
         return;
+    }
+    let requesterId = _getRequesterUnitId(requester);
+    if (Number.isFinite(requesterId)) {
+        _ensurePathfindRequesterBudgetArrays();
+        let consumed = pathfindConsumedUnitIdSetsByPlayer[pid];
+        if (consumed && consumed.has(requesterId)) return;
+        if (consumed) consumed.add(requesterId);
     }
     pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
 }
@@ -116,6 +189,7 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (pid < 0) return true;
     if (_getPlayerAstarBudgetRemaining(u.owner) < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
+        return false;
     }
     _consumePlayerAstarStockpile(u.owner, amount, u, 'movement');
     return true;
@@ -155,12 +229,12 @@ function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fa
 function _tryUpgradeAstarFallbackPath(u) {
     if (!u || !u.pathIsFallbackAstar || !u._pendingPathTarget || u.dead) return;
     if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
-    if (!_canUsePathfindRequestBudget(u.owner)) return;
+    if (!_canUsePathfindRequestBudget(u.owner, u)) return;
 
     let pt = u._pendingPathTarget;
     let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
     let dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-    _consumePathfindRequestBudget(u.owner);
+    _consumePathfindRequestBudget(u.owner, u);
     let path = _findPathForUnitTagged(pt.src || 'deferred_resolver', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, getPathCanWalkForUnit(u), u.owner);
     if (path && path.length > 0) {
         u.path = path;
@@ -621,7 +695,7 @@ function _heapPush(f, k) {
     let hF = _astarHeapF, hK = _astarHeapK;
     while (i > 0) {
         let p = (i - 1) >> 1;
-        if (hF[p] > hF[i]) {
+        if (hF[p] > hF[i] || (hF[p] === hF[i] && hK[p] > hK[i])) {
             let tf = hF[i]; hF[i] = hF[p]; hF[p] = tf;
             let tk = hK[i]; hK[i] = hK[p]; hK[p] = tk;
             i = p;
@@ -640,8 +714,8 @@ function _heapPop() {
         let i = 0;
         while (true) {
             let l = (i << 1) + 1, r = l + 1, s = i;
-            if (l < n && hF[l] < hF[s]) s = l;
-            if (r < n && hF[r] < hF[s]) s = r;
+                if (l < n && (hF[l] < hF[s] || (hF[l] === hF[s] && hK[l] < hK[s]))) s = l;
+                if (r < n && (hF[r] < hF[s] || (hF[r] === hF[s] && hK[r] < hK[s]))) s = r;
             if (s !== i) {
                 let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
                 let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
@@ -884,8 +958,8 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                 if (l >= heapSz) break;
                 let r = l + 1;
                 let s = l;
-                if (r < heapSz && hF[r] < hF[l]) s = r;
-                if (hF[i] <= hF[s]) break;
+                if (r < heapSz && (hF[r] < hF[l] || (hF[r] === hF[l] && hK[r] < hK[l]))) s = r;
+                if (hF[i] < hF[s] || (hF[i] === hF[s] && hK[i] <= hK[s])) break;
                 let tf = hF[i]; hF[i] = hF[s]; hF[s] = tf;
                 let tk = hK[i]; hK[i] = hK[s]; hK[s] = tk;
                 i = s;

@@ -33,10 +33,26 @@ let WORKER_AI_TICK_DELAY = 3;
 let INPUT_DELAY = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 2 : 0; // desktop: immediate lockstep input, touch: small safety buffer
 let LOCKSTEP_PIPELINE_MIN = 2;
 let LOCKSTEP_PIPELINE_TICKS = Math.max(INPUT_DELAY, LOCKSTEP_PIPELINE_MIN); // keep only a few ticks in flight to avoid strict-lockstep starvation
+
+function getLockstepResendRequestMs() {
+    let pipelineTicks = Math.max(1, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
+    return Math.max(60, Math.floor(TICK_MS * pipelineTicks));
+}
+
+function getLockstepHardResyncMs() {
+    let pipelineTicks = Math.max(1, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
+    return Math.max(120, Math.floor(TICK_MS * Math.max(2, pipelineTicks * 2)));
+}
+
+function getLockstepPostSnapshotGraceMs() {
+    let pipelineTicks = Math.max(1, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
+    return Math.max(50, Math.floor(TICK_MS * Math.max(2, pipelineTicks)));
+}
+
 let LOCKSTEP_PACKET_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
 let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
-let LOCKSTEP_RESEND_REQUEST_MS = Math.max(200, Math.floor(TICK_MS * 4));
-let LOCKSTEP_HARD_RESYNC_MS = Math.max(3000, Math.floor(TICK_MS * 60));
+let LOCKSTEP_RESEND_REQUEST_MS = getLockstepResendRequestMs();
+let LOCKSTEP_HARD_RESYNC_MS = getLockstepHardResyncMs();
 let LOCKSTEP_STATE_CHECK_INTERVAL = 10;
 let LOCKSTEP_DEBUG_HASH_DETAILS = true;
 let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering

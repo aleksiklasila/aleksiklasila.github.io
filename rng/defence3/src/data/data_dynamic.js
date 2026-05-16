@@ -1,5 +1,17 @@
 "use strict";
 
+const RESOURCE_FIXED_POINT_SCALE = 1024;
+
+function _toFixedResourceUnits(value) {
+    let n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * RESOURCE_FIXED_POINT_SCALE);
+}
+
+function _fromFixedResourceUnits(value) {
+    return (Math.floor(Number(value) || 0)) / RESOURCE_FIXED_POINT_SCALE;
+}
+
 function makeDefaultStartingResourcesConfig() {
     return {
         researchLevels: {},
@@ -37,12 +49,18 @@ function _ensurePlayerResourceState(playerId) {
     if (!players[pid]) return null;
     let player = players[pid];
     if (!player.resourceMaxValues || typeof player.resourceMaxValues !== 'object') player.resourceMaxValues = {};
+    if (!player._resourceFixedValues || typeof player._resourceFixedValues !== 'object') player._resourceFixedValues = {};
     if (!PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || typeof PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] !== 'object') PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {};
     for (let cfg of RESOURCE_TYPE_LIST) {
         let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
         if (!stockpileKey) continue;
         let currentValue = Number(player[stockpileKey]);
         if (!Number.isFinite(currentValue)) currentValue = 0;
+        if (!Number.isFinite(player._resourceFixedValues[stockpileKey])) {
+            player._resourceFixedValues[stockpileKey] = _toFixedResourceUnits(currentValue);
+        }
+        currentValue = _fromFixedResourceUnits(player._resourceFixedValues[stockpileKey]);
+        player[stockpileKey] = currentValue;
         let currentMax = Number(player.resourceMaxValues[stockpileKey]);
         if (!Number.isFinite(currentMax)) currentMax = Math.max(1, currentValue);
         player.resourceMaxValues[stockpileKey] = Math.max(1, currentMax, currentValue);
@@ -126,6 +144,9 @@ function _setPlayerResourceValue(playerId, resourceKey, value) {
     if (!stockpileKey) return 0;
     let nextValue = Number(value);
     if (!Number.isFinite(nextValue)) nextValue = 0;
+    let fixedMap = player._resourceFixedValues || (player._resourceFixedValues = {});
+    fixedMap[stockpileKey] = _toFixedResourceUnits(nextValue);
+    nextValue = _fromFixedResourceUnits(fixedMap[stockpileKey]);
     player[stockpileKey] = nextValue;
     let changedResources = _updatePlayerResourcePenaltyMultipliers(pid);
     for (let changedResourceKey of changedResources) rebuildPrecomputedStatsMapPlayerResource(pid, changedResourceKey);
@@ -140,7 +161,13 @@ function addPlayerResource(playerId, resourceKey, delta) {
     if (!stockpileKey) return 0;
     let amount = Number(delta);
     if (!Number.isFinite(amount) || amount === 0) return Number(player[stockpileKey]) || 0;
-    return _setPlayerResourceValue(pid, stockpileKey, (Number(player[stockpileKey]) || 0) + amount);
+    let fixedMap = player._resourceFixedValues || (player._resourceFixedValues = {});
+    let currentFixed = Number.isFinite(fixedMap[stockpileKey])
+        ? Math.floor(fixedMap[stockpileKey])
+        : _toFixedResourceUnits(Number(player[stockpileKey]) || 0);
+    let deltaFixed = _toFixedResourceUnits(amount);
+    fixedMap[stockpileKey] = currentFixed + deltaFixed;
+    return _setPlayerResourceValue(pid, stockpileKey, _fromFixedResourceUnits(fixedMap[stockpileKey]));
 }
 
 function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey) {

@@ -36,6 +36,7 @@ function _researcherTryPickupMaterial(u, target, owner) {
 
 const WORKER_REPATH_MIN_INTERVAL_TICKS = 8;
 const WORKER_REPATH_STALL_TICKS = 45;
+const WORKER_MANUAL_MOVE_MAX_PENDING_TICKS = 120;
 
 function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = null, cacheProfileHint = null, force = false) {
     if (!u) return null;
@@ -60,12 +61,12 @@ function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = n
         return u.path || null;
     }
 
-    if (!_canUsePathfindRequestBudget(u.owner)) {
+    if (!_canUsePathfindRequestBudget(u.owner, u)) {
         _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
         return null;
     }
 
-    _consumePathfindRequestBudget(u.owner);
+    _consumePathfindRequestBudget(u.owner, u);
     let path = _findPathForUnitTagged('worker_ai', u, startGx, startGy, targetGx, targetGy, ignoreWalls, canWalk, u.owner, cacheProfile);
     if (!path && _lastPathfindAbortedByBudget) {
         _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
@@ -105,6 +106,16 @@ function updateWorkerAI(u) {
             if (u.pathIsFallbackAstar) {
                 _tryUpgradeAstarFallbackPath(u);
             }
+            let issuedTick = Math.floor(Number(u._manualMoveIssuedTick) || 0);
+            if ((gameTime - issuedTick) >= WORKER_MANUAL_MOVE_MAX_PENDING_TICKS) {
+                u.path = null;
+                u.pathIndex = 0;
+                u._pendingPathTarget = null;
+                u.pathIsFallbackAstar = false;
+                u._workerNextIdleRetargetTick = gameTime;
+                u.workerState = 'IDLE';
+                u.commandState = CMD_IDLE;
+            }
             return;
         }
         if (!u.path || u.pathIndex >= u.path.length) {
@@ -130,8 +141,8 @@ function updateWorkerAI(u) {
             }
             if (!u.path || u.pathIndex >= u.path.length) {
                 if (_workerHasPendingAutoRouteToTarget(u)) return;
-                let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                if (dist <= 24) {
+                let inSalvageRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
+                if (inSalvageRange) {
                     if (u.workerTransferCooldown > 0) return;
                     let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
                     let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
@@ -216,8 +227,8 @@ function updateWorkerAI(u) {
                 return;
             }
             if (!u.path || u.pathIndex >= u.path.length) {
-                let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-                if (dist > 24) {
+                let inBuildRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
+                if (!inBuildRange) {
                     // If displaced while en route, re-path back to the same target.
                     let canWalk = _builderCanWalk(u.owner);
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
@@ -226,7 +237,7 @@ function updateWorkerAI(u) {
                     u.commandState = CMD_MOVING;
                     return;
                 }
-                if (dist <= 24) {
+                if (inBuildRange) {
                     if (!u.builderHasMaterial) {
                         let route = getSpawnerRoute('builder_spawner', null);
                         let tripCost = getBuilderTripGoldCost(u);
@@ -367,8 +378,8 @@ function updateWorkerAI(u) {
             }
             if (!u.path || u.pathIndex >= u.path.length) {
                 let spawner = u._builderSpawnerTarget || _findClosestBuilderSpawner(u);
-                let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
-                if (!spawner || dist <= 24) {
+                let atSpawner = !spawner || _isWorkerWithinTileInteractionRange(u, spawner, 1);
+                if (atSpawner) {
                     if (u.workerTransferCooldown > 0) return;
                     let tripCost = getBuilderTripGoldCost(u);
                     if (spawner) {
@@ -535,8 +546,8 @@ function updateWorkerAI(u) {
             if (!u.path || u.pathIndex >= u.path.length) {
                 let tx = targetIsQueue ? u.workerTarget.x : u.workerTarget.x;
                 let ty = targetIsQueue ? u.workerTarget.y : u.workerTarget.y;
-                let dist = Math.hypot(tx - u.x, ty - u.y);
-                if (dist > 24) {
+                let inHealRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
+                if (!inHealRange) {
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                     let targetGx = Math.floor(tx / TILE), targetGy = Math.floor(ty / TILE);
                     u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
@@ -651,8 +662,8 @@ function updateWorkerAI(u) {
             }
             if (!u.path || u.pathIndex >= u.path.length) {
                 let spawner = u._healerSpawnerTarget || _findClosestHealerSpawner(u);
-                let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
-                if (!spawner || dist <= 24) {
+                let atSpawner = !spawner || _isWorkerWithinTileInteractionRange(u, spawner, 1);
+                if (atSpawner) {
                     if (u.workerTransferCooldown > 0) return;
                     let tripCost = targetIsQueue ? _getHealerQueueTripCost(u, u.workerTarget) : 1;
                     if (spawner && tripCost > 0) {
@@ -714,8 +725,8 @@ function updateWorkerAI(u) {
             }
             if (!u.path || u.pathIndex >= u.path.length) {
                 let target = u.workerTarget;
-                let dist = Math.hypot(target.x - u.x, target.y - u.y);
-                if (dist > 24) {
+                let inResearchRange = _isWorkerWithinTileInteractionRange(u, target, 1);
+                if (!inResearchRange) {
                     let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
                     u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, null, null);
                     u.pathIndex = 0;
@@ -725,8 +736,8 @@ function updateWorkerAI(u) {
                 if (!u.researcherHasMaterial) {
                     // If we're already next to a research lab, pick material here and wait normal transfer cooldown.
                     let sourceLab = _findClosestSpawner(u, 'research');
-                    let sourceDist = sourceLab ? Math.hypot(sourceLab.x - u.x, sourceLab.y - u.y) : Infinity;
-                    if (sourceLab && sourceDist <= 24) {
+                    let atSourceLab = sourceLab && _isWorkerWithinTileInteractionRange(u, sourceLab, 1);
+                    if (atSourceLab) {
                         if (u.workerTransferCooldown > 0) return;
                         _researcherTryPickupMaterial(u, target, owner);
                         return;
@@ -798,8 +809,8 @@ function updateWorkerAI(u) {
             }
             if (!u.path || u.pathIndex >= u.path.length) {
                 let spawner = u._researchSpawnerTarget || _findClosestSpawner(u, 'research');
-                let dist = spawner ? Math.hypot(spawner.x - u.x, spawner.y - u.y) : 0;
-                if (!spawner || dist <= 24) {
+                let atSpawner = !spawner || _isWorkerWithinTileInteractionRange(u, spawner, 1);
+                if (atSpawner) {
                     if (u.workerTransferCooldown > 0) return;
                     if (spawner) _researcherTryPickupMaterial(u, u.workerTarget, owner);
                     u._researchSpawnerTarget = null;
@@ -1009,8 +1020,8 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
         }
         if (!u.path || u.pathIndex >= u.path.length) {
             if (_workerHasPendingAutoRouteToTarget(u)) return;
-            let dist = Math.hypot(u.workerTarget.x - u.x, u.workerTarget.y - u.y);
-            if (dist <= 24) {
+            let inGatherRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
+            if (inGatherRange) {
                 if (u.workerTransferCooldown > 0) return;
                 if (u.workerTargetType === 'drop') {
                     u.carryingValue = u.workerTarget.value;
@@ -1026,8 +1037,11 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
                         let extract = Math.min(gatherPerTrip, Math.max(0, Number(u.workerTarget[resourceCfg.mineStatKey]) || 0));
                         u.workerTarget[resourceCfg.mineStatKey] -= extract;
                         u.carryingValue = extract;
+                        // Keep static/background mine visuals in sync as mine values change.
+                        let mine = u.workerTarget;
+                        _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
+                        dirtyGrid = true;
                         if (u.workerTarget[resourceCfg.mineStatKey] <= 0) {
-                            let mine = u.workerTarget;
                             grid[mine.gy][mine.gx].type = TYPE_FLOOR;
                             let mineArray = _getResourceCollectorMineArray(resourceCfg);
                             let idx = mineArray ? mineArray.indexOf(mine) : -1;
@@ -1066,11 +1080,11 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
     }
     if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
         if (!u.path || u.pathIndex >= u.path.length) {
-            let closest = _findClosestSpawner(u, resourceCfg.collectorBuildingKey);
-            let isAtDropoff = !!closest && Math.hypot(closest.x - u.x, closest.y - u.y) <= 24;
-            if (isAtDropoff && closest) {
-                _setResourceCollectorLastDropoffSpawner(u, closest);
-                _setResourceCollectorNextSpawner(u, closest);
+            let dropoff = _getResourceCollectorPreferredSpawner(u, resourceCfg.collectorBuildingKey) || _findClosestSpawner(u, resourceCfg.collectorBuildingKey);
+            let isAtDropoff = !!dropoff && _isWorkerWithinTileInteractionRange(u, dropoff, 1);
+            if (isAtDropoff && dropoff) {
+                _setResourceCollectorLastDropoffSpawner(u, dropoff);
+                _setResourceCollectorNextSpawner(u, dropoff);
             }
             if (u.carryingValue > 0 && !isAtDropoff) {
                 _workerReturnPath(u);
@@ -1429,6 +1443,22 @@ function _rebuildActiveBuilderWorkCache() {
         }
     }
 
+    // Canonicalize per-owner target order so later scans are independent of source array order.
+    for (let [owner, ownerList] of _activeBuilderWorkTargetsByOwner.entries()) {
+        if (!Array.isArray(ownerList) || ownerList.length <= 1) continue;
+        ownerList.sort((a, b) => {
+            let ay = Math.floor(Number(a && a.gy) || Math.floor((Number(a && a.y) || 0) / TILE));
+            let by = Math.floor(Number(b && b.gy) || Math.floor((Number(b && b.y) || 0) / TILE));
+            if (ay !== by) return ay - by;
+            let ax = Math.floor(Number(a && a.gx) || Math.floor((Number(a && a.x) || 0) / TILE));
+            let bx = Math.floor(Number(b && b.gx) || Math.floor((Number(b && b.x) || 0) / TILE));
+            if (ax !== bx) return ax - bx;
+            let ai = Math.floor(Number(a && a.id) || -1);
+            let bi = Math.floor(Number(b && b.id) || -1);
+            return ai - bi;
+        });
+    }
+
     _activeBuilderWorkCacheTick = gameTime;
 }
 
@@ -1463,6 +1493,16 @@ function _builderCanWalk(owner) {
     fn._pathProfileKey = `builder_${o}`;
     _builderCanWalkByOwner.set(o, fn);
     return fn;
+}
+
+function _isWorkerWithinTileInteractionRange(u, target, maxTileDelta = 1) {
+    if (!u || !target) return false;
+    let ux = Math.floor((Number(u.x) || 0) / TILE);
+    let uy = Math.floor((Number(u.y) || 0) / TILE);
+    let tx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
+    let ty = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
+    if (!Number.isFinite(ux) || !Number.isFinite(uy) || !Number.isFinite(tx) || !Number.isFinite(ty)) return false;
+    return Math.abs(ux - tx) <= maxTileDelta && Math.abs(uy - ty) <= maxTileDelta;
 }
 
 function getBuilderTripGoldCost(u) {
@@ -1533,6 +1573,25 @@ function _setResourceCollectorLastDropoffSpawner(u, spawner) {
     let cfg = getResourceCollectorConfigByWorkerType(u && u.workerType);
     if (!cfg) return;
     if (cfg.stockpileKey === 'energy') u._collectorLastDropoffSpawner = spawner || null;
+}
+
+function _getResourceCollectorPreferredSpawner(u, type) {
+    if (!u || !type) return null;
+    let mem = _getResourceCollectorMemory(u);
+    let candidates = [
+        mem && mem.nextSpawner,
+        mem && mem.lastDropoffSpawner,
+        u._collectorNextSpawner,
+        u._astarNextSpawner,
+        u._collectorLastDropoffSpawner
+    ];
+    for (let s of candidates) {
+        if (!s) continue;
+        if (s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
+            return s;
+        }
+    }
+    return null;
 }
 
 function _clearResourceCollectorTaskMemory(u) {
@@ -1867,7 +1926,8 @@ function _pickDistributedWorkerCandidate(u, candidates) {
         let tt = String((candidate && candidate.targetType) || '');
         let gx = Number.isFinite(t && t.gx) ? Math.floor(Number(t.gx)) : Math.floor(Number((t && t.x) || 0) / TILE);
         let gy = Number.isFinite(t && t.gy) ? Math.floor(Number(t.gy)) : Math.floor(Number((t && t.y) || 0) / TILE);
-        return `${tt}|${gx},${gy}`;
+        let tid = Number.isFinite(t && t.id) ? Math.floor(Number(t.id)) : -1;
+        return `${tt}|${gx},${gy}|${tid}`;
     };
 
     let best = null;
@@ -2117,8 +2177,7 @@ function _builderAssignTarget(u, target, myGx, myGy) {
         return;
     }
     let route = _findBestSpawnerRoute(u, 'builder_spawner', null);
-    let tripCost = getBuilderTripGoldCost(u);
-    if (route && players[u.owner].energy >= tripCost) {
+    if (route) {
         u.workerState = 'RETURNING_FOR_GOLD';
         u.path = route.path;
         u.pathIndex = 0; u.commandState = CMD_MOVING;
@@ -2149,24 +2208,55 @@ function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
                 return { spawner: s, path: cached.path };
             }
         }
-        if (cacheOnly) return null;
-    } else if (cacheOnly) {
-        return null;
     }
 
-    for (let s of collectorSpawners) {
-        if (s.type !== type || s.owner !== u.owner || s.energy <= 0 || s.underConstruction) continue;
-        let path = _requestWorkerPath(u, startGx, startGy, s.gx, s.gy, canWalk, null);
-        if (!path || path.length === 0) continue;
-        let score = Math.max(0, path.length - 1);
+    let candidateSpawners = collectorSpawners
+        .filter(s => s && s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction)
+        .slice()
+        .sort((a, b) => {
+            let ay = Math.floor(Number(a.gy) || 0), by = Math.floor(Number(b.gy) || 0);
+            if (ay !== by) return ay - by;
+            let ax = Math.floor(Number(a.gx) || 0), bx = Math.floor(Number(b.gx) || 0);
+            if (ax !== bx) return ax - bx;
+            let ai = Math.floor(Number(a.id) || 0), bi = Math.floor(Number(b.id) || 0);
+            return ai - bi;
+        });
+
+    for (let s of candidateSpawners) {
+        // Pick the route target deterministically before spending the unit's pathfind request slot.
+        let score = Math.abs(Math.floor(Number(s.gx) || 0) - startGx) + Math.abs(Math.floor(Number(s.gy) || 0) - startGy);
         if (score < bestScore) {
             bestScore = score;
             bestSpawner = s;
-            bestPath = path;
+            continue;
+        }
+        if (Math.abs(score - bestScore) <= 1e-9 && bestSpawner) {
+            let sy = Math.floor(Number(s.gy) || 0), by = Math.floor(Number(bestSpawner.gy) || 0);
+            let sx = Math.floor(Number(s.gx) || 0), bx = Math.floor(Number(bestSpawner.gx) || 0);
+            let si = Math.floor(Number(s.id) || 0), bi = Math.floor(Number(bestSpawner.id) || 0);
+            if (sy < by || (sy === by && (sx < bx || (sx === bx && si < bi)))) {
+                bestSpawner = s;
+            }
         }
     }
 
-    if (!bestSpawner || !bestPath) return null;
+    if (!bestSpawner) return null;
+
+    let bestSpawnerGx = Math.floor(Number(bestSpawner.gx) || 0);
+    let bestSpawnerGy = Math.floor(Number(bestSpawner.gy) || 0);
+    if (!cacheOnly && _canUsePathfindRequestBudget(u.owner, u)) {
+        bestPath = _requestWorkerPath(
+            u,
+            startGx,
+            startGy,
+            bestSpawnerGx,
+            bestSpawnerGy,
+            canWalk,
+            null,
+            true
+        );
+    }
+
     if (routeKey) {
         sharedSpawnerRouteCache.set(routeKey, {
             spawner: bestSpawner,
@@ -2184,7 +2274,12 @@ function _findClosestBuilderSpawner(u) {
     for (let s of collectorSpawners) {
         if (s.type === 'builder_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let d = Math.hypot(s.x - u.x, s.y - u.y);
-            if (d < bestDist) { bestDist = d; closest = s; }
+            if (d < bestDist) { bestDist = d; closest = s; continue; }
+            if (Math.abs(d - bestDist) <= 1e-9 && closest) {
+                let sy = Math.floor(Number(s.gy) || 0), cy = Math.floor(Number(closest.gy) || 0);
+                let sx = Math.floor(Number(s.gx) || 0), cx = Math.floor(Number(closest.gx) || 0);
+                if (sy < cy || (sy === cy && sx < cx)) closest = s;
+            }
         }
     }
     return closest;
@@ -2195,7 +2290,12 @@ function _findClosestHealerSpawner(u) {
     for (let s of collectorSpawners) {
         if (s.type === 'healer_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let d = Math.hypot(s.x - u.x, s.y - u.y);
-            if (d < bestDist) { bestDist = d; closest = s; }
+            if (d < bestDist) { bestDist = d; closest = s; continue; }
+            if (Math.abs(d - bestDist) <= 1e-9 && closest) {
+                let sy = Math.floor(Number(s.gy) || 0), cy = Math.floor(Number(closest.gy) || 0);
+                let sx = Math.floor(Number(s.gx) || 0), cx = Math.floor(Number(closest.gx) || 0);
+                if (sy < cy || (sy === cy && sx < cx)) closest = s;
+            }
         }
     }
     return closest;
@@ -2267,9 +2367,18 @@ function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNe
         if (requireNeedsWork && !isQueueEnabled(s)) return;
         if (requireNeedsWork && !_isHealerQueueTarget(s, owner)) return;
         let d = Math.hypot(s.x - worldX, s.y - worldY);
-        if (d <= bestDist) {
+        if (d < bestDist) {
             bestDist = d;
             best = s;
+            return;
+        }
+        if (Math.abs(d - bestDist) <= 1e-9 && best) {
+            let sy = Math.floor(Number(s.gy) || 0), by = Math.floor(Number(best.gy) || 0);
+            let sx = Math.floor(Number(s.gx) || 0), bx = Math.floor(Number(best.gx) || 0);
+            let si = Math.floor(Number(s.id) || 0), bi = Math.floor(Number(best.id) || 0);
+            if (sy < by || (sy === by && (sx < bx || (sx === bx && si < bi)))) {
+                best = s;
+            }
         }
     };
     for (let b of barracks) consider(b);
@@ -2399,7 +2508,18 @@ function _ensureHealerDamagedCandidatesCacheCurrent() {
     _healerDamagedCandidatesTick = gameTime;
 
     let cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0);
-    for (let target of units) {
+    let pooled = Array.from({ length: ownerCount }, () => []);
+    let orderedUnits = units.slice().sort((a, b) => {
+        let ai = Math.floor(Number(a && a.id) || -1);
+        let bi = Math.floor(Number(b && b.id) || -1);
+        if (ai !== bi) return ai - bi;
+        let ax = Number(a && a.x) || 0, bx = Number(b && b.x) || 0;
+        if (ax !== bx) return ax - bx;
+        let ay = Number(a && a.y) || 0, by = Number(b && b.y) || 0;
+        return ay - by;
+    });
+
+    for (let target of orderedUnits) {
         if (!target || target.dead) continue;
         let owner = Math.floor(Number(target.owner));
         if (owner < 0 || owner >= ownerCount) continue;
@@ -2408,26 +2528,25 @@ function _ensureHealerDamagedCandidatesCacheCurrent() {
         if (!(maxEnergy > 0) || !(energy > 0) || !(energy < maxEnergy)) continue;
 
         let ratio = energy / maxEnergy;
-        let arr = _healerDamagedCandidatesByOwner[owner];
-        if (!arr) continue;
+        pooled[owner].push({ u: target, ratio: ratio });
+    }
 
-        if (arr.length < cap) {
-            arr.push({ u: target, ratio: ratio });
-            continue;
-        }
-
-        let worstIdx = -1;
-        let worstRatio = -1;
-        for (let i = 0; i < arr.length; i++) {
-            let r = arr[i].ratio;
-            if (r > worstRatio) {
-                worstRatio = r;
-                worstIdx = i;
-            }
-        }
-        if (worstIdx >= 0 && ratio < worstRatio) {
-            arr[worstIdx] = { u: target, ratio: ratio };
-        }
+    for (let owner = 0; owner < ownerCount; owner++) {
+        let arr = pooled[owner];
+        if (!arr || arr.length <= 0) continue;
+        arr.sort((a, b) => {
+            let ar = Number(a.ratio) || 0;
+            let br = Number(b.ratio) || 0;
+            if (ar !== br) return ar - br;
+            let ai = Math.floor(Number(a.u && a.u.id) || -1);
+            let bi = Math.floor(Number(b.u && b.u.id) || -1);
+            if (ai !== bi) return ai - bi;
+            let ax = Number(a.u && a.u.x) || 0, bx = Number(b.u && b.u.x) || 0;
+            if (ax !== bx) return ax - bx;
+            let ay = Number(a.u && a.u.y) || 0, by = Number(b.u && b.u.y) || 0;
+            return ay - by;
+        });
+        _healerDamagedCandidatesByOwner[owner] = arr.slice(0, cap);
     }
 }
 
@@ -2747,6 +2866,8 @@ function interruptWorkerForManualMove(u) {
     u.path = null;
     u.pathIndex = 0;
     u._pendingPathTarget = null;
+    u.pathIsFallbackAstar = false;
+    u._manualMoveIssuedTick = gameTime;
     u.workerState = 'MANUAL_MOVE';
 }
 
@@ -2760,8 +2881,8 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
     interruptWorkerForManualMove(u);
     u.commandState = CMD_MOVING;
 
-    if (_canUsePathfindRequestBudget(u.owner)) {
-        _consumePathfindRequestBudget(u.owner);
+    if (_canUsePathfindRequestBudget(u.owner, u)) {
+        _consumePathfindRequestBudget(u.owner, u);
         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, gx, gy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
         if (u.path && u.path.length > 0) {
