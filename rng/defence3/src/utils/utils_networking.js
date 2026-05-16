@@ -894,6 +894,9 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
             snap.snapshotRuntime = {
                 pendingPathTarget: cloneSnapshotValue(u._pendingPathTarget),
                 targetPos: cloneSnapshotValue(u.targetPos),
+                path: u.path && u.path.length > 0 ? u.path.map(n => ({ x: Math.floor(Number(n.x)||0), y: Math.floor(Number(n.y)||0) })) : null,
+                pathIndex: Number.isFinite(u.pathIndex) ? Math.floor(u.pathIndex) : 0,
+                pathIsFallbackAstar: !!u.pathIsFallbackAstar,
                 manualMoveIssuedTick: Number.isFinite(Number(u._manualMoveIssuedTick)) ? Math.floor(Number(u._manualMoveIssuedTick)) : null,
                 collectorPinnedTargetType: u._collectorPinnedTargetType !== undefined ? cloneSnapshotValue(u._collectorPinnedTargetType) : null,
                 astarPinnedTargetType: u._astarPinnedTargetType !== undefined ? cloneSnapshotValue(u._astarPinnedTargetType) : null,
@@ -1122,6 +1125,9 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         if (runtime) {
             u._pendingPathTarget = runtime.pendingPathTarget ? cloneSnapshotValue(runtime.pendingPathTarget) : null;
             u.targetPos = runtime.targetPos ? cloneSnapshotValue(runtime.targetPos) : null;
+            u.path = runtime.path && runtime.path.length > 0 ? runtime.path.map(n => ({ x: Math.floor(Number(n.x)||0), y: Math.floor(Number(n.y)||0) })) : null;
+            u.pathIndex = Number.isFinite(runtime.pathIndex) ? Math.floor(runtime.pathIndex) : 0;
+            u.pathIsFallbackAstar = !!runtime.pathIsFallbackAstar;
             
             if (!u._pendingPathTarget && u.targetPos && (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING)) {
                 let gx = Math.floor(u.targetPos.x / 32);
