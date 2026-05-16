@@ -528,14 +528,36 @@ function buildHostPresenceSnapshot() {
     return map;
 }
 
-function cloneSnapshotValue(value) {
+function cloneSnapshotValue(value, ancestors = new Set()) {
     if (value === undefined || value === null) return value;
+    if (typeof value !== 'object') return value;
+    if (typeof value === 'function') return undefined;
+
+    // Detect and break cycles using a recursion stack (ancestors set).
+    // This allows duplicate references in different branches but prevents infinite recursion.
+    if (ancestors.has(value)) return null;
+    ancestors.add(value);
+
+    let out;
     try {
-        return JSON.parse(JSON.stringify(value));
-    } catch (e) {
-        console.error("[Networking] cloneSnapshotValue failed:", e);
-        return value;
+        if (Array.isArray(value)) {
+            out = [];
+            for (let i = 0; i < value.length; i++) {
+                out[i] = cloneSnapshotValue(value[i], ancestors);
+            }
+        } else {
+            out = {};
+            // For class instances (Unit, Tower), we only want to clone their data properties.
+            for (let k of Object.keys(value)) {
+                // Skip internal/private properties
+                if (k.startsWith('_')) continue;
+                out[k] = cloneSnapshotValue(value[k], ancestors);
+            }
+        }
+    } finally {
+        ancestors.delete(value);
     }
+    return out;
 }
 
 function snapshotEntity(obj, omitKeys = []) {
@@ -544,7 +566,15 @@ function snapshotEntity(obj, omitKeys = []) {
     let out = {};
     for (let k of Object.keys(obj)) {
         if (omit.has(k)) continue;
-        out[k] = obj[k];
+        let val = obj[k];
+        
+        // If the property is another entity, convert it to a ref to avoid circularity.
+        let ref = makeSnapshotEntityRef(val);
+        if (ref) {
+            out[k] = ref;
+        } else {
+            out[k] = val;
+        }
     }
     return cloneSnapshotValue(out);
 }
