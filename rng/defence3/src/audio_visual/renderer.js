@@ -223,11 +223,31 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     let maxEnergy = Number(entity && entity.maxEnergy) || 0;
     let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
     let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
+    
+    // Don't show upgrading progress if at max level
+    if (isProgress && entity) {
+        let baseLevel = getThingBaseLevel(entity);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (baseLevel >= maxLevel) {
+            isProgress = false;
+        }
+    }
+    
     let manualStacks = Number(entity && entity.manualStacks);
     let stackedStacks = Number(entity && entity.stacks);
     let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
         ? (manualStacks > stackedStacks)
         : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
+    
+    // Don't show stacking progress if next stack would exceed max level
+    if (hasStackQueue && entity) {
+        let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (nextStackLevel > maxLevel) {
+            hasStackQueue = false;
+        }
+    }
+    
     if (hasStackQueue) {
         bars.push({ pct: getThingStackingProgressRatio(entity), bgColor: '#11291c', fillColor: '#2fd27f' });
     }
@@ -668,11 +688,31 @@ function build3DOverlayData(bounds, alpha) {
         let maxEnergy = Number(entity && entity.maxEnergy) || 0;
         let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
         let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
+        
+        // Don't show upgrading progress if at max level
+        if (isProgress && entity) {
+            let baseLevel = getThingBaseLevel(entity);
+            let maxLevel = getThingResearchedMaxLevel(entity);
+            if (baseLevel >= maxLevel) {
+                isProgress = false;
+            }
+        }
+        
         let manualStacks = Number(entity && entity.manualStacks);
         let stackedStacks = Number(entity && entity.stacks);
         let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
             ? (manualStacks > stackedStacks)
             : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
+        
+        // Don't show stacking progress if next stack would exceed max level
+        if (hasStackQueue && entity) {
+            let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
+            let maxLevel = getThingResearchedMaxLevel(entity);
+            if (nextStackLevel > maxLevel) {
+                hasStackQueue = false;
+            }
+        }
+        
         if (hasStackQueue) {
             pushBar(worldX, worldY, 0.72, energyBarOffsetY - energyBarHeight - 1, energyBarWidth, energyBarHeight, getThingStackingProgressRatio(entity), '#11291c', '#2fd27f');
         }

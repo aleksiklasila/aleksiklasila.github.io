@@ -306,6 +306,11 @@ function updateWorkerAI(u) {
 
                         let stackedAny = false;
                         while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
+                            // Don't stack if it would exceed researched max level
+                            let nextStackLevel = stackCountToLevel(getThingStackedStacks(t) + 1);
+                            let maxLevel = getThingResearchedMaxLevel(t);
+                            if (nextStackLevel > maxLevel) break;
+                            
                             t.stackingWorkDone -= stackCost;
                             t.stacks = getThingStackedStacks(t) + 1;
                             stackedAny = true;
@@ -473,6 +478,11 @@ function updateWorkerAI(u) {
                     t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + buildStep;
                     let stackedAny = false;
                     while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
+                        // Don't stack if it would exceed researched max level
+                        let nextStackLevel = stackCountToLevel(getThingStackedStacks(t) + 1);
+                        let maxLevel = getThingResearchedMaxLevel(t);
+                        if (nextStackLevel > maxLevel) break;
+                        
                         t.stackingWorkDone -= stackCost;
                         t.stacks = getThingStackedStacks(t) + 1;
                         stackedAny = true;
@@ -552,7 +562,7 @@ function updateWorkerAI(u) {
                 if (targetIsQueue) {
                     let sp = u.workerTarget;
                     let fallbackType = getSpawnerFallbackUnitType(sp);
-                    let effLvl = getThingEffectiveLevel(sp);
+                    let effLvl = getThingBaseLevel(sp);
                     let front = getQueuedSpawnInfo(sp.spawnQueue[0], fallbackType, effLvl, owner);
                     let didWork = false;
                     let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1))));
@@ -1015,7 +1025,7 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
                 } else {
                     let gatherPerTrip = _resourceCollectorGetGatherPerTrip(u, owner);
                     if (u.workerTargetType === resourceCfg.farmKey) {
-                        let farmLvl = getThingEffectiveLevel(u.workerTarget, stackCountToLevel(u.workerTarget.effectiveStacks || u.workerTarget.stacks || 1));
+                        let farmLvl = getThingBaseLevel(u.workerTarget, stackCountToLevel(u.workerTarget.stacks || 1));
                         let mult = getBuildingStatForOwner(owner, resourceCfg.farmKey, farmLvl, 'multiplier');
                         if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
                         u.carryingValue = Math.max(1, gatherPerTrip * mult);
@@ -1673,10 +1683,7 @@ function _getResearcherAutoSearchDistancePx(u) {
 function _getTargetPriorityLevel(target) {
     if (!target) return 1;
     if (target.workerType) return getUnitEffectiveLevel(target, getUnitBaseLevel(target));
-    if (Number.isFinite(target.effectiveLevel)) return Math.max(0, Math.floor(target.effectiveLevel));
-    if (Number.isFinite(target.level)) return Math.max(0, Math.floor(target.level));
-    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
-    return 1;
+    return Math.max(1, Math.floor(getThingBaseLevel(target) || 1));
 }
 
 // Per-target worker load counters (updated on target set/clear).
@@ -2176,7 +2183,7 @@ function _isHealerQueueTarget(target, owner) {
     if (!isQueueEnabled(target)) return false;
     if (!Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return false;
     let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingEffectiveLevel(target);
+    let effLvl = getThingBaseLevel(target);
     let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
     return front.energyPaid < front.energyRequired;
 }
@@ -2192,7 +2199,7 @@ function _getHealerQueueTripCost(u, target) {
     if (!isQueueEnabled(target)) return 0;
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
     let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingEffectiveLevel(target);
+    let effLvl = getThingBaseLevel(target);
     let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
     let remaining = Math.max(0, Math.floor((front.energyRequired || 0) - (front.energyPaid || 0)));
     if (remaining <= 0) return 0;
@@ -2253,7 +2260,7 @@ function _setHealerQueueCommit(u, target) {
     }
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
     let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingEffectiveLevel(target);
+    let effLvl = getThingBaseLevel(target);
     let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
     u._healerQueueCommitTarget = target;
     u._healerQueueCommitRequired = Math.max(1, Math.floor(Number(front.energyRequired) || 1));
@@ -2271,7 +2278,7 @@ function _getHealerCommittedQueueTarget(u) {
 
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
     let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingEffectiveLevel(target);
+    let effLvl = getThingBaseLevel(target);
     let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
     let paid = Math.max(0, Math.floor(Number(front.energyPaid) || 0));
     let required = Math.max(1, Math.floor(Number(u._healerQueueCommitRequired) || 1));
