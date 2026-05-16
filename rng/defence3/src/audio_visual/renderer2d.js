@@ -1,4 +1,4 @@
-﻿// DRAWING HELPERS
+// DRAWING HELPERS
 // ============================================================
 let _visibilityMaskCanvas = null;
 let _visibilityMaskCtx = null;
@@ -77,10 +77,10 @@ function _quantizeTowerAngleIndex(angle) {
 }
 
 function get2DRenderOwnerColor(owner) {
-    if (Number.isFinite(owner) && owner >= 0) {
-        return teamColorById[owner] || PLAYER_COLORS[owner] || '#c8ced8';
-    }
-    return '#c8ced8';
+    if (owner === undefined || owner === null || owner < 0) return '#c8ced8';
+    let pid = Math.floor(Number(owner));
+    if (typeof getTeamDisplayColor === 'function') return getTeamDisplayColor(pid);
+    return (typeof teamColorById !== 'undefined' && teamColorById[pid]) || (typeof PLAYER_COLORS !== 'undefined' && PLAYER_COLORS[pid]) || '#c8ced8';
 }
 
 function draw2DDamageFlashOverlay(ctx, target, x, y, radiusOrHalfSize, isRect = false) {
@@ -336,7 +336,7 @@ function drawFloorItem(ctx, cell, px, py) {
     let x = px + 16, y = py + 16;
     // Owner border
     if (cell.owner >= 0) {
-        ctx.strokeStyle = PLAYER_COLORS_DIM[cell.owner]; ctx.lineWidth = 1;
+        ctx.strokeStyle = (typeof get2DRenderOwnerColor === 'function' ? get2DRenderOwnerColor(cell.owner) : '#c8ced8'); ctx.lineWidth = 1;
         ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
     }
     let floorSprite = _getFloorItemSprite(item);
@@ -479,9 +479,6 @@ function getItemThumbnail(key, size) {
         ctx.fill();
         ctx.fillStyle = unitColor; ctx.beginPath(); ctx.arc(cx, cy + 4 * s, 5 * s, 0, 6.28); ctx.fill();
     } else if (key === 'spawner') {
-        ctx.strokeStyle = PLAYER_COLORS[0] || '#4488ff';
-        ctx.lineWidth = Math.max(1, s);
-        ctx.strokeRect(cx - 14 * s, cy - 14 * s, 28 * s, 28 * s);
         ctx.fillStyle = '#432';
         ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
         ctx.fillStyle = '#f3d55b';
@@ -515,10 +512,7 @@ function getItemThumbnail(key, size) {
         ctx.fillStyle = '#fff'; ctx.fillRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
         ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1; ctx.strokeRect(cx - 7 * s, cy - 5 * s, 14 * s, 10 * s);
     } else if (key === 'research') {
-        // Match play-area look: team border, blue tile, and centered R.
-        ctx.strokeStyle = PLAYER_COLORS[0] || '#4488ff';
-        ctx.lineWidth = Math.max(1, s);
-        ctx.strokeRect(cx - 14 * s, cy - 14 * s, 28 * s, 28 * s);
+        // Match play-area look: blue tile, and centered R.
         ctx.fillStyle = '#446';
         ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
         ctx.fillStyle = '#aef';
@@ -696,10 +690,12 @@ function getCurrentBuildPreviewData() {
         let aId = grid[gy][gx].areaId;
         let area = getAreaById(aId);
         if (!area) return preview;
+        let areaCells = _getCanonicalAreaCellsById(aId, area);
+        if (areaCells.length <= 0) return preview;
         let areaContested = _areaHasForeignBuildPresence(aId, localPlayerId);
         let filledCount = 0;
         let cells = [];
-        for (let cp of area.cells) {
+        for (let cp of areaCells) {
             let c = grid[cp.y][cp.x];
             let occupied = false;
             if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) occupied = true;
@@ -711,12 +707,12 @@ function getCurrentBuildPreviewData() {
         }
         preview.areaCells = cells;
         preview.filledCount = filledCount;
-        preview.areaCellCount = area.cells.length;
+        preview.areaCellCount = areaCells.length;
         preview.areaMultiplierLevel = area.multiplierLevel || 0;
         preview.areaUpgradeCost = getAreaUpgradeCost(preview.areaMultiplierLevel);
-        preview.areaCenterX = area.cells.reduce((sum, cell) => sum + cell.x + 0.5, 0) / Math.max(1, area.cells.length);
-        preview.areaCenterY = area.cells.reduce((sum, cell) => sum + cell.y + 0.5, 0) / Math.max(1, area.cells.length);
-        preview.canBuild = buildTileVisible && !areaContested && filledCount === area.cells.length && preview.areaMultiplierLevel < 5;
+        preview.areaCenterX = areaCells.reduce((sum, cell) => sum + cell.x + 0.5, 0) / Math.max(1, areaCells.length);
+        preview.areaCenterY = areaCells.reduce((sum, cell) => sum + cell.y + 0.5, 0) / Math.max(1, areaCells.length);
+        preview.canBuild = buildTileVisible && !areaContested && filledCount === areaCells.length && preview.areaMultiplierLevel < 5;
     } else {
         preview.canBuild = buildTileVisible && (canBuildAt(gx, gy, localPlayerId) || canStackAt(gx, gy, selectedBuildItem, localPlayerId));
     }
@@ -1627,6 +1623,7 @@ function draw() {
         if (ent.energy !== undefined && ent.energy <= 0) continue;
         let ex = ent.x || (ent.gx * TILE + 16);
         let ey = ent.y || (ent.gy * TILE + 16);
+        let entOwnerColor = get2DRenderOwnerColor(ent.owner);
         let entVisible = _overlayBoundsVisible(ex, ey, ex, ey, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 64);
 
         if (entVisible && showSelectionOutlinesForBuildings()) {
@@ -1639,11 +1636,11 @@ function draw() {
             if (!segVisible) continue;
             let isDynamicRally = ent.rallyTargetUnitId != null;
             if (isDynamicRally) {
-                dynamicBuildingRallySegments.push([ex, ey, rx, ry]);
-                dynamicBuildingRallyMarkers.push([rx, ry]);
+                dynamicBuildingRallySegments.push([ex, ey, rx, ry, entOwnerColor]);
+                dynamicBuildingRallyMarkers.push([rx, ry, entOwnerColor]);
             } else {
-                stationaryBuildingRallySegments.push([ex, ey, rx, ry]);
-                stationaryBuildingRallyMarkers.push([rx, ry]);
+                stationaryBuildingRallySegments.push([ex, ey, rx, ry, entOwnerColor]);
+                stationaryBuildingRallyMarkers.push([rx, ry, entOwnerColor]);
             }
         }
 
@@ -1653,9 +1650,9 @@ function draw() {
                 let rx = marker.x, ry = marker.y;
                 ctx.save();
                 ctx.globalAlpha = marker.locked ? 1 : 0.55;
-                ctx.strokeStyle = '#9cf'; ctx.lineWidth = 1.5;
+                ctx.strokeStyle = entOwnerColor; ctx.lineWidth = 1.5;
                 ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(rx, ry); ctx.stroke();
-                ctx.fillStyle = '#9cf';
+                ctx.fillStyle = entOwnerColor;
                 ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 6.28); ctx.fill();
                 ctx.restore();
             }
@@ -1665,7 +1662,7 @@ function draw() {
             if (ent instanceof Tower) {
                 let visArea = getEntityVisibilityRangeArea(ent);
                 if (Number.isFinite(visArea) && visArea > 0) {
-                    let color = (ent.owner === localOwnerIndex || !isMultiplayer) ? 'rgba(0,255,0,0.20)' : 'rgba(255,0,0,0.20)';
+                    let color = (ent.owner === localPlayerId || !isMultiplayer) ? 'rgba(0,255,0,0.20)' : 'rgba(255,0,0,0.20)';
                     towerRangeEntries.push([getAreaRangeCellsAtWorld(ex, ey, visArea), color]);
                 }
             }
@@ -1681,19 +1678,20 @@ function draw() {
 
     if (stationaryBuildingRallyMarkers.length > 0) {
         if (showRallyLinesForBuildings()) {
-            let markerSprite = _getOverlayMarkerSprite('rally_arrow', '#9aa');
             for (let seg of stationaryBuildingRallySegments) {
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, '#9aa', 1);
-                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, '#9aa', 1);
+                let color = seg[4] || '#9aa';
+                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, color, 1);
+                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, color, 1);
             }
             for (let pos of stationaryBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1];
+                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
+                let markerSprite = _getOverlayMarkerSprite('rally_arrow', color);
                 ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
             }
         } else {
-            let markerSprite = _getOverlayMarkerSprite('plus', '#9aa');
             for (let pos of stationaryBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1];
+                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
+                let markerSprite = _getOverlayMarkerSprite('plus', color);
                 ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
             }
         }
@@ -1701,19 +1699,20 @@ function draw() {
 
     if (dynamicBuildingRallyMarkers.length > 0) {
         if (showRallyLinesForBuildings()) {
-            let markerSprite = _getOverlayMarkerSprite('rally_arrow', '#9aa');
             for (let seg of dynamicBuildingRallySegments) {
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, '#9aa', 1);
-                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, '#9aa', 1);
+                let color = seg[4] || '#9aa';
+                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, color, 1);
+                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, color, 1);
             }
             for (let pos of dynamicBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1];
+                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
+                let markerSprite = _getOverlayMarkerSprite('rally_arrow', color);
                 ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
             }
         } else {
-            let markerSprite = _getOverlayMarkerSprite('plus', '#9aa');
             for (let pos of dynamicBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1];
+                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
+                let markerSprite = _getOverlayMarkerSprite('plus', color);
                 ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
             }
         }
@@ -1734,7 +1733,7 @@ function draw() {
                 if (rangeArea <= 0) continue;
                 let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
                 let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-                let color = (u.owner === localOwnerIndex || !isMultiplayer) ? 'rgba(120,220,255,0.52)' : 'rgba(255,150,150,0.52)';
+                let color = (u.owner === localPlayerId || !isMultiplayer) ? 'rgba(120,220,255,0.52)' : 'rgba(255,150,150,0.52)';
                 _drawAreaRangeOverlay2D(ctx, ux, uy, rangeArea, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
             }
         }

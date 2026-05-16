@@ -1,5 +1,11 @@
 "use strict";
 
+// Per-player startup status map: peerId -> 'preparing'|'loading'|'ready'. Null when no startup in progress.
+let _matchStartPlayerStatuses = null;
+// Countdown timer for the all-ready launch sequence.
+let _matchStartCountdownHandle = null;
+let _matchStartCountdownRemaining = 0;
+
 // ============================================================
 // MULTIPLAYER (PeerJS)
 // ============================================================
@@ -49,6 +55,149 @@ function getTeamIdForPeer(peerId) {
     let setup = computeTeamSetupFromLobby();
     let tid = setup.teamByPeer[String(peerId || '')];
     return Number.isFinite(tid) ? tid : -1;
+}
+
+function ensureMatchLoadOverlayElement() {
+    let el = document.getElementById('match-load-overlay');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'match-load-overlay';
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.width = '100vw';
+    el.style.height = '100vh';
+    el.style.display = 'none';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.background = 'rgba(8, 12, 18, 0.86)';
+    el.style.zIndex = '14000';
+    el.innerHTML = '<div style="min-width:280px;max-width:480px;padding:20px 24px;border-radius:14px;background:linear-gradient(145deg,#1d2633,#141b25);border:1px solid rgba(255,255,255,0.12);box-shadow:0 10px 36px rgba(0,0,0,0.45);color:#eaf2ff;font-family:\'Segoe UI\',\'Trebuchet MS\',sans-serif;text-align:center;">'
+        + '<div id="match-load-overlay-title" style="font-size:22px;font-weight:700;letter-spacing:0.2px;margin-bottom:8px;">Loading Match</div>'
+        + '<div id="match-load-overlay-detail" style="font-size:14px;line-height:1.45;opacity:0.92;">Preparing game state...</div>'
+        + '<div id="match-load-overlay-players" style="display:none;margin-top:14px;text-align:left;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px;"></div>'
+        + '</div>';
+    document.body.appendChild(el);
+    return el;
+}
+
+function _startMatchCountdown(totalSeconds) {
+    _stopMatchCountdown();
+    // Keep strict lockstep paused for host and guests until START_GAME_ALL_READY.
+    matchStartWaitingForReady = true;
+    _matchStartCountdownRemaining = Math.max(1, Math.floor(totalSeconds));
+    _tickMatchCountdown();
+    _matchStartCountdownHandle = setInterval(() => {
+        _matchStartCountdownRemaining--;
+        if (_matchStartCountdownRemaining <= 0) {
+            _stopMatchCountdown();
+            if (isHost) {
+                matchStartWaitingForReady = false;
+                _matchStartPlayerStatuses = null;
+                setMatchLoadOverlay(false);
+                broadcastStartGameAllReady();
+            }
+            // Clients close their overlay when START_GAME_ALL_READY arrives.
+        } else {
+            _tickMatchCountdown();
+        }
+    }, 1000);
+}
+
+function _stopMatchCountdown() {
+    if (_matchStartCountdownHandle) { clearInterval(_matchStartCountdownHandle); _matchStartCountdownHandle = null; }
+    _matchStartCountdownRemaining = 0;
+}
+
+function _tickMatchCountdown() {
+    setMatchLoadOverlay(true, 'All Players Ready!', 'Starting in\u00a0' + _matchStartCountdownRemaining + '\u2026');
+}
+
+function _updateMatchLoadOverlayPlayers() {
+    ensureMatchLoadOverlayElement();
+    let btnEl = document.getElementById('btn-start-online');
+    let listEl = document.getElementById('match-load-overlay-players');
+    if (!listEl) return;
+    let statuses = _matchStartPlayerStatuses;
+    if (!statuses || Object.keys(statuses).length === 0) {
+        listEl.style.display = 'none';
+        return;
+    }
+    listEl.style.display = 'block';
+    let allPlayers = (lobbyPlayers && lobbyPlayers.length > 0) ? lobbyPlayers : [];
+    let pids = Object.keys(statuses);
+    let html = '';
+    for (let pid of pids) {
+        let status = statuses[pid];
+        let lp = allPlayers.find(p => p && p.peerId === pid);
+        let name = lp ? (lp.name || defaultLobbyName(pid)).slice(0, 28) : defaultLobbyName(pid).slice(0, 28);
+        let isMe = pid === myPeerId;
+        let icon, color, label;
+        if (status === 'ready') { icon = '&#10003;'; color = '#6fcf6f'; label = 'Ready'; }
+        else if (status === 'loading') { icon = '&#8943;'; color = '#faa43a'; label = 'Loading…'; }
+        else { icon = '&#8943;'; color = '#8ab4d0'; label = 'Preparing…'; }
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13px;">`
+            + `<span style="width:18px;text-align:center;font-size:15px;color:${color};font-weight:700;">${icon}</span>`
+            + `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escapeHtml(name)}${isMe ? ' <span style="opacity:0.55;font-size:11px;">(you)</span>' : ''}</span>`
+            + `<span style="font-size:12px;color:${color};white-space:nowrap;">${label}</span>`
+            + `</div>`;
+    }
+    listEl.innerHTML = html;
+    if (btnEl) {
+        if (isHost && _matchStartPlayerStatuses) {
+            let allReady = Object.values(statuses).every(s => s === 'ready');
+            btnEl.style.display = 'block';
+            btnEl.disabled = !allReady;
+            btnEl.style.opacity = allReady ? '1' : '0.45';
+            btnEl.style.cursor = allReady ? 'pointer' : 'not-allowed';
+            btnEl.textContent = allReady ? '\u25BA Start Game' : 'Waiting for players…';
+        } else {
+            btnEl.style.display = 'none';
+        }
+    }
+}
+
+function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Preparing game state...') {
+    let el = ensureMatchLoadOverlayElement();
+    let t = document.getElementById('match-load-overlay-title');
+    let d = document.getElementById('match-load-overlay-detail');
+    if (t) t.textContent = String(title || 'Loading Match');
+    if (d) d.textContent = String(detail || 'Preparing game state...');
+    el.style.display = visible ? 'flex' : 'none';
+    if (visible) _updateMatchLoadOverlayPlayers();
+}
+
+function areAllMatchStartPeersReady() {
+    if (!Array.isArray(matchStartExpectedReadyPeerIds) || matchStartExpectedReadyPeerIds.length <= 0) return true;
+    for (let pid of matchStartExpectedReadyPeerIds) {
+        if (!matchStartReadyByPeerId[pid]) return false;
+    }
+    return true;
+}
+
+function updateHostMatchStartReadyUi() {
+    _updateMatchLoadOverlayPlayers();
+}
+
+function broadcastStartGameAllReady() {
+    let payload = { type: 'START_GAME_ALL_READY', startSessionId: matchStartSessionId };
+    for (let c of connections) {
+        if (!c) continue;
+        try { c.send(payload); } catch { }
+    }
+    // Retry a few times in case one packet drops during heavy startup.
+    setTimeout(() => {
+        for (let c of connections) {
+            if (!c) continue;
+            try { c.send(payload); } catch { }
+        }
+    }, 200);
+    setTimeout(() => {
+        for (let c of connections) {
+            if (!c) continue;
+            try { c.send(payload); } catch { }
+        }
+    }, 700);
 }
 
 function canonicalPeerId(peerId) {
@@ -160,6 +309,97 @@ function generateGameSessionId() {
     return `${generateSocketId()}-${generateSocketId()}`;
 }
 
+function _getPlayingPeerIdsForResyncPause() {
+    let out = [];
+    for (let c of connections) {
+        if (!c || !c.peer) continue;
+        let pid = String(c.peer);
+        if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
+        out.push(pid);
+    }
+    return out;
+}
+
+function _broadcastResyncPauseState(active, sessionId, reason = '') {
+    let payload = {
+        type: 'LOCKSTEP_RESYNC_PAUSE',
+        active: !!active,
+        sessionId: String(sessionId || ''),
+        reason: String(reason || '')
+    };
+    for (let c of connections) {
+        if (!c || !c.peer) continue;
+        try { c.send(payload); } catch { }
+    }
+}
+
+function _isHostResyncPauseComplete() {
+    if (!lockstepResyncPauseActive) return true;
+    let map = (lockstepResyncPendingAckByPeer && typeof lockstepResyncPendingAckByPeer === 'object')
+        ? lockstepResyncPendingAckByPeer
+        : {};
+    let keys = Object.keys(map);
+    if (keys.length <= 0) return true;
+    for (let pid of keys) if (!map[pid]) return false;
+    return true;
+}
+
+function _finishHostResyncPause(reason = '') {
+    if (!lockstepResyncPauseActive) return;
+    lockstepResyncPauseActive = false;
+    lockstepResyncPendingAckByPeer = {};
+    lockstepResyncSnapshotCache = null;
+    let sessionId = String(lockstepResyncSessionId || '');
+    lockstepResyncSessionId = '';
+    waitingForRemoteSince = 0;
+    _broadcastResyncPauseState(false, sessionId, reason);
+}
+
+function _startHostResyncPause(reason = '', includeConfig = false) {
+    let peers = _getPlayingPeerIdsForResyncPause();
+    let sessionId = generateGameSessionId();
+    let ackMap = {};
+    for (let pid of peers) ackMap[pid] = false;
+
+    lockstepResyncPauseActive = true;
+    lockstepResyncSessionId = sessionId;
+    lockstepResyncPendingAckByPeer = ackMap;
+    waitingForRemoteSince = performance.now();
+
+    if (!lockstepResyncSnapshotCache) {
+        lockstepResyncSnapshotCache = buildHostAuthoritativeStateSnapshot({
+            includeConfig,
+            includeStaticMapState: false
+        });
+    }
+
+    _broadcastResyncPauseState(true, sessionId, reason);
+
+    for (let c of connections) {
+        if (!c || !c.peer) continue;
+        if (!Object.prototype.hasOwnProperty.call(ackMap, String(c.peer))) continue;
+        try { c.send({ type: 'MATCH_STATE_SNAPSHOT', snapshot: lockstepResyncSnapshotCache, sessionId }); } catch { }
+    }
+
+    if (_isHostResyncPauseComplete()) {
+        _finishHostResyncPause('no remote peers pending');
+    }
+}
+
+function _markHostResyncAck(peerId, sessionId) {
+    if (!isHost || !lockstepResyncPauseActive) return;
+    let sid = String(sessionId || '');
+    if (sid && lockstepResyncSessionId && sid !== lockstepResyncSessionId) return;
+    let pid = String(peerId || '');
+    if (!pid) return;
+    if (lockstepResyncPendingAckByPeer && Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, pid)) {
+        lockstepResyncPendingAckByPeer[pid] = true;
+    }
+    if (_isHostResyncPauseComplete()) {
+        _finishHostResyncPause('all peers acknowledged snapshot');
+    }
+}
+
 function normalizeIncomingLobbyPlayers(players) {
     let list = Array.isArray(players) ? players : [];
     let byPeer = new Map();
@@ -254,6 +494,7 @@ function normalizeMatchRole(role, fallback = '') {
 function buildHostMatchSyncPayload() {
     return {
         seed: gameSeed,
+        startSessionId: matchStartSessionId,
         lobbyPlayers: matchStartLobbyPlayers.length ? matchStartLobbyPlayers : lobbyPlayers,
         cfg: matchStartConfig,
         currentTick,
@@ -288,14 +529,13 @@ function buildHostPresenceSnapshot() {
 }
 
 function cloneSnapshotValue(value) {
-    let seen = new WeakSet();
-    return JSON.parse(JSON.stringify(value, (key, v) => {
-        if (typeof v === 'function') return undefined;
-        if (!v || typeof v !== 'object') return v;
-        if (seen.has(v)) return undefined;
-        seen.add(v);
-        return v;
-    }));
+    if (value === undefined || value === null) return value;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch (e) {
+        console.error("[Networking] cloneSnapshotValue failed:", e);
+        return value;
+    }
 }
 
 function snapshotEntity(obj, omitKeys = []) {
@@ -419,7 +659,31 @@ function resolveSnapshotEntityRef(ref, context) {
     return null;
 }
 
-function buildHostAuthoritativeStateSnapshot() {
+function buildRuntimeConfigHashForSnapshot() {
+    let cfg = {
+        gridW: GRID_W,
+        gridH: GRID_H,
+        tickRate: TICK_RATE,
+        pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+        gameMode: gameMode,
+        maxPop: CONFIG_MAX_POP,
+        maxThingLevel: MAX_THING_LEVEL,
+        maxResearchLevel: MAX_RESEARCH_LEVEL,
+        mapType: MAP_TYPE,
+        fullVisibility: !!fullVisibility,
+        startingMoney: STARTING_MONEY,
+        startingAstar: STARTING_ASTAR,
+        startingResources: cloneSnapshotValue(startingResourcesConfig || {}),
+        editableConfig: serializeEditableRuntimeConfigForTransport()
+    };
+    return hashStringLockstep(stableSerializeForLockstep(cfg));
+}
+
+function buildHostAuthoritativeStateSnapshot(options = null) {
+    let opts = (options && typeof options === 'object') ? options : {};
+    let includeConfig = opts.includeConfig !== false;
+    let includeStaticMapState = opts.includeStaticMapState !== false;
+
     let floorItems = [];
     for (let gy = 0; gy < GRID_H; gy++) {
         for (let gx = 0; gx < GRID_W; gx++) {
@@ -432,14 +696,14 @@ function buildHostAuthoritativeStateSnapshot() {
         }
     }
 
-    return {
+    let snapshot = {
         currentTick,
         gameTime,
         nextUnitId,
         gameOver: !!gameOver,
         localDefeated: !!localDefeated,
         spectateMode: String(spectateMode || 'none'),
-        editableConfig: serializeEditableRuntimeConfigForTransport(),
+        configHash: buildRuntimeConfigHashForSnapshot(),
         players: cloneSnapshotValue(players),
         towers: towers.map(t => snapshotEntity(t, ['connectedLasers', 'preferredTarget', 'textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
         barracks: barracks.map(b => snapshotEntity(b, ['textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
@@ -470,26 +734,48 @@ function buildHostAuthoritativeStateSnapshot() {
             return snap;
         }).filter(Boolean),
         goldMines: cloneSnapshotValue(goldMines),
+        astarMines: cloneSnapshotValue(astarMines),
         droppedItems: cloneSnapshotValue(droppedItems),
         floorItems,
-        areas: cloneSnapshotValue(areas),
         resignedTeams: Array.from(resignedTeams || []).map(v => Math.floor(Number(v) || 0)).sort((a, b) => a - b),
         rngState: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
         visualRngState: (visualRng && typeof visualRng.getState === 'function') ? visualRng.getState() : null
     };
+
+    if (includeConfig) {
+        snapshot.editableConfig = serializeEditableRuntimeConfigForTransport();
+    }
+    if (includeStaticMapState) {
+        snapshot.areas = cloneSnapshotValue(areas);
+    }
+    return snapshot;
 }
 
 function applyAuthoritativeStateSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
+    let now = performance.now();
 
-    if (snapshot.editableConfig && typeof snapshot.editableConfig === 'object') {
+    let incomingConfigHash = String((snapshot && snapshot.configHash) || '');
+    let localConfigHash = buildRuntimeConfigHashForSnapshot();
+    let shouldApplyConfig = !!(snapshot.editableConfig && typeof snapshot.editableConfig === 'object');
+    if (!shouldApplyConfig && incomingConfigHash && localConfigHash && incomingConfigHash !== localConfigHash) {
+        // Host and guest config hashes differ; request explicit config payload in a follow-up snapshot.
+        if (connections[0] && !isHost) {
+            try { connections[0].send({ type: 'REQUEST_MATCH_SYNC', tick: currentTick, reason: 'config hash mismatch' }); } catch { }
+        }
+    }
+
+    if (shouldApplyConfig) {
         try {
             applyEditableRuntimeConfigObject(snapshot.editableConfig, { fromTransport: true });
         } catch { }
     }
 
     waitingForRemoteSince = 0;
-    lockstepLastHardResyncRequestAt = 0;
+    lockstepLastHardResyncRequestAt = now;
+    lockstepHardResyncInFlightUntil = 0;
+    lockstepPostSnapshotGraceUntilAt = now + Math.max(1200, Math.floor(TICK_MS * 20));
+    lockstepResyncSnapshotCache = null;
     lockstepDesyncDetected = false;
     lockstepExpectedStateHashByTick = {};
     lockstepLocalStateHashByTick = {};
@@ -518,6 +804,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 
     players = Array.isArray(snapshot.players) ? cloneSnapshotValue(snapshot.players) : players;
     currentTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || 0));
+    lockstepHashGraceUntilTick = currentTick + Math.max(48, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 8));
     gameTime = Math.max(0, Math.floor(Number(snapshot.gameTime) || currentTick));
     let snapshotNextUnitId = Math.max(1, Math.floor(Number(snapshot.nextUnitId) || 1));
     nextUnitId = snapshotNextUnitId;
@@ -635,6 +922,20 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         delete u._snapshotRefs;
     }
 
+    // Rebuild worker target reservation cache from restored unit targets.
+    // Snapshot payload can carry workerTarget references, but the reservation index is runtime-only.
+    _invalidateWorkerTargetLoadCache();
+    for (let u of units) {
+        if (!u || !u.workerState || !u.workerType) continue;
+        u._workerReservedTileIndex = -1;
+        if (!u.workerTarget) continue;
+        let restoredTarget = u.workerTarget;
+        let restoredTargetType = u.workerTargetType;
+        u.workerTarget = null;
+        u.workerTargetType = null;
+        _setWorkerTarget(u, restoredTarget, restoredTargetType);
+    }
+
     // Re-derive live unit stats from precomputed tables after snapshot assignment.
     // This prevents stale/invalid serialized fields (including astarCost) from bypassing runtime scaling.
     for (let u of units) {
@@ -653,6 +954,13 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         let gx = Math.floor(Number(m.gx));
         let gy = Math.floor(Number(m.gy));
         setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m);
+    }
+    astarMines = Array.isArray(snapshot.astarMines) ? cloneSnapshotValue(snapshot.astarMines) : astarMines;
+    for (let m of astarMines) {
+        if (!m) continue;
+        let gx = Math.floor(Number(m.gx));
+        let gy = Math.floor(Number(m.gy));
+        setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m);
     }
     droppedItems = [];
     initDroppedItemGrid();
@@ -709,6 +1017,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     lockstepLastFinalizeSentAtByTick = {};
     lockstepLastResendRequestAtByTick = {};
     lockstepHistoryByTick = {};
+    lockstepSnapshotLastSentAtByPeer = {};
 
     let st = document.getElementById('lobby-status');
     if (st && !isHost) {
@@ -718,9 +1027,22 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 }
 
 function applyIncomingMatchSyncPayload(data, role = 'playing') {
+    let now = performance.now();
     gameSeed = data.seed;
+    matchStartSessionId = String((data && data.startSessionId) || matchStartSessionId || '');
+    if (!isHost) {
+        matchStartWaitingForReady = true;
+        setMatchLoadOverlay(true, 'Loading Match', 'Applying host state...');
+    }
     waitingForRemoteSince = 0;
     lockstepLastHardResyncRequestAt = 0;
+    lockstepHardResyncInFlightUntil = 0;
+    lockstepPostSnapshotGraceUntilAt = now + Math.max(1200, Math.floor(TICK_MS * 20));
+    lockstepSnapshotLastSentAtByPeer = {};
+    lockstepResyncPauseActive = false;
+    lockstepResyncSessionId = '';
+    lockstepResyncPendingAckByPeer = {};
+    lockstepResyncSnapshotCache = null;
     lockstepDesyncDetected = false;
     lockstepExpectedStateHashByTick = {};
     lockstepLocalStateHashByTick = {};
@@ -747,6 +1069,9 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
     activeTeamIds = setup.activeTeamIds;
     teamColorById = setup.teamColorById;
     localPlayerId = resolveLocalPlayerTeamId(setup);
+    //if (isMultiplayer) {
+    //    console.log(`[Networking] Resolved localPlayerId: ${localPlayerId} for peer: ${myPeerId}`);
+    //}
     isMultiplayer = true;
     if (data.cfg) {
         let cfgGridW = Math.max(8, Math.floor(Number(data.cfg.gridW) || 80));
@@ -789,10 +1114,38 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
     }
     initAudio();
     startGame();
+    lockstepHashGraceUntilTick = currentTick + Math.max(48, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 8));
 
     if (data && data.stateSnapshot && typeof data.stateSnapshot === 'object') {
         applyAuthoritativeStateSnapshot(data.stateSnapshot);
+        if (!isHost && connections.length > 0) {
+            for (let c of connections) {
+                if (!c) continue;
+                try {
+                    c.send({
+                        type: 'START_GAME_READY',
+                        startSessionId: matchStartSessionId,
+                        teamId: localPlayerId,
+                        role: normalizeMatchRole(role, 'playing')
+                    });
+                } catch { }
+            }
+        }
         return;
+    }
+
+    if (!isHost && connections.length > 0) {
+        for (let c of connections) {
+            if (!c) continue;
+            try {
+                c.send({
+                    type: 'START_GAME_READY',
+                    startSessionId: matchStartSessionId,
+                    teamId: localPlayerId,
+                    role: normalizeMatchRole(role, 'playing')
+                });
+            } catch { }
+        }
     }
 
     if (role === 'spectating') {
@@ -856,19 +1209,6 @@ function requestSpectateCurrentMatch() {
     if (isHost || gameStarted || !connections[0]) return;
     pendingJoinAsSpectator = true;
     connections[0].send({ type: 'REQUEST_SPECTATE' });
-    let st = document.getElementById('lobby-status');
-    if (st) {
-        st.textContent = 'Requesting spectate access...';
-        st.style.color = '#8cf';
-    }
-}
-
-function applyDuplicateUidBlock(reason = 'This profile is already connected in another tab/window.') {
-    duplicateUidBlocked = true;
-    duplicateUidBlockReason = String(reason || 'This profile is already connected in another tab/window.');
-    pendingJoinAsSpectator = false;
-    remoteMatchRunning = false;
-    lobbyPlayers = [];
     connections = [];
     peerPresenceById = {};
     remotePresenceByPeerId = {};
@@ -914,6 +1254,10 @@ function resolveLocalPlayerTeamId(setup) {
             if (myPeerId) setup.teamByPeer[myPeerId] = setup.teamByPeer[match.peerId];
             return setup.teamByPeer[match.peerId];
         }
+    }
+    if (setup && Array.isArray(setup.activeTeamIds)) {
+        let prevLocalTeam = Math.floor(Number(localPlayerId));
+        if (setup.activeTeamIds.includes(prevLocalTeam)) return prevLocalTeam;
     }
     return (setup && Array.isArray(setup.activeTeamIds) && setup.activeTeamIds.length > 0)
         ? setup.activeTeamIds[0]
@@ -1275,8 +1619,39 @@ function setupConnection(conn) {
                 delete pendingPingByPeerId[conn.peer];
                 if (isHost) broadcastLobbyState();
             }
+        } else if (data.type === 'START_GAME_PREPARE' && !isHost) {
+            // PREPARE is only meaningful before gameplay starts.
+            // Late/retried PREPARE packets can interfere with startup flow and lockstep gating.
+            if (gameStarted) return;
+            let prepSessionId = String((data && (data.sessionId || data.startSessionId)) || '');
+            if (prepSessionId) matchStartSessionId = prepSessionId;
+            let prepPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
+            if (prepPlayers.length > 0) lobbyPlayers = prepPlayers;
+            _matchStartPlayerStatuses = {};
+            for (let p of lobbyPlayers) {
+                if (p && p.peerId) _matchStartPlayerStatuses[p.peerId] = p.peerId === myPeerId ? 'loading' : 'preparing';
+            }
+            setMatchLoadOverlay(true, 'Match Starting', 'Waiting for host to generate world\u2026');
         } else if (data.type === 'START_GAME') {
-            applyIncomingMatchSyncPayload(data, 'playing');
+            // Fallback: if START_GAME_PREPARE was missed, set up statuses from this packet.
+            if (!_matchStartPlayerStatuses) {
+                let prepPlayers = normalizeIncomingLobbyPlayers(data.lobbyPlayers);
+                if (prepPlayers.length > 0) lobbyPlayers = prepPlayers;
+                _matchStartPlayerStatuses = {};
+                for (let p of lobbyPlayers) {
+                    if (p && p.peerId) _matchStartPlayerStatuses[p.peerId] = p.peerId === myPeerId ? 'loading' : 'preparing';
+                }
+            }
+            // Host just sent us the world \u2014 they are ready.
+            if (conn && conn.peer && _matchStartPlayerStatuses) _matchStartPlayerStatuses[String(conn.peer)] = 'ready';
+            setMatchLoadOverlay(true, 'Loading Match', 'Receiving host world state\u2026');
+            // Yield once so the loading overlay appears before heavy snapshot/startup work.
+            setTimeout(() => {
+                applyIncomingMatchSyncPayload(data, 'playing');
+                // Mark self as ready and wait for countdown from host.
+                if (_matchStartPlayerStatuses && myPeerId) _matchStartPlayerStatuses[myPeerId] = 'ready';
+                setMatchLoadOverlay(true, 'Waiting for Players', 'Loaded! Waiting for other players\u2026');
+            }, 0);
         } else if (data.type === 'LOBBY_JOIN' && isHost) {
             if (conn && conn.peer) peerPresenceById[conn.peer] = true;
             let joiningUid = String((data && data.uid) || peerUidByPeerId[conn.peer] || conn.peer || '').trim();
@@ -1367,7 +1742,43 @@ function setupConnection(conn) {
             renderOnlineLobby();
         } else if (data.type === 'REQUEST_MATCH_SYNC' && isHost) {
             if (!gameStarted || gameOver) return;
-            conn.send({ type: 'MATCH_STATE_SNAPSHOT', snapshot: buildHostAuthoritativeStateSnapshot() });
+            let pid = String((conn && conn.peer) || '');
+            let now = performance.now();
+            let minGap = Math.max(350, Math.floor(TICK_MS * 6));
+            if (pid) {
+                let lastSentAt = Number(lockstepSnapshotLastSentAtByPeer[pid]) || 0;
+                if (lastSentAt && (now - lastSentAt) < minGap) {
+                    return;
+                }
+                lockstepSnapshotLastSentAtByPeer[pid] = now;
+            }
+            let reqReason = String((data && data.reason) || 'peer requested full match sync');
+            let includeConfig = reqReason.toLowerCase().includes('config hash mismatch');
+            if (!lockstepResyncPauseActive) {
+                _startHostResyncPause(reqReason, includeConfig);
+            } else {
+                try {
+                    conn.send({
+                        type: 'LOCKSTEP_RESYNC_PAUSE',
+                        active: true,
+                        sessionId: String(lockstepResyncSessionId || ''),
+                        reason: reqReason
+                    });
+                } catch { }
+                if (!lockstepResyncSnapshotCache) {
+                    lockstepResyncSnapshotCache = buildHostAuthoritativeStateSnapshot({
+                        includeConfig,
+                        includeStaticMapState: false
+                    });
+                }
+                try {
+                    conn.send({
+                        type: 'MATCH_STATE_SNAPSHOT',
+                        snapshot: lockstepResyncSnapshotCache,
+                        sessionId: String(lockstepResyncSessionId || '')
+                    });
+                } catch { }
+            }
         } else if (data.type === 'START_SPECTATE' && !isHost) {
             pendingJoinAsSpectator = false;
             applyIncomingMatchSyncPayload(data, 'spectating');
@@ -1376,6 +1787,42 @@ function setupConnection(conn) {
                 st.textContent = 'Spectating current match.';
                 st.style.color = '#9f9';
             }
+        } else if (data.type === 'START_GAME_READY' && isHost) {
+            let incomingSessionId = String((data && data.startSessionId) || '');
+            if (incomingSessionId && matchStartSessionId && incomingSessionId !== matchStartSessionId) return;
+            let pid = String((conn && conn.peer) || '');
+            if (!pid) return;
+            matchStartReadyByPeerId[pid] = true;
+            if (_matchStartPlayerStatuses) _matchStartPlayerStatuses[pid] = 'ready';
+            updateHostMatchStartReadyUi();
+            // When all clients are ready, broadcast a countdown and start it locally.
+            if (matchStartWaitingForReady && areAllMatchStartPeersReady() && !_matchStartCountdownHandle) {
+                let allStatuses = {};
+                for (let p of (matchStartLobbyPlayers || [])) if (p && p.peerId) allStatuses[p.peerId] = 'ready';
+                if (myPeerId) allStatuses[myPeerId] = 'ready';
+                if (_matchStartPlayerStatuses) Object.assign(_matchStartPlayerStatuses, allStatuses);
+                let cdPayload = { type: 'START_GAME_COUNTDOWN', seconds: 3, statuses: allStatuses, startSessionId: matchStartSessionId };
+                connections.forEach(c => { if (c && c.peer) try { c.send(cdPayload); } catch { } });
+                _startMatchCountdown(3);
+            }
+        } else if (data.type === 'START_GAME_COUNTDOWN' && !isHost) {
+            let incomingSessionId = String((data && data.startSessionId) || '');
+            if (incomingSessionId && matchStartSessionId && incomingSessionId !== matchStartSessionId) return;
+            matchStartWaitingForReady = true;
+            // Update all player statuses so the list shows everyone as ready.
+            if (data.statuses && typeof data.statuses === 'object') {
+                if (!_matchStartPlayerStatuses) _matchStartPlayerStatuses = {};
+                for (let pid in data.statuses) _matchStartPlayerStatuses[pid] = data.statuses[pid];
+                _updateMatchLoadOverlayPlayers();
+            }
+            _startMatchCountdown(Math.max(1, Math.floor(Number((data && data.seconds) || 3))));
+        } else if (data.type === 'START_GAME_ALL_READY' && !isHost) {
+            let incomingSessionId = String((data && data.startSessionId) || '');
+            if (incomingSessionId && matchStartSessionId && incomingSessionId !== matchStartSessionId) return;
+            _stopMatchCountdown();
+            matchStartWaitingForReady = false;
+            _matchStartPlayerStatuses = null;
+            setMatchLoadOverlay(false);
         } else if (data.type === 'SPECTATE_UNAVAILABLE' && !isHost) {
             pendingJoinAsSpectator = false;
             let st = document.getElementById('lobby-status');
@@ -1385,7 +1832,44 @@ function setupConnection(conn) {
             }
         } else if (data.type === 'MATCH_STATE_SNAPSHOT' && !isHost) {
             pendingJoinAsSpectator = false;
+            let snapshotSessionId = String((data && data.sessionId) || '');
+            if (snapshotSessionId) lockstepResyncSessionId = snapshotSessionId;
             applyAuthoritativeStateSnapshot(data.snapshot);
+            if (connections[0] && snapshotSessionId) {
+                try { connections[0].send({ type: 'MATCH_STATE_SNAPSHOT_APPLIED', sessionId: snapshotSessionId, tick: currentTick }); } catch { }
+            }
+            // Outside coordinated pause mode, request current tick bundle immediately.
+            if (!lockstepResyncPauseActive && connections[0] && gameStarted && Number.isFinite(currentTick) && currentTick >= 0) {
+                try { connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: currentTick }); } catch { }
+            }
+        } else if (data.type === 'MATCH_STATE_SNAPSHOT_APPLIED' && isHost) {
+            _markHostResyncAck(conn && conn.peer ? conn.peer : '', data && data.sessionId ? String(data.sessionId) : '');
+        } else if (data.type === 'LOCKSTEP_RESYNC_PAUSE' && !isHost) {
+            let active = !!(data && data.active);
+            let sessionId = String((data && data.sessionId) || '');
+            if (active) {
+                lockstepResyncPauseActive = true;
+                if (sessionId) lockstepResyncSessionId = sessionId;
+                waitingForRemoteSince = performance.now();
+                let st = document.getElementById('lobby-status');
+                if (st && gameStarted) {
+                    st.textContent = 'Lockstep paused: synchronizing match state...';
+                    st.style.color = '#fa4';
+                }
+            } else {
+                if (!sessionId || !lockstepResyncSessionId || sessionId === lockstepResyncSessionId) {
+                    lockstepResyncPauseActive = false;
+                    lockstepResyncSessionId = '';
+                    waitingForRemoteSince = 0;
+                    lockstepHardResyncInFlightUntil = 0;
+                    lockstepDesyncDetected = false;
+                    let st = document.getElementById('lobby-status');
+                    if (st && gameStarted) {
+                        st.textContent = 'Lockstep resumed after synchronization.';
+                        st.style.color = '#9f9';
+                    }
+                }
+            }
         } else if (data.type === 'MATCH_ROLE_UPDATE' && isHost) {
             let role = normalizeMatchRole(data.role, '');
             if (gameStarted && role && conn && conn.peer) {
@@ -1482,10 +1966,30 @@ function setupConnection(conn) {
         connections = connections.filter(c => c !== conn);
         let leftPeerId = conn && conn.peer ? conn.peer : null;
         if (leftPeerId) peerPresenceById[leftPeerId] = false;
+        if (isHost && matchStartWaitingForReady && leftPeerId) {
+            matchStartExpectedReadyPeerIds = (matchStartExpectedReadyPeerIds || []).filter(pid => pid !== leftPeerId);
+            delete matchStartReadyByPeerId[leftPeerId];
+            if (_matchStartPlayerStatuses) delete _matchStartPlayerStatuses[leftPeerId];
+            // Refresh overlay; the Start Game button will auto-enable if all remaining players are ready.
+            updateHostMatchStartReadyUi();
+            // If no more remote players are expected, auto-close overlay (everyone who joined is ready).
+            if (areAllMatchStartPeersReady() && matchStartExpectedReadyPeerIds.length === 0) {
+                matchStartWaitingForReady = false;
+                _matchStartPlayerStatuses = null;
+                setMatchLoadOverlay(false);
+                broadcastStartGameAllReady();
+            }
+        }
         if (leftPeerId) {
             delete pendingPingByPeerId[leftPeerId];
             delete peerLatencyByPeerId[leftPeerId];
             delete peerLatencyUpdatedAtByPeerId[leftPeerId];
+            if (isHost && lockstepResyncPauseActive && lockstepResyncPendingAckByPeer && Object.prototype.hasOwnProperty.call(lockstepResyncPendingAckByPeer, leftPeerId)) {
+                delete lockstepResyncPendingAckByPeer[leftPeerId];
+                if (_isHostResyncPauseComplete()) {
+                    _finishHostResyncPause('peer left during resync');
+                }
+            }
         }
 
         if (!isHost && gameStarted && leftPeerId === wsHostId) {
@@ -1581,8 +2085,12 @@ function resetWorldState() {
     resetAreaDistanceCaches();
     grid = [];
     visibilityGrid = [];
+    visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
     visibilityVersion = 0;
     visibilityGridByPlayerCache.clear();
+    if (typeof visibilityGridRawByPlayerCache !== 'undefined' && visibilityGridRawByPlayerCache && typeof visibilityGridRawByPlayerCache.clear === 'function') {
+        visibilityGridRawByPlayerCache.clear();
+    }
     if (typeof visibilityGridSmoothedByPlayerCache !== 'undefined' && visibilityGridSmoothedByPlayerCache && typeof visibilityGridSmoothedByPlayerCache.clear === 'function') {
         visibilityGridSmoothedByPlayerCache.clear();
     }
@@ -1615,6 +2123,13 @@ function resetWorldState() {
     nextLocalActionSeq = 1;
     waitingForRemoteSince = 0;
     lockstepLastHardResyncRequestAt = 0;
+    lockstepHardResyncInFlightUntil = 0;
+    lockstepPostSnapshotGraceUntilAt = 0;
+    lockstepSnapshotLastSentAtByPeer = {};
+    lockstepResyncPauseActive = false;
+    lockstepResyncSessionId = '';
+    lockstepResyncPendingAckByPeer = {};
+    lockstepResyncSnapshotCache = null;
     peerPresenceById = {};
     remoteRoleByPeerId = {};
     remotePresenceByPeerId = {};
@@ -1631,6 +2146,11 @@ function resetWorldState() {
     lockstepExpectedStateDigestByTick = {};
     lockstepLocalStateDigestByTick = {};
     lockstepDesyncDetected = false;
+    lockstepHashGraceUntilTick = -1;
+    matchStartSessionId = '';
+    matchStartWaitingForReady = false;
+    matchStartExpectedReadyPeerIds = [];
+    matchStartReadyByPeerId = {};
     currentTick = 0;
     gameTime = 0;
     nextUnitId = 1;
@@ -1647,6 +2167,7 @@ function resetWorldState() {
     dirtyGrid = true;
     dirtyAreas = true;
     invalidateStaticLayerCache();
+    setMatchLoadOverlay(false);
 }
 
 function returnToOnlineLobby(asHost, statusText) {
@@ -1671,6 +2192,10 @@ function returnToOnlineLobby(asHost, statusText) {
     matchRoleByPeerId = {};
     matchRoleByUid = {};
     peerUidByPeerId = {};
+    matchStartSessionId = '';
+    matchStartWaitingForReady = false;
+    matchStartExpectedReadyPeerIds = [];
+    matchStartReadyByPeerId = {};
     if (asHost) {
         duplicateUidBlocked = false;
         duplicateUidBlockReason = '';
@@ -1723,6 +2248,15 @@ function hostOnlineGame() {
 
 function startHostedGame() {
     if (!isHost || connections.length === 0) return;
+    let connectedPeerIds = connections
+        .filter(c => c && c.peer)
+        .map(c => String(c.peer));
+    let lobbyPeerSet = new Set((lobbyPlayers || []).map(p => String((p && p.peerId) || '')));
+    let missingPeers = connectedPeerIds.filter(pid => !!pid && !lobbyPeerSet.has(pid));
+    if (missingPeers.length > 0) {
+        document.getElementById('lobby-status').textContent = 'Still syncing lobby players. Please wait a moment and press Start again.';
+        return;
+    }
     let preSetup = computeTeamSetupFromLobby();
     if (preSetup.activeTeamIds.length < 2) {
         document.getElementById('lobby-status').textContent = 'Need at least 2 different team colors to start.';
@@ -1732,65 +2266,147 @@ function startHostedGame() {
     startBtn.disabled = true;
     document.getElementById('lobby-status').textContent = 'Starting game...';
 
-    readConfigFromMenu();
-    gameSeed = Date.now();
-    removedFromMatchPeerIds = new Set();
-    lockstepHistoryByTick = {};
-    matchStartLobbyPlayers = lobbyPlayers.map(p => ({ peerId: p.peerId, name: p.name, color: normalizeLobbyColor(p.color), uid: String((p && p.uid) || getPeerProfileUid(p && p.peerId) || '') }));
-    matchRoleByPeerId = {};
-    matchRoleByUid = {};
-    for (let p of matchStartLobbyPlayers) {
-        if (!p || !p.peerId) continue;
-        matchRoleByPeerId[p.peerId] = 'playing';
-        let uid = getPeerProfileUid(p.peerId);
-        if (uid) matchRoleByUid[uid] = 'playing';
-    }
-    matchStartConfig = {
-        gridW: GRID_W,
-        gridH: GRID_H,
-        goldCount: GOLD_MINE_COUNT,
-        goldMin: GOLD_MINE_MIN,
-        goldMax: GOLD_MINE_MAX,
-        goldArea: GOLD_MINE_AREA,
-        fullVis: fullVisibility,
-        gameMode: gameMode,
-        maxPop: CONFIG_MAX_POP,
-        startingMoney: STARTING_MONEY,
-        startingAstar: STARTING_ASTAR,
-        mapType: MAP_TYPE,
-        tickRate: TICK_RATE,
-        pipelineDelay: LOCKSTEP_PIPELINE_MIN,
-        thingStatsRecalcIntervalSeconds: THING_STATS_RECALC_INTERVAL_SECONDS,
-        unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
-        astarIterBudgetPerPlayerTick: ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
-        workerAiTickDelay: WORKER_AI_TICK_DELAY,
-        researchCostExp: RESEARCH_COST_EXP,
-        researchWorkExp: RESEARCH_WORK_EXP,
-        researchWorkBase: RESEARCH_WORK_BASE,
-        researchBonusExpUnits: RESEARCH_BONUS_EXP_UNITS,
-        researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
-        researchBonusExpOtherHousePopCap: RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
-        maxThingLevel: MAX_THING_LEVEL,
-        maxResearchLevel: MAX_RESEARCH_LEVEL,
-        startingResources: cloneStartingResourcesConfig(),
-        editableConfig: serializeEditableRuntimeConfigForTransport(),
-    };
-    let setup = preSetup;
-    activeTeamIds = setup.activeTeamIds;
-    teamColorById = setup.teamColorById;
-    localPlayerId = resolveLocalPlayerTeamId(setup);
-    isMultiplayer = true;
-
-    initAudio();
-    startGame();
-
-    let startSnapshot = buildHostAuthoritativeStateSnapshot();
-    connections.forEach(c => c.send({
-        type: 'START_GAME', seed: gameSeed,
-        lobbyPlayers: matchStartLobbyPlayers,
-        cfg: matchStartConfig,
-        stateSnapshot: startSnapshot
+    // Initialize session/player metadata immediately so we can broadcast a prepare signal to clients
+    // before the heavy world-generation work begins.
+    matchStartSessionId = generateGameSessionId();
+    matchStartLobbyPlayers = lobbyPlayers.map(p => ({
+        peerId: p.peerId, name: p.name,
+        color: normalizeLobbyColor(p.color),
+        uid: String((p && p.uid) || getPeerProfileUid(p && p.peerId) || '')
     }));
+
+    // Build per-player status map. Host starts as 'preparing'; clients are 'preparing' until they load.
+    _matchStartPlayerStatuses = {};
+    for (let p of matchStartLobbyPlayers) {
+        if (p && p.peerId) _matchStartPlayerStatuses[p.peerId] = 'preparing';
+    }
+
+    // Show the overlay on the host immediately.
+    setMatchLoadOverlay(true, 'Preparing Match', 'Generating world and synchronizing data\u2026');
+
+    // Tell clients to show their overlay right away (before the snapshot even arrives).
+    let preparePayload = {
+        type: 'START_GAME_PREPARE',
+        sessionId: matchStartSessionId,
+        startSessionId: matchStartSessionId,
+        lobbyPlayers: matchStartLobbyPlayers
+    };
+    let sendPreparePayload = () => {
+        connections.forEach(c => { if (c && c.peer) try { c.send(preparePayload); } catch { } });
+    };
+    sendPreparePayload();
+
+    // Yield once so the loading overlay can paint before heavy world generation begins.
+    setTimeout(() => {
+        try {
+            readConfigFromMenu();
+            gameSeed = Date.now();
+            // matchStartSessionId and matchStartLobbyPlayers already set above.
+            removedFromMatchPeerIds = new Set();
+            lockstepHistoryByTick = {};
+            matchRoleByPeerId = {};
+            matchRoleByUid = {};
+            for (let p of matchStartLobbyPlayers) {
+                if (!p || !p.peerId) continue;
+                matchRoleByPeerId[p.peerId] = 'playing';
+                let uid = getPeerProfileUid(p.peerId);
+                if (uid) matchRoleByUid[uid] = 'playing';
+            }
+            matchStartExpectedReadyPeerIds = matchStartLobbyPlayers
+                .map(p => (p && p.peerId) ? String(p.peerId) : '')
+                .filter(pid => !!pid && pid !== myPeerId && normalizeMatchRole(matchRoleByPeerId[pid], '') === 'playing');
+            matchStartReadyByPeerId = {};
+            for (let pid of matchStartExpectedReadyPeerIds) matchStartReadyByPeerId[pid] = false;
+            // matchStartWaitingForReady is set AFTER startGame() because resetWorldState() (called
+            // inside startGame()) clears it back to false. Setting it here would be overwritten.
+            matchStartConfig = {
+                gridW: GRID_W,
+                gridH: GRID_H,
+                goldCount: GOLD_MINE_COUNT,
+                goldMin: GOLD_MINE_MIN,
+                goldMax: GOLD_MINE_MAX,
+                goldArea: GOLD_MINE_AREA,
+                fullVis: fullVisibility,
+                gameMode: gameMode,
+                maxPop: CONFIG_MAX_POP,
+                startingMoney: STARTING_MONEY,
+                startingAstar: STARTING_ASTAR,
+                mapType: MAP_TYPE,
+                tickRate: TICK_RATE,
+                pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+                thingStatsRecalcIntervalSeconds: THING_STATS_RECALC_INTERVAL_SECONDS,
+                unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
+                astarIterBudgetPerPlayerTick: ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
+                workerAiTickDelay: WORKER_AI_TICK_DELAY,
+                researchCostExp: RESEARCH_COST_EXP,
+                researchWorkExp: RESEARCH_WORK_EXP,
+                researchWorkBase: RESEARCH_WORK_BASE,
+                researchBonusExpUnits: RESEARCH_BONUS_EXP_UNITS,
+                researchBonusExpOther: RESEARCH_BONUS_EXP_OTHER,
+                researchBonusExpOtherHousePopCap: RESEARCH_BONUS_EXP_OTHER_HOUSE_POPCAP,
+                maxThingLevel: MAX_THING_LEVEL,
+                maxResearchLevel: MAX_RESEARCH_LEVEL,
+                startingResources: cloneStartingResourcesConfig(),
+                editableConfig: serializeEditableRuntimeConfigForTransport(),
+            };
+            let setup = preSetup;
+            activeTeamIds = setup.activeTeamIds;
+            teamColorById = setup.teamColorById;
+            localPlayerId = resolveLocalPlayerTeamId(setup);
+            isMultiplayer = true;
+
+            initAudio();
+            // Save the startup tracking vars before startGame(), because resetWorldState() (called
+            // inside startGame()) clears matchStartSessionId, matchStartExpectedReadyPeerIds,
+            // matchStartReadyByPeerId, and matchStartWaitingForReady.
+            let _savedSessionId = matchStartSessionId;
+            let _savedExpectedPeerIds = matchStartExpectedReadyPeerIds.slice();
+            let _savedReadyByPeerId = { ...matchStartReadyByPeerId };
+
+            initAudio();
+            startGame();
+
+            // Restore the startup tracking state that resetWorldState() wiped.
+            matchStartSessionId = _savedSessionId;
+            matchStartExpectedReadyPeerIds = _savedExpectedPeerIds;
+            matchStartReadyByPeerId = _savedReadyByPeerId;
+            matchStartWaitingForReady = _savedExpectedPeerIds.length > 0;
+
+            // Host world is generated — mark host as ready in the status map.
+            if (_matchStartPlayerStatuses && myPeerId) _matchStartPlayerStatuses[myPeerId] = 'ready';
+
+            let startSnapshot = buildHostAuthoritativeStateSnapshot();
+            connections.forEach(c => {
+                if (!c || !c.peer) return;
+                c.send({
+                    type: 'START_GAME', seed: gameSeed,
+                    startSessionId: matchStartSessionId,
+                    lobbyPlayers: matchStartLobbyPlayers,
+                    cfg: matchStartConfig,
+                    stateSnapshot: startSnapshot
+                });
+            });
+
+            if (matchStartWaitingForReady) {
+                // Show the player-list overlay; host clicks "Start Game" when all are ready.
+                setMatchLoadOverlay(true, 'Waiting for Players', 'Waiting for players to load\u2026');
+            } else {
+                // Solo — nobody to wait for, start immediately.
+                _matchStartPlayerStatuses = null;
+                setMatchLoadOverlay(false);
+            }
+        } catch (err) {
+            console.error('[STARTUP] Failed to start hosted game', err);
+            _matchStartPlayerStatuses = null;
+            setMatchLoadOverlay(false);
+            startBtn.disabled = false;
+            let st = document.getElementById('lobby-status');
+            if (st) {
+                st.textContent = 'Failed to start game. Check console and try again.';
+                st.style.color = '#f66';
+            }
+        }
+    }, 0);
 }
 
 function joinGame(hostId, opts = null) {

@@ -29,6 +29,16 @@ function _isOperationalAdjacencyEntity(obj) {
     return true;
 }
 
+function _getCanonicalAreaCellsById(areaId, fallbackArea = null) {
+    let aId = Math.floor(Number(areaId));
+    if (aId >= 0 && Array.isArray(gridCellsByArea) && Array.isArray(gridCellsByArea[aId]) && gridCellsByArea[aId].length > 0) {
+        return gridCellsByArea[aId];
+    }
+    let area = fallbackArea || getAreaById(aId);
+    if (!area || !Array.isArray(area.cells) || area.cells.length <= 0) return [];
+    return area.cells.filter(cp => cp && Number.isFinite(cp.x) && Number.isFinite(cp.y));
+}
+
 function _getAdjacencySignatureAt(gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
     let ref = getTileEntityRef(gx, gy);
@@ -122,27 +132,39 @@ function _runAdjacencyRecalculation() {
 
     const areaSignatureCache = new Map();
     const getAreaSignatureKey = (aId) => {
-        if (areaSignatureCache.has(aId)) return areaSignatureCache.get(aId);
-        let area = getAreaById(aId);
-        if (!area || !Array.isArray(area.cells) || area.cells.length <= 0) {
+        try {
+            if (areaSignatureCache.has(aId)) return areaSignatureCache.get(aId);
+            let area = getAreaById(aId);
+            let areaCells = _getCanonicalAreaCellsById(aId, area);
+            if (!area || areaCells.length <= 0) {
+                areaSignatureCache.set(aId, null);
+                return null;
+            }
+            let firstKey = null;
+            for (let cp of areaCells) {
+                let cx = cp?.x;
+                let cy = cp?.y;
+                if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+                    areaSignatureCache.set(aId, null);
+                    return null;
+                }
+                let sig = _getAdjacencySignatureAt(cx, cy);
+                if (!sig) {
+                    areaSignatureCache.set(aId, null);
+                    return null;
+                }
+                if (firstKey === null) firstKey = sig.sigKey;
+                else if (firstKey !== sig.sigKey) {
+                    areaSignatureCache.set(aId, null);
+                    return null;
+                }
+            }
+            areaSignatureCache.set(aId, firstKey);
+            return firstKey;
+        } catch {
             areaSignatureCache.set(aId, null);
             return null;
         }
-        let firstKey = null;
-        for (let cp of area.cells) {
-            let sig = _getAdjacencySignatureAt(cp.x, cp.y);
-            if (!sig) {
-                areaSignatureCache.set(aId, null);
-                return null;
-            }
-            if (firstKey === null) firstKey = sig.sigKey;
-            else if (firstKey !== sig.sigKey) {
-                areaSignatureCache.set(aId, null);
-                return null;
-            }
-        }
-        areaSignatureCache.set(aId, firstKey);
-        return firstKey;
     };
 
     let visited = new Set();
@@ -206,7 +228,8 @@ function _runAdjacencyRecalculation() {
             let areaSig = getAreaSignatureKey(aId);
             if (areaSig !== rootSig.sigKey) continue;
             let power = (area.multiplierLevel || 0) + 1;
-            areaMult *= Math.pow(area.cells.length, power);
+            let areaCellCount = _getCanonicalAreaCellsById(aId, area).length;
+            areaMult *= Math.pow(Math.max(1, areaCellCount), power);
         }
 
         let groupSize = group.length;
@@ -626,8 +649,9 @@ function _areaHasForeignBuildPresence(areaId, playerId) {
     }
 
     let area = getAreaById(aId);
-    if (!area || !Array.isArray(area.cells)) return false;
-    for (let cellPos of area.cells) {
+    let areaCells = _getCanonicalAreaCellsById(aId, area);
+    if (areaCells.length <= 0) return false;
+    for (let cellPos of areaCells) {
         let ref = getTileEntityRef(cellPos.x, cellPos.y);
         if (!ref) continue;
         if (!Number.isFinite(ref.owner) || ref.owner < 0 || ref.owner === playerId) continue;
@@ -642,8 +666,15 @@ function _isBuildAreaContested(gx, gy, playerId) {
 
 function canBuildAt(gx, gy, playerId) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
-    if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
-    if (_isBuildAreaContested(gx, gy, playerId)) return false;
+    let isVisible = isTileActuallyVisibleToPlayer(playerId, gx, gy);
+    if (!isVisible) {
+        // Diagnostic log to help identify why visibility check is failing for this player
+        if (gameTime % 20 === 0) {
+            console.warn(`canBuildAt: visibility check failed for player ${playerId} at ${gx},${gy}. isMultiplayer: ${isMultiplayer}, isHost: ${isHost}`);
+        }
+        return false;
+    }
+    if (!(isMultiplayer && gameStarted) && _isBuildAreaContested(gx, gy, playerId)) return false;
     if (grid[gy][gx].type === TYPE_WALL) return false;
     if (grid[gy][gx].item) return false;
     // Don't allow building on gold mines
@@ -667,26 +698,45 @@ function canBuildAt(gx, gy, playerId) {
 function canStackAt(gx, gy, itemKey, playerId) {
     // Check if we can stack on an existing same-type building
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
-    if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
-    if (_isBuildAreaContested(gx, gy, playerId)) return false;
+    let pid = Math.floor(Number(playerId));
+    let isVisible = isTileActuallyVisibleToPlayer(pid, gx, gy);
+    if (!isVisible) return false;
+
+    if (!(isMultiplayer && gameStarted) && _isBuildAreaContested(gx, gy, pid)) return false;
     let cardDef = BASE_CARD_TYPES[itemKey];
     if (!cardDef) return false;
     if (cardDef.target === 'wall') {
         let t = getTowerAtTile(gx, gy);
-        return !!(t && t.type === itemKey && t.owner === playerId);
+        let ok = !!(t && t.type === itemKey && Math.floor(Number(t.owner)) === pid);
+        if (!ok && t && t.type === itemKey && gameTime % 20 === 0) {
+             console.warn(`canStackAt: owner mismatch for tower. t.owner: ${t.owner}, pid: ${pid}`);
+        }
+        return ok;
     }
     if (itemKey.startsWith('barrack_')) {
         let unitType = cardDef.unitType || 'norm';
         let b = getBarrackAtTile(gx, gy);
-        return !!(b && b.unitType === unitType && b.owner === playerId);
+        let ok = !!(b && b.unitType === unitType && Math.floor(Number(b.owner)) === pid);
+        if (!ok && b && b.unitType === unitType && gameTime % 20 === 0) {
+             console.warn(`canStackAt: owner mismatch for barrack. b.owner: ${b.owner}, pid: ${pid}`);
+        }
+        return ok;
     }
     if (itemKey === 'spawner' || itemKey === 'astar_spawner' || itemKey === 'salvager' || itemKey === 'builder_spawner' || itemKey === 'healer_spawner' || itemKey === 'research') {
         let s = getSpawnerAtTile(gx, gy);
-        return !!(s && s.type === itemKey && s.owner === playerId);
+        let ok = !!(s && s.type === itemKey && Math.floor(Number(s.owner)) === pid);
+        if (!ok && s && s.type === itemKey && gameTime % 20 === 0) {
+             console.warn(`canStackAt: owner mismatch for spawner. s.owner: ${s.owner}, pid: ${pid}`);
+        }
+        return ok;
     }
     // Floor items
     let cell = grid[gy][gx];
-    return cell.item && cell.item.type === itemKey && cell.owner === playerId;
+    let ok = !!(cell.item && cell.item.type === itemKey && Math.floor(Number(cell.owner)) === pid);
+    if (!ok && cell.item && cell.item.type === itemKey && gameTime % 20 === 0) {
+         console.warn(`canStackAt: owner mismatch for floor item. cell.owner: ${cell.owner}, pid: ${pid}`);
+    }
+    return ok;
 }
 
 const AREA_LEVEL_COLORS = ['#888', '#4f4', '#4af', '#c4f', '#f90', '#fd0'];
@@ -725,9 +775,13 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         if (_areaHasForeignBuildPresence(aId, playerId)) return false;
         let area = getAreaById(aId);
         if (!area) return false;
+        let areaCells = _getCanonicalAreaCellsById(aId, area);
+        if (areaCells.length <= 0) return false;
         // Check if ALL cells in area are occupied by any building/item (any owner)
-        let allFilled = area.cells.every(cp => {
+        let allFilled = areaCells.every(cp => {
+            if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) return false;
             let c = grid[cp.y][cp.x];
+            if (!c) return false;
             if (c.type === TYPE_WALL) {
                 let t = getTowerAtTile(cp.x, cp.y);
                 if (t && !t.underConstruction && getDisplayLevel(t) > 0) return true;
@@ -746,7 +800,10 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         recordEnergyDelta(playerId, 'builder', -upgradeCost);
         area.multiplierLevel = (area.multiplierLevel || 0) + 1;
         _markCombinedBgAreaDirty(aId, 1);
-        for (let cp of area.cells) requestAdjacencyRecalc(cp.x, cp.y, 0);
+        for (let cp of areaCells) {
+            if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) continue;
+            requestAdjacencyRecalc(cp.x, cp.y, 0);
+        }
         recalculateAdjacency({ passiveRefresh: true });
         if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
         return true;

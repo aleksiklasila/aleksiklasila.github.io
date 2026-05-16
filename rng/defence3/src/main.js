@@ -929,15 +929,17 @@ function initInput() {
             if (_areaHasForeignBuildPresence(aId, localPlayerId)) return false;
             let area = getAreaById(aId);
             if (!area) return false;
+            let areaCells = _getCanonicalAreaCellsById(aId, area);
+            if (areaCells.length <= 0) return false;
             let filledCount = 0;
-            for (let cp of area.cells) {
+            for (let cp of areaCells) {
                 let c = grid[cp.y][cp.x];
                 if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) filledCount++;
                 else if (c.item) filledCount++;
                 else if (getBarrackAtTile(cp.x, cp.y)) filledCount++;
                 else if (getSpawnerAtTile(cp.x, cp.y)) filledCount++;
             }
-            return filledCount === area.cells.length && (area.multiplierLevel || 0) < 5;
+            return filledCount === areaCells.length && (area.multiplierLevel || 0) < 5;
         }
         return _cd &&
             (canStackAt(gx, gy, selectedBuildItem, localPlayerId) || canBuildAt(gx, gy, localPlayerId));
@@ -2723,10 +2725,6 @@ function startGame() {
     let spawns = pickPlayerSpawns(teams.length);
     generateResourceMinesMixed(spawns);
 
-    let teamBuilderSpawners = {};
-    let teamHealerSpawners = {};
-    let teamCollectorSpawners = {};
-    let teamResearchSpawners = {};
     let teamSpawnPos = {};
     let teamStarterSpawnState = {};
 
@@ -2955,45 +2953,10 @@ function startGame() {
 
         let builderSpawner = new BuilderSpawner(pos.gx, pos.gy, pid);
         completeStarterBuilding(builderSpawner, 'builder_spawner', pid, 1);
-        teamBuilderSpawners[pid] = builderSpawner;
         collectorSpawners.push(builderSpawner);
         grid[pos.gy][pos.gx].item = builderSpawner;
         grid[pos.gy][pos.gx].owner = pid;
         setTileEntity(pos.gx, pos.gy, 'builder_spawner', builderSpawner);
-
-        let healerSpawner = spawnStartingBuilding(pid, pos, 'healer_spawner', 1);
-        if (healerSpawner) teamHealerSpawners[pid] = healerSpawner;
-
-        let collectorSpawner = spawnStartingBuilding(pid, pos, 'spawner', 1);
-        if (collectorSpawner) teamCollectorSpawners[pid] = collectorSpawner;
-
-        let researchSpawner = spawnStartingBuilding(pid, pos, 'research', 1);
-        if (researchSpawner) teamResearchSpawners[pid] = researchSpawner;
-
-        spawnStartingBuilding(pid, pos, 'house', 6);
-        spawnStartingBuilding(pid, pos, 'house', 6);
-        // spawnStartingBuilding(pid, pos, 'house', 4);
-    }
-
-    recomputePlayerPopCaps();
-
-    for (let pid of teams) {
-        let pos = teamSpawnPos[pid];
-        let builderSpawner = teamBuilderSpawners[pid];
-        let healerSpawner = teamHealerSpawners[pid];
-        let collectorSpawner = teamCollectorSpawners[pid];
-        let researchSpawner = teamResearchSpawners[pid];
-
-        for (let i = 0; i < 3; i++) {
-            spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingBaseLevel(builderSpawner) : 1);
-        }
-        for (let i = 0; i < 3; i++) {
-            spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingBaseLevel(healerSpawner) : 1);
-        }
-
-        // Requested starter replacements: give each team one collector + one researcher.
-        spawnStartingUnit(pid, pos, 'collector', collectorSpawner ? getThingBaseLevel(collectorSpawner) : 1);
-        spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingBaseLevel(researchSpawner) : 1);
     }
 
     for (let pid of teams) {
@@ -3018,12 +2981,7 @@ function startGame() {
         }
     }
 
-    // Spawn kings for each team
-    for (let pid of teams) {
-        let pos = teamSpawnPos[pid];
-        let king = spawnStartingUnit(pid, pos, 'king', 1);
-        if (king) applyUnitLevelScaling(king, 1);
-    }
+    recomputePlayerPopCaps();
 
     // Center camera on own base
     let localSpawn = teamSpawnPos[localPlayerId] || spawns[0];
@@ -3052,6 +3010,9 @@ function startGame() {
         lockstepLastFinalizeSentAtByTick = {};
         lockstepLastResendRequestAtByTick = {};
         lockstepLastHardResyncRequestAt = 0;
+        lockstepHardResyncInFlightUntil = 0;
+        lockstepPostSnapshotGraceUntilAt = 0;
+        lockstepSnapshotLastSentAtByPeer = {};
         lockstepExpectedStateHashByTick = {};
         lockstepLocalStateHashByTick = {};
         lockstepExpectedStateDigestByTick = {};
@@ -3214,10 +3175,23 @@ function scheduleGuestAutoReconnect(reason = 'Connection lost') {
 function getActiveMatchPeerIds() {
     if (gameStarted) {
         let ids = [];
-        for (let pid of Object.keys(matchRoleByPeerId || {})) {
-            if (normalizeMatchRole(matchRoleByPeerId[pid], '') !== 'playing') continue;
-            if (isPeerExplicitlyRemoved(pid)) continue;
-            ids.push(pid);
+        let sourcePlayers = (Array.isArray(matchStartLobbyPlayers) && matchStartLobbyPlayers.length > 0)
+            ? matchStartLobbyPlayers
+            : lobbyPlayers;
+        if (Array.isArray(sourcePlayers) && sourcePlayers.length > 0) {
+            for (let p of sourcePlayers) {
+                let pid = String((p && p.peerId) || '');
+                if (!pid) continue;
+                if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
+                if (isPeerExplicitlyRemoved(pid)) continue;
+                if (!ids.includes(pid)) ids.push(pid);
+            }
+        } else {
+            for (let pid of Object.keys(matchRoleByPeerId || {})) {
+                if (normalizeMatchRole(matchRoleByPeerId[pid], '') !== 'playing') continue;
+                if (isPeerExplicitlyRemoved(pid)) continue;
+                ids.push(pid);
+            }
         }
         if (myPeerId && !ids.includes(myPeerId) && !isPeerExplicitlyRemoved(myPeerId)) {
             ids.push(myPeerId);
@@ -3409,6 +3383,9 @@ function handleIncomingTickBundle(conn, data) {
     if (isHost) return;
     let bundle = data && data.bundle ? data.bundle : null;
     if (!bundle || typeof bundle !== 'object') return;
+    // Do NOT close the overlay here — guests wait for START_GAME_ALL_READY.
+    // Just clear the flag so lockstep processing isn't permanently blocked.
+    if (matchStartWaitingForReady) matchStartWaitingForReady = false;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < 0) return;
     bundle.tick = t;
@@ -3418,7 +3395,7 @@ function handleIncomingTickBundle(conn, data) {
 function handleIncomingTickBundleAck(conn, data) {
     if (!isHost) return;
     let t = Math.floor(Number(data && data.tick));
-    if (!Number.isFinite(t) || t < 0 || !conn || !conn.peer) return;
+    if (!Number.isFinite(t) || t < 0) return;
     let bundle = lockstepBundleByTick[t];
     if (!bundle) return;
     if (String(data.combinedChecksum || '') !== String(bundle.combinedChecksum || '')) {
@@ -3539,6 +3516,13 @@ function computeLockstepStateDigest(tick) {
                 gy: Math.floor(Number(m.gy) || 0),
                 gold: Math.floor(Number(m.gold) || 0)
             }))
+            .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx)),
+        astarMines: astarMines
+            .map(m => ({
+                gx: Math.floor(Number(m.gx) || 0),
+                gy: Math.floor(Number(m.gy) || 0),
+                astar: Math.floor(Number(m.astar) || 0)
+            }))
             .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx))
     };
 
@@ -3573,7 +3557,7 @@ function summarizeLockstepDigestMismatch(expectedDigest, localDigest) {
         firstDiff: {}
     };
 
-    let keys = ['players', 'units', 'towers', 'barracks', 'spawners', 'floorItems', 'mines'];
+    let keys = ['players', 'units', 'towers', 'barracks', 'spawners', 'floorItems', 'mines', 'astarMines'];
     for (let key of keys) {
         let expArr = Array.isArray(expectedDigest[key]) ? expectedDigest[key] : [];
         let locArr = Array.isArray(localDigest[key]) ? localDigest[key] : [];
@@ -3620,12 +3604,25 @@ function maybeCompareLockstepStateHash(tick) {
     delete lockstepExpectedStateDigestByTick[t];
     delete lockstepLocalStateDigestByTick[t];
 
+    if (Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
+
     if (expected === local) return;
+
+    let now = performance.now();
+    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
+        logLockstepWarning('State hash mismatch ignored during post-snapshot grace window', {
+            tick: t,
+            expected,
+            local,
+            graceLeftMs: Math.max(0, Math.round(lockstepPostSnapshotGraceUntilAt - now))
+        });
+        return;
+    }
 
     let mismatchSummary = summarizeLockstepDigestMismatch(expectedDigest, localDigest);
 
     lockstepDesyncDetected = true;
-    waitingForRemoteSince = performance.now();
+    waitingForRemoteSince = now;
     logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
         tick: t,
         expected,
@@ -3643,9 +3640,7 @@ function maybeCompareLockstepStateHash(tick) {
         });
     }
 
-    if (connections[0]) {
-        connections[0].send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: 'state hash mismatch' });
-    }
+    requestHardLockstepResync(t, 'state hash mismatch', now);
 }
 
 function handleIncomingTickStateHash(conn, data) {
@@ -3659,27 +3654,47 @@ function handleIncomingTickStateHash(conn, data) {
     maybeCompareLockstepStateHash(t);
 }
 
-function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
-    if (isHost || !isMultiplayer || !gameStarted) return;
+function requestHardLockstepResync(tick, reason = 'tick timeout', now = performance.now()) {
+    if (isHost || !isMultiplayer || !gameStarted) return false;
     let conn = connections[0];
-    if (!conn) return;
+    if (!conn) return false;
+    let t = Math.floor(Number(tick));
+    if (!Number.isFinite(t) || t < 0) return false;
+
+    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
+        return false;
+    }
+
+    if (lockstepHardResyncInFlightUntil && now < lockstepHardResyncInFlightUntil) {
+        return false;
+    }
+
+    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, 2500);
+    if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) {
+        return false;
+    }
+
+    lockstepLastHardResyncRequestAt = now;
+    lockstepHardResyncInFlightUntil = now + minGap;
+    lockstepResyncPauseActive = true;
+    waitingForRemoteSince = now;
+    logLockstepWarning('Lockstep stalled; requesting full match sync', {
+        tick: t,
+        reason: String(reason || 'tick timeout')
+    });
+    conn.send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: String(reason || 'tick timeout') });
+    return true;
+}
+
+function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
+    if (isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
 
     let startedAt = Number(waitingForRemoteSince) || 0;
     if (!startedAt) return;
     if ((now - startedAt) < LOCKSTEP_HARD_RESYNC_MS) return;
-
-    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, 2500);
-    if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) return;
-
-    lockstepLastHardResyncRequestAt = now;
-    logLockstepWarning('Lockstep stalled; requesting full match sync', {
-        tick: t,
-        waitMs: Math.round(now - startedAt),
-        reason
-    });
-    conn.send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: String(reason || 'tick timeout') });
+    requestHardLockstepResync(t, reason, now);
 }
 
 function processDeferredGuestLockstepWindow(now, tick) {
@@ -3822,6 +3837,14 @@ function handleIncomingTickResendRequest(conn, data) {
 
 function driveStrictLockstep(now, tick) {
     if (!isMultiplayer) return;
+    if (lockstepResyncPauseActive) {
+        if (!waitingForRemoteSince) waitingForRemoteSince = now;
+        return;
+    }
+    if (matchStartWaitingForReady) {
+        if (!waitingForRemoteSince) waitingForRemoteSince = now;
+        return;
+    }
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
 
@@ -3896,6 +3919,8 @@ function driveStrictLockstep(now, tick) {
 
 function isStrictTickReady(tick) {
     if (!isMultiplayer) return true;
+    if (lockstepResyncPauseActive) return false;
+    if (matchStartWaitingForReady) return false;
     if (!isHost && lockstepDesyncDetected) return false;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return false;

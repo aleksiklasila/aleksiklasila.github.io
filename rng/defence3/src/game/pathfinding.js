@@ -296,6 +296,13 @@ function _pendingPathPriority(src) {
 }
 
 function _updateAdaptivePathBudget() {
+    // Lockstep determinism: never derive gameplay pathfinding budget from local FPS/load.
+    // Different machine performance can otherwise change worker path assignment timing.
+    if (isMultiplayer && gameStarted) {
+        MAX_PATHS_PER_TICK = Math.max(MIN_PATHS_PER_TICK, Math.min(MAX_PATHS_PER_TICK_HARD, 30));
+        return;
+    }
+
     let fps = Number(_fpsDisplay);
     let tickLoad = Number(_tickAccumulator) / Math.max(1, Number(TICK_MS));
     if (!Number.isFinite(fps)) fps = 60;

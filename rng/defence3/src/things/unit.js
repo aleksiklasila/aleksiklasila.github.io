@@ -21,10 +21,10 @@ class Unit {
         this.basePreComputed = null;
         this.preComputed = null;
         this.attackTimer = 0;
-        this.color = s.color; this.r = s.r;
-        this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
         this.vis = s.vis || 'circle';
-        this.isFlying = s.isFlying || false;
+        this.color = s.color || '#fff';
+        this.r = s.r;
+        this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
         this.turretImmune = s.turretImmune || false;
         this.isSnake = s.isSnake || false;
         this.snakeMaxHistory = s.snakeMaxHistory || 0;
@@ -796,26 +796,38 @@ class Unit {
     draw(ctx) {
         if (this.dead || this.teleportHideTicks > 0) return;
         // Unit body
-        let strokeColor = '#000', lw = 1;
+        let strokeColor = (this.owner >= 0) ? get2DRenderOwnerColor(this.owner) : '#000';
+        let lw = 1;
         if (this.burning > 0) strokeColor = '#f50';
         else if (this.poisoned > 0) strokeColor = '#2d2';
         else if (this.frozen > 0 && this.wet > 0) strokeColor = '#fff';
         else if (this.frozen > 0) strokeColor = '#afe';
         else if (this.wet > 0) strokeColor = '#4af';
-        if (this.burning > 0 || this.poisoned > 0 || this.frozen > 0 || this.wet > 0) lw = 2;
+        if (this.burning > 0 || this.poisoned > 0 || this.frozen > 0 || this.wet > 0) lw = 1.5;
 
         if (this.isSnake && this.snakeHistory.length > 0) {
             ctx.save();
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = this.r * 2;
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            // Draw team colored outline first
+            ctx.lineWidth = this.r * 2 + 3;
+            ctx.strokeStyle = strokeColor;
+            ctx.beginPath(); ctx.moveTo(this.x, this.y);
+            for (let p of this.snakeHistory) ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+            // Draw body
+            ctx.lineWidth = this.r * 2;
             ctx.strokeStyle = this.color;
             ctx.beginPath(); ctx.moveTo(this.x, this.y);
             for (let p of this.snakeHistory) ctx.lineTo(p.x, p.y);
             ctx.stroke();
+            // Head
+            ctx.fillStyle = strokeColor;
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 1.5, 0, 6.28); ctx.fill();
             ctx.fillStyle = this.color;
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 2, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
             ctx.fillStyle = "black";
-            ctx.beginPath(); ctx.arc(this.x - 2, this.y - 2, 2, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x + 2, this.y - 2, 2, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x - 2, this.y - 2, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x + 2, this.y - 2, 1.5, 0, 6.28); ctx.fill();
             ctx.restore();
         } else if (this.vis === 'triangle') {
             ctx.fillStyle = this.color; ctx.beginPath();
@@ -825,6 +837,9 @@ class Unit {
         } else if (this.vis === 'star') {
             if (this.unitType === 'collector' || this.unitType === 'astar_collector') {
                 ctx.save();
+                // Outline circle
+                ctx.strokeStyle = strokeColor; ctx.lineWidth = lw;
+                ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.stroke();
                 ctx.font = `${Math.round(this.r * 2.4)}px Arial`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
@@ -869,17 +884,15 @@ class Unit {
             ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
             // Jewel dots on crown tips
             ctx.fillStyle = '#f00';
-            ctx.beginPath(); ctx.arc(this.x - rr, this.y - rr * 0.2, 2, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x, this.y - rr * 0.7, 2, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x + rr, this.y - rr * 0.2, 2, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x - rr, this.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x, this.y - rr * 0.7, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x + rr, this.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
         } else {
             ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
             ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
         }
 
-        // Owner dot
-        ctx.fillStyle = PLAYER_COLORS[this.owner];
-        ctx.beginPath(); ctx.arc(this.x, this.y - this.r - 3, 2, 0, 6.28); ctx.fill();
+        // Owner dot removed in favor of colored outline
 
         // Energy bar
         if (this.energy < this.preComputed.maxEnergy) {

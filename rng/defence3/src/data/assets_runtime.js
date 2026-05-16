@@ -624,7 +624,7 @@ function getThing3DPreviewProfile(key, options = {}) {
         return {
             renderShape: 'cylinder',
             topTextureCanvas: typeof get3DUnitTopTexture === 'function' ? get3DUnitTopTexture(unitStub, owner, status) : null,
-            tint: ownerColor
+            tint: '#c8ced8'
         };
     }
     if (String(key).startsWith('barrack_')) {
@@ -634,7 +634,7 @@ function getThing3DPreviewProfile(key, options = {}) {
             topTextureCanvas: typeof get3DBuildingTopTexture === 'function'
                 ? get3DBuildingTopTexture('barrack', owner, { subtype: unitType, color: ((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).color || '#fff'), status: { keySuffix: '', bars: [] }, statusKey: '' })
                 : null,
-            tint: ownerColor
+            tint: '#c8ced8'
         };
     }
     if (key === 'spawner' || key === 'astar_spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
@@ -649,7 +649,7 @@ function getThing3DPreviewProfile(key, options = {}) {
             topTextureCanvas: typeof get3DBuildingTopTexture === 'function'
                 ? get3DBuildingTopTexture(kind, owner, { subtype: key, status: { keySuffix: '', bars: [] }, statusKey: '' })
                 : null,
-            tint: ownerColor
+            tint: '#c8ced8'
         };
     }
     if (BASE_CARD_TYPES && BASE_CARD_TYPES[key] && BASE_CARD_TYPES[key].target === 'wall') {
@@ -659,7 +659,7 @@ function getThing3DPreviewProfile(key, options = {}) {
             topTextureCanvas: typeof get3DBuildingTopTexture === 'function'
                 ? get3DBuildingTopTexture('tower', owner, { subtype: key, color: def.color || '#999', angle: 0, angleKey: 0, active: true, status: { keySuffix: '', bars: [] }, statusKey: '' })
                 : null,
-            tint: ownerColor
+            tint: '#c8ced8'
         };
     }
     if (BASE_CARD_TYPES && BASE_CARD_TYPES[key]) {
@@ -667,10 +667,10 @@ function getThing3DPreviewProfile(key, options = {}) {
         return {
             renderShape: 'box',
             topTextureCanvas: typeof get3DTopTextureForFloorItem === 'function' ? get3DTopTextureForFloorItem(itemStub, { keySuffix: '', bars: [] }) : null,
-            tint: ownerColor
+            tint: '#c8ced8'
         };
     }
-    return { renderShape: 'box', topTextureCanvas: null, tint: ownerColor };
+    return { renderShape: 'box', topTextureCanvas: null, tint: '#c8ced8' };
 }
 
 function buildThingAsset3DObjects(entityOrKey, baseObject = {}, options = {}) {

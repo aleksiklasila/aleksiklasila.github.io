@@ -28,6 +28,7 @@ let renderer3dLayerCanvases = new Map();
 let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridByPlayerCache = new Map();
+let visibilityGridRawByPlayerCache = new Map();
 let visibilityGridSmoothedByPlayerCache = new Map();
 let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
@@ -49,8 +50,11 @@ let _tpsTickCount = 0, _tpsLastTime = performance.now(), _tpsDisplay = 0;
 const _litTintCache = new Map();
 
 function get3DRenderOwnerColor(owner) {
-    if (Number.isFinite(owner) && owner >= 0 && owner < PLAYER_COLORS.length) return PLAYER_COLORS[owner];
-    return '#c8ced8';
+    if (owner === undefined || owner === null || owner < 0) return '#c8ced8';
+    let pid = Math.floor(Number(owner));
+    if (typeof getTeamDisplayColor === 'function') return getTeamDisplayColor(pid);
+    if (typeof teamColorById !== 'undefined' && teamColorById[pid]) return teamColorById[pid];
+    return (typeof PLAYER_COLORS !== 'undefined' && PLAYER_COLORS[pid]) || '#c8ced8';
 }
 
 const DAMAGE_FLASH_TICKS = 10;
@@ -107,8 +111,8 @@ function _getCachedLitTint(baseTint, lightLevel) {
 }
 
 function getDamageFlashColor(target, sourceOwner = null) {
-    if (Number.isFinite(sourceOwner) && sourceOwner >= 0 && sourceOwner < PLAYER_COLORS.length) {
-        return PLAYER_COLORS[sourceOwner];
+    if (Number.isFinite(sourceOwner) && sourceOwner >= 0 && typeof getTeamDisplayColor === 'function') {
+        return getTeamDisplayColor(Math.floor(sourceOwner));
     }
     let base = get3DRenderOwnerColor(target && target.owner);
     let rgb = _parseHexColor(base);
@@ -223,7 +227,7 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     let maxEnergy = Number(entity && entity.maxEnergy) || 0;
     let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
     let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
-    
+
     // Don't show upgrading progress if at max level
     if (isProgress && entity) {
         let baseLevel = getThingBaseLevel(entity);
@@ -232,13 +236,13 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
             isProgress = false;
         }
     }
-    
+
     let manualStacks = Number(entity && entity.manualStacks);
     let stackedStacks = Number(entity && entity.stacks);
     let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
         ? (manualStacks > stackedStacks)
         : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
-    
+
     // Don't show stacking progress if next stack would exceed max level
     if (hasStackQueue && entity) {
         let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
@@ -247,7 +251,7 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
             hasStackQueue = false;
         }
     }
-    
+
     if (hasStackQueue) {
         bars.push({ pct: getThingStackingProgressRatio(entity), bgColor: '#11291c', fillColor: '#2fd27f' });
     }
@@ -367,7 +371,7 @@ function _get3DSideAccentColorForOwner(owner, extraColor = null) {
     let oppositeOwner = Number.isFinite(owner) && PLAYER_COLORS.length > 1
         ? ((owner + 1) % PLAYER_COLORS.length)
         : -1;
-    let accentColor = oppositeOwner >= 0 ? PLAYER_COLORS[oppositeOwner] : '#ffffff';
+    let accentColor = oppositeOwner >= 0 ? get3DRenderOwnerColor(oppositeOwner) : '#ffffff';
     if (extraColor) accentColor = _mixHexColors(accentColor, extraColor, 0.45);
     return accentColor;
 }
@@ -550,10 +554,7 @@ function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
             g.fill();
             g.stroke();
         }
-        g.fillStyle = ownerColor;
-        g.beginPath();
-        g.arc(size * 0.5, size * 0.14, Math.max(4, Math.round(size * 0.05)), 0, Math.PI * 2);
-        g.fill();
+        // Owner dot removed in favor of border
         if (statusOptions && statusOptions.glyphSymbol) {
             g.textAlign = 'center';
             g.textBaseline = 'middle';
@@ -637,11 +638,13 @@ function get3DBuildingTopTexture(kind, owner, options = {}) {
             g.fillStyle = '#8b5'; g.fillRect(size * 0.31, size * 0.38, size * 0.38, size * 0.22);
             g.strokeStyle = '#fff'; g.lineWidth = 2; g.strokeRect(size * 0.31, size * 0.38, size * 0.38, size * 0.22);
         } else if (kind === 'spawner_healer') {
-            g.fillStyle = '#355'; g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
+            g.fillStyle = '#355';
+            g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
             g.fillStyle = '#fff'; g.fillRect(size * 0.31, size * 0.38, size * 0.38, size * 0.22);
             g.strokeStyle = '#ddd'; g.lineWidth = 2; g.strokeRect(size * 0.31, size * 0.38, size * 0.38, size * 0.22);
         } else if (kind === 'spawner_research') {
-            g.fillStyle = '#446'; g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
+            g.fillStyle = '#446';
+            g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
             g.fillStyle = '#aef'; g.font = `700 ${Math.round(size * 0.24)}px Arial`; g.fillText('R', size * 0.5, size * 0.52);
         }
         draw3DTopTextureStatus(g, options.status);
@@ -688,7 +691,7 @@ function build3DOverlayData(bounds, alpha) {
         let maxEnergy = Number(entity && entity.maxEnergy) || 0;
         let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
         let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
-        
+
         // Don't show upgrading progress if at max level
         if (isProgress && entity) {
             let baseLevel = getThingBaseLevel(entity);
@@ -697,13 +700,13 @@ function build3DOverlayData(bounds, alpha) {
                 isProgress = false;
             }
         }
-        
+
         let manualStacks = Number(entity && entity.manualStacks);
         let stackedStacks = Number(entity && entity.stacks);
         let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
             ? (manualStacks > stackedStacks)
             : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
-        
+
         // Don't show stacking progress if next stack would exceed max level
         if (hasStackQueue && entity) {
             let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
@@ -712,7 +715,7 @@ function build3DOverlayData(bounds, alpha) {
                 hasStackQueue = false;
             }
         }
-        
+
         if (hasStackQueue) {
             pushBar(worldX, worldY, 0.72, energyBarOffsetY - energyBarHeight - 1, energyBarWidth, energyBarHeight, getThingStackingProgressRatio(entity), '#11291c', '#2fd27f');
         }
@@ -914,16 +917,16 @@ function push3DRenderObject(target, object) {
         let fx = ox - gx, fz = oz - gy;
         let ifx = 1 - fx, ifz = 1 - fz;
         let _vis = visibilityGrid;
-        let g00x = ((_vis[gy] && _vis[gy][gx+1])||0) - ((_vis[gy] && _vis[gy][gx-1])||0);
-        let g00z = ((_vis[gy+1] && _vis[gy+1][gx])||0) - ((_vis[gy-1] && _vis[gy-1][gx])||0);
-        let g10x = ((_vis[gy] && _vis[gy][gx+2])||0) - ((_vis[gy] && _vis[gy][gx])||0);
-        let g10z = ((_vis[gy+1] && _vis[gy+1][gx+1])||0) - ((_vis[gy-1] && _vis[gy-1][gx+1])||0);
-        let g01x = ((_vis[gy+1] && _vis[gy+1][gx+1])||0) - ((_vis[gy+1] && _vis[gy+1][gx-1])||0);
-        let g01z = ((_vis[gy+2] && _vis[gy+2][gx])||0) - ((_vis[gy] && _vis[gy][gx])||0);
-        let g11x = ((_vis[gy+1] && _vis[gy+1][gx+2])||0) - ((_vis[gy+1] && _vis[gy+1][gx])||0);
-        let g11z = ((_vis[gy+2] && _vis[gy+2][gx+1])||0) - ((_vis[gy] && _vis[gy][gx+1])||0);
-        let gradX = g00x*ifx*ifz + g10x*fx*ifz + g01x*ifx*fz + g11x*fx*fz;
-        let gradZ = g00z*ifx*ifz + g10z*fx*ifz + g01z*ifx*fz + g11z*fx*fz;
+        let g00x = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
+        let g00z = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
+        let g10x = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+        let g10z = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
+        let g01x = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
+        let g01z = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+        let g11x = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
+        let g11z = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
+        let gradX = g00x * ifx * ifz + g10x * fx * ifz + g01x * ifx * fz + g11x * fx * fz;
+        let gradZ = g00z * ifx * ifz + g10z * fx * ifz + g01z * ifx * fz + g11z * fx * fz;
         let gradLen = Math.hypot(gradX, gradZ);
         if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
     }
@@ -1832,9 +1835,9 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
         c.fillRect(startX * scale, y * scale, runW, tilePx);
     };
 
-    for (let t of towers) drawCell(t.gx, t.gy, PLAYER_COLORS[t.owner]);
-    for (let b of barracks) drawCell(b.gx, b.gy, PLAYER_COLORS[b.owner]);
-    for (let s of collectorSpawners) drawCell(s.gx, s.gy, PLAYER_COLORS[s.owner]);
+    for (let t of towers) drawCell(t.gx, t.gy, get3DRenderOwnerColor(t.owner));
+    for (let b of barracks) drawCell(b.gx, b.gy, get3DRenderOwnerColor(b.owner));
+    for (let s of collectorSpawners) drawCell(s.gx, s.gy, get3DRenderOwnerColor(s.owner));
 
     for (let y = 0; y < GRID_H; y++) {
         let runStart = -1;
@@ -1851,12 +1854,12 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
                     runStart = x;
                     runOwner = owner;
                 } else if (owner !== runOwner) {
-                    drawRun(runStart, x, y, PLAYER_COLORS_DIM[runOwner] || PLAYER_COLORS[runOwner]);
+                    drawRun(runStart, x, y, (typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(runOwner) : '#c8ced8') + '4d');
                     runStart = x;
                     runOwner = owner;
                 }
             } else if (runStart >= 0) {
-                drawRun(runStart, x, y, PLAYER_COLORS_DIM[runOwner] || PLAYER_COLORS[runOwner]);
+                drawRun(runStart, x, y, (typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(runOwner) : '#c8ced8') + '4d');
                 runStart = -1;
                 runOwner = -1;
             }
@@ -1931,7 +1934,7 @@ function drawMinimap() {
         if (u.dead) continue;
         let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
         if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0)) continue;
-        setMinimapFill(PLAYER_COLORS[u.owner]);
+        setMinimapFill(get3DRenderOwnerColor(u.owner));
         let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
         minimapCtx.fillRect(ux, uy, 2, 2);
     }
@@ -2003,7 +2006,10 @@ function smoothVisibilityGridForPlayer(playerId, targetVis) {
 function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
+    let unitsFound = 0, towersFound = 0, barracksFound = 0, spawnersFound = 0, buildingsFound = 0;
     let areaRangeBySourceArea = new Map();
+    // let shouldLog = isMultiplayer && !isHost && (gameTime % 60 === 0);
+    let shouldLog = isMultiplayer && (gameTime % 60 === 0);
     let includedTiles = new Array(GRID_H);
     for (let y = 0; y < GRID_H; y++) includedTiles[y] = new Uint8Array(GRID_W);
     let stampSource = (gx, gy, rangeTiles) => {
@@ -2012,6 +2018,25 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let range = Math.max(0, Number(rangeTiles) || 0);
         if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H || !(range > 0)) return;
         if (range > vis[y][x]) vis[y][x] = range;
+    };
+    let includeFallbackCircleAroundSource = (gx, gy, rangeTiles) => {
+        let cx = Math.floor(Number(gx));
+        let cy = Math.floor(Number(gy));
+        let r = Math.max(0, Math.ceil(Number(rangeTiles) || 0));
+        if (cx < 0 || cx >= GRID_W || cy < 0 || cy >= GRID_H || !(r > 0)) return;
+        let minY = Math.max(0, cy - r);
+        let maxY = Math.min(GRID_H - 1, cy + r);
+        let minX = Math.max(0, cx - r);
+        let maxX = Math.min(GRID_W - 1, cx + r);
+        let r2 = r * r;
+        for (let y = minY; y <= maxY; y++) {
+            let dy = y - cy;
+            let row = includedTiles[y];
+            for (let x = minX; x <= maxX; x++) {
+                let dx = x - cx;
+                if ((dx * dx + dy * dy) <= r2) row[x] = 1;
+            }
+        }
     };
     let addAreaVisibilitySource = (areaId, rangeArea) => {
         let aId = Math.floor(Number(areaId));
@@ -2025,35 +2050,44 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let y = Number(wy);
         let range = Math.max(0, Number(rangeArea) || 0);
         let areaId = getAreaIdAtWorld(x, y);
+        let rangeTiles = range * AREA_UNIT_TILE_EQUIVALENT;
         addAreaVisibilitySource(areaId, range);
-        if (areaId < 0 || !(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        stampSource(x / TILE, y / TILE, range * AREA_UNIT_TILE_EQUIVALENT);
+        if (!(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        stampSource(x / TILE, y / TILE, rangeTiles);
+        if (areaId < 0) {
+            includeFallbackCircleAroundSource(x / TILE, y / TILE, rangeTiles);
+        }
     };
 
     let shouldRevealForPlayer = (owner, watched) => {
         let ownerId = Math.floor(Number(owner));
-        return ownerId === playerId || (Number(watched) || 0) > 0;
+        let targetId = Math.floor(Number(playerId));
+        return ownerId === targetId || (Number(watched) || 0) > 0;
     };
 
     for (let u of units) {
         if (!u || u.dead) continue;
         if (!shouldRevealForPlayer(u.owner, u.watched || 0)) continue;
+        unitsFound++;
         let visionArea = Number.isFinite(u.preComputed && u.preComputed.visionRangeArea) ? Number(u.preComputed.visionRangeArea) : ((Number(u.preComputed && u.preComputed.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
     for (let t of towers) {
         if (!t || !(t.energy > 0) || t.underConstruction) continue;
         if (!shouldRevealForPlayer(t.owner, t.watched || 0)) continue;
+        towersFound++;
         addWorldVisibilitySource(t.x, t.y, Number(t.currentStats && t.currentStats.visionRange));
     }
     for (let b of barracks) {
         if (!b || !(b.energy > 0) || b.underConstruction) continue;
         if (!shouldRevealForPlayer(b.owner, b.watched || 0)) continue;
+        barracksFound++;
         addWorldVisibilitySource(b.x, b.y, getEntityVisibilityRangeArea(b));
     }
     for (let s of collectorSpawners) {
         if (!s || !(s.energy > 0) || s.underConstruction) continue;
         if (!shouldRevealForPlayer(s.owner, s.watched || 0)) continue;
+        spawnersFound++;
         addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
     }
     for (let y = 0; y < GRID_H; y++) {
@@ -2062,6 +2096,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             let cell = row[x];
             if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
             if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0)) continue;
+            buildingsFound++;
             addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
         }
     }
@@ -2072,7 +2107,8 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let cells = getGridCellsWithinAreaDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
         for (let i = 0; i < cells.length; i++) {
             let cell = cells[i];
-            if (!cell) continue;
+            if (shouldLog) console.log("getGridCellsWithinAreaDistance: " + areaId + ", " + i + ", " + cell + ", " + rangeArea)
+            if (!cell) continue; // client does not go further than this
             includedTiles[cell.y][cell.x] = 1;
         }
     }
@@ -2105,30 +2141,65 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             vis[y][x] = v;
         }
     }
+
 }
 
 function getVisibilityGridForPlayer(playerId) {
-    if (fullVisibility) return null;
-    return getActualVisibilityGridForPlayer(playerId);
+    let pid = Math.floor(Number(playerId));
+    if (!Number.isFinite(pid) || pid < 0) return getActualVisibilityGridForPlayer(localPlayerId);
+
+    // Always check the player-specific grid cache first.
+    if (Array.isArray(visibilityGridByPlayer) && visibilityGridByPlayer[pid] && visibilityGridByPlayer[pid].length === GRID_H) {
+        return visibilityGridByPlayer[pid];
+    }
+
+    // Fallback: If it's the local player, we can use the global visibilityGrid reference if it matches our pid.
+    // However, in multiplayer, we prefer the explicit grid from the player-specific cache.
+    if (pid === localPlayerId && Array.isArray(visibilityGrid) && visibilityGrid.length === GRID_H) {
+        return visibilityGrid;
+    }
+
+    return getActualVisibilityGridForPlayer(pid);
 }
 
 function getActualVisibilityGridForPlayer(playerId) {
     if (visibilityCacheTick !== gameTime) {
+        visibilityGridRawByPlayerCache.clear();
         visibilityGridByPlayerCache.clear();
         visibilityCacheTick = gameTime;
     }
-    let cached = visibilityGridByPlayerCache.get(playerId);
-    if (cached) return cached;
-    let rawVis = createEmptyVisibilityGrid();
-    computeVisibilityGridForPlayer(playerId, rawVis);
+    let cachedSmoothed = visibilityGridByPlayerCache.get(playerId);
+    if (cachedSmoothed) return cachedSmoothed;
+    let rawVis = getRawVisibilityGridForPlayer(playerId);
     let smoothedVis = smoothVisibilityGridForPlayer(playerId, rawVis);
     visibilityGridByPlayerCache.set(playerId, smoothedVis);
     return smoothedVis;
 }
 
+function getRawVisibilityGridForPlayer(playerId) {
+    let pid = Math.floor(Number(playerId));
+    if (!Number.isFinite(pid) || pid < 0) pid = localPlayerId;
+
+    if (visibilityCacheTick !== gameTime) {
+        visibilityGridRawByPlayerCache.clear();
+        visibilityGridByPlayerCache.clear();
+        visibilityCacheTick = gameTime;
+    }
+    let cachedRaw = visibilityGridRawByPlayerCache.get(playerId);
+    if (cachedRaw) return cachedRaw;
+    let rawVis = createEmptyVisibilityGrid();
+    computeVisibilityGridForPlayer(playerId, rawVis);
+    visibilityGridRawByPlayerCache.set(playerId, rawVis);
+    return rawVis;
+}
+
 function isTileActuallyVisibleToPlayer(playerId, gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
-    let vis = getActualVisibilityGridForPlayer(playerId);
+    let pid = Math.floor(Number(playerId));
+    if (!Number.isFinite(pid) || pid < 0) pid = localPlayerId;
+
+    let vis = getRawVisibilityGridForPlayer(pid);
+    if (!vis || vis.length !== GRID_H) return false;
     return !!(vis[gy] && vis[gy][gx] > 0);
 }
 
@@ -2136,23 +2207,51 @@ function isTileVisibleToPlayer(playerId, gx, gy) {
     if (fullVisibility) return true;
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
 
-    if (playerId === localPlayerId) return isTileVisible(gx, gy);
-    let vis = getActualVisibilityGridForPlayer(playerId);
+    let pid = Math.floor(Number(playerId));
+    let vis = getRawVisibilityGridForPlayer(pid);
+    if (!vis || vis.length !== GRID_H) return false;
     return !!(vis[gy] && vis[gy][gx] > 0);
 }
 
 function isGameplayTargetVisibleToPlayer(playerId, gx, gy) {
-    if (isMultiplayer) return true;
-    return isTileVisibleToPlayer(playerId, gx, gy);
+    return isTileActuallyVisibleToPlayer(playerId, gx, gy);
 }
 
 function updateVisibility(playerId) {
-    // Check fullVisibility toggle
-    if (fullVisibility) return;
-
-    visibilityGrid = getVisibilityGridForPlayer(playerId);
-
+    let targetPlayerId = Math.floor(Number(playerId));
+    if (!Number.isFinite(targetPlayerId) || targetPlayerId < 0) targetPlayerId = localPlayerId;
+    updateAllPlayerVisibility();
+    visibilityGrid = getVisibilityGridForPlayer(targetPlayerId) || [];
     visibilityVersion++;
+}
+
+function updateAllPlayerVisibility() {
+    let seen = new Set();
+    let ids = [];
+    let pushId = (value) => {
+        let id = Math.floor(Number(value));
+        if (!Number.isFinite(id) || id < 0 || seen.has(id)) return;
+        seen.add(id);
+        ids.push(id);
+    };
+
+    pushId(localPlayerId);
+    for (let lp of (lobbyPlayers || [])) {
+        if (!lp) continue;
+        pushId(lp.teamId);
+        pushId(lp.playerId);
+        pushId(lp.owner);
+    }
+    if (Array.isArray(activeTeamIds)) for (let id of activeTeamIds) pushId(id);
+    if (Array.isArray(players)) for (let i = 0; i < players.length; i++) pushId(i);
+
+    if (!Array.isArray(visibilityGridByPlayer) || visibilityGridByPlayer.length < players.length) {
+        visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
+    }
+    for (let id of ids) {
+        let vis = getActualVisibilityGridForPlayer(id);
+        visibilityGridByPlayer[id] = vis || [];
+    }
 }
 
 
@@ -2701,11 +2800,11 @@ function _getBuildingLevelTextSprite(label) {
     let height = 48;
     let canvas = document.createElement('canvas');
     let c = canvas.getContext('2d');
-    
+
     // Use smaller font if three-part (with ->) or blocked
     let isThreePart = (displayText.match(/->/g) || []).length === 2;
     let fontSize = isThreePart || isBlocked ? 6 : 8;
-    
+
     c.font = `700 ${fontSize}px Segoe UI, Arial, sans-serif`;
     width = Math.max(width, Math.ceil(c.measureText(displayText).width + 10));
     canvas.width = width * scale;
@@ -2720,7 +2819,7 @@ function _getBuildingLevelTextSprite(label) {
     c.lineJoin = 'round';
     c.strokeStyle = 'rgba(0,0,0,0.95)';
     c.lineWidth = 2;
-    
+
     if (isBlocked && displayText.includes('->')) {
         // Parse either L1->L3->L5 or L1->L5 format
         let parts = displayText.split('->');
@@ -2730,21 +2829,21 @@ function _getBuildingLevelTextSprite(label) {
             let part2 = parts[1]; // L1
             let part3 = parts[2]; // L3
             let arrow = '->';
-            
+
             let fullText = displayText;
             let startX = (width - c.measureText(fullText).width) * 0.5;
-            
+
             let x1 = startX;
             let x2 = x1 + c.measureText(part1 + arrow).width;
             let x3 = x2 + c.measureText(part2 + arrow).width;
-            
+
             // Stroke all
             c.strokeText(part1, x1, 11);
             c.strokeText(arrow, x1 + c.measureText(part1).width, 11);
             c.strokeText(part2, x2, 11);
             c.strokeText(arrow, x2 + c.measureText(part2).width, 11);
             c.strokeText(part3, x3, 11);
-            
+
             // Fill - normal for L0->L1, red for L3
             c.fillStyle = '#eee';
             c.fillText(part1, x1, 11);
@@ -2758,16 +2857,16 @@ function _getBuildingLevelTextSprite(label) {
             let currentText = parts[0];
             let arrow = '->';
             let potentialText = parts[1];
-            
+
             let startX = (width - c.measureText(displayText).width) * 0.5;
             let x1 = startX;
             let x2 = x1 + c.measureText(currentText + arrow).width;
-            
+
             // Stroke all
             c.strokeText(currentText, x1, 11);
             c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
             c.strokeText(potentialText, x2, 11);
-            
+
             // Fill - normal for current and arrow, bright red for potential
             c.fillStyle = '#eee';
             c.fillText(currentText, x1, 11);
@@ -2781,17 +2880,17 @@ function _getBuildingLevelTextSprite(label) {
         let currentText = displayText.substring(0, arrowIdx);
         let arrow = '->';
         let nextText = displayText.substring(arrowIdx + 2);
-        
+
         let fullWidth = c.measureText(displayText).width;
         let startX = (width - fullWidth) * 0.5;
         let x1 = startX;
         let x2 = x1 + c.measureText(currentText + arrow).width;
-        
+
         // Stroke all
         c.strokeText(currentText, x1, 11);
         c.strokeText(arrow, x1 + c.measureText(currentText).width, 11);
         c.strokeText(nextText, x2, 11);
-        
+
         // Fill - all normal
         c.fillStyle = '#eee';
         c.fillText(currentText, x1, 11);
