@@ -2009,7 +2009,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     let unitsFound = 0, towersFound = 0, barracksFound = 0, spawnersFound = 0, buildingsFound = 0;
     let areaRangeBySourceArea = new Map();
     // let shouldLog = isMultiplayer && !isHost && (gameTime % 60 === 0);
-    let shouldLog = isMultiplayer && (gameTime % 60 === 0);
+    // let shouldLog = isMultiplayer && (gameTime % 60 === 0);
     let includedTiles = new Array(GRID_H);
     for (let y = 0; y < GRID_H; y++) includedTiles[y] = new Uint8Array(GRID_W);
     let stampSource = (gx, gy, rangeTiles) => {
@@ -2107,7 +2107,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         let cells = getGridCellsWithinAreaDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
         for (let i = 0; i < cells.length; i++) {
             let cell = cells[i];
-            if (shouldLog) console.log("getGridCellsWithinAreaDistance: " + areaId + ", " + i + ", " + cell + ", " + rangeArea)
+            // if (shouldLog) console.log("getGridCellsWithinAreaDistance: " + areaId + ", " + i + ", " + cell + ", " + rangeArea)
             if (!cell) continue; // client does not go further than this
             includedTiles[cell.y][cell.x] = 1;
         }
