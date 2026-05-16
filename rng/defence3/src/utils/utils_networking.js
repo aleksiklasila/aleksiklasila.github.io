@@ -897,22 +897,35 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 path: u.path && u.path.length > 0 ? u.path.map(n => ({ x: Math.floor(Number(n.x)||0), y: Math.floor(Number(n.y)||0) })) : null,
                 pathIndex: Number.isFinite(u.pathIndex) ? Math.floor(u.pathIndex) : 0,
                 pathIsFallbackAstar: !!u.pathIsFallbackAstar,
-                manualMoveIssuedTick: Number.isFinite(Number(u._manualMoveIssuedTick)) ? Math.floor(Number(u._manualMoveIssuedTick)) : null,
+                manualMoveIssuedTick: (u._manualMoveIssuedTick !== null && u._manualMoveIssuedTick !== undefined) ? Math.floor(Number(u._manualMoveIssuedTick)) : null,
                 collectorPinnedTargetType: u._collectorPinnedTargetType !== undefined ? cloneSnapshotValue(u._collectorPinnedTargetType) : null,
                 astarPinnedTargetType: u._astarPinnedTargetType !== undefined ? cloneSnapshotValue(u._astarPinnedTargetType) : null,
                 astarLastMineTargetType: u._astarLastMineTargetType !== undefined ? cloneSnapshotValue(u._astarLastMineTargetType) : null,
                 collectorLastGatherType: u._collectorLastGatherType !== undefined ? cloneSnapshotValue(u._collectorLastGatherType) : null,
-                healerQueueTripCost: Number.isFinite(Number(u._healerQueueTripCost)) ? Number(u._healerQueueTripCost) : null,
-                healerLastWorkX: Number.isFinite(Number(u._healerLastWorkX)) ? Number(u._healerLastWorkX) : null,
-                healerLastWorkY: Number.isFinite(Number(u._healerLastWorkY)) ? Number(u._healerLastWorkY) : null,
-                healerLastWorkGx: Number.isFinite(Number(u._healerLastWorkGx)) ? Math.floor(Number(u._healerLastWorkGx)) : null,
-                healerLastWorkGy: Number.isFinite(Number(u._healerLastWorkGy)) ? Math.floor(Number(u._healerLastWorkGy)) : null,
-                healerQueueCommitRequired: Number.isFinite(Number(u._healerQueueCommitRequired)) ? Math.floor(Number(u._healerQueueCommitRequired)) : null,
-                healerQueueCommitMaxPaid: Number.isFinite(Number(u._healerQueueCommitMaxPaid)) ? Math.floor(Number(u._healerQueueCommitMaxPaid)) : null,
-                astarLastGatherX: Number.isFinite(Number(u._astarLastGatherX)) ? Number(u._astarLastGatherX) : null,
-                astarLastGatherY: Number.isFinite(Number(u._astarLastGatherY)) ? Number(u._astarLastGatherY) : null,
-                astarLastGatherGx: Number.isFinite(Number(u._astarLastGatherGx)) ? Math.floor(Number(u._astarLastGatherGx)) : null,
-                astarLastGatherGy: Number.isFinite(Number(u._astarLastGatherGy)) ? Math.floor(Number(u._astarLastGatherGy)) : null
+                healerQueueTripCost: (u._healerQueueTripCost !== null && u._healerQueueTripCost !== undefined) ? Number(u._healerQueueTripCost) : null,
+                healerLastWorkX: (u._healerLastWorkX !== null && u._healerLastWorkX !== undefined) ? Number(u._healerLastWorkX) : null,
+                healerLastWorkY: (u._healerLastWorkY !== null && u._healerLastWorkY !== undefined) ? Number(u._healerLastWorkY) : null,
+                healerLastWorkGx: (u._healerLastWorkGx !== null && u._healerLastWorkGx !== undefined) ? Math.floor(Number(u._healerLastWorkGx)) : null,
+                healerLastWorkGy: (u._healerLastWorkGy !== null && u._healerLastWorkGy !== undefined) ? Math.floor(Number(u._healerLastWorkGy)) : null,
+                healerQueueCommitRequired: (u._healerQueueCommitRequired !== null && u._healerQueueCommitRequired !== undefined) ? Math.floor(Number(u._healerQueueCommitRequired)) : null,
+                healerQueueCommitMaxPaid: (u._healerQueueCommitMaxPaid !== null && u._healerQueueCommitMaxPaid !== undefined) ? Math.floor(Number(u._healerQueueCommitMaxPaid)) : null,
+                astarLastGatherX: (u._astarLastGatherX !== null && u._astarLastGatherX !== undefined) ? Number(u._astarLastGatherX) : null,
+                astarLastGatherY: (u._astarLastGatherY !== null && u._astarLastGatherY !== undefined) ? Number(u._astarLastGatherY) : null,
+                astarLastGatherGx: (u._astarLastGatherGx !== null && u._astarLastGatherGx !== undefined) ? Math.floor(Number(u._astarLastGatherGx)) : null,
+                astarLastGatherGy: (u._astarLastGatherGy !== null && u._astarLastGatherGy !== undefined) ? Math.floor(Number(u._astarLastGatherGy)) : null,
+                
+                builderLastMoveTick: (u._builderLastMoveTick !== null && u._builderLastMoveTick !== undefined) ? Math.floor(Number(u._builderLastMoveTick)) : null,
+                builderNextRecheckTick: (u._builderNextRecheckTick !== null && u._builderNextRecheckTick !== undefined) ? Math.floor(Number(u._builderNextRecheckTick)) : null,
+                collectorLastMoveTick: (u._collectorLastMoveTick !== null && u._collectorLastMoveTick !== undefined) ? Math.floor(Number(u._collectorLastMoveTick)) : null,
+                collectorNextRecheckTick: (u._collectorNextRecheckTick !== null && u._collectorNextRecheckTick !== undefined) ? Math.floor(Number(u._collectorNextRecheckTick)) : null,
+                healerLastMoveTick: (u._healerLastMoveTick !== null && u._healerLastMoveTick !== undefined) ? Math.floor(Number(u._healerLastMoveTick)) : null,
+                healerNextRecheckTick: (u._healerNextRecheckTick !== null && u._healerNextRecheckTick !== undefined) ? Math.floor(Number(u._healerNextRecheckTick)) : null,
+                researchLastMoveTick: (u._researchLastMoveTick !== null && u._researchLastMoveTick !== undefined) ? Math.floor(Number(u._researchLastMoveTick)) : null,
+                researchNextRecheckTick: (u._researchNextRecheckTick !== null && u._researchNextRecheckTick !== undefined) ? Math.floor(Number(u._researchNextRecheckTick)) : null,
+                astarLastChargedTick: (u._astarLastChargedTick !== null && u._astarLastChargedTick !== undefined) ? Math.floor(Number(u._astarLastChargedTick)) : null,
+                astarLastChargedFromKey: (u._astarLastChargedFromKey !== null && u._astarLastChargedFromKey !== undefined) ? Math.floor(Number(u._astarLastChargedFromKey)) : null,
+                astarLastChargedToKey: (u._astarLastChargedToKey !== null && u._astarLastChargedToKey !== undefined) ? Math.floor(Number(u._astarLastChargedToKey)) : null,
+                energyBlockedUntil: (u._energyBlockedUntil !== null && u._energyBlockedUntil !== undefined) ? Math.floor(Number(u._energyBlockedUntil)) : null
             };
             return snap;
         }).filter(Boolean),
@@ -1135,22 +1148,35 @@ function applyAuthoritativeStateSnapshot(snapshot) {
                 u._pendingPathTarget = { gx, gy, cmd: u.commandState, src: 'deferred_resolver' };
             }
 
-            u._manualMoveIssuedTick = Number.isFinite(Number(runtime.manualMoveIssuedTick)) ? Math.floor(Number(runtime.manualMoveIssuedTick)) : null;
+            u._manualMoveIssuedTick = (runtime.manualMoveIssuedTick !== null && runtime.manualMoveIssuedTick !== undefined) ? Math.floor(Number(runtime.manualMoveIssuedTick)) : null;
             u._collectorPinnedTargetType = runtime.collectorPinnedTargetType !== undefined ? runtime.collectorPinnedTargetType : null;
             u._astarPinnedTargetType = runtime.astarPinnedTargetType !== undefined ? runtime.astarPinnedTargetType : null;
             u._astarLastMineTargetType = runtime.astarLastMineTargetType !== undefined ? runtime.astarLastMineTargetType : null;
             u._collectorLastGatherType = runtime.collectorLastGatherType !== undefined ? runtime.collectorLastGatherType : null;
-            u._healerQueueTripCost = Number.isFinite(Number(runtime.healerQueueTripCost)) ? Number(runtime.healerQueueTripCost) : 0;
-            u._healerLastWorkX = Number.isFinite(Number(runtime.healerLastWorkX)) ? Number(runtime.healerLastWorkX) : null;
-            u._healerLastWorkY = Number.isFinite(Number(runtime.healerLastWorkY)) ? Number(runtime.healerLastWorkY) : null;
-            u._healerLastWorkGx = Number.isFinite(Number(runtime.healerLastWorkGx)) ? Math.floor(Number(runtime.healerLastWorkGx)) : null;
-            u._healerLastWorkGy = Number.isFinite(Number(runtime.healerLastWorkGy)) ? Math.floor(Number(runtime.healerLastWorkGy)) : null;
-            u._healerQueueCommitRequired = Number.isFinite(Number(runtime.healerQueueCommitRequired)) ? Math.floor(Number(runtime.healerQueueCommitRequired)) : 0;
-            u._healerQueueCommitMaxPaid = Number.isFinite(Number(runtime.healerQueueCommitMaxPaid)) ? Math.floor(Number(runtime.healerQueueCommitMaxPaid)) : 0;
-            u._astarLastGatherX = Number.isFinite(Number(runtime.astarLastGatherX)) ? Number(runtime.astarLastGatherX) : null;
-            u._astarLastGatherY = Number.isFinite(Number(runtime.astarLastGatherY)) ? Number(runtime.astarLastGatherY) : null;
-            u._astarLastGatherGx = Number.isFinite(Number(runtime.astarLastGatherGx)) ? Math.floor(Number(runtime.astarLastGatherGx)) : null;
-            u._astarLastGatherGy = Number.isFinite(Number(runtime.astarLastGatherGy)) ? Math.floor(Number(runtime.astarLastGatherGy)) : null;
+            u._healerQueueTripCost = (runtime.healerQueueTripCost !== null && runtime.healerQueueTripCost !== undefined) ? Number(runtime.healerQueueTripCost) : 0;
+            u._healerLastWorkX = (runtime.healerLastWorkX !== null && runtime.healerLastWorkX !== undefined) ? Number(runtime.healerLastWorkX) : null;
+            u._healerLastWorkY = (runtime.healerLastWorkY !== null && runtime.healerLastWorkY !== undefined) ? Number(runtime.healerLastWorkY) : null;
+            u._healerLastWorkGx = (runtime.healerLastWorkGx !== null && runtime.healerLastWorkGx !== undefined) ? Math.floor(Number(runtime.healerLastWorkGx)) : null;
+            u._healerLastWorkGy = (runtime.healerLastWorkGy !== null && runtime.healerLastWorkGy !== undefined) ? Math.floor(Number(runtime.healerLastWorkGy)) : null;
+            u._healerQueueCommitRequired = (runtime.healerQueueCommitRequired !== null && runtime.healerQueueCommitRequired !== undefined) ? Math.floor(Number(runtime.healerQueueCommitRequired)) : 0;
+            u._healerQueueCommitMaxPaid = (runtime.healerQueueCommitMaxPaid !== null && runtime.healerQueueCommitMaxPaid !== undefined) ? Math.floor(Number(runtime.healerQueueCommitMaxPaid)) : 0;
+            u._astarLastGatherX = (runtime.astarLastGatherX !== null && runtime.astarLastGatherX !== undefined) ? Number(runtime.astarLastGatherX) : null;
+            u._astarLastGatherY = (runtime.astarLastGatherY !== null && runtime.astarLastGatherY !== undefined) ? Number(runtime.astarLastGatherY) : null;
+            u._astarLastGatherGx = (runtime.astarLastGatherGx !== null && runtime.astarLastGatherGx !== undefined) ? Math.floor(Number(runtime.astarLastGatherGx)) : null;
+            u._astarLastGatherGy = (runtime.astarLastGatherGy !== null && runtime.astarLastGatherGy !== undefined) ? Math.floor(Number(runtime.astarLastGatherGy)) : null;
+            
+            u._builderLastMoveTick = (runtime.builderLastMoveTick !== null && runtime.builderLastMoveTick !== undefined) ? Math.floor(Number(runtime.builderLastMoveTick)) : null;
+            u._builderNextRecheckTick = (runtime.builderNextRecheckTick !== null && runtime.builderNextRecheckTick !== undefined) ? Math.floor(Number(runtime.builderNextRecheckTick)) : null;
+            u._collectorLastMoveTick = (runtime.collectorLastMoveTick !== null && runtime.collectorLastMoveTick !== undefined) ? Math.floor(Number(runtime.collectorLastMoveTick)) : null;
+            u._collectorNextRecheckTick = (runtime.collectorNextRecheckTick !== null && runtime.collectorNextRecheckTick !== undefined) ? Math.floor(Number(runtime.collectorNextRecheckTick)) : null;
+            u._healerLastMoveTick = (runtime.healerLastMoveTick !== null && runtime.healerLastMoveTick !== undefined) ? Math.floor(Number(runtime.healerLastMoveTick)) : null;
+            u._healerNextRecheckTick = (runtime.healerNextRecheckTick !== null && runtime.healerNextRecheckTick !== undefined) ? Math.floor(Number(runtime.healerNextRecheckTick)) : null;
+            u._researchLastMoveTick = (runtime.researchLastMoveTick !== null && runtime.researchLastMoveTick !== undefined) ? Math.floor(Number(runtime.researchLastMoveTick)) : null;
+            u._researchNextRecheckTick = (runtime.researchNextRecheckTick !== null && runtime.researchNextRecheckTick !== undefined) ? Math.floor(Number(runtime.researchNextRecheckTick)) : null;
+            u._astarLastChargedTick = (runtime.astarLastChargedTick !== null && runtime.astarLastChargedTick !== undefined) ? Math.floor(Number(runtime.astarLastChargedTick)) : null;
+            u._astarLastChargedFromKey = (runtime.astarLastChargedFromKey !== null && runtime.astarLastChargedFromKey !== undefined) ? Math.floor(Number(runtime.astarLastChargedFromKey)) : null;
+            u._astarLastChargedToKey = (runtime.astarLastChargedToKey !== null && runtime.astarLastChargedToKey !== undefined) ? Math.floor(Number(runtime.astarLastChargedToKey)) : null;
+            u._energyBlockedUntil = (runtime.energyBlockedUntil !== null && runtime.energyBlockedUntil !== undefined) ? Math.floor(Number(runtime.energyBlockedUntil)) : null;
         }
         delete u.snapshotRefs;
         delete u._snapshotRefs;
