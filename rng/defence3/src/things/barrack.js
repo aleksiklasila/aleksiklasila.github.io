@@ -90,7 +90,7 @@ function updateSpawnerProductionProgress(spawner) {
         return;
     }
     let owner = Number.isFinite(spawner.owner) ? spawner.owner : localPlayerId;
-    let effLvl = getThingEffectiveLevel(spawner);
+    let effLvl = getThingBaseLevel(spawner);
     let fallbackType = getSpawnerFallbackUnitType(spawner);
     let front = getQueuedSpawnInfo(spawner.spawnQueue[0], fallbackType, effLvl, owner);
     spawner.spawnQueue[0] = front;
@@ -113,7 +113,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
     let owner = spawner.owner;
     if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
 
-    let effLvl = getThingEffectiveLevel(spawner);
+    let effLvl = getThingBaseLevel(spawner);
     let fallbackType = getSpawnerFallbackUnitType(spawner);
     if (!fallbackType) return false;
 
@@ -179,7 +179,7 @@ function processGlobalSpawnerQueue() {
             if (!isQueueEnabled(s)) return;
             if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return;
             let owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
-            let effLvl = getThingEffectiveLevel(s);
+            let effLvl = getThingBaseLevel(s);
             let fallbackType = getSpawnerFallbackUnitType(s);
             let front = getQueuedSpawnInfo(s.spawnQueue[0], fallbackType, effLvl, owner);
             if (front.energyPaid < front.energyRequired) return;
@@ -230,7 +230,7 @@ class Barrack {
         let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -240,7 +240,7 @@ class Barrack {
     }
 
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, this.unitType, lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
@@ -249,7 +249,7 @@ class Barrack {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown(this.unitType, effLvl, this.owner, `barrack_${this.unitType}`) * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -305,7 +305,7 @@ class CollectorSpawner {
         let stats = calculateItemStats('spawner', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -317,7 +317,7 @@ class CollectorSpawner {
         updateItemTextCache(this);
     }
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'collector', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
@@ -325,7 +325,7 @@ class CollectorSpawner {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('collector', effLvl, this.owner, 'spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -371,7 +371,7 @@ class AstarSpawner {
         let stats = calculateItemStats('astar_spawner', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -383,7 +383,7 @@ class AstarSpawner {
         updateItemTextCache(this);
     }
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'astar_collector', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
@@ -391,7 +391,7 @@ class AstarSpawner {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('astar_collector', effLvl, this.owner, 'astar_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -434,7 +434,7 @@ class SalvagerSpawner {
         let stats = calculateItemStats('salvager', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.markedForSalvage = false;
         this.autoUpgradeEnabled = true;
@@ -446,7 +446,7 @@ class SalvagerSpawner {
         updateItemTextCache(this);
     }
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'salvager_unit', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
@@ -454,7 +454,7 @@ class SalvagerSpawner {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('salvager_unit', effLvl, this.owner, 'salvager') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -495,7 +495,7 @@ class BuilderSpawner {
         let stats = calculateItemStats('builder_spawner', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
@@ -508,13 +508,13 @@ class BuilderSpawner {
         updateItemTextCache(this);
     }
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
-    // Builder DPS per unit: scales with effective level
+    // Builder DPS per unit: scales with base level
     getBuilderDps() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'builderDps');
         let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
@@ -523,7 +523,7 @@ class BuilderSpawner {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('builder_unit', effLvl, this.owner, 'builder_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -565,7 +565,7 @@ class HealerSpawner {
         let stats = calculateItemStats('healer_spawner', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
@@ -578,12 +578,12 @@ class HealerSpawner {
         updateItemTextCache(this);
     }
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     gethealerDps() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'healerDps');
         let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
@@ -592,7 +592,7 @@ class HealerSpawner {
         tickStatusEffects(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('healer_unit', effLvl, this.owner, 'healer_spawner') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);
@@ -638,7 +638,7 @@ class ResearchSpawner {
         let stats = calculateItemStats('research', this.level, this.owner);
         this.preComputedBase = stats;
         this.preComputedEffective = stats;
-        this.preComputed = this.preComputedEffective;
+        this.preComputed = this.preComputedBase;
         this.energy = stats.maxEnergy; this.maxEnergy = stats.maxEnergy;
         this.underConstruction = true;
         this.markedForSalvage = false;
@@ -652,13 +652,13 @@ class ResearchSpawner {
     }
 
     getUnitCost() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'energy');
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
 
     getResearcherDps() {
-        let lvl = getThingEffectiveLevel(this);
+        let lvl = getThingBaseLevel(this);
         let dps = getUnitStatForOwner(this.owner, 'researcher_unit', lvl, 'researcherDps');
         let fallback = Number(UNIT_FORMULA_CONFIG.workerSpecialistBaseRate) || 1;
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
@@ -669,7 +669,7 @@ class ResearchSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        let effLvl = getThingEffectiveLevel(this);
+        let effLvl = getThingBaseLevel(this);
         this.spawnCooldown = Math.round(getBarrackSpawnCooldown('researcher_unit', effLvl, this.owner, 'research') * TICK_RATE);
         if (this.spawnQueue.length > 0) {
             updateSpawnerProductionProgress(this);

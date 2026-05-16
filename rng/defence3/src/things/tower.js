@@ -51,8 +51,8 @@ class Tower {
         let effLevel = getThingEffectiveLevel(this);
         this.preComputedBase = calculateItemStats(this.type, Math.max(1, this.level), this.owner);
         this.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(this.preComputedBase, calculateItemStats(this.type, effLevel, this.owner), false);
-        this.preComputed = this.preComputedEffective;
-        this.currentStats = this.preComputedEffective || this.baseStats;
+        this.preComputed = this.preComputedBase;
+        this.currentStats = this.preComputedBase || this.baseStats;
 
         let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy);
         if (!Number.isFinite(newmaxEnergy)) newmaxEnergy = this.maxEnergy || 1;

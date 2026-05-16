@@ -69,7 +69,7 @@ function _getThingUpKeepPerSecond(thing) {
 
     let statsType = typeof getEntityStatsCalcType === 'function' ? getEntityStatsCalcType(thing) : (thing.type || '');
     if (!statsType) return 0;
-    let lvl = Math.max(1, getThingEffectiveLevel(thing));
+    let lvl = Math.max(1, getThingBaseLevel(thing));
     let upKeep = Number(getBuildingStatForOwner(owner, statsType, lvl, 'upKeep'));
     if (Number.isFinite(upKeep)) return Math.max(0, upKeep);
 
@@ -2289,7 +2289,7 @@ function processActions(actions, playerId) {
                 let count = Math.max(1, Math.floor(a.count || 1));
                 for (let i = 0; i < count; i++) {
                     if (b.spawnQueue.length >= 20) break;
-                    let queuedLevel = getThingEffectiveLevel(b);
+                    let queuedLevel = getThingBaseLevel(b);
                     b.spawnQueue.push(getQueuedSpawnInfo({ unitType: b.unitType, level: queuedLevel }, b.unitType, queuedLevel, playerId));
                 }
             }
@@ -2300,7 +2300,7 @@ function processActions(actions, playerId) {
                 let count = Math.max(1, Math.floor(a.count || 1));
                 for (let i = 0; i < count; i++) {
                     if (s.spawnQueue.length >= 10) break;
-                    let queuedLevel = getThingEffectiveLevel(s);
+                    let queuedLevel = getThingBaseLevel(s);
                     let queuedType = getSpawnedUnitTypeForBuildingKey(s.type)
                         || (s.type === 'builder_spawner'
                             ? 'builder_unit'
@@ -2985,15 +2985,15 @@ function startGame() {
         let researchSpawner = teamResearchSpawners[pid];
 
         for (let i = 0; i < 3; i++) {
-            spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingEffectiveLevel(builderSpawner) : 1);
+            spawnStartingUnit(pid, pos, 'builder_unit', builderSpawner ? getThingBaseLevel(builderSpawner) : 1);
         }
         for (let i = 0; i < 3; i++) {
-            spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingEffectiveLevel(healerSpawner) : 1);
+            spawnStartingUnit(pid, pos, 'healer_unit', healerSpawner ? getThingBaseLevel(healerSpawner) : 1);
         }
 
         // Requested starter replacements: give each team one collector + one researcher.
-        spawnStartingUnit(pid, pos, 'collector', collectorSpawner ? getThingEffectiveLevel(collectorSpawner) : 1);
-        spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingEffectiveLevel(researchSpawner) : 1);
+        spawnStartingUnit(pid, pos, 'collector', collectorSpawner ? getThingBaseLevel(collectorSpawner) : 1);
+        spawnStartingUnit(pid, pos, 'researcher_unit', researchSpawner ? getThingBaseLevel(researchSpawner) : 1);
     }
 
     for (let pid of teams) {
@@ -3460,7 +3460,7 @@ function computeLockstepStateDigest(tick) {
                 let item = cell ? cell.item : null;
                 if (!item || item.type !== 'house' || Math.floor(Number(cell.owner) || 0) !== owner) continue;
                 if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
-                let lvl = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
+                let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
                 housePop += getHousePopCapContribution(owner, lvl);
             }
         }

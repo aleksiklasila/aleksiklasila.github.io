@@ -3384,7 +3384,7 @@ function formatResearchMultiplierValue(mult) {
 
 function getResearchBuildingEfficiency(researchBuilding) {
     if (!researchBuilding || researchBuilding.type !== 'research') return 1;
-    let lvl = Math.max(1, getThingEffectiveLevel(researchBuilding));
+    let lvl = Math.max(1, getThingBaseLevel(researchBuilding));
     let owner = Number.isFinite(researchBuilding.owner) ? researchBuilding.owner : localPlayerId;
     let mapped = getBuildingStatForOwner(owner, 'research', lvl, 'efficiency');
     if (Number.isFinite(mapped)) return Math.max(0, mapped);
@@ -3583,7 +3583,7 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let lvl = getThingEffectiveLevel(b);
         b.preComputedBase = calculateItemStats(`barrack_${b.unitType}`, Math.max(1, b.level || lvl), b.owner);
         b.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(b.preComputedBase, calculateItemStats(`barrack_${b.unitType}`, lvl, b.owner), false);
-        b.preComputed = b.preComputedEffective;
+        b.preComputed = b.preComputedBase;
         b.maxEnergy = Math.max(1, Math.floor((b.preComputedBase && b.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') b.energy = Math.max(1, Math.min(prevEnergy, b.maxEnergy));
     }
@@ -3594,7 +3594,7 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
         let lvl = getThingEffectiveLevel(s);
         s.preComputedBase = calculateItemStats(s.type, Math.max(1, s.level || lvl), s.owner);
         s.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(s.preComputedBase, calculateItemStats(s.type, lvl, s.owner), false);
-        s.preComputed = s.preComputedEffective;
+        s.preComputed = s.preComputedBase;
         s.maxEnergy = Math.max(1, Math.floor((s.preComputedBase && s.preComputedBase.maxEnergy) || 1));
         if (statKey === 'maxEnergy') s.energy = Math.max(1, Math.min(prevEnergy, s.maxEnergy));
     }
@@ -3606,7 +3606,7 @@ function applyBuildingResearchUpgradeToExisting(owner, buildingKey, statKey) {
             let item = cell.item;
             if (item.type !== buildingKey) continue;
             let prevEnergy = item.energy;
-            let lvl = getThingEffectiveLevel(item);
+            let lvl = getThingBaseLevel(item);
             let stats = calculateItemStats(item.type, lvl, owner);
             if (Number.isFinite(stats.maxEnergy) && stats.maxEnergy > 0) {
                 item.maxEnergy = Math.max(1, Math.floor(stats.maxEnergy));

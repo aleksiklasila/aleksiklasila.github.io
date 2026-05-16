@@ -249,7 +249,14 @@ function _runAdjacencyRecalculation() {
 
             if (!passiveRefresh) {
                 if (!obj.underConstruction && !obj.isUpgrading) {
-                    obj.isStacking = getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj);
+                    // Only set isStacking if there are remaining stacks AND they won't exceed max level
+                    if (getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj)) {
+                        let nextStackLevel = stackCountToLevel(getThingStackedStacks(obj) + 1);
+                        let maxLevel = getThingResearchedMaxLevel(obj);
+                        obj.isStacking = nextStackLevel <= maxLevel;
+                    } else {
+                        obj.isStacking = false;
+                    }
                     if (!obj.isStacking) obj.stackingWorkDone = 0;
                 } else if (obj.isUpgrading) {
                     obj.isStacking = false;
@@ -276,7 +283,7 @@ function _runAdjacencyRecalculation() {
                 obj.preComputedBase = baseStats;
                 obj.preComputedEffective = stats;
                 obj.preComputedPotential = potentialStats;
-                obj.preComputed = obj.preComputedEffective;
+                obj.preComputed = obj.preComputedBase;
                 if (obj.isUpgrading && obj.upgrademaxEnergy > 0) {
                     obj.maxEnergy = Math.max(1, Math.floor(obj.upgrademaxEnergy));
                     if (!Number.isFinite(obj.energy) || obj.energy < 1) obj.energy = 1;
@@ -379,7 +386,7 @@ function _refreshThingPrecomputedStats(item) {
     item.preComputedBase = calculateItemStats(statsType, baseLevel, item.owner);
     item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, effectiveLevel, item.owner), false);
     item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(item.preComputedBase, calculateItemStats(statsType, potentialLevel, item.owner), false);
-    item.preComputed = item.preComputedEffective;
+    item.preComputed = item.preComputedBase;
 
     if (item.isUpgrading && item.upgrademaxEnergy > 0) {
         item.maxEnergy = Math.max(1, Math.floor(item.upgrademaxEnergy));
@@ -1089,7 +1096,13 @@ function refreshThingProgressState(item) {
         return;
     }
 
-    item.isStacking = hasPendingStacks && isAutoStackEnabled(item);
+    item.isStacking = false;
+    if (hasPendingStacks && isAutoStackEnabled(item)) {
+        // Only stack if next stack level won't exceed max level
+        let nextStackLevel = stackCountToLevel(getThingStackedStacks(item) + 1);
+        let maxLevel = getThingResearchedMaxLevel(item);
+        item.isStacking = nextStackLevel <= maxLevel;
+    }
     if (!item.isStacking) item.stackingWorkDone = 0;
     if (!item.underConstruction && !item.isUpgrading && !item.isStacking && Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
         let builderTypeIndex = _workerTypeToLoadIndex('builder');
@@ -1182,7 +1195,7 @@ function recomputePlayerPopCaps() {
             let owner = cell.owner;
             if (owner < 0 || owner >= players.length) continue;
             if (item.energy <= 0 || item.underConstruction) continue;
-            let level = Math.max(1, Math.floor(getDisplayLevel(item) || 1));
+            let level = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
             popByOwner[owner] += getHousePopCapContribution(owner, level);
         }
     }

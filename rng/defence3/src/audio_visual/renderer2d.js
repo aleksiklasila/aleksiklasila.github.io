@@ -222,14 +222,34 @@ function drawBuildingEnergyProgressBar(ctx, entity, centerX, y, width = 24, heig
     let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
         ? (manualStacks > stackedStacks)
         : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
-    if (!isProgress && !hasStackQueue && energy >= maxEnergy) return false;
+    
+    // Don't show stacking progress if next stack would exceed max level
+    if (hasStackQueue && entity) {
+        let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (nextStackLevel > maxLevel) {
+            hasStackQueue = false;
+        }
+    }
+    
+    // Don't show upgrading progress if at max level
+    let showUpgradingProgress = isProgress;
+    if (isProgress && entity) {
+        let baseLevel = getThingBaseLevel(entity);
+        let maxLevel = getThingResearchedMaxLevel(entity);
+        if (baseLevel >= maxLevel) {
+            showUpgradingProgress = false;
+        }
+    }
+    
+    if (!showUpgradingProgress && !hasStackQueue && energy >= maxEnergy) return false;
     if (hasStackQueue) {
         let stackPct = getThingStackingProgressRatio(entity);
         let stackY = y - height;
         _drawCachedProgressBar(ctx, centerX, stackY, width, height, stackPct, '#11291c', '#2fd27f');
     }
 
-    _drawCachedProgressBar(ctx, centerX, y, width, height, pct, isProgress ? '#333' : '#600', isProgress ? '#fa0' : '#0f0');
+    _drawCachedProgressBar(ctx, centerX, y, width, height, pct, showUpgradingProgress ? '#333' : '#600', showUpgradingProgress ? '#fa0' : '#0f0');
     return true;
 }
 

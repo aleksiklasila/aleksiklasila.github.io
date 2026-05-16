@@ -447,8 +447,9 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
 
     let upkeepBreakdown = (typeof getPlayerUpKeepBreakdown === 'function')
         ? getPlayerUpKeepBreakdown(owner)
-        : { total: 0, unitTypes: {} };
+        : { total: 0, unitTypes: {}, buildingTypes: {} };
     let upkeepUnitTypes = upkeepBreakdown && upkeepBreakdown.unitTypes ? upkeepBreakdown.unitTypes : {};
+    let upkeepBuildingTypes = upkeepBreakdown && upkeepBreakdown.buildingTypes ? upkeepBreakdown.buildingTypes : {};
     let getUpkeepForMetric = (metric) => {
         if (metric === 'total') return Math.max(0, Number(upkeepBreakdown && upkeepBreakdown.total) || 0);
         if (metric === 'collect') return Math.max(0, Number(upkeepUnitTypes.collector) || 0);
@@ -489,6 +490,21 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
         html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
         html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
+        
+        let buildingKeys = Object.keys(upkeepBuildingTypes).filter(k => (Number(upkeepBuildingTypes[k]) || 0) > 0).sort((a, b) => _prettyBuildingTypeLabel(a).localeCompare(_prettyBuildingTypeLabel(b)));
+        if (buildingKeys.length > 0) {
+            html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+            for (let buildingType of buildingKeys) {
+                let buildingUpkeep = Math.max(0, Number(upkeepBuildingTypes[buildingType]) || 0);
+                let sec = getEnergyDeltaWindowSeconds('total');
+                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('buildings', buildingType, { thumbKey: buildingType, isUnit: false }, 40, `Select all ${buildingType}`);
+                html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+                    + `<button class="info-energy-delta-window-btn" data-metric="building_${buildingType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
+                    + thingHtml
+                    + `<span class="info-value" style="color:#f88">-${fmt(buildingUpkeep)} ⚡/ s</span>`
+                    + `</div>`;
+            }
+        }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
     return html;
@@ -647,6 +663,17 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         for (let unitType of sortedOtherTypes) {
             let metric = `u_${unitType}`;
             html += deltaRow(metric, ev => ev.unitType === unitType, { thumbKey: unitType, isUnit: true }, '', unitType, 'units');
+        }
+        
+        let buildingTypes = (typeof getPlayerUpKeepBreakdown === 'function')
+            ? (getPlayerUpKeepBreakdown(owner).buildingTypes || {})
+            : {};
+        let buildingKeys = Object.keys(buildingTypes).filter(k => buildingTypes[k]).sort((a, b) => _prettyBuildingTypeLabel(a).localeCompare(_prettyBuildingTypeLabel(b)));
+        if (buildingKeys.length > 0) {
+            html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+            for (let buildingType of buildingKeys) {
+                html += deltaRow(`b_${buildingType}`, () => false, { thumbKey: buildingType, isUnit: false }, '', buildingType, 'buildings');
+            }
         }
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
