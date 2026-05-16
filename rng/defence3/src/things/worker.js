@@ -923,7 +923,8 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     _setResourceCollectorPinnedTarget(u, null, null, resourceCfg);
 
     let origin = _getResourceCollectorSearchOrigin(u, resourceCfg);
-    let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
+    let maxSearchPx = _getWorkerAutoSearchDistancePx(u);
+    let maxSearchPxSq = maxSearchPx * maxSearchPx;
     let mem = _getResourceCollectorMemory(u);
     let anchorSpawner = null;
     if (_isResourceCollectorSpawnerValidForUnit(u, mem.nextSpawner, resourceCfg)) {
@@ -935,39 +936,13 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     }
 
     let candidates = [];
-    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
-        if (!tileRef || !cell) return false;
-
-        let x = tileRef.x;
-        let y = tileRef.y;
-        let worldX = x * TILE + TILE * 0.5;
-        let worldY = y * TILE + TILE * 0.5;
-        let dx = worldX - origin.x;
-        let dy = worldY - origin.y;
+    let considerCandidate = (candidate, candidateType, dropPenalty = 0) => {
+        if (!candidate) return;
+        let dx = Number(candidate.x) - origin.x;
+        let dy = Number(candidate.y) - origin.y;
         let originDistSq = dx * dx + dy * dy;
-
-        let drop = resourceCfg.supportsDropTarget ? getDroppedItemAt(x, y) : null;
-        let mine = getResourceMineAt(resourceCfg.key, x, y);
-        let item = cell.item;
-
-        let candidate = null;
-        let candidateType = null;
-        let dropPenalty = 0;
-        if (drop) {
-            candidate = drop;
-            candidateType = 'drop';
-            dropPenalty = TILE * 0.5;
-        } else if (mine && Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0) {
-            candidate = mine;
-            candidateType = resourceCfg.mineTileType;
-        } else if (item && item.type === resourceCfg.farmKey && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
-            candidate = item;
-            candidateType = resourceCfg.farmKey;
-        }
-
-        if (!candidate) return false;
-        if (!_isTargetWithinWorkerSearchLimits(u, origin.x, origin.y, candidate, maxSearchArea)) return false;
-        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return false;
+        if (!Number.isFinite(originDistSq) || originDistSq > maxSearchPxSq) return;
+        if (!_canAssignWorkerTargetExclusive(u, candidate, candidateType)) return;
 
         let originDist = Math.sqrt(originDistSq);
         let spawnerDist = anchorSpawner
@@ -979,8 +954,26 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
             dist: spawnerDist + originDist * 0.22 + dropPenalty,
             worldDist: Math.hypot(candidate.x - u.x, candidate.y - u.y)
         });
-        return false;
-    });
+    };
+
+    if (resourceCfg.supportsDropTarget) {
+        for (let drop of droppedItems) {
+            if (!drop) continue;
+            considerCandidate(drop, 'drop', TILE * 0.5);
+        }
+    }
+
+    let mineArray = _getResourceCollectorMineArray(resourceCfg) || [];
+    for (let mine of mineArray) {
+        if (!mine) continue;
+        if (!(Number.isFinite(mine[resourceCfg.mineStatKey]) && mine[resourceCfg.mineStatKey] > 0)) continue;
+        considerCandidate(mine, resourceCfg.mineTileType, 0);
+    }
+
+    for (let s of collectorSpawners) {
+        if (!s || s.type !== resourceCfg.farmKey || s.owner !== u.owner || s.underConstruction || !(Number(s.energy) > 0)) continue;
+        considerCandidate(s, resourceCfg.farmKey, 0);
+    }
 
     let picked = _pickDistributedWorkerCandidate(u, candidates);
     if (picked && picked.target) {
@@ -1750,7 +1743,29 @@ function _setWorkerTarget(unit, target, targetType = null) {
     let nextSlotIndex = target ? _getWorkerReservationSlotIndex(target, unit.workerType) : -1;
     if (nextSlotIndex >= 0) {
         let reservedUnit = workerReservedTiles[nextSlotIndex];
-        if (reservedUnit && reservedUnit !== unit && !reservedUnit.dead && reservedUnit.owner === unit.owner && reservedUnit.workerType === unit.workerType) return false;
+        if (reservedUnit && reservedUnit !== unit && !reservedUnit.dead && reservedUnit.owner === unit.owner && reservedUnit.workerType === unit.workerType) {
+            let contenderId = Math.floor(Number(unit.id) || 0);
+            let reservedId = Math.floor(Number(reservedUnit.id) || 0);
+            // Deterministic tie-break for same tile/type: lower unit id always wins.
+            if (reservedId <= contenderId) return false;
+
+            let reservedSlotIndex = Number.isFinite(reservedUnit._workerReservedTileIndex)
+                ? Math.floor(reservedUnit._workerReservedTileIndex)
+                : -1;
+            if (reservedSlotIndex >= 0 && workerReservedTiles[reservedSlotIndex] === reservedUnit) {
+                workerReservedTiles[reservedSlotIndex] = null;
+            }
+            if (reservedUnit.workerTarget === target) {
+                reservedUnit.workerTarget = null;
+                reservedUnit.workerTargetType = null;
+                if (reservedUnit.workerState === 'MOVING_TO' || reservedUnit.workerState === 'MOVING_TO_ASTAR' || reservedUnit.workerState === 'IDLE') {
+                    reservedUnit.workerState = 'IDLE';
+                    reservedUnit.commandState = CMD_IDLE;
+                    _clearWorkerAutoRoute(reservedUnit);
+                }
+            }
+            reservedUnit._workerReservedTileIndex = -1;
+        }
         if (!reservedUnit) {
             let directConflict = _findConflictingWorkerOnTargetTile(unit, target);
             if (directConflict) return false;
@@ -1847,6 +1862,14 @@ function _scoreWorkerTaskCandidate(u, candidate) {
 function _pickDistributedWorkerCandidate(u, candidates) {
     if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
 
+    let getTargetSortKey = (candidate) => {
+        let t = candidate && candidate.target ? candidate.target : null;
+        let tt = String((candidate && candidate.targetType) || '');
+        let gx = Number.isFinite(t && t.gx) ? Math.floor(Number(t.gx)) : Math.floor(Number((t && t.x) || 0) / TILE);
+        let gy = Number.isFinite(t && t.gy) ? Math.floor(Number(t.gy)) : Math.floor(Number((t && t.y) || 0) / TILE);
+        return `${tt}|${gx},${gy}`;
+    };
+
     let best = null;
     let bestScore = Infinity;
     for (let c of candidates) {
@@ -1857,6 +1880,14 @@ function _pickDistributedWorkerCandidate(u, candidates) {
         if (score < bestScore) {
             bestScore = score;
             best = c;
+            continue;
+        }
+        if (Math.abs(score - bestScore) <= 1e-9 && best) {
+            let aKey = getTargetSortKey(c);
+            let bKey = getTargetSortKey(best);
+            if (aKey < bKey) {
+                best = c;
+            }
         }
     }
     return best || null;
@@ -2589,7 +2620,18 @@ function _findClosestSpawner(u, type) {
     for (let s of collectorSpawners) {
         if (s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
             let d = Math.hypot(s.x - u.x, s.y - u.y);
-            if (d < bestDist) { bestDist = d; closest = s; }
+            if (d < bestDist) {
+                bestDist = d;
+                closest = s;
+                continue;
+            }
+            if (Math.abs(d - bestDist) <= 1e-9 && closest) {
+                let sx = Math.floor(Number(s.gx) || 0), sy = Math.floor(Number(s.gy) || 0);
+                let cx = Math.floor(Number(closest.gx) || 0), cy = Math.floor(Number(closest.gy) || 0);
+                if (sy < cy || (sy === cy && sx < cx)) {
+                    closest = s;
+                }
+            }
         }
     }
     return closest;

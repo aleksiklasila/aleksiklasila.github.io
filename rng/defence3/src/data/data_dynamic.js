@@ -4,7 +4,14 @@ function makeDefaultStartingResourcesConfig() {
     return {
         researchLevels: {},
         spawnCounts: {
+            'building:healer_spawner': { 1: 1 },
+            'building:spawner': { 1: 1 },
+            'building:research': { 1: 1 },
+            'building:house': { 6: 2 },
             'building:astar_spawner': { 1: 1 },
+            'unit:builder_unit': { 1: 3 },
+            'unit:healer_unit': { 1: 3 },
+            'unit:king': { 1: 1 },
             'unit:astar_collector': { 1: 1 },
         }
     };
@@ -177,7 +184,10 @@ function ensureMainMenuPrecomputedStateReady() {
 function normalizeStartingResourcesConfig(rawCfg) {
     ensureResearchThingsReady();
     let raw = (rawCfg && typeof rawCfg === 'object') ? rawCfg : {};
-    let out = makeDefaultStartingResourcesConfig();
+    let out = {
+        researchLevels: {},
+        spawnCounts: {}
+    };
 
     if (raw.researchLevels && typeof raw.researchLevels === 'object') {
         for (let id in raw.researchLevels) {
@@ -1512,7 +1522,14 @@ function makeDefaultStartingResourcesConfig() {
     return {
         researchLevels: {},
         spawnCounts: {
+            'building:healer_spawner': { 1: 1 },
+            'building:spawner': { 1: 1 },
+            'building:research': { 1: 1 },
+            'building:house': { 6: 2 },
             'building:astar_spawner': { 1: 1 },
+            'unit:builder_unit': { 1: 3 },
+            'unit:healer_unit': { 1: 3 },
+            'unit:king': { 1: 1 },
             'unit:astar_collector': { 1: 1 },
         }
     };
@@ -3276,7 +3293,6 @@ function rebuildResearchThings() {
         let def = BASE_CARD_TYPES[key];
         if (!def || !Number.isFinite(def.price) || def.price <= 0) continue;
         let stats = getResearchStatEntriesForThing('building', key);
-        if (stats.length <= 0) continue;
         things.push({
             kind: 'building',
             key,
@@ -3287,7 +3303,6 @@ function rebuildResearchThings() {
     }
     for (let key in BASE_UNIT_STATS) {
         let stats = getResearchStatEntriesForThing('unit', key);
-        if (stats.length <= 0) continue;
         things.push({
             kind: 'unit',
             key,

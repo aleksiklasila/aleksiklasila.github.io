@@ -35,7 +35,7 @@ function _recomputeSpatialLowestHealthUnitForChunkPlayer(chunkKey, owner) {
 
     let chunk = spatialUnits[ck];
     let best = null;
-    if (chunk && chunk.size > 0) {
+    if (chunk && chunk.length > 0) {
         for (let u of chunk) {
             if (!_isDamagedLivingUnitForOwner(u, pid)) continue;
             if (!best || _isUnitHealthLowerThan(u, best)) best = u;
@@ -109,7 +109,7 @@ function _recomputeSpatialMaxUnitVisibilityForChunkPlayer(chunkKey, owner) {
     if (pid < 0 || pid >= spatialUnitsComplexPlayerCount) return;
     let maxScaled = 0;
     let chunk = spatialUnits[ck];
-    if (chunk && chunk.size > 0) {
+    if (chunk && chunk.length > 0) {
         for (let u of chunk) {
             if (!u || u.dead || Math.floor(Number(u.owner)) !== pid) continue;
             let scaled = _getSpatialUnitVisibilityScaled(u);
@@ -124,7 +124,7 @@ function initSpatialHash() {
     CHUNKS_W = Math.ceil(GRID_W / CHUNK_SIZE);
     CHUNKS_H = Math.ceil(GRID_H / CHUNK_SIZE);
     spatialUnits = [];
-    for (let i = 0; i < CHUNKS_W * CHUNKS_H; i++) spatialUnits.push(new Set());
+    for (let i = 0; i < CHUNKS_W * CHUNKS_H; i++) spatialUnits.push([]);
     closestEnemyChunkQueryCache.clear();
 
     spatialUnitTypeToIndex = Object.create(null);
@@ -145,8 +145,32 @@ function initSpatialHash() {
         spatialUnitsComplexLowestHealthUnit = [];
     }
     let areaCount = Array.isArray(areas) ? areas.length : 0;
-    spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => new Set());
+    spatialUnitsByArea = Array.from({ length: Math.max(0, areaCount) }, () => []);
 }
+
+function _addUnitToSpatialArray(arr, u) {
+    if (!arr) return false;
+    for (let i = 0; i < arr.length; i++) {
+        if (arr[i] === u) return false;
+        if (arr[i].id > u.id) {
+            arr.splice(i, 0, u);
+            return true;
+        }
+    }
+    arr.push(u);
+    return true;
+}
+
+function _removeUnitFromSpatialArray(arr, u) {
+    if (!arr) return false;
+    let i = arr.indexOf(u);
+    if (i >= 0) {
+        arr.splice(i, 1);
+        return true;
+    }
+    return false;
+}
+
 function getSpatialKey(wx, wy) {
     let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
     let cy = Math.floor(wy / (CHUNK_SIZE * TILE));
@@ -161,13 +185,13 @@ function updateUnitSpatial(u) {
     let currentScaled = _getSpatialUnitVisibilityScaled(u);
     if (u._spatialAreaId !== undefined && u._spatialAreaId !== newAreaId) {
         let oldAreaId = u._spatialAreaId;
-        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length && spatialUnitsByArea[oldAreaId]) {
-            spatialUnitsByArea[oldAreaId].delete(u);
+        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
+            _removeUnitFromSpatialArray(spatialUnitsByArea[oldAreaId], u);
         }
     }
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
         let oldKey = u._spatialKey;
-        if (spatialUnits[u._spatialKey].delete(u)) {
+        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) {
             let owner = Math.floor(Number(u.owner));
             if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
                 let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
@@ -189,8 +213,8 @@ function updateUnitSpatial(u) {
         }
     }
     if (u._spatialKey === newKey) {
-        spatialUnits[newKey].add(u);
-        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) spatialUnitsByArea[newAreaId].add(u);
+        _addUnitToSpatialArray(spatialUnits[newKey], u);
+        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToSpatialArray(spatialUnitsByArea[newAreaId], u);
         let ownerSame = Math.floor(Number(u.owner));
         if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
             _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
@@ -200,8 +224,8 @@ function updateUnitSpatial(u) {
         if (ENABLE_SPATIAL_LOWEST_HEALTH_CACHE) _updateSpatialLowestHealthForUnit(u, newKey);
         return;
     }
-    spatialUnits[newKey].add(u);
-    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) spatialUnitsByArea[newAreaId].add(u);
+    _addUnitToSpatialArray(spatialUnits[newKey], u);
+    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToSpatialArray(spatialUnitsByArea[newAreaId], u);
     let owner = Math.floor(Number(u.owner));
     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
         let typeIdx = spatialUnitTypeToIndex[u.unitType];
@@ -223,7 +247,7 @@ function removeUnitSpatial(u) {
     if (u._spatialKey !== undefined) {
         let oldKey = u._spatialKey;
         let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
-        if (spatialUnits[u._spatialKey].delete(u)) {
+        if (_removeUnitFromSpatialArray(spatialUnits[u._spatialKey], u)) {
             let owner = Math.floor(Number(u.owner));
             if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
                 let typeIdx = Number.isFinite(u._spatialUnitTypeIdx)
@@ -248,8 +272,8 @@ function removeUnitSpatial(u) {
     }
     if (u._spatialAreaId !== undefined) {
         let oldAreaId = u._spatialAreaId;
-        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length && spatialUnitsByArea[oldAreaId]) {
-            spatialUnitsByArea[oldAreaId].delete(u);
+        if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
+            _removeUnitFromSpatialArray(spatialUnitsByArea[oldAreaId], u);
         }
         u._spatialAreaId = undefined;
     }
@@ -272,7 +296,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
         let bucket = spatialUnitsByArea[areaId];
-        if (!bucket || bucket.size <= 0) continue;
+        if (!bucket || bucket.length <= 0) continue;
         for (let u of bucket) {
             if (!includeDead && u.dead) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
@@ -371,7 +395,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                     if (cplx[pb] <= 0) continue;
                 }
                 let chunk = chunks[ck];
-                if (!chunk || chunk.size <= 0) continue;
+                if (!chunk || chunk.length <= 0) continue;
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
                 let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
@@ -417,7 +441,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                     }
                 }
                 let chunk = chunks[ck];
-                if (!chunk || chunk.size <= 0) continue;
+                if (!chunk || chunk.length <= 0) continue;
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
                 let ny = wy < minY ? minY : (wy > minY + cws ? minY + cws : wy);
@@ -465,7 +489,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 }
             }
             let chunk = chunks[ck];
-            if (!chunk || chunk.size <= 0) continue;
+            if (!chunk || chunk.length <= 0) continue;
             if (exact) {
                 let minX = cx * cws, minY = cy * cws;
                 let nx = wx < minX ? minX : (wx > minX + cws ? minX + cws : wx);
@@ -544,7 +568,7 @@ function _computeClosestEnemyUnitByChunks(ownerId, wx, wy, rangeSq, minCx, minCy
 
     if (bestChunkKey < 0) return null;
     let chunk = spatialUnits[bestChunkKey];
-    if (!chunk || chunk.size <= 0) return null;
+    if (!chunk || chunk.length <= 0) return null;
 
     let best = null;
     let bestD2 = Infinity;

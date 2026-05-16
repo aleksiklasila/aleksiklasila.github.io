@@ -260,9 +260,10 @@ class Barrack {
     }
 
     draw(ctx) {
-        // Owner border
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
 
         ctx.fillStyle = '#664'; ctx.beginPath();
         ctx.moveTo(this.x - 12, this.y - 12); ctx.lineTo(this.x + 12, this.y - 12); ctx.lineTo(this.x, this.y - 20);
@@ -332,8 +333,10 @@ class CollectorSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#432'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#f3d55b';
         ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
@@ -398,8 +401,10 @@ class AstarSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#555'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#f0f0f0';
         ctx.font = 'bold 16px Arial';
@@ -461,8 +466,10 @@ class SalvagerSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#543'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#8d8'; ctx.beginPath();
         for (let i = 0; i < 3; i++) { let a = (i * 2 * Math.PI) / 3 - Math.PI / 2; ctx.lineTo(this.x + Math.cos(a) * 8, this.y + Math.sin(a) * 8); }
@@ -530,8 +537,10 @@ class BuilderSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#354'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         // Rectangle icon
         ctx.fillStyle = '#8b5';
@@ -599,8 +608,10 @@ class HealerSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#355'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#fff';
         ctx.fillRect(this.x - 7, this.y - 5, 14, 10);
@@ -689,8 +700,10 @@ class ResearchSpawner {
     }
 
     draw(ctx) {
-        ctx.strokeStyle = PLAYER_COLORS[this.owner]; ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 14, this.y - 14, 28, 28);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
         ctx.fillStyle = '#446'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#aef';
         ctx.font = '11px Arial';

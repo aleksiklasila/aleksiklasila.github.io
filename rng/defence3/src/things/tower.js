@@ -237,10 +237,10 @@ class Tower {
     }
 
     draw(ctx) {
-        // Owner color border
-        ctx.strokeStyle = PLAYER_COLORS[this.owner];
-        ctx.lineWidth = 1;
-        ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        if (this.owner >= 0) {
+            ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+        }
 
         // Under construction overlay
         if (this.underConstruction || this.isUpgrading) {

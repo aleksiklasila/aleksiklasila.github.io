@@ -3983,9 +3983,6 @@ function renderResearchInfo(e) {
     if (e.owner === localPlayerId) {
         html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
     }
-    html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-    html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
-    html += `</div>`;
     if (e.owner === localPlayerId) {
         let labLevel = getThingEffectiveLevel(e);
         let researcherEnergy = getUnitStatForOwner(e.owner, 'researcher_unit', labLevel, 'energy');
@@ -4008,14 +4005,17 @@ function renderResearchInfo(e) {
         html += renderSpawnerEnergyProgressRow(getSpawnerEnergyProgress(e));
     }
     if (e.owner === localPlayerId && !e.underConstruction) {
+        html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+        html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+        html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
+        html += `</div>`;
         if (queueOpen) {
             html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
             html += renderQueuedResearchTasksForSingleBuilding(e);
             html += `</div>`;
         }
-
         html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-        html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Shared Research Queue (Per Stat)</div>`;
+
         html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
         html += `</div>`;
     }
@@ -4077,9 +4077,6 @@ function renderResearchGroupInfo(group) {
             html += infoRow('Rally', 'Mixed');
         }
     }
-    html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-    html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
-    html += `</div>`;
     if (e.owner === localPlayerId) {
         let workerQueueCount = 0;
         for (let r of group) {
@@ -4107,14 +4104,18 @@ function renderResearchGroupInfo(group) {
         html += `</div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
 
+        html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+        html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+        html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
+        html += `</div>`;
+
         if (queueOpen) {
             html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
             html += renderQueuedResearchTasksForGroup(group);
             html += `</div>`;
         }
-
         html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-        html += `<div style="font-size:10px;color:#8cf;margin-bottom:3px">Shared Research Queue (Per Stat)</div>`;
+
         html += renderResearchThingRowsForPanel(e.owner, queueScope, group);
         html += `</div>`;
 

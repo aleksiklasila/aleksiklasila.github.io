@@ -2,6 +2,7 @@
 // ============================================================
 let dirtyGrid = true, dirtyAreas = true;
 let visibilityGrid = [];
+let visibilityGridByPlayer = Array.from({ length: 8 }, () => []);
 let visibilityVersion = 0;
 let fullVisibility = false;
 
@@ -17,7 +18,7 @@ let areaIdGrid = []; // 2D lookup [y][x] -> areaId
 let gridCellsByArea = []; // [areaId] -> [{x,y}]
 let gridCellsByAreaDistance = []; // [areaId][distance] -> [{x,y}]
 let gridCellsWithinAreaDistance = []; // [areaId][distance] -> [{x,y}]
-let spatialUnitsByArea = []; // [areaId] -> Set<Unit>
+let spatialUnitsByArea = []; // [areaId] -> [Unit]
 let droppedItemsByArea = []; // [areaId] -> [drop]
 
 const TILE_ENTITY_NONE = '';
@@ -78,18 +79,24 @@ function _removeDroppedItemFromAreaBucket(drop) {
 
 function rebuildAreaDistanceCachesFromAreas() {
     _areaById = [];
-    let areaCount = Array.isArray(areas) ? areas.length : 0;
+    let maxId = -1;
+    if (Array.isArray(areas)) {
+        for (let a of areas) {
+            if (!a) continue;
+            let aid = Number(a.id);
+            if (Number.isFinite(aid)) maxId = Math.max(maxId, aid);
+        }
+    }
+    let areaCount = maxId + 1;
     areaIdGrid = Array.from({ length: GRID_H }, () => new Int32Array(GRID_W).fill(-1));
     if (areaCount <= 0) {
         resetAreaDistanceCaches();
         return;
     }
 
+
     let neighborSets = Array.from({ length: areaCount }, () => new Set());
-    for (let area of areas) {
-        if (!area || !Number.isFinite(area.id)) continue;
-        _areaById[area.id] = area;
-    }
+
 
     for (let y = 0; y < GRID_H; y++) {
         let row = grid[y];
@@ -99,24 +106,52 @@ function rebuildAreaDistanceCachesFromAreas() {
             if (!cell) continue;
             let areaId = Math.floor(Number(cell.areaId));
             areaIdGrid[y][x] = areaId;
+        }
+    }
+
+    // Authoritatively populate areaId mapping from the snapshotted areas.
+    // This is critical for multiplayer resyncs where the grid may have lost its areaId properties.
+    for (let area of areas) {
+        let aid = Number(area && area.id);
+        if (!Number.isFinite(aid)) continue;
+        _areaById[aid] = area;
+        if (Array.isArray(area.cells)) {
+            for (let i = 0; i < area.cells.length; i++) {
+                let c = area.cells[i];
+                if (!c) continue;
+                if (c.x >= 0 && c.x < GRID_W && c.y >= 0 && c.y < GRID_H) {
+                    if (grid[c.y] && grid[c.y][c.x]) grid[c.y][c.x].areaId = aid;
+                    if (areaIdGrid[c.y]) areaIdGrid[c.y][c.x] = aid;
+                }
+            }
+        }
+    }
+
+    let neighborTotal = 0;
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            let areaId = areaIdGrid[y][x];
             if (!(areaId >= 0 && areaId < areaCount)) continue;
 
             if (x + 1 < GRID_W) {
-                let rightId = Math.floor(Number(grid[y][x + 1] && grid[y][x + 1].areaId));
+                let rightId = areaIdGrid[y][x + 1];
                 if (rightId >= 0 && rightId < areaCount && rightId !== areaId) {
+                    if (!neighborSets[areaId].has(rightId)) neighborTotal++;
                     neighborSets[areaId].add(rightId);
                     neighborSets[rightId].add(areaId);
                 }
             }
             if (y + 1 < GRID_H) {
-                let downId = Math.floor(Number(grid[y + 1] && grid[y + 1][x] && grid[y + 1][x].areaId));
+                let downId = areaIdGrid[y + 1] ? areaIdGrid[y + 1][x] : -1;
                 if (downId >= 0 && downId < areaCount && downId !== areaId) {
+                    if (!neighborSets[areaId].has(downId)) neighborTotal++;
                     neighborSets[areaId].add(downId);
                     neighborSets[downId].add(areaId);
                 }
             }
         }
     }
+
 
     areaNeighborIds = new Array(areaCount);
     areaDistanceMatrix = new Array(areaCount);
@@ -126,10 +161,10 @@ function rebuildAreaDistanceCachesFromAreas() {
     gridCellsByAreaDistance = new Array(areaCount);
     gridCellsWithinAreaDistance = new Array(areaCount);
     if (!Array.isArray(spatialUnitsByArea) || spatialUnitsByArea.length !== areaCount) {
-        spatialUnitsByArea = Array.from({ length: areaCount }, () => new Set());
+        spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
     } else {
         for (let i = 0; i < spatialUnitsByArea.length; i++) {
-            if (!(spatialUnitsByArea[i] instanceof Set)) spatialUnitsByArea[i] = new Set();
+            if (!Array.isArray(spatialUnitsByArea[i])) spatialUnitsByArea[i] = [];
         }
     }
     droppedItemsByArea = Array.from({ length: areaCount }, () => []);
@@ -140,7 +175,16 @@ function rebuildAreaDistanceCachesFromAreas() {
     }
 
     for (let source = 0; source < areaCount; source++) {
-        let neighbors = Array.from(neighborSets[source]).sort((a, b) => a - b);
+        if (!_areaById[source]) {
+             areaNeighborIds[source] = [];
+             areaDistanceMatrix[source] = null;
+             areaIdsByDistance[source] = [];
+             areaIdsWithinDistance[source] = [];
+             gridCellsByAreaDistance[source] = [];
+             gridCellsWithinAreaDistance[source] = [];
+             continue;
+        }
+        let neighbors = Array.from(neighborSets[source] || []).sort((a, b) => a - b);
         areaNeighborIds[source] = neighbors;
         if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
         let ownCells = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
@@ -190,8 +234,11 @@ function rebuildAreaDistanceCachesFromAreas() {
             for (let i = 0; i < areaIds.length; i++) {
                 let targetAreaId = areaIds[i];
                 let targetArea = _areaById[targetAreaId];
-                if (!targetArea || !Array.isArray(targetArea.cells) || targetArea.cells.length <= 0) continue;
-                cellsAtDistance = cellsAtDistance.concat(targetArea.cells);
+                if (!targetArea || !Array.isArray(targetArea.cells)) continue;
+                let tCells = targetArea.cells;
+                for (let j = 0; j < tCells.length; j++) {
+                    if (tCells[j]) cellsAtDistance.push(tCells[j]);
+                }
             }
             exactGridCells[distance] = cellsAtDistance;
             if (cellsAtDistance.length > 0) cumulativeCells = cumulativeCells.concat(cellsAtDistance);
@@ -899,6 +946,13 @@ let lockstepLastResendRequestAtByTick = {}; // host/guest: {tick: timestamp}
 let nextLocalActionSeq = 1;
 let waitingForRemoteSince = 0;
 let lockstepLastHardResyncRequestAt = 0;
+let lockstepHardResyncInFlightUntil = 0;
+let lockstepPostSnapshotGraceUntilAt = 0;
+let lockstepSnapshotLastSentAtByPeer = {};
+let lockstepResyncPauseActive = false;
+let lockstepResyncSessionId = '';
+let lockstepResyncPendingAckByPeer = {};
+let lockstepResyncSnapshotCache = null;
 let nextUnitId = 1;
 let visualRng = null; // separate RNG for particles/visual effects (not synced)
 
@@ -915,6 +969,12 @@ let duplicateUidBlocked = false;
 let duplicateUidBlockReason = '';
 let matchStartLobbyPlayers = [];
 let matchStartConfig = null;
+let matchStartSessionId = '';
+let matchStartWaitingForReady = false;
+let matchStartExpectedReadyPeerIds = [];
+let matchStartReadyByPeerId = {};
+let matchStartTeamByPeerId = {};
+let matchStartTeamByUid = {};
 let matchRoleByPeerId = {};
 let matchRoleByUid = {};
 let peerUidByPeerId = {};
@@ -932,6 +992,7 @@ let lockstepLocalStateHashByTick = {};
 let lockstepExpectedStateDigestByTick = {};
 let lockstepLocalStateDigestByTick = {};
 let lockstepDesyncDetected = false;
+let lockstepHashGraceUntilTick = -1;
 const LS_PLAYER_UID_KEY = 'defence3_player_uid';
 const LS_PLAYER_NAME_KEY = 'defence3_player_name';
 const LS_UI_SETTINGS_KEY = 'defence3_ui_settings_v1';
