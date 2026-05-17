@@ -859,10 +859,31 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         localDefeated: !!localDefeated,
         spectateMode: String(spectateMode || 'none'),
         configHash: buildRuntimeConfigHashForSnapshot(),
+        globalSpawnerReadyOrderCounter: typeof globalSpawnerReadyOrderCounter !== 'undefined' ? Math.floor(Number(globalSpawnerReadyOrderCounter) || 1) : 1,
         players: cloneSnapshotValue(players),
+        // Serialize the fixed-point resource accumulators explicitly so the guest doesn't
+        // re-derive them from floating-point player.energy/astar values on restore.
+        playerResourceFixedValues: players.map(p => {
+            let fv = p && p._resourceFixedValues;
+            if (!fv || typeof fv !== 'object') return null;
+            let out = {};
+            for (let k of Object.keys(fv)) {
+                let v = Math.floor(Number(fv[k]) || 0);
+                if (Number.isFinite(v)) out[k] = v;
+            }
+            return out;
+        }),
         towers: towers.map(t => snapshotEntity(t, ['connectedLasers', 'preferredTarget', 'textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
-        barracks: barracks.map(b => snapshotEntity(b, ['textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
-        spawners: collectorSpawners.map(s => snapshotEntity(s, ['textCtx', 'textCanvas', '_textCanvasScale'])).filter(Boolean),
+        barracks: barracks.map(b => {
+            let snap = snapshotEntity(b, ['textCtx', 'textCanvas', '_textCanvasScale']);
+            if (snap) snap._spawnReadyOrder = (b._spawnReadyOrder !== null && b._spawnReadyOrder !== undefined && Number.isFinite(Number(b._spawnReadyOrder))) ? Math.floor(Number(b._spawnReadyOrder)) : null;
+            return snap;
+        }).filter(Boolean),
+        spawners: collectorSpawners.map(s => {
+            let snap = snapshotEntity(s, ['textCtx', 'textCanvas', '_textCanvasScale']);
+            if (snap) snap._spawnReadyOrder = (s._spawnReadyOrder !== null && s._spawnReadyOrder !== undefined && Number.isFinite(Number(s._spawnReadyOrder))) ? Math.floor(Number(s._spawnReadyOrder)) : null;
+            return snap;
+        }).filter(Boolean),
         units: units.map(u => {
             let snap = snapshotEntity(u, [
                 'targetUnit', 'targetBuilding', 'attackTarget', 'workerTarget',
@@ -913,6 +934,10 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 astarLastGatherY: (u._astarLastGatherY !== null && u._astarLastGatherY !== undefined) ? Number(u._astarLastGatherY) : null,
                 astarLastGatherGx: (u._astarLastGatherGx !== null && u._astarLastGatherGx !== undefined) ? Math.floor(Number(u._astarLastGatherGx)) : null,
                 astarLastGatherGy: (u._astarLastGatherGy !== null && u._astarLastGatherGy !== undefined) ? Math.floor(Number(u._astarLastGatherGy)) : null,
+                collectorLastGatherX: (u._collectorLastGatherX !== null && u._collectorLastGatherX !== undefined) ? Number(u._collectorLastGatherX) : null,
+                collectorLastGatherY: (u._collectorLastGatherY !== null && u._collectorLastGatherY !== undefined) ? Number(u._collectorLastGatherY) : null,
+                collectorLastGatherGx: (u._collectorLastGatherGx !== null && u._collectorLastGatherGx !== undefined) ? Math.floor(Number(u._collectorLastGatherGx)) : null,
+                collectorLastGatherGy: (u._collectorLastGatherGy !== null && u._collectorLastGatherGy !== undefined) ? Math.floor(Number(u._collectorLastGatherGy)) : null,
                 
                 builderLastMoveTick: (u._builderLastMoveTick !== null && u._builderLastMoveTick !== undefined) ? Math.floor(Number(u._builderLastMoveTick)) : null,
                 builderNextRecheckTick: (u._builderNextRecheckTick !== null && u._builderNextRecheckTick !== undefined) ? Math.floor(Number(u._builderNextRecheckTick)) : null,
@@ -925,7 +950,12 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 astarLastChargedTick: (u._astarLastChargedTick !== null && u._astarLastChargedTick !== undefined) ? Math.floor(Number(u._astarLastChargedTick)) : null,
                 astarLastChargedFromKey: (u._astarLastChargedFromKey !== null && u._astarLastChargedFromKey !== undefined) ? Math.floor(Number(u._astarLastChargedFromKey)) : null,
                 astarLastChargedToKey: (u._astarLastChargedToKey !== null && u._astarLastChargedToKey !== undefined) ? Math.floor(Number(u._astarLastChargedToKey)) : null,
-                energyBlockedUntil: (u._energyBlockedUntil !== null && u._energyBlockedUntil !== undefined) ? Math.floor(Number(u._energyBlockedUntil)) : null
+                energyBlockedUntil: (u._energyBlockedUntil !== null && u._energyBlockedUntil !== undefined) ? Math.floor(Number(u._energyBlockedUntil)) : null,
+                workerNextIdleRetargetTick: (u._workerNextIdleRetargetTick !== null && u._workerNextIdleRetargetTick !== undefined) ? Math.floor(Number(u._workerNextIdleRetargetTick)) : null,
+                workerReservedTileIndex: (u._workerReservedTileIndex !== null && u._workerReservedTileIndex !== undefined) ? Math.floor(Number(u._workerReservedTileIndex)) : -1,
+                lastIdleStateTime: (u._lastIdleStateTime !== null && u._lastIdleStateTime !== undefined) ? Math.floor(Number(u._lastIdleStateTime)) : null,
+                forcedTargetLastSeenX: (u._forcedTargetLastSeenX !== null && u._forcedTargetLastSeenX !== undefined) ? Number(u._forcedTargetLastSeenX) : null,
+                forcedTargetLastSeenY: (u._forcedTargetLastSeenY !== null && u._forcedTargetLastSeenY !== undefined) ? Number(u._forcedTargetLastSeenY) : null
             };
             return snap;
         }).filter(Boolean),
@@ -1006,6 +1036,19 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     initTileEntityLookup();
 
     players = Array.isArray(snapshot.players) ? cloneSnapshotValue(snapshot.players) : players;
+    // Restore the exact fixed-point resource counters so p.energy/p.astar are
+    // re-derived from integers instead of being re-initialised from floats.
+    if (Array.isArray(snapshot.playerResourceFixedValues)) {
+        for (let i = 0; i < snapshot.playerResourceFixedValues.length; i++) {
+            let fv = snapshot.playerResourceFixedValues[i];
+            if (!fv || typeof fv !== 'object' || !players[i]) continue;
+            players[i]._resourceFixedValues = {};
+            for (let k of Object.keys(fv)) {
+                let v = Math.floor(Number(fv[k]) || 0);
+                if (Number.isFinite(v)) players[i]._resourceFixedValues[k] = v;
+            }
+        }
+    }
     currentTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || 0));
     lockstepHashGraceUntilTick = currentTick + Math.max(48, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 8));
     gameTime = Math.max(0, Math.floor(Number(snapshot.gameTime) || currentTick));
@@ -1014,6 +1057,10 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     gameOver = !!snapshot.gameOver;
     localDefeated = !!snapshot.localDefeated;
     spectateMode = String(snapshot.spectateMode || spectateMode || 'none');
+    // Restore the global spawn-order counter so that the guest's spawn priority is identical to the host's.
+    if (Number.isFinite(Number(snapshot.globalSpawnerReadyOrderCounter))) {
+        try { globalSpawnerReadyOrderCounter = Math.max(1, Math.floor(Number(snapshot.globalSpawnerReadyOrderCounter))); } catch {}
+    }
     let snapshotGoldMines = Array.isArray(snapshot.goldMines) ? cloneSnapshotValue(snapshot.goldMines) : goldMines;
     let snapshotAstarMines = Array.isArray(snapshot.astarMines) ? cloneSnapshotValue(snapshot.astarMines) : astarMines;
 
@@ -1027,6 +1074,13 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         t.connectedLasers = [];
         t.textCtx = ensureLevelTextCanvas(t);
         t.updateStats();
+        // Re-apply the authoritative snapshot energy/maxEnergy AFTER updateStats() so that
+        // construction-in-progress values are not corrupted by the preComputed clamp.
+        if (Number.isFinite(Number(ts.energy))) t.energy = Number(ts.energy);
+        if (Number.isFinite(Number(ts.maxEnergy))) t.maxEnergy = Number(ts.maxEnergy);
+        if (ts.underConstruction !== undefined) t.underConstruction = !!ts.underConstruction;
+        if (ts.isUpgrading !== undefined) t.isUpgrading = !!ts.isUpgrading;
+        if (Number.isFinite(Number(ts.upgrademaxEnergy))) t.upgrademaxEnergy = Number(ts.upgrademaxEnergy);
         towers.push(t);
         let tgx = Math.floor(Number(t.gx));
         let tgy = Math.floor(Number(t.gy));
@@ -1044,6 +1098,15 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         let b = new Barrack(Math.floor(bs.gx), Math.floor(bs.gy), Math.floor(Number(bs.owner) || 0), String(bs.unitType || 'norm'), Math.max(1, Math.floor(Number(bs.stacks) || 1)));
         Object.assign(b, cloneSnapshotValue(bs));
         updateItemTextCache(b);
+        // Re-apply authoritative snapshot energy values after stat recalc.
+        if (Number.isFinite(Number(bs.energy))) b.energy = Number(bs.energy);
+        if (Number.isFinite(Number(bs.maxEnergy))) b.maxEnergy = Number(bs.maxEnergy);
+        if (bs.underConstruction !== undefined) b.underConstruction = !!bs.underConstruction;
+        if (bs.isUpgrading !== undefined) b.isUpgrading = !!bs.isUpgrading;
+        if (Number.isFinite(Number(bs.upgrademaxEnergy))) b.upgrademaxEnergy = Number(bs.upgrademaxEnergy);
+        if (Number.isFinite(Number(bs.spawnTimer))) b.spawnTimer = Math.floor(Number(bs.spawnTimer));
+        if (Number.isFinite(Number(bs.spawnCooldown))) b.spawnCooldown = Math.max(1, Math.floor(Number(bs.spawnCooldown)));
+        b._spawnReadyOrder = (bs._spawnReadyOrder !== null && bs._spawnReadyOrder !== undefined && Number.isFinite(Number(bs._spawnReadyOrder))) ? Math.floor(Number(bs._spawnReadyOrder)) : undefined;
         barracks.push(b);
         let bgx = Math.floor(Number(b.gx));
         let bgy = Math.floor(Number(b.gy));
@@ -1070,6 +1133,15 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         let s = createSpawnerByType(type, Math.floor(ss.gx), Math.floor(ss.gy), Math.floor(Number(ss.owner) || 0), Math.max(1, Math.floor(Number(ss.stacks) || 1)));
         Object.assign(s, cloneSnapshotValue(ss));
         updateItemTextCache(s);
+        // Re-apply authoritative snapshot energy values after stat recalc.
+        if (Number.isFinite(Number(ss.energy))) s.energy = Number(ss.energy);
+        if (Number.isFinite(Number(ss.maxEnergy))) s.maxEnergy = Number(ss.maxEnergy);
+        if (ss.underConstruction !== undefined) s.underConstruction = !!ss.underConstruction;
+        if (ss.isUpgrading !== undefined) s.isUpgrading = !!ss.isUpgrading;
+        if (Number.isFinite(Number(ss.upgrademaxEnergy))) s.upgrademaxEnergy = Number(ss.upgrademaxEnergy);
+        if (Number.isFinite(Number(ss.spawnTimer))) s.spawnTimer = Math.floor(Number(ss.spawnTimer));
+        if (Number.isFinite(Number(ss.spawnCooldown))) s.spawnCooldown = Math.max(1, Math.floor(Number(ss.spawnCooldown)));
+        s._spawnReadyOrder = (ss._spawnReadyOrder !== null && ss._spawnReadyOrder !== undefined && Number.isFinite(Number(ss._spawnReadyOrder))) ? Math.floor(Number(ss._spawnReadyOrder)) : undefined;
         collectorSpawners.push(s);
         let sgx = Math.floor(Number(s.gx));
         let sgy = Math.floor(Number(s.gy));
@@ -1142,7 +1214,10 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u.pathIndex = Number.isFinite(runtime.pathIndex) ? Math.floor(runtime.pathIndex) : 0;
             u.pathIsFallbackAstar = !!runtime.pathIsFallbackAstar;
             
-            if (!u._pendingPathTarget && u.targetPos && (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING)) {
+            // Only synthesize a pending path target if no path was restored - a restored path should
+            // be followed as-is; creating a _pendingPathTarget here would cause a fresh re-path on the
+            // first tick and diverge from the host.
+            if (!u._pendingPathTarget && (!u.path || u.path.length === 0) && u.targetPos && (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING)) {
                 let gx = Math.floor(u.targetPos.x / 32);
                 let gy = Math.floor(u.targetPos.y / 32);
                 u._pendingPathTarget = { gx, gy, cmd: u.commandState, src: 'deferred_resolver' };
@@ -1164,6 +1239,10 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u._astarLastGatherY = (runtime.astarLastGatherY !== null && runtime.astarLastGatherY !== undefined) ? Number(runtime.astarLastGatherY) : null;
             u._astarLastGatherGx = (runtime.astarLastGatherGx !== null && runtime.astarLastGatherGx !== undefined) ? Math.floor(Number(runtime.astarLastGatherGx)) : null;
             u._astarLastGatherGy = (runtime.astarLastGatherGy !== null && runtime.astarLastGatherGy !== undefined) ? Math.floor(Number(runtime.astarLastGatherGy)) : null;
+            u._collectorLastGatherX = (runtime.collectorLastGatherX !== null && runtime.collectorLastGatherX !== undefined) ? Number(runtime.collectorLastGatherX) : null;
+            u._collectorLastGatherY = (runtime.collectorLastGatherY !== null && runtime.collectorLastGatherY !== undefined) ? Number(runtime.collectorLastGatherY) : null;
+            u._collectorLastGatherGx = (runtime.collectorLastGatherGx !== null && runtime.collectorLastGatherGx !== undefined) ? Math.floor(Number(runtime.collectorLastGatherGx)) : null;
+            u._collectorLastGatherGy = (runtime.collectorLastGatherGy !== null && runtime.collectorLastGatherGy !== undefined) ? Math.floor(Number(runtime.collectorLastGatherGy)) : null;
             
             u._builderLastMoveTick = (runtime.builderLastMoveTick !== null && runtime.builderLastMoveTick !== undefined) ? Math.floor(Number(runtime.builderLastMoveTick)) : null;
             u._builderNextRecheckTick = (runtime.builderNextRecheckTick !== null && runtime.builderNextRecheckTick !== undefined) ? Math.floor(Number(runtime.builderNextRecheckTick)) : null;
@@ -1177,6 +1256,11 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u._astarLastChargedFromKey = (runtime.astarLastChargedFromKey !== null && runtime.astarLastChargedFromKey !== undefined) ? Math.floor(Number(runtime.astarLastChargedFromKey)) : null;
             u._astarLastChargedToKey = (runtime.astarLastChargedToKey !== null && runtime.astarLastChargedToKey !== undefined) ? Math.floor(Number(runtime.astarLastChargedToKey)) : null;
             u._energyBlockedUntil = (runtime.energyBlockedUntil !== null && runtime.energyBlockedUntil !== undefined) ? Math.floor(Number(runtime.energyBlockedUntil)) : null;
+            u._workerNextIdleRetargetTick = (runtime.workerNextIdleRetargetTick !== null && runtime.workerNextIdleRetargetTick !== undefined) ? Math.floor(Number(runtime.workerNextIdleRetargetTick)) : null;
+            u._workerReservedTileIndex = (runtime.workerReservedTileIndex !== null && runtime.workerReservedTileIndex !== undefined) ? Math.floor(Number(runtime.workerReservedTileIndex)) : -1;
+            u._lastIdleStateTime = (runtime.lastIdleStateTime !== null && runtime.lastIdleStateTime !== undefined) ? Math.floor(Number(runtime.lastIdleStateTime)) : null;
+            u._forcedTargetLastSeenX = (runtime.forcedTargetLastSeenX !== null && runtime.forcedTargetLastSeenX !== undefined) ? Number(runtime.forcedTargetLastSeenX) : null;
+            u._forcedTargetLastSeenY = (runtime.forcedTargetLastSeenY !== null && runtime.forcedTargetLastSeenY !== undefined) ? Number(runtime.forcedTargetLastSeenY) : null;
         }
         delete u.snapshotRefs;
         delete u._snapshotRefs;
@@ -1189,13 +1273,52 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     _invalidateWorkerTargetLoadCache();
     for (let u of units) {
         if (!u || !u.workerState || !u.workerType) continue;
-        u._workerReservedTileIndex = -1;
         if (!u.workerTarget) continue;
         let restoredTarget = u.workerTarget;
         let restoredTargetType = u.workerTargetType;
         u.workerTarget = null;
         u.workerTargetType = null;
+        u._workerReservedTileIndex = -1;
         _setWorkerTarget(u, restoredTarget, restoredTargetType);
+    }
+
+    // Re-populate _resourceCollectorMemory from the restored backing fields.
+    // cloneSnapshotValue strips _-prefixed fields, so the cache is null on restore.
+    // Without this, the collector's first `_getResourceCollectorMemory()` call creates
+    // an empty cache, losing its mine/spawner routing memory and potentially causing
+    // an extra mine visit or wrong-spawner deposit.
+    for (let u of units) {
+        if (!u || !u.workerType) continue;
+        let wt = String(u.workerType || '');
+        if (wt === 'collector') {
+            u._resourceCollectorMemory = {
+                pinnedTarget: u._collectorPinnedTarget || null,
+                pinnedTargetType: u._collectorPinnedTargetType || null,
+                lastGatherX: (u._collectorLastGatherX !== null && u._collectorLastGatherX !== undefined) ? Number(u._collectorLastGatherX) : null,
+                lastGatherY: (u._collectorLastGatherY !== null && u._collectorLastGatherY !== undefined) ? Number(u._collectorLastGatherY) : null,
+                lastGatherGx: (u._collectorLastGatherGx !== null && u._collectorLastGatherGx !== undefined) ? Math.floor(Number(u._collectorLastGatherGx)) : null,
+                lastGatherGy: (u._collectorLastGatherGy !== null && u._collectorLastGatherGy !== undefined) ? Math.floor(Number(u._collectorLastGatherGy)) : null,
+                lastGatherType: u._collectorLastGatherType || null,
+                nextSpawner: u._collectorNextSpawner || null,
+                lastDropoffSpawner: u._collectorLastDropoffSpawner || null,
+                lastMineTarget: u._lastMineTarget || null,
+                lastMineTargetType: null,
+            };
+        } else if (wt === 'astar_collector') {
+            u._resourceCollectorMemory = {
+                pinnedTarget: u._astarPinnedTarget || null,
+                pinnedTargetType: u._astarPinnedTargetType || null,
+                lastGatherX: (u._astarLastGatherX !== null && u._astarLastGatherX !== undefined) ? Number(u._astarLastGatherX) : null,
+                lastGatherY: (u._astarLastGatherY !== null && u._astarLastGatherY !== undefined) ? Number(u._astarLastGatherY) : null,
+                lastGatherGx: (u._astarLastGatherGx !== null && u._astarLastGatherGx !== undefined) ? Math.floor(Number(u._astarLastGatherGx)) : null,
+                lastGatherGy: (u._astarLastGatherGy !== null && u._astarLastGatherGy !== undefined) ? Math.floor(Number(u._astarLastGatherGy)) : null,
+                lastGatherType: u._astarLastMineTargetType || null,
+                nextSpawner: u._astarNextSpawner || null,
+                lastDropoffSpawner: null,
+                lastMineTarget: u._astarLastMineTarget || null,
+                lastMineTargetType: u._astarLastMineTargetType || null,
+            };
+        }
     }
 
     // Re-derive live unit stats from precomputed tables after snapshot assignment.
@@ -2167,6 +2290,9 @@ function setupConnection(conn) {
                     if (st && gameStarted) {
                         st.textContent = 'Lockstep resumed after synchronization.';
                         st.style.color = '#9f9';
+                    }
+                    if (connections[0] && gameStarted && Number.isFinite(currentTick) && currentTick >= 0) {
+                        try { connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: currentTick }); } catch { }
                     }
                 }
             }
