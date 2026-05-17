@@ -268,7 +268,7 @@ function updateWorkerAI(u) {
                     if (t.underConstruction) {
                         let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
                         t.maxEnergy = requiredEnergy;
-                        t.energy = Math.min(requiredEnergy, t.energy + dps);
+                        t.energy = Math.round(Math.min(requiredEnergy, t.energy + dps) * 1000) / 1000;
                         didWork = true;
                         if (t.energy >= requiredEnergy) {
                             markConstructionComplete(t);
@@ -286,7 +286,7 @@ function updateWorkerAI(u) {
                         let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
                         t.upgrademaxEnergy = requiredEnergy;
                         t.maxEnergy = requiredEnergy;
-                        t.energy = Math.min(requiredEnergy, t.energy + dps);
+                        t.energy = Math.round(Math.min(requiredEnergy, t.energy + dps) * 1000) / 1000;
                         didWork = true;
                         if (t.energy >= requiredEnergy) {
                             let prevStacked = getThingStackedStacks(t);
@@ -338,7 +338,7 @@ function updateWorkerAI(u) {
                             _builderFindTarget(u, myGx, myGy);
                         }
                     } else if (_isBuilderRepairTarget(t)) {
-                        t.energy = Math.min(t.maxEnergy, t.energy + dps);
+                        t.energy = Math.round(Math.min(t.maxEnergy, t.energy + dps) * 1000) / 1000;
                         didWork = true;
                         if (!_isBuilderRepairTarget(t)) {
                             _builderRememberWorkSite(u, t);
@@ -444,7 +444,7 @@ function updateWorkerAI(u) {
                 if (t.underConstruction) {
                     let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
                     t.maxEnergy = requiredEnergy;
-                    t.energy = Math.min(requiredEnergy, t.energy + buildStep);
+                    t.energy = Math.round(Math.min(requiredEnergy, t.energy + buildStep) * 1000) / 1000;
                     if (t.energy >= requiredEnergy) {
                         markConstructionComplete(t);
                         refreshThingProgressState(t);
@@ -461,7 +461,7 @@ function updateWorkerAI(u) {
                     let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
                     t.upgrademaxEnergy = requiredEnergy;
                     t.maxEnergy = requiredEnergy;
-                    t.energy = Math.min(requiredEnergy, t.energy + buildStep);
+                    t.energy = Math.round(Math.min(requiredEnergy, t.energy + buildStep) * 1000) / 1000;
                     if (t.energy >= requiredEnergy) {
                         let prevStacked = getThingStackedStacks(t);
                         let prevManual = getThingManualStacks(t);
@@ -510,7 +510,7 @@ function updateWorkerAI(u) {
                         _builderFindTarget(u, myGx, myGy);
                     }
                 } else if (_isBuilderRepairTarget(t)) {
-                    t.energy = Math.min(t.maxEnergy, t.energy + buildStep);
+                    t.energy = Math.round(Math.min(t.maxEnergy, t.energy + buildStep) * 1000) / 1000;
                     if (!_isBuilderRepairTarget(t)) {
                         _builderRememberWorkSite(u, t);
                         _clearWorkerTarget(u);
@@ -1032,9 +1032,12 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
                         let farmLvl = getThingBaseLevel(u.workerTarget, stackCountToLevel(u.workerTarget.stacks || 1));
                         let mult = getBuildingStatForOwner(owner, resourceCfg.farmKey, farmLvl, 'multiplier');
                         if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
-                        u.carryingValue = Math.max(1, gatherPerTrip * mult);
+                        u.carryingValue = Math.floor(Math.max(1, gatherPerTrip * mult));
                     } else {
-                        let extract = Math.min(gatherPerTrip, Math.max(0, Number(u.workerTarget[resourceCfg.mineStatKey]) || 0));
+                        // Floor extract to integer — float gatherPerTrip (from level-scaling Math.pow)
+                        // would leave a fractional mine value; Math.floor in the digest would then diverge
+                        // between clients if their accumulated floats differ even slightly.
+                        let extract = Math.floor(Math.min(gatherPerTrip, Math.max(0, Number(u.workerTarget[resourceCfg.mineStatKey]) || 0)));
                         u.workerTarget[resourceCfg.mineStatKey] -= extract;
                         u.carryingValue = extract;
                         // Keep static/background mine visuals in sync as mine values change.
