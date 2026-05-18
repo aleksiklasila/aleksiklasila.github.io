@@ -163,6 +163,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
             u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
             u.commandState = CMD_MOVING;
             u.workerState = 'MANUAL_MOVE';
+            u.targetPos = { x: rgx * TILE + 16, y: rgy * TILE + 16 };
             u._manualMoveIssuedTick = gameTime;
         }
     }

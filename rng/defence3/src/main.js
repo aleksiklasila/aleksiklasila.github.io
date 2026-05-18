@@ -167,13 +167,16 @@ function _getThingUpKeepPerSecond(thing) {
     return def.target === 'wall' ? 3 : 1;
 }
 
+function _getThingUpKeepFixedPerSecond(thing) {
+    let perSecond = _getThingUpKeepPerSecond(thing);
+    return Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
+}
+
 function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
     if (!thing || !breakdowns) return;
     let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
     if (owner < 0 || owner >= breakdowns.length) return;
-    let perSecond = _getThingUpKeepPerSecond(thing);
-    if (!(perSecond > 0)) return;
-    let perSecondFixed = Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
+    let perSecondFixed = _getThingUpKeepFixedPerSecond(thing);
     if (!(perSecondFixed > 0)) return;
 
     let row = breakdowns[owner];
@@ -278,6 +281,7 @@ function gameTick() {
                 if (u.path && u.path.length > 0) {
                     u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                     u.commandState = pt.cmd;
+                    u.pathIsFallbackAstar = false;
                     u._pendingPathTarget = null;
                 } else {
                     _markUnitAstarBudgetBlocked(u, 1);
@@ -1970,6 +1974,11 @@ function initInput() {
             if (!gameStarted || localDefeated) return;
             if (!confirm('Resign and become a spectator?')) return;
             queueAction({ action: 'resign' });
+            // Immediate UX fallback during lockstep stalls: switch local client to spectating now.
+            enterSpectateMode('defeated');
+            if (isMultiplayer && !isHost && connections[0]) {
+                try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
+            }
         });
     }
     if (goBtnSpectate) {
@@ -2257,6 +2266,7 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         interruptWorkerForManualMove(u);
                     }
+                    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
                     if (_canUsePathfindRequestBudget(u.owner, u)) {
                         _consumePathfindRequestBudget(u.owner, u);
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -2264,6 +2274,7 @@ function processActions(actions, playerId) {
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                         if (u.path && u.path.length > 0) {
                             u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                            u.pathIsFallbackAstar = false;
                             u._pendingPathTarget = null;
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_MOVING, 'player_commands');
@@ -2287,6 +2298,7 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         interruptWorkerForManualMove(u);
                     }
+                    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
                     if (_canUsePathfindRequestBudget(u.owner, u)) {
                         _consumePathfindRequestBudget(u.owner, u);
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
@@ -2294,6 +2306,7 @@ function processActions(actions, playerId) {
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                         if (u.path && u.path.length > 0) {
                             u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                            u.pathIsFallbackAstar = false;
                             u._pendingPathTarget = null;
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_ATTACK_MOVING, 'player_commands');
@@ -2315,6 +2328,7 @@ function processActions(actions, playerId) {
                     if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                         u.targetUnit = target; u.commandState = CMD_ATTACKING; u.targetBuilding = null; u.forcedAttackTarget = true;
                         u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
+                        u.targetPos = { x: target.x, y: target.y };
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
                         if (_canUsePathfindRequestBudget(u.owner, u)) {
@@ -2322,6 +2336,7 @@ function processActions(actions, playerId) {
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
+                                u.pathIsFallbackAstar = false;
                                 u._pendingPathTarget = null;
                             } else {
                                 u.path = null;
@@ -2346,6 +2361,7 @@ function processActions(actions, playerId) {
                     if (a.unitIds.includes(u.id) && u.owner === playerId && !u.dead) {
                         u.targetBuilding = tb; u.commandState = CMD_ATTACKING; u.targetUnit = null; u.forcedAttackTarget = false;
                         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
+                        u.targetPos = { x: tb.x, y: tb.y };
                         let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
                         let dest = findNearestWalkable(tb.gx, tb.gy, ugx, ugy, u);
                         if (_canUsePathfindRequestBudget(u.owner, u)) {
@@ -2353,6 +2369,7 @@ function processActions(actions, playerId) {
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = 0;
+                                u.pathIsFallbackAstar = false;
                                 u._pendingPathTarget = null;
                             } else {
                                 u.path = null;
@@ -3177,12 +3194,15 @@ function hashStringLockstep(s) {
     return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-function computeTickPacketChecksum(tick, peerId, teamId, actions) {
+function computeTickPacketChecksum(tick, peerId, teamId, actions, stateHashTick = -1, stateHash = '', stateDigest = null) {
     return hashStringLockstep(stableSerializeForLockstep({
         tick: Math.floor(tick),
         peerId: String(peerId || ''),
         teamId: Math.floor(Number(teamId) || 0),
-        actions: Array.isArray(actions) ? actions : []
+        actions: Array.isArray(actions) ? actions : [],
+        stateHashTick: Math.floor(Number(stateHashTick) || -1),
+        stateHash: String(stateHash || ''),
+        stateDigest: stateDigest && typeof stateDigest === 'object' ? stateDigest : null
     }));
 }
 
@@ -3203,6 +3223,45 @@ function logLockstepWarning(reason, details = {}) {
     try {
         console.warn('[LOCKSTEP]', reason, details);
     } catch { }
+}
+
+function isStrictHardLockstepDebugMode() {
+    return !!lockstepStrictDebugMode;
+}
+
+function getEffectiveLockstepPipelineTicks() {
+    if (isStrictHardLockstepDebugMode()) return 0;
+    return Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
+}
+
+function getEffectiveLockstepStateCheckInterval() {
+    if (isStrictHardLockstepDebugMode()) return 1;
+    return Math.max(1, Math.floor(Number(LOCKSTEP_STATE_CHECK_INTERVAL) || 1));
+}
+
+function stopLockstepDebugMatch(reason, details = null) {
+    let stopReason = String(reason || 'lockstep stopped');
+    let stopTick = Number.isFinite(Number(details && details.tick))
+        ? Math.floor(Number(details.tick))
+        : currentTick;
+
+    lockstepFatalStopActive = true;
+    lockstepFatalStopTick = stopTick;
+    lockstepFatalStopReason = stopReason;
+    lockstepFatalStopDetails = details || null;
+    lockstepDesyncDetected = true;
+    waitingForRemoteSince = performance.now();
+
+    try {
+        console.error('[LOCKSTEP STOP]', stopReason, details || {});
+    } catch { }
+
+    let st = document.getElementById('lobby-status');
+    if (st) {
+        st.textContent = 'Lockstep stopped: ' + stopReason;
+        st.style.color = '#f88';
+    }
+    return true;
 }
 
 function isPeerExplicitlyRemoved(peerId) {
@@ -3316,18 +3375,43 @@ function getActiveMatchPeerIds() {
     return ids;
 }
 
+function getOutgoingTickStateHashPayload(tick) {
+    let packetTick = Math.floor(Number(tick));
+    if (!Number.isFinite(packetTick)) packetTick = currentTick;
+    let stateHashTick = packetTick - 1;
+    if (!Number.isFinite(stateHashTick) || stateHashTick < 0) {
+        return {
+            stateHashTick: -1,
+            stateHash: '',
+            stateDigest: null
+        };
+    }
+
+    let stateHash = String(lockstepLocalStateHashByTick[stateHashTick] || '');
+    let stateDigest = LOCKSTEP_DEBUG_HASH_DETAILS ? (lockstepLocalStateDigestByTick[stateHashTick] || null) : null;
+    return {
+        stateHashTick,
+        stateHash,
+        stateDigest: stateDigest && typeof stateDigest === 'object' ? stateDigest : null
+    };
+}
+
 function buildLocalTickPacket(tick) {
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0 || !myPeerId) return null;
     let actions = (localInputBuffer[t] || []).map(a => normalizeLockstepPayload({ ...a, teamId: localPlayerId }));
+    let hashPayload = getOutgoingTickStateHashPayload(t);
     let packet = {
         tick: t,
         peerId: myPeerId,
         teamId: localPlayerId,
-        actions
+        actions,
+        stateHashTick: hashPayload.stateHashTick,
+        stateHash: hashPayload.stateHash,
+        stateDigest: hashPayload.stateDigest
     };
     packet = normalizeLockstepPayload(packet) || packet;
-    packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
+    packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions, packet.stateHashTick, packet.stateHash, packet.stateDigest);
     lockstepLocalPacketByTick[t] = packet;
     return packet;
 }
@@ -3340,7 +3424,10 @@ function validateTickPacket(packet) {
     if (!peerId) return false;
     let teamId = Math.floor(Number(packet.teamId) || 0);
     let actions = Array.isArray(packet.actions) ? packet.actions : [];
-    let expected = computeTickPacketChecksum(t, peerId, teamId, actions);
+    let stateHashTick = Math.floor(Number(packet.stateHashTick) || -1);
+    let stateHash = String(packet.stateHash || '');
+    let stateDigest = (packet.stateDigest && typeof packet.stateDigest === 'object') ? packet.stateDigest : null;
+    let expected = computeTickPacketChecksum(t, peerId, teamId, actions, stateHashTick, stateHash, stateDigest);
     return String(packet.checksum || '') === expected;
 }
 
@@ -3354,6 +3441,16 @@ function validateTickBundle(bundle) {
     }
     let expected = computeTickBundleChecksum(t, packets);
     return String(bundle.combinedChecksum || '') === expected;
+}
+
+function shouldIgnoreIncomingLockstepTick(tick) {
+    let t = Math.floor(Number(tick));
+    if (!Number.isFinite(t) || t < 0) return true;
+    if (lockstepResyncPauseActive) return true;
+    if (Number.isFinite(lockstepResyncResumeTick) && lockstepResyncResumeTick >= 0 && t > lockstepResyncResumeTick) {
+        return true;
+    }
+    return false;
 }
 
 function sendLocalTickPacket(tick, force = false) {
@@ -3375,7 +3472,7 @@ function sendLocalTickPacket(tick, force = false) {
 function sendLocalTickPacketWindow(tick, force = false) {
     let baseTick = Math.floor(Number(tick));
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
-    let endTick = baseTick + LOCKSTEP_PIPELINE_TICKS;
+    let endTick = baseTick + getEffectiveLockstepPipelineTicks();
     for (let t = baseTick; t <= endTick; t++) {
         sendLocalTickPacket(t, force);
     }
@@ -3389,11 +3486,21 @@ function handleIncomingTickPacket(conn, data) {
     packet.peerId = connPeerId || String(packet.peerId || '');
     packet.tick = Math.floor(Number(packet.tick));
     if (!Number.isFinite(packet.tick) || packet.tick < 0 || !packet.peerId) return;
+    if (shouldIgnoreIncomingLockstepTick(packet.tick)) return;
     packet.teamId = Math.floor(Number(packet.teamId) || 0);
     packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
     packet = normalizeLockstepPayload(packet) || packet;
 
     if (!validateTickPacket(packet)) {
+        if (isStrictHardLockstepDebugMode()) {
+            stopLockstepDebugMatch('invalid tick packet', {
+                tick: packet.tick,
+                packetPeerId: packet.peerId,
+                fromPeer: connPeerId || null,
+                packet
+            });
+            return;
+        }
         logLockstepWarning('Packet checksum mismatch; requesting resend', {
             tick: packet.tick,
             packetPeerId: packet.peerId,
@@ -3401,6 +3508,28 @@ function handleIncomingTickPacket(conn, data) {
         });
         conn.send({ type: 'TICK_RESEND_REQUEST', tick: packet.tick, packetPeerId: packet.peerId });
         return;
+    }
+
+    if (isStrictHardLockstepDebugMode()) {
+        let remoteHashTick = Math.floor(Number(packet.stateHashTick) || -1);
+        let remoteHash = String(packet.stateHash || '');
+        if (remoteHashTick >= 0 && remoteHash) {
+            let localHash = String(lockstepLocalStateHashByTick[remoteHashTick] || '');
+            if (localHash && localHash !== remoteHash) {
+                stopLockstepDebugMatch('peer state hash mismatch', {
+                    tick: remoteHashTick,
+                    packetTick: packet.tick,
+                    peerId: packet.peerId,
+                    expected: localHash,
+                    local: remoteHash,
+                    details: summarizeLockstepDigestMismatch(
+                        lockstepLocalStateDigestByTick[remoteHashTick] || null,
+                        packet.stateDigest && typeof packet.stateDigest === 'object' ? packet.stateDigest : null
+                    )
+                });
+                return;
+            }
+        }
     }
 
     if (lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
@@ -3413,7 +3542,7 @@ function handleIncomingTickPacket(conn, data) {
     if (packet.teamId !== enforcedTeamId || packet.actions.some(a => Math.floor(Number(a && a.teamId) || 0) !== enforcedTeamId)) {
         packet.teamId = enforcedTeamId;
         packet.actions = packet.actions.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
-        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
+        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions, packet.stateHashTick, packet.stateHash, packet.stateDigest);
     }
 
     if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
@@ -3496,6 +3625,7 @@ function handleIncomingTickBundle(conn, data) {
     if (matchStartWaitingForReady) matchStartWaitingForReady = false;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < 0) return;
+    if (shouldIgnoreIncomingLockstepTick(t)) return;
     bundle.tick = t;
     lockstepPendingBundleByTick[t] = bundle;
 }
@@ -3524,6 +3654,7 @@ function handleIncomingTickCommit(conn, data) {
     if (isHost) return;
     let t = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(t) || t < 0) return;
+    if (shouldIgnoreIncomingLockstepTick(t)) return;
     lockstepPendingCommitByTick[t] = String(data.combinedChecksum || '');
 }
 
@@ -3558,6 +3689,42 @@ function computeLockstepStateDigest(tick) {
         }
         return Math.min(cfgCap, housePop);
     };
+    let getPlayerResourceFixedValue = (player, resourceKey) => {
+        let fixedMap = player && player._resourceFixedValues;
+        return Math.floor(Number(fixedMap && fixedMap[resourceKey]) || 0);
+    };
+    let serializeFixedMap = (fixedMap) => {
+        let out = {};
+        if (!fixedMap || typeof fixedMap !== 'object') return out;
+        let keys = Object.keys(fixedMap).sort();
+        for (let i = 0; i < keys.length; i++) {
+            let key = keys[i];
+            let value = Math.floor(Number(fixedMap[key]) || 0);
+            if (value > 0) out[key] = value;
+        }
+        return out;
+    };
+    let getPlayerUpKeepFixedSnapshot = (owner) => {
+        let row = _upKeepRateByPlayer[Math.max(0, Math.floor(Number(owner) || 0))];
+        if (!row) {
+            return {
+                totalFixed: 0,
+                unitsFixed: 0,
+                buildingsFixed: 0,
+                turretsFixed: 0,
+                unitTypesFixed: {},
+                buildingTypesFixed: {}
+            };
+        }
+        return {
+            totalFixed: Math.floor(Number(row._totalFixed) || 0),
+            unitsFixed: Math.floor(Number(row._unitsFixed) || 0),
+            buildingsFixed: Math.floor(Number(row._buildingsFixed) || 0),
+            turretsFixed: Math.floor(Number(row._turretsFixed) || 0),
+            unitTypesFixed: serializeFixedMap(row._unitTypesFixed),
+            buildingTypesFixed: serializeFixedMap(row._buildingTypesFixed)
+        };
+    };
 
     let digest = {
         tick: Number.isFinite(t) ? t : currentTick,
@@ -3566,9 +3733,12 @@ function computeLockstepStateDigest(tick) {
             idx,
             money: quantizeLockstepNumber(p && p.money),
             energy: quantizeLockstepNumber(p && p.energy),
+            energyFixed: getPlayerResourceFixedValue(p, 'energy'),
             astar: quantizeLockstepNumber(p && p.astar),
+            astarFixed: getPlayerResourceFixedValue(p, 'astar'),
             popCount: Math.floor(Number((p && p.popCount) || 0)),
-            popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0))
+            popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0)),
+            upKeep: getPlayerUpKeepFixedSnapshot(idx)
         })),
         units: units
             .filter(u => u && !u.dead)
@@ -3576,12 +3746,22 @@ function computeLockstepStateDigest(tick) {
                 id: Math.floor(Number(u.id) || 0),
                 owner: Math.floor(Number(u.owner) || 0),
                 type: String(u.unitType || ''),
+                baseLevel: Math.max(1, Math.floor(getUnitBaseLevel(u) || 1)),
+                effectiveLevel: Math.max(1, Math.floor(getUnitEffectiveLevel(u) || 1)),
                 x: quantizeLockstepUnitPosition(u.x),
                 y: quantizeLockstepUnitPosition(u.y),
                 energy: quantizeLockstepNumber(u.energy),
+                upKeepFixed: _getThingUpKeepFixedPerSecond(u),
                 cmd: Math.floor(Number(u.commandState) || 0),
                 workerState: String(u.workerState || ''),
+                workerTargetType: String(u.workerTargetType || ''),
                 workerType: String(u.workerType || ''),
+                workerTransferCooldown: Math.floor(Number(u.workerTransferCooldown) || 0),
+                healerHasMaterial: !!u.healerHasMaterial,
+                healerQueueTripCost: Math.floor(Number(u._healerQueueTripCost) || 0),
+                pathIndex: Math.floor(Number(u.pathIndex) || 0),
+                pathLen: Array.isArray(u.path) ? u.path.length : 0,
+                hasPendingPath: !!u._pendingPathTarget,
                 stack: Math.floor(Number(u.stackCount || 1))
             }))
             .sort((a, b) => a.id - b.id),
@@ -3593,7 +3773,9 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(tw.owner) || 0),
                 type: String(tw.type || ''),
                 level: Math.floor(Number(tw.level) || 1),
+                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(tw, getThingBaseLevel(tw)) || 1)),
                 energy: quantizeLockstepNumber(tw.energy),
+                upKeepFixed: _getThingUpKeepFixedPerSecond(tw),
                 underConstruction: !!tw.underConstruction,
                 isUpgrading: !!tw.isUpgrading
             }))
@@ -3606,7 +3788,9 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(b.owner) || 0),
                 unitType: String(b.unitType || ''),
                 level: Math.floor(Number(b.level) || 1),
+                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(b, getThingBaseLevel(b)) || 1)),
                 energy: quantizeLockstepNumber(b.energy),
+                upKeepFixed: _getThingUpKeepFixedPerSecond(b),
                 queueLen: Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0,
                 underConstruction: !!b.underConstruction,
                 isUpgrading: !!b.isUpgrading
@@ -3620,7 +3804,9 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(s.owner) || 0),
                 type: String(s.type || ''),
                 level: Math.floor(Number(s.level) || 1),
+                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(s, getThingBaseLevel(s)) || 1)),
                 energy: quantizeLockstepNumber(s.energy),
+                upKeepFixed: _getThingUpKeepFixedPerSecond(s),
                 queueLen: Array.isArray(s.spawnQueue) ? s.spawnQueue.length : 0,
                 underConstruction: !!s.underConstruction,
                 isUpgrading: !!s.isUpgrading
@@ -3647,13 +3833,16 @@ function computeLockstepStateDigest(tick) {
         for (let gx = 0; gx < GRID_W; gx++) {
             let cell = grid[gy][gx];
             if (!cell || !cell.item) continue;
+            if ((cell.item instanceof Tower) || (cell.item instanceof Barrack) || isSpawnerEntity(cell.item)) continue;
             digest.floorItems.push({
                 gx,
                 gy,
                 owner: Math.floor(Number(cell.owner) || 0),
                 type: String(cell.item.type || ''),
                 level: Math.floor(Number(cell.item.level) || 1),
+                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(cell.item, getThingBaseLevel(cell.item)) || 1)),
                 energy: quantizeLockstepNumber(cell.item.energy),
+                upKeepFixed: _getThingUpKeepFixedPerSecond(cell.item),
                 underConstruction: !!cell.item.underConstruction,
                 isUpgrading: !!cell.item.isUpgrading
             });
@@ -3721,12 +3910,12 @@ function maybeCompareLockstepStateHash(tick) {
     delete lockstepExpectedStateDigestByTick[t];
     delete lockstepLocalStateDigestByTick[t];
 
-    if (Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
-
     if (expected === local) return;
 
+    if (!isStrictHardLockstepDebugMode() && Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
+
     let now = performance.now();
-    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
+    if (!isStrictHardLockstepDebugMode() && Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
         logLockstepWarning('State hash mismatch ignored during post-snapshot grace window', {
             tick: t,
             expected,
@@ -3738,15 +3927,6 @@ function maybeCompareLockstepStateHash(tick) {
 
     let mismatchSummary = summarizeLockstepDigestMismatch(expectedDigest, localDigest);
 
-    lockstepDesyncDetected = true;
-    waitingForRemoteSince = now;
-    logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
-        tick: t,
-        expected,
-        local,
-        details: mismatchSummary
-    });
-
     if (connections[0] && mismatchSummary) {
         connections[0].send({
             type: 'TICK_STATE_HASH_MISMATCH_REPORT',
@@ -3757,6 +3937,25 @@ function maybeCompareLockstepStateHash(tick) {
         });
     }
 
+    if (isStrictHardLockstepDebugMode()) {
+        stopLockstepDebugMatch('state hash mismatch', {
+            tick: t,
+            expected,
+            local,
+            details: mismatchSummary
+        });
+        return;
+    }
+
+    lockstepDesyncDetected = true;
+    waitingForRemoteSince = now;
+    logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
+        tick: t,
+        expected,
+        local,
+        details: mismatchSummary
+    });
+
     requestHardLockstepResync(t, 'state hash mismatch', now);
 }
 
@@ -3764,6 +3963,7 @@ function handleIncomingTickStateHash(conn, data) {
     if (isHost) return;
     let t = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(t) || t < 0) return;
+    if (shouldIgnoreIncomingLockstepTick(t)) return;
     lockstepExpectedStateHashByTick[t] = String(data.stateHash || '');
     if (data && data.stateDigest && typeof data.stateDigest === 'object') {
         lockstepExpectedStateDigestByTick[t] = data.stateDigest;
@@ -3772,6 +3972,7 @@ function handleIncomingTickStateHash(conn, data) {
 }
 
 function requestHardLockstepResync(tick, reason = 'tick timeout', now = performance.now()) {
+    if (isStrictHardLockstepDebugMode()) return false;
     if (isHost || !isMultiplayer || !gameStarted) return false;
     let conn = connections[0];
     if (!conn) return false;
@@ -3804,6 +4005,7 @@ function requestHardLockstepResync(tick, reason = 'tick timeout', now = performa
 }
 
 function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
+    if (isStrictHardLockstepDebugMode()) return;
     if (isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
@@ -3818,12 +4020,21 @@ function processDeferredGuestLockstepWindow(now, tick) {
     if (isHost) return;
     let baseTick = Math.floor(Number(tick));
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
-    let endTick = baseTick + LOCKSTEP_PIPELINE_TICKS;
+    let endTick = baseTick + getEffectiveLockstepPipelineTicks();
 
     for (let t = baseTick; t <= endTick; t++) {
         let pendingBundle = lockstepPendingBundleByTick[t];
         if (pendingBundle) {
             if (!validateTickBundle(pendingBundle)) {
+                if (isStrictHardLockstepDebugMode()) {
+                    stopLockstepDebugMatch('invalid tick bundle', {
+                        tick: t,
+                        combinedChecksum: String(pendingBundle.combinedChecksum || ''),
+                        bundle: pendingBundle
+                    });
+                    delete lockstepPendingBundleByTick[t];
+                    return;
+                }
                 let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
                 if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                     logLockstepWarning('Bundle checksum mismatch; requesting resend', {
@@ -3851,6 +4062,13 @@ function processDeferredGuestLockstepWindow(now, tick) {
 
         let bundle = lockstepBundleByTick[t];
         if (!bundle) {
+            if (isStrictHardLockstepDebugMode()) {
+                stopLockstepDebugMatch('commit received before bundle', {
+                    tick: t,
+                    commitChecksum: String(pendingCommitChecksum || '')
+                });
+                return;
+            }
             let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
             if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                 logLockstepWarning('Commit received before bundle; requesting resend', { tick: t });
@@ -3861,6 +4079,15 @@ function processDeferredGuestLockstepWindow(now, tick) {
         }
 
         if (String(bundle.combinedChecksum || '') !== pendingCommitChecksum) {
+            if (isStrictHardLockstepDebugMode()) {
+                stopLockstepDebugMatch('commit checksum mismatch', {
+                    tick: t,
+                    bundleChecksum: String(bundle.combinedChecksum || ''),
+                    commitChecksum: String(pendingCommitChecksum || '')
+                });
+                delete lockstepPendingCommitByTick[t];
+                return;
+            }
             let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
             if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                 logLockstepWarning('Commit checksum mismatch; requesting resend', {
@@ -3954,6 +4181,7 @@ function handleIncomingTickResendRequest(conn, data) {
 
 function driveStrictLockstep(now, tick) {
     if (!isMultiplayer) return;
+    if (lockstepFatalStopActive) return;
     if (lockstepResyncPauseActive) {
         if (!waitingForRemoteSince) waitingForRemoteSince = now;
         return;
@@ -3978,6 +4206,7 @@ function driveStrictLockstep(now, tick) {
         let missing = participants.filter(pid => !pmap[pid]);
         if (missing.length > 0) {
             if (!waitingForRemoteSince) waitingForRemoteSince = now;
+            if (isStrictHardLockstepDebugMode()) return;
             let lastReq = lockstepLastResendRequestAtByTick[t];
             if (!lastReq) {
                 lockstepLastResendRequestAtByTick[t] = now;
@@ -4005,15 +4234,17 @@ function driveStrictLockstep(now, tick) {
         sendHostBundle(t);
         maybeCommitHostTick(t);
 
-        for (let pt = t + 1; pt <= t + LOCKSTEP_PIPELINE_TICKS; pt++) {
+        for (let pt = t + 1; pt <= t + getEffectiveLockstepPipelineTicks(); pt++) {
             maybeBuildHostBundle(pt);
             sendHostBundle(pt);
             maybeCommitHostTick(pt);
         }
 
-        let recentStart = Math.max(0, t - Math.max(2, LOCKSTEP_PIPELINE_TICKS));
-        for (let rt = recentStart; rt < t; rt++) {
-            sendHostFinalize(rt);
+        if (!isStrictHardLockstepDebugMode()) {
+            let recentStart = Math.max(0, t - Math.max(2, getEffectiveLockstepPipelineTicks()));
+            for (let rt = recentStart; rt < t; rt++) {
+                sendHostFinalize(rt);
+            }
         }
         return;
     }
@@ -4023,6 +4254,10 @@ function driveStrictLockstep(now, tick) {
     if (!lockstepCommittedByTick[t]) {
         let hasBundleMaterialInFlight = !!lockstepBundleByTick[t] || !!lockstepPendingBundleByTick[t] || !!lockstepPendingCommitByTick[t] || !!lockstepPendingBundleAckByTick[t];
         if (hasBundleMaterialInFlight) {
+            if (!waitingForRemoteSince) waitingForRemoteSince = now;
+            return;
+        }
+        if (isStrictHardLockstepDebugMode()) {
             if (!waitingForRemoteSince) waitingForRemoteSince = now;
             return;
         }
@@ -4046,6 +4281,7 @@ function driveStrictLockstep(now, tick) {
 
 function isStrictTickReady(tick) {
     if (!isMultiplayer) return true;
+    if (lockstepFatalStopActive) return false;
     if (lockstepResyncPauseActive) return false;
     if (matchStartWaitingForReady) return false;
     if (!isHost && lockstepDesyncDetected) return false;
@@ -4084,6 +4320,9 @@ function runOneTick() {
                     peerId: p.peerId,
                     teamId: p.teamId,
                     actions: Array.isArray(p.actions) ? p.actions.map(a => ({ ...a })) : [],
+                    stateHashTick: Math.floor(Number(p.stateHashTick) || -1),
+                    stateHash: String(p.stateHash || ''),
+                    stateDigest: p.stateDigest && typeof p.stateDigest === 'object' ? cloneSnapshotValue(p.stateDigest) : null,
                     checksum: p.checksum
                 })),
                 combinedChecksum: b.combinedChecksum
@@ -4122,9 +4361,11 @@ function runOneTick() {
     if (currentTick % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
 
-    if (isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0) {
+    if (isMultiplayer && (processedTick % getEffectiveLockstepStateCheckInterval()) === 0) {
         let stateDigest = computeLockstepStateDigest(processedTick);
         let stateHash = hashStringLockstep(stableSerializeForLockstep(stateDigest));
+        lockstepLocalStateHashByTick[processedTick] = stateHash;
+        if (LOCKSTEP_DEBUG_HASH_DETAILS) lockstepLocalStateDigestByTick[processedTick] = stateDigest;
         if (isHost) {
             connections.forEach(c => {
                 if (c) {
@@ -4134,14 +4375,12 @@ function runOneTick() {
                 }
             });
         } else {
-            lockstepLocalStateHashByTick[processedTick] = stateHash;
-            if (LOCKSTEP_DEBUG_HASH_DETAILS) lockstepLocalStateDigestByTick[processedTick] = stateDigest;
             maybeCompareLockstepStateHash(processedTick);
         }
     }
 
     if (isMultiplayer && !isHost) {
-        let pruneBefore = processedTick - Math.max(200, LOCKSTEP_STATE_CHECK_INTERVAL * 20);
+        let pruneBefore = processedTick - Math.max(200, getEffectiveLockstepStateCheckInterval() * 20);
         for (let key of Object.keys(lockstepExpectedStateHashByTick)) {
             let t = Math.floor(Number(key));
             if (Number.isFinite(t) && t < pruneBefore) {
@@ -4164,6 +4403,10 @@ function runOneTick() {
         _tpsDisplay = Math.round(_tpsTickCount * 1000 / (tpsNow - _tpsLastTime));
         _tpsTickCount = 0;
         _tpsLastTime = tpsNow;
+    }
+
+    if (Number.isFinite(lockstepResyncResumeTick) && lockstepResyncResumeTick >= 0 && processedTick >= lockstepResyncResumeTick) {
+        lockstepResyncResumeTick = -1;
     }
 
     currentTick++;
