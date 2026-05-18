@@ -3416,6 +3416,17 @@ function renderEntityGroupBlock(group) {
     return '';
 }
 
+function shouldRenderMixedEntitySubgroupAsGroup(group) {
+    let e = Array.isArray(group) ? group[0] : group;
+    if (!e) return false;
+    if (e.type === 'barrack' && e.unitType) return true;
+    return e.type === 'spawner'
+        || e.type === 'astar_spawner'
+        || e.type === 'salvager'
+        || e.type === 'builder_spawner'
+        || e.type === 'healer_spawner';
+}
+
 function renderGoldMineGroupInfo(group) {
     let html = '';
     let totalGold = 0, totalMax = 0;
@@ -4078,15 +4089,15 @@ function renderResearchGroupInfo(group) {
         }
     }
     if (e.owner === localPlayerId) {
+        let readyGroup = group.filter(r => !r.underConstruction);
         let workerQueueCount = 0;
-        for (let r of group) {
+        for (let r of readyGroup) {
             if (!r || !Array.isArray(r.spawnQueue)) continue;
             workerQueueCount += r.spawnQueue.length;
         }
-        let readyGroup = group.filter(r => !r.underConstruction);
         let queueReady = readyGroup;
         let workerCoordStr = queueReady.map(r => `${r.gx},${r.gy}`).join(';');
-        let queueCostSource = group.find(r => !r.underConstruction) || group[0];
+        let queueCostSource = readyGroup[0] || group[0];
         let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = Math.max(1, Math.floor(cost || 1)) * purchaseCount;
@@ -4099,7 +4110,7 @@ function renderResearchGroupInfo(group) {
             : `<span style="color:#444;font-weight:bold;">[+]</span>`;
         html += `<div class="info-row" style="align-items:center;justify-content:space-between;gap:8px;">`;
         html += `<span style="color:#fd0;">${formatInfoCurrency(totalCost)}</span>`;
-        html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(workerQueueCount, group.length * 10)}</span>`;
+        html += `<span style="color:#fff;margin:0 6px;">${formatInfoFraction(workerQueueCount, Math.max(1, readyGroup.length) * 10)}</span>`;
         html += `<span>${subBtn} ${addBtn}</span>`;
         html += `</div>`;
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
@@ -4515,7 +4526,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
                 }
                 html += infoHeader(prefix + label, e0, { mixedLevel: mixedEntityLevels, leftButtonHtml: subgroupPopupBtnHtml });
             }
-            if (items.length === 1) {
+            if (items.length === 1 && !shouldRenderMixedEntitySubgroupAsGroup(items)) {
                 html += renderEntityBlock(items[0]);
             } else {
                 html += renderEntityGroupBlock(items);

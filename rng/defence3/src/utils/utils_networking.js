@@ -837,6 +837,7 @@ function buildRuntimeConfigHashForSnapshot() {
         gridH: GRID_H,
         tickRate: TICK_RATE,
         pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+        exactLockstep: !!lockstepStrictDebugMode,
         gameMode: gameMode,
         maxPop: CONFIG_MAX_POP,
         maxThingLevel: MAX_THING_LEVEL,
@@ -3128,6 +3129,7 @@ function startHostedGame() {
                 mapType: MAP_TYPE,
                 tickRate: TICK_RATE,
                 pipelineDelay: LOCKSTEP_PIPELINE_MIN,
+                exactLockstep: !!lockstepStrictDebugMode,
                 thingStatsRecalcIntervalSeconds: THING_STATS_RECALC_INTERVAL_SECONDS,
                 unitEffectiveStatsRecalcTicks: UNIT_EFFECTIVE_STATS_RECALC_TICKS,
                 astarIterBudgetPerPlayerTick: ASTAR_ITER_BUDGET_PER_PLAYER_TICK,
@@ -3274,6 +3276,7 @@ function readConfigFromMenu() {
     UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number((document.getElementById('cfg-unit-collision-ticks') || {}).value) || 5)));
     ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number((document.getElementById('cfg-astar-iter-budget-per-player') || {}).value) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
     WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number((document.getElementById('cfg-worker-ai-tick-delay') || {}).value) || WORKER_AI_TICK_DELAY)));
+    lockstepStrictDebugMode = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
 
     let menuTickRate = parseInt(document.getElementById('cfg-tick-rate').value);
     let menuPipelineDelay = parseInt(document.getElementById('cfg-pipeline-delay').value);

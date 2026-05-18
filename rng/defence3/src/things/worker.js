@@ -1966,6 +1966,18 @@ function _scoreWorkerTaskCandidate(u, candidate) {
     return score;
 }
 
+function _canWorkerUseTargetTilePathEndpoint(u, target) {
+    if (!u || !target) return false;
+    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor(Number(target.x || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor(Number(target.y || 0) / TILE);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return false;
+    if (u.isFlying) return true;
+
+    let canWalk = getPathCanWalkForUnit(u);
+    if (typeof canWalk === 'function' && canWalk(gx, gy)) return true;
+    return canUnitOccupyTile(u, gx, gy);
+}
+
 function _pickDistributedWorkerCandidate(u, candidates) {
     if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
 
@@ -1983,6 +1995,7 @@ function _pickDistributedWorkerCandidate(u, candidates) {
     for (let c of candidates) {
         if (!c || !c.target) continue;
         let targetType = (c.targetType !== undefined) ? c.targetType : null;
+        if (!_canWorkerUseTargetTilePathEndpoint(u, c.target)) continue;
         if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && !_canAssignWorkerTargetExclusive(u, c.target, targetType)) continue;
         let score = _scoreWorkerTaskCandidate(u, c);
         if (score < bestScore) {
@@ -2308,14 +2321,11 @@ function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
 
     let finalPath = bestPath;
     if (!Array.isArray(finalPath) || finalPath.length <= 0) {
-        // Deterministic geometric fallback so route selection does not depend on local cache/path budget state.
-        if (startGx === bestSpawnerGx && startGy === bestSpawnerGy) {
-            finalPath = [{ x: startGx, y: startGy }];
+        // Keep fallback deterministic without inventing an illegal ground route.
+        if (u.isFlying) {
+            finalPath = _buildDeterministicOpenGridPath(startGx, startGy, bestSpawnerGx, bestSpawnerGy);
         } else {
-            finalPath = [
-                { x: startGx, y: startGy },
-                { x: bestSpawnerGx, y: bestSpawnerGy }
-            ];
+            finalPath = [{ x: startGx, y: startGy }];
         }
     }
 

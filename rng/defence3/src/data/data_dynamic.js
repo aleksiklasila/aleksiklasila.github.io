@@ -2027,6 +2027,7 @@ function createEditableRuntimeConfigSnapshot() {
             CONFIG_MAX_POP,
             TICK_RATE,
             LOCKSTEP_PIPELINE_MIN,
+            LOCKSTEP_STRICT_DEBUG_MODE: !!lockstepStrictDebugMode,
             UNIT_EFFECTIVE_STATS_RECALC_TICKS,
             UNIT_COLLISION_RECALC_TICKS,
             ASTAR_MAX_ITERS_LIMIT,
@@ -2093,6 +2094,11 @@ function syncMainMenuFromRuntimeConfig() {
         if (!el) return;
         el.value = String(value);
     };
+    let setChecked = (id, value) => {
+        let el = document.getElementById(id);
+        if (!el) return;
+        el.checked = !!value;
+    };
 
     setValue('cfg-mapsize', GRID_W);
     setValue('cfg-gold-count', GOLD_MINE_COUNT);
@@ -2107,6 +2113,7 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-map-type', MAP_TYPE);
     setValue('cfg-tick-rate', TICK_RATE);
     setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
+    setChecked('cfg-exact-lockstep', lockstepStrictDebugMode);
     setValue('cfg-unit-eff-stats-ticks', UNIT_EFFECTIVE_STATS_RECALC_TICKS);
     setValue('cfg-unit-collision-ticks', UNIT_COLLISION_RECALC_TICKS);
     setValue('cfg-astar-iter-budget-per-player', ASTAR_ITER_BUDGET_PER_PLAYER_TICK);
@@ -2156,6 +2163,9 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     let nextTickRate = Number(cfg.TICK_RATE);
     let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
     applyTimingConfig(nextTickRate, nextPipelineDelay);
+    if (cfg.LOCKSTEP_STRICT_DEBUG_MODE !== undefined) {
+        lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
+    }
     if (Number.isFinite(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))) {
         UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(Number(cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     }
@@ -2326,6 +2336,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
+    cfg.LOCKSTEP_STRICT_DEBUG_MODE = !!((document.getElementById('cfg-exact-lockstep') || {}).checked);
     cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-eff-stats-ticks', cfg.UNIT_EFFECTIVE_STATS_RECALC_TICKS))));
     cfg.UNIT_COLLISION_RECALC_TICKS = Math.max(1, Math.min(240, Math.floor(getNumber('cfg-unit-collision-ticks', cfg.UNIT_COLLISION_RECALC_TICKS))));
     cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
@@ -2363,6 +2374,7 @@ function applyMainMenuControlsToRuntimeState() {
     ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(Number(cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || ASTAR_ITER_BUDGET_PER_PLAYER_TICK)));
     WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(Number(cfg.WORKER_AI_TICK_DELAY) || WORKER_AI_TICK_DELAY)));
     applyTimingConfig(cfg.TICK_RATE, cfg.LOCKSTEP_PIPELINE_MIN);
+    lockstepStrictDebugMode = !!cfg.LOCKSTEP_STRICT_DEBUG_MODE;
 
     let gameModeEl = document.getElementById('cfg-gamemode');
     if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
@@ -2377,7 +2389,7 @@ function createMainMenuSettingsSnapshot() {
         'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
     ];
     let selectIds = ['cfg-gamemode', 'cfg-map-type'];
-    let checkboxIds = ['cfg-full-vis'];
+    let checkboxIds = ['cfg-full-vis', 'cfg-exact-lockstep'];
 
     let out = {
         version: 2,
