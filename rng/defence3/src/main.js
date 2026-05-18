@@ -2390,6 +2390,10 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         _clearWorkerTarget(u);
                         clearWorkerTaskMemoryForFreeRetarget(u);
+                        u.targetPos = null;
+                        u.pathIndex = 0;
+                        u.pathIsFallbackAstar = false;
+                        u._manualMoveIssuedTick = null;
                         u.workerState = 'IDLE';
                     }
                 }

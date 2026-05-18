@@ -234,25 +234,27 @@ class Unit {
             updateWorkerAI(this);
             // Keep worker motion state deterministic: movement-oriented worker states must
             // always execute the movement state machine this tick.
-            if (
-                this.workerState === 'MANUAL_MOVE' ||
-                this.workerState === 'MOVING_TO' ||
-                this.workerState === 'MOVING_TO_ASTAR' ||
-                this.workerState === 'RETURNING' ||
-                this.workerState === 'RETURNING_ASTAR' ||
-                this.workerState === 'MOVING_TO_BUILD' ||
-                this.workerState === 'RETURNING_FOR_GOLD' ||
-                this.workerState === 'MOVING_TO_HEAL' ||
-                this.workerState === 'MOVING_TO_RESEARCH'
-            ) {
-                this.commandState = CMD_MOVING;
-            } else if (
-                this.workerState === 'IDLE' ||
-                this.workerState === 'BUILDING_IN_PLACE' ||
-                this.workerState === 'HEALING' ||
-                this.workerState === 'RESEARCHING'
-            ) {
-                this.commandState = CMD_IDLE;
+            if (this.commandState !== CMD_HOLDING) {
+                if (
+                    this.workerState === 'MANUAL_MOVE' ||
+                    this.workerState === 'MOVING_TO' ||
+                    this.workerState === 'MOVING_TO_ASTAR' ||
+                    this.workerState === 'RETURNING' ||
+                    this.workerState === 'RETURNING_ASTAR' ||
+                    this.workerState === 'MOVING_TO_BUILD' ||
+                    this.workerState === 'RETURNING_FOR_GOLD' ||
+                    this.workerState === 'MOVING_TO_HEAL' ||
+                    this.workerState === 'MOVING_TO_RESEARCH'
+                ) {
+                    this.commandState = CMD_MOVING;
+                } else if (
+                    this.workerState === 'IDLE' ||
+                    this.workerState === 'BUILDING_IN_PLACE' ||
+                    this.workerState === 'HEALING' ||
+                    this.workerState === 'RESEARCHING'
+                ) {
+                    this.commandState = CMD_IDLE;
+                }
             }
             // Workers still follow paths via the normal system
         }

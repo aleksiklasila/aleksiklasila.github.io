@@ -85,15 +85,18 @@ function updateWorkerAI(u) {
     if (!u.workerState) return;
     let workerAiTickDelay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
     let canRunHeavyAi = ((gameTime + u.id) % workerAiTickDelay) === 0;
+    let forceImmediateIdleRetarget = false;
     let getSpawnerRoute = (type, canWalk = null) => _findBestSpawnerRoute(u, type, canWalk, { cacheOnly: !canRunHeavyAi });
     if (u.commandState === CMD_HOLDING) {
         _clearWorkerTarget(u);
-        clearWorkerTaskMemoryForFreeRetarget(u);
-        u.workerState = 'IDLE';
         u.path = null;
+        u.pathIndex = 0;
         u.targetUnit = null;
         u.targetBuilding = null;
+        u.targetPos = null;
         u._pendingPathTarget = null;
+        u.pathIsFallbackAstar = false;
+        u.workerState = 'IDLE';
         return;
     }
     let owner = u.owner;
@@ -106,6 +109,8 @@ function updateWorkerAI(u) {
     if (u.workerTransferCooldown > 0) u.workerTransferCooldown--;
 
     if (u.workerState === 'MANUAL_MOVE') {
+        let manualMoveCompleted = false;
+
         // Manual rally must stay in movement mode until target is reached or explicitly canceled.
         u.commandState = CMD_MOVING;
 
@@ -114,15 +119,25 @@ function updateWorkerAI(u) {
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             let tgx = Math.floor(Number(u.targetPos.x) / TILE), tgy = Math.floor(Number(u.targetPos.y) / TILE);
             let dest = findNearestWalkable(tgx, tgy, ugx, ugy, u);
-            let canWalk = getPathCanWalkForUnit(u);
-            let rebuilt = _requestWorkerPath(u, ugx, ugy, dest.x, dest.y, canWalk, null, true);
-            if (rebuilt && rebuilt.length > 0) {
-                u.path = rebuilt;
-                u.pathIndex = (rebuilt.length > 1 && rebuilt[0].x === ugx && rebuilt[0].y === ugy) ? 1 : 0;
-            } else {
-                _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'worker_ai');
+            if (dest && ugx === dest.x && ugy === dest.y) {
+                manualMoveCompleted = true;
             }
-            return;
+            if (manualMoveCompleted) {
+                u.path = null;
+                u.pathIndex = 0;
+                u._pendingPathTarget = null;
+                u.pathIsFallbackAstar = false;
+            } else {
+            let canWalk = getPathCanWalkForUnit(u);
+                let rebuilt = _requestWorkerPath(u, ugx, ugy, dest.x, dest.y, canWalk, null, true);
+                if (rebuilt && rebuilt.length > 0) {
+                    u.path = rebuilt;
+                    u.pathIndex = (rebuilt.length > 1 && rebuilt[0].x === ugx && rebuilt[0].y === ugy) ? 1 : 0;
+                } else {
+                    _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'worker_ai');
+                }
+                return;
+            }
         }
 
         if ((!u.path || u.pathIndex >= u.path.length) && u._pendingPathTarget) {
@@ -135,25 +150,43 @@ function updateWorkerAI(u) {
                 u.pathIndex = 0;
                 u._pendingPathTarget = null;
                 u.pathIsFallbackAstar = false;
-                u._workerNextIdleRetargetTick = gameTime;
-                u.workerState = 'IDLE';
-                u.commandState = CMD_IDLE;
+                manualMoveCompleted = true;
             }
-            return;
+            if (!manualMoveCompleted) return;
         }
         if (!u.path || u.pathIndex >= u.path.length) {
-            u._workerNextIdleRetargetTick = gameTime;
-            u.workerState = 'IDLE'; u.commandState = CMD_IDLE;
+            manualMoveCompleted = true;
         }
-        return;
+        if (!manualMoveCompleted) return;
+
+        u.path = null;
+        u.pathIndex = 0;
+        u._pendingPathTarget = null;
+        u.pathIsFallbackAstar = false;
+        u.targetPos = null;
+        u._manualMoveIssuedTick = null;
+        _clearWorkerTarget(u);
+        u.targetUnit = null;
+        u.targetBuilding = null;
+        u.forcedAttackTarget = false;
+        u._forcedTargetLastSeenX = null;
+        u._forcedTargetLastSeenY = null;
+        clearWorkerTaskMemoryForFreeRetarget(u);
+        u.workerState = 'IDLE';
+        u.commandState = CMD_IDLE;
+        forceImmediateIdleRetarget = true;
     }
 
     if (isResourceCollectorWorkerType(u.workerType)) {
+        if (forceImmediateIdleRetarget && u.workerState === 'IDLE') {
+            _updateResourceCollectorAI(u, owner, myGx, myGy, true);
+            return;
+        }
         _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi);
         return;
     } else if (u.workerType === 'salvager') {
         if (u.workerState === 'IDLE') {
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
+            if (!forceImmediateIdleRetarget && !shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
             _salvagerFindTarget(u, myGx, myGy);
         } else if (u.workerState === 'MOVING_TO') {
             if (!u.workerTarget || !u.workerTarget.markedForSalvage || !_workerOwnsReservedTarget(u)) {
@@ -239,7 +272,7 @@ function updateWorkerAI(u) {
         }
 
         if (u.workerState === 'IDLE') {
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
+            if (!forceImmediateIdleRetarget && !shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
             _builderFindTarget(u, myGx, myGy);
         } else if (u.workerState === 'MOVING_TO_BUILD') {
             if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
@@ -562,7 +595,8 @@ function updateWorkerAI(u) {
         }
     } else if (u.workerType === 'healer') {
         if (u.workerState === 'IDLE') {
-            if (!runHealerRetargetIfDue()) return;
+            if (!forceImmediateIdleRetarget && !runHealerRetargetIfDue()) return;
+            if (forceImmediateIdleRetarget) _healerFindTarget(u, myGx, myGy);
         } else if (u.workerState === 'MOVING_TO_HEAL') {
             let targetIsQueue = (u.workerTargetType === 'queue');
             if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
@@ -739,7 +773,7 @@ function updateWorkerAI(u) {
         }
     } else if (u.workerType === 'researcher') {
         if (u.workerState === 'IDLE') {
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
+            if (!forceImmediateIdleRetarget && !shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
             let target = _findNearestResearchBuildingNeedingWork(u);
             if (target) {
                 if (!_setWorkerTarget(u, target, 'research')) {
