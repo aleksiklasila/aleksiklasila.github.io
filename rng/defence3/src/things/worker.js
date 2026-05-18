@@ -1027,7 +1027,7 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     }
 
     for (let s of collectorSpawners) {
-        if (!s || s.type !== resourceCfg.farmKey || s.owner !== u.owner || s.underConstruction || !(Number(s.energy) > 0)) continue;
+        if (!s || s.type !== resourceCfg.farmKey || s.owner !== u.owner || s.underConstruction) continue;
         considerCandidate(s, resourceCfg.farmKey, 0);
     }
 
@@ -1170,7 +1170,7 @@ function _isResourceCollectorTargetValid(target, targetType, owner, resourceCfg)
         return Number.isFinite(target[resourceCfg.mineStatKey]) && target[resourceCfg.mineStatKey] > 0;
     }
     if (targetType === resourceCfg.farmKey) {
-        return target.type === resourceCfg.farmKey && target.owner === owner && !target.underConstruction && target.energy > 0;
+        return target.type === resourceCfg.farmKey && target.owner === owner && !target.underConstruction;
     }
     if (targetType === 'drop') {
         return !!resourceCfg.supportsDropTarget && getDroppedItemAt(target.gx, target.gy) === target;
@@ -1211,7 +1211,6 @@ function _isResourceCollectorSpawnerValidForUnit(u, spawner, resourceCfg = null)
     if (!u || !spawner || !cfg) return false;
     return spawner.type === cfg.collectorBuildingKey
         && spawner.owner === u.owner
-        && spawner.energy > 0
         && !spawner.underConstruction;
 }
 
@@ -2390,7 +2389,7 @@ function _isHealerTargetUnit(target, owner) {
 
 function _isHealerQueueTarget(target, owner) {
     if (!target || target.owner !== owner) return false;
-    if (target.energy <= 0 || target.underConstruction) return false;
+    if (target.underConstruction) return false;
     if (!isQueueEnabled(target)) return false;
     if (!Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return false;
     let fallbackType = getSpawnerFallbackUnitType(target);
@@ -2542,7 +2541,7 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
 function _isResearcherTargetBuilding(target, owner) {
     if (!target || target.type !== 'research') return false;
     if (target.owner !== owner) return false;
-    if (target.energy <= 0 || target.underConstruction || target.markedForSalvage) return false;
+    if (target.underConstruction || target.markedForSalvage) return false;
     let task = target.researchTask;
     if (!task) {
         // Only auto-start new research when auto-research is enabled.
@@ -2821,7 +2820,7 @@ function _findClosestSpawner(u, type) {
     let ux = Math.floor(Number(u && u.x) / TILE);
     let uy = Math.floor(Number(u && u.y) / TILE);
     for (let s of collectorSpawners) {
-        if (s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
+        if (s.type === type && s.owner === u.owner && !s.underConstruction) {
             let sx = Math.floor(Number(s.gx) || 0);
             let sy = Math.floor(Number(s.gy) || 0);
             let d = Math.abs(sx - ux) + Math.abs(sy - uy);
