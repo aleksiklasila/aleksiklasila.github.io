@@ -301,18 +301,20 @@ class Unit {
                         nx = dx / d;
                         ny = dy / d;
                     } else {
-                        // Exact overlap fallback: use current movement direction (no random/id jitter).
+                        // Exact overlap fallback: split the pair deterministically so
+                        // same-direction air units do not keep shoving in lockstep.
                         let mdx = this.vx, mdy = this.vy;
                         if (Math.hypot(mdx, mdy) < 0.001 && this.path && this.pathIndex < this.path.length) {
                             let pn = this.path[this.pathIndex];
                             mdx = pn.x * TILE + 16 - this.x;
                             mdy = pn.y * TILE + 16 - this.y;
                         }
+                        let pairSign = ((Number(this.id) || 0) < (Number(other && other.id) || 0)) ? -1 : 1;
                         if (Math.abs(mdx) >= Math.abs(mdy)) {
-                            nx = mdx >= 0 ? 0 : 0;
-                            ny = mdx >= 0 ? -1 : 1;
+                            nx = 0;
+                            ny = (mdx >= 0 ? -1 : 1) * pairSign;
                         } else {
-                            nx = mdy >= 0 ? 1 : -1;
+                            nx = (mdy >= 0 ? 1 : -1) * pairSign;
                             ny = 0;
                         }
                     }
