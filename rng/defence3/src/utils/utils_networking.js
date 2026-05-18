@@ -856,6 +856,7 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
     let opts = (options && typeof options === 'object') ? options : {};
     let includeConfig = opts.includeConfig !== false;
     let includeStaticMapState = opts.includeStaticMapState !== false;
+    let includeGridTypes = opts.includeGridTypes !== false;
     let lockstepWindowStartTick = Math.max(0, Math.floor(Number(currentTick) || 0));
     let lockstepWindowEndTick = lockstepWindowStartTick + Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
 
@@ -899,14 +900,17 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         }
     }
 
-    let gridTypes = [];
-    for (let gy = 0; gy < GRID_H; gy++) {
-        let row = [];
-        for (let gx = 0; gx < GRID_W; gx++) {
-            let cell = grid[gy] && grid[gy][gx];
-            row.push(Math.floor(Number(cell && cell.type) || TYPE_FLOOR));
+    let gridTypes = null;
+    if (includeGridTypes) {
+        gridTypes = [];
+        for (let gy = 0; gy < GRID_H; gy++) {
+            let row = [];
+            for (let gx = 0; gx < GRID_W; gx++) {
+                let cell = grid[gy] && grid[gy][gx];
+                row.push(Math.floor(Number(cell && cell.type) || TYPE_FLOOR));
+            }
+            gridTypes.push(row);
         }
-        gridTypes.push(row);
     }
 
     let snapshot = {
@@ -1043,7 +1047,6 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         goldMines: cloneSnapshotValue(goldMines),
         astarMines: cloneSnapshotValue(astarMines),
         droppedItems: cloneSnapshotValue(droppedItems),
-        gridTypes,
         floorItems,
         resignedTeams: Array.from(resignedTeams || []).map(v => Math.floor(Number(v) || 0)).sort((a, b) => a - b),
         rngState: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
@@ -1069,6 +1072,10 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
             .filter(t => Number.isFinite(t) && t >= lockstepWindowStartTick && t <= lockstepWindowEndTick && !!lockstepCommittedByTick[t])
             .sort((a, b) => a - b)
     };
+
+    if (gridTypes) {
+        snapshot.gridTypes = gridTypes;
+    }
 
     if (includeConfig) {
         snapshot.editableConfig = serializeEditableRuntimeConfigForTransport();
@@ -3171,7 +3178,11 @@ function startHostedGame() {
             // Host world is generated — mark host as ready in the status map.
             if (_matchStartPlayerStatuses && myPeerId) _matchStartPlayerStatuses[myPeerId] = 'ready';
 
-            let startSnapshot = buildHostAuthoritativeStateSnapshot();
+            let startSnapshot = buildHostAuthoritativeStateSnapshot({
+                includeConfig: false,
+                includeStaticMapState: false,
+                includeGridTypes: false
+            });
             connections.forEach(c => {
                 if (!c || !c.peer) return;
                 c.send({

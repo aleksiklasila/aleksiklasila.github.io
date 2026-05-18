@@ -952,7 +952,7 @@ function _getInfoPanelUnitStateHelpText(u) {
     }
 
     if (u.commandState === CMD_HOLDING) {
-        if (u.workerType) return 'Holding because hold/stop was used. Press X to clear hold and let worker auto-AI resume.';
+        if (u.workerType) return 'Holding because hold was used. Press X to release hold and let worker auto-AI resume.';
         return 'Holding position. The unit only fights in place until you give a new order or press X.';
     }
 
