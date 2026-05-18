@@ -953,6 +953,12 @@ let lockstepResyncPauseActive = false;
 let lockstepResyncSessionId = '';
 let lockstepResyncPendingAckByPeer = {};
 let lockstepResyncSnapshotCache = null;
+let lockstepResyncResumeTick = -1;
+let lockstepStrictDebugMode = true;
+let lockstepFatalStopActive = false;
+let lockstepFatalStopTick = -1;
+let lockstepFatalStopReason = '';
+let lockstepFatalStopDetails = null;
 let nextUnitId = 1;
 let visualRng = null; // separate RNG for particles/visual effects (not synced)
 

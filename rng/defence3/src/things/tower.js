@@ -1,5 +1,42 @@
 "use strict";
 
+function _compareDeterministicBuildingRefs(a, b) {
+    let agy = Math.floor(Number(a && a.gy) || 0);
+    let bgy = Math.floor(Number(b && b.gy) || 0);
+    if (agy !== bgy) return agy - bgy;
+
+    let agx = Math.floor(Number(a && a.gx) || 0);
+    let bgx = Math.floor(Number(b && b.gx) || 0);
+    if (agx !== bgx) return agx - bgx;
+
+    let aowner = Math.floor(Number(a && a.owner) || 0);
+    let bowner = Math.floor(Number(b && b.owner) || 0);
+    if (aowner !== bowner) return aowner - bowner;
+
+    let atype = String((a && a.type) || '');
+    let btype = String((b && b.type) || '');
+    if (atype !== btype) return atype < btype ? -1 : 1;
+
+    let aid = Math.floor(Number(a && a.id) || 0);
+    let bid = Math.floor(Number(b && b.id) || 0);
+    if (aid !== bid) return aid - bid;
+
+    let ax = Number(a && a.x) || 0;
+    let bx = Number(b && b.x) || 0;
+    if (ax !== bx) return ax - bx;
+
+    let ay = Number(a && a.y) || 0;
+    let by = Number(b && b.y) || 0;
+    return ay - by;
+}
+
+function _shouldPreferBuildingTarget(candidate, best, candidateDist, bestDist) {
+    if (!best) return true;
+    if (candidateDist < bestDist - 1e-9) return true;
+    if (candidateDist > bestDist + 1e-9) return false;
+    return _compareDeterministicBuildingRefs(candidate, best) < 0;
+}
+
 // ============================================================
 // TOWER CLASS
 // ============================================================
@@ -119,7 +156,7 @@ class Tower {
                     }
                     // Check Buildings - iterate in deterministic ID order
                     for (let list of [towers, barracks, collectorSpawners]) {
-                        let sortedList = [...list].sort((a, b) => (a.id || 0) - (b.id || 0));
+                        let sortedList = [...list].sort(_compareDeterministicBuildingRefs);
                         for (let b of sortedList) {
                             if (b.owner === this.owner || b.energy <= 0) continue;
                             let hit = false;
@@ -202,22 +239,31 @@ class Tower {
             // Auto-find nearest enemy building: towers first, then barracks/spawners
             let bestDist = rangePx;
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
-            for (let t of towers) {
+            for (let t of [...towers].sort(_compareDeterministicBuildingRefs)) {
                 if (t === this || t.owner === this.owner || t.energy <= 0) continue;
                 let d = Math.hypot(t.x - this.x, t.y - this.y);
-                if (d < bestDist) { bestDist = d; target = t; }
+                if (_shouldPreferBuildingTarget(t, target, d, bestDist)) {
+                    bestDist = d;
+                    target = t;
+                }
             }
             // Try barracks and spawners (lower priority, only if no tower found)
             if (!target) {
-                for (let b of barracks) {
+                for (let b of [...barracks].sort(_compareDeterministicBuildingRefs)) {
                     if (b.owner === this.owner || b.energy <= 0) continue;
                     let d = Math.hypot(b.x - this.x, b.y - this.y);
-                    if (d < bestDist) { bestDist = d; target = b; }
+                    if (_shouldPreferBuildingTarget(b, target, d, bestDist)) {
+                        bestDist = d;
+                        target = b;
+                    }
                 }
-                for (let s of collectorSpawners) {
+                for (let s of [...collectorSpawners].sort(_compareDeterministicBuildingRefs)) {
                     if (s.owner === this.owner || s.energy <= 0) continue;
                     let d = Math.hypot(s.x - this.x, s.y - this.y);
-                    if (d < bestDist) { bestDist = d; target = s; }
+                    if (_shouldPreferBuildingTarget(s, target, d, bestDist)) {
+                        bestDist = d;
+                        target = s;
+                    }
                 }
             }
         }

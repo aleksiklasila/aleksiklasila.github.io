@@ -345,6 +345,14 @@ function _isHostResyncPauseComplete() {
 }
 
 function _finishHostResyncPause(reason = '') {
+    if (lockstepStrictDebugMode) {
+        lockstepResyncPauseActive = false;
+        lockstepResyncPendingAckByPeer = {};
+        lockstepResyncSnapshotCache = null;
+        lockstepResyncSessionId = '';
+        waitingForRemoteSince = 0;
+        return;
+    }
     if (!lockstepResyncPauseActive) return;
     lockstepResyncPauseActive = false;
     lockstepResyncPendingAckByPeer = {};
@@ -361,20 +369,20 @@ function _finishHostResyncPause(reason = '') {
 }
 
 function _startHostResyncPause(reason = '', includeConfig = false) {
+    if (lockstepStrictDebugMode) {
+        if (typeof stopLockstepDebugMatch === 'function') {
+            stopLockstepDebugMatch('legacy host resync requested in strict mode', {
+                tick: currentTick,
+                reason: String(reason || ''),
+                includeConfig: !!includeConfig
+            });
+        }
+        return;
+    }
     let peers = _getPlayingPeerIdsForResyncPause();
     let sessionId = generateGameSessionId();
     let ackMap = {};
     for (let pid of peers) ackMap[pid] = false;
-
-    lockstepResyncPauseActive = true;
-    lockstepResyncSessionId = sessionId;
-    lockstepResyncPendingAckByPeer = ackMap;
-    waitingForRemoteSince = performance.now();
-    let st = document.getElementById('lobby-status');
-    if (st && gameStarted) {
-        st.textContent = 'Lockstep paused: synchronizing match state...';
-        st.style.color = '#fa4';
-    }
 
     if (!lockstepResyncSnapshotCache) {
         lockstepResyncSnapshotCache = buildHostAuthoritativeStateSnapshot({
@@ -383,12 +391,31 @@ function _startHostResyncPause(reason = '', includeConfig = false) {
         });
     }
 
+    // Critical: host must run through the same snapshot-apply path as guests.
+    // Otherwise guests can restore into a quantized/rehydrated state while host keeps
+    // pre-restore transient runtime values, causing persistent tiny drift.
+    let authoritativeSnapshot = lockstepResyncSnapshotCache;
+    if (authoritativeSnapshot) {
+        applyAuthoritativeStateSnapshot(authoritativeSnapshot);
+    }
+
+    lockstepResyncPauseActive = true;
+    lockstepResyncSessionId = sessionId;
+    lockstepResyncPendingAckByPeer = ackMap;
+    waitingForRemoteSince = performance.now();
+    lockstepResyncSnapshotCache = authoritativeSnapshot;
+    let st = document.getElementById('lobby-status');
+    if (st && gameStarted) {
+        st.textContent = 'Lockstep paused: synchronizing match state...';
+        st.style.color = '#fa4';
+    }
+
     _broadcastResyncPauseState(true, sessionId, reason);
 
     for (let c of connections) {
         if (!c || !c.peer) continue;
         if (!Object.prototype.hasOwnProperty.call(ackMap, String(c.peer))) continue;
-        try { c.send({ type: 'MATCH_STATE_SNAPSHOT', snapshot: lockstepResyncSnapshotCache, sessionId }); } catch { }
+        try { c.send({ type: 'MATCH_STATE_SNAPSHOT', snapshot: authoritativeSnapshot, sessionId }); } catch { }
     }
 
     if (_isHostResyncPauseComplete()) {
@@ -828,6 +855,36 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
     let opts = (options && typeof options === 'object') ? options : {};
     let includeConfig = opts.includeConfig !== false;
     let includeStaticMapState = opts.includeStaticMapState !== false;
+    let lockstepWindowStartTick = Math.max(0, Math.floor(Number(currentTick) || 0));
+    let lockstepWindowEndTick = lockstepWindowStartTick + Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
+
+    let serializeTickPacketForSnapshot = (packet) => {
+        if (!packet || typeof packet !== 'object') return null;
+        let tick = Math.floor(Number(packet.tick));
+        let peerId = String(packet.peerId || '');
+        if (!Number.isFinite(tick) || tick < 0 || !peerId) return null;
+        return {
+            tick,
+            peerId,
+            teamId: Math.floor(Number(packet.teamId) || 0),
+            actions: Array.isArray(packet.actions) ? packet.actions.map(a => cloneSnapshotValue(a)) : [],
+            stateHashTick: Math.floor(Number(packet.stateHashTick) || -1),
+            stateHash: String(packet.stateHash || ''),
+            stateDigest: packet.stateDigest && typeof packet.stateDigest === 'object' ? cloneSnapshotValue(packet.stateDigest) : null,
+            checksum: String(packet.checksum || '')
+        };
+    };
+
+    let serializeTickBundleForSnapshot = (bundle) => {
+        if (!bundle || typeof bundle !== 'object') return null;
+        let tick = Math.floor(Number(bundle.tick));
+        if (!Number.isFinite(tick) || tick < 0) return null;
+        return {
+            tick,
+            packets: Array.isArray(bundle.packets) ? bundle.packets.map(serializeTickPacketForSnapshot).filter(Boolean) : [],
+            combinedChecksum: String(bundle.combinedChecksum || '')
+        };
+    };
 
     let floorItems = [];
     for (let gy = 0; gy < GRID_H; gy++) {
@@ -939,6 +996,11 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 collectorLastGatherGx: (u._collectorLastGatherGx !== null && u._collectorLastGatherGx !== undefined) ? Math.floor(Number(u._collectorLastGatherGx)) : null,
                 collectorLastGatherGy: (u._collectorLastGatherGy !== null && u._collectorLastGatherGy !== undefined) ? Math.floor(Number(u._collectorLastGatherGy)) : null,
                 
+                builderLastWorkX: (u._builderLastWorkX !== null && u._builderLastWorkX !== undefined) ? Number(u._builderLastWorkX) : null,
+                builderLastWorkY: (u._builderLastWorkY !== null && u._builderLastWorkY !== undefined) ? Number(u._builderLastWorkY) : null,
+                builderLastWorkGx: (u._builderLastWorkGx !== null && u._builderLastWorkGx !== undefined) ? Math.floor(Number(u._builderLastWorkGx)) : null,
+                builderLastWorkGy: (u._builderLastWorkGy !== null && u._builderLastWorkGy !== undefined) ? Math.floor(Number(u._builderLastWorkGy)) : null,
+                
                 builderLastMoveTick: (u._builderLastMoveTick !== null && u._builderLastMoveTick !== undefined) ? Math.floor(Number(u._builderLastMoveTick)) : null,
                 builderNextRecheckTick: (u._builderNextRecheckTick !== null && u._builderNextRecheckTick !== undefined) ? Math.floor(Number(u._builderNextRecheckTick)) : null,
                 collectorLastMoveTick: (u._collectorLastMoveTick !== null && u._collectorLastMoveTick !== undefined) ? Math.floor(Number(u._collectorLastMoveTick)) : null,
@@ -953,9 +1015,27 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 energyBlockedUntil: (u._energyBlockedUntil !== null && u._energyBlockedUntil !== undefined) ? Math.floor(Number(u._energyBlockedUntil)) : null,
                 workerNextIdleRetargetTick: (u._workerNextIdleRetargetTick !== null && u._workerNextIdleRetargetTick !== undefined) ? Math.floor(Number(u._workerNextIdleRetargetTick)) : null,
                 workerReservedTileIndex: (u._workerReservedTileIndex !== null && u._workerReservedTileIndex !== undefined) ? Math.floor(Number(u._workerReservedTileIndex)) : -1,
+                workerLastPathX: (u._workerLastPathX !== null && u._workerLastPathX !== undefined) ? Number(u._workerLastPathX) : null,
+                workerLastPathY: (u._workerLastPathY !== null && u._workerLastPathY !== undefined) ? Number(u._workerLastPathY) : null,
+                workerLastPathKey: (u._workerLastPathKey !== null && u._workerLastPathKey !== undefined) ? String(u._workerLastPathKey) : null,
+                workerLastPathTick: (u._workerLastPathTick !== null && u._workerLastPathTick !== undefined) ? Math.floor(Number(u._workerLastPathTick)) : null,
+                workerPathStallTicks: (u._workerPathStallTicks !== null && u._workerPathStallTicks !== undefined) ? Math.floor(Number(u._workerPathStallTicks)) : 0,
                 lastIdleStateTime: (u._lastIdleStateTime !== null && u._lastIdleStateTime !== undefined) ? Math.floor(Number(u._lastIdleStateTime)) : null,
                 forcedTargetLastSeenX: (u._forcedTargetLastSeenX !== null && u._forcedTargetLastSeenX !== undefined) ? Number(u._forcedTargetLastSeenX) : null,
-                forcedTargetLastSeenY: (u._forcedTargetLastSeenY !== null && u._forcedTargetLastSeenY !== undefined) ? Number(u._forcedTargetLastSeenY) : null
+                forcedTargetLastSeenY: (u._forcedTargetLastSeenY !== null && u._forcedTargetLastSeenY !== undefined) ? Number(u._forcedTargetLastSeenY) : null,
+                builderLastWatchX: (u._builderLastWatchX !== null && u._builderLastWatchX !== undefined) ? Number(u._builderLastWatchX) : null,
+                builderLastWatchY: (u._builderLastWatchY !== null && u._builderLastWatchY !== undefined) ? Number(u._builderLastWatchY) : null,
+                researcherTripWork: (u._researcherTripWork !== null && u._researcherTripWork !== undefined) ? Math.floor(Number(u._researcherTripWork)) : 0,
+                researcherTripCost: (u._researcherTripCost !== null && u._researcherTripCost !== undefined) ? Math.floor(Number(u._researcherTripCost)) : 0,
+                researcherMaterialReadyTick: (u._researcherMaterialReadyTick !== null && u._researcherMaterialReadyTick !== undefined) ? Math.floor(Number(u._researcherMaterialReadyTick)) : 0,
+                scoutTarget: u._scoutTarget ? { gx: Math.floor(Number(u._scoutTarget.gx)||0), gy: Math.floor(Number(u._scoutTarget.gy)||0) } : null,
+                nextScoutRetargetTick: (u._nextScoutRetargetTick !== null && u._nextScoutRetargetTick !== undefined) ? Math.floor(Number(u._nextScoutRetargetTick)) : null,
+                workerTransferCooldown: (u.workerTransferCooldown !== null && u.workerTransferCooldown !== undefined) ? Math.floor(Number(u.workerTransferCooldown)) : 0,
+                healerHasMaterial: !!u.healerHasMaterial,
+                builderHasMaterial: !!u.builderHasMaterial,
+                researcherHasMaterial: !!u.researcherHasMaterial,
+                astarBudgetBlockedUntil: (u._astarBudgetBlockedUntil !== null && u._astarBudgetBlockedUntil !== undefined) ? Math.floor(Number(u._astarBudgetBlockedUntil)) : null,
+                astarBudgetRetryTick: (u._astarBudgetRetryTick !== null && u._astarBudgetRetryTick !== undefined) ? Math.floor(Number(u._astarBudgetRetryTick)) : null
             };
             return snap;
         }).filter(Boolean),
@@ -966,7 +1046,27 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         floorItems,
         resignedTeams: Array.from(resignedTeams || []).map(v => Math.floor(Number(v) || 0)).sort((a, b) => a - b),
         rngState: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
-        visualRngState: (visualRng && typeof visualRng.getState === 'function') ? visualRng.getState() : null
+        visualRngState: (visualRng && typeof visualRng.getState === 'function') ? visualRng.getState() : null,
+        pathfindBudgetByPlayer: pathfindBudgetByPlayer && pathfindBudgetByPlayer.length > 0 ? Array.from(pathfindBudgetByPlayer).map(v => Math.max(0, Math.floor(Number(v) || 0))) : [],
+        astarNodeBudgetRemainingByPlayer: astarNodeBudgetRemainingByPlayer && astarNodeBudgetRemainingByPlayer.length > 0 ? Array.from(astarNodeBudgetRemainingByPlayer).map(v => Math.max(0, Math.floor(Number(v) || 0))) : [],
+        lockstepWindowPackets: Object.keys(lockstepHostPacketsByTick || {})
+            .map(k => Math.floor(Number(k)))
+            .filter(t => Number.isFinite(t) && t >= lockstepWindowStartTick && t <= lockstepWindowEndTick)
+            .sort((a, b) => a - b)
+            .map(t => ({
+                tick: t,
+                packets: Object.values(lockstepHostPacketsByTick[t] || {}).map(serializeTickPacketForSnapshot).filter(Boolean)
+            })),
+        lockstepWindowBundles: Object.keys(lockstepBundleByTick || {})
+            .map(k => Math.floor(Number(k)))
+            .filter(t => Number.isFinite(t) && t >= lockstepWindowStartTick && t <= lockstepWindowEndTick)
+            .sort((a, b) => a - b)
+            .map(t => serializeTickBundleForSnapshot(lockstepBundleByTick[t]))
+            .filter(Boolean),
+        lockstepWindowCommittedTicks: Object.keys(lockstepCommittedByTick || {})
+            .map(k => Math.floor(Number(k)))
+            .filter(t => Number.isFinite(t) && t >= lockstepWindowStartTick && t <= lockstepWindowEndTick && !!lockstepCommittedByTick[t])
+            .sort((a, b) => a - b)
     };
 
     if (includeConfig) {
@@ -1002,7 +1102,11 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     waitingForRemoteSince = 0;
     lockstepLastHardResyncRequestAt = now;
     lockstepHardResyncInFlightUntil = 0;
-    lockstepPostSnapshotGraceUntilAt = now + getLockstepPostSnapshotGraceMs();
+    let postSnapshotGraceMs = Math.max(
+        Math.floor(Number(getLockstepPostSnapshotGraceMs()) || 0),
+        Math.floor(Number(LOCKSTEP_HARD_RESYNC_MS) || 0) * 3
+    );
+    lockstepPostSnapshotGraceUntilAt = now + postSnapshotGraceMs;
     lockstepResyncSnapshotCache = null;
     lockstepDesyncDetected = false;
     lockstepExpectedStateHashByTick = {};
@@ -1052,6 +1156,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     currentTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || 0));
     lockstepHashGraceUntilTick = currentTick + Math.max(48, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 8));
     gameTime = Math.max(0, Math.floor(Number(snapshot.gameTime) || currentTick));
+    lockstepResyncResumeTick = currentTick;
     let snapshotNextUnitId = Math.max(1, Math.floor(Number(snapshot.nextUnitId) || 1));
     nextUnitId = snapshotNextUnitId;
     gameOver = !!snapshot.gameOver;
@@ -1213,14 +1318,71 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u.path = runtime.path && runtime.path.length > 0 ? runtime.path.map(n => ({ x: Math.floor(Number(n.x)||0), y: Math.floor(Number(n.y)||0) })) : null;
             u.pathIndex = Number.isFinite(runtime.pathIndex) ? Math.floor(runtime.pathIndex) : 0;
             u.pathIsFallbackAstar = !!runtime.pathIsFallbackAstar;
+
+            if (u.workerState === 'MANUAL_MOVE') {
+                u.commandState = CMD_MOVING;
+            }
             
             // Only synthesize a pending path target if no path was restored - a restored path should
-            // be followed as-is; creating a _pendingPathTarget here would cause a fresh re-path on the
-            // first tick and diverge from the host.
-            if (!u._pendingPathTarget && (!u.path || u.path.length === 0) && u.targetPos && (u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING)) {
-                let gx = Math.floor(u.targetPos.x / 32);
-                let gy = Math.floor(u.targetPos.y / 32);
-                u._pendingPathTarget = { gx, gy, cmd: u.commandState, src: 'deferred_resolver' };
+            // be followed as-is; creating a _pendingPathTarget here would force an unnecessary re-path
+            // on the next tick and can skip one worker action after a resync.
+            if (!u._pendingPathTarget && (!u.path || u.path.length === 0)) {
+                let resumeGx = null;
+                let resumeGy = null;
+                let resumeCmd = u.commandState;
+                let resumeSrc = 'deferred_resolver';
+
+                if (u.workerState && u.workerState !== 'IDLE') {
+                    if (u.workerState === 'RETURNING_FOR_GOLD') {
+                        let returnSpawner = null;
+                        if (u.workerType === 'builder') returnSpawner = u._builderSpawnerTarget;
+                        else if (u.workerType === 'healer') returnSpawner = u._healerSpawnerTarget;
+                        else if (u.workerType === 'researcher') returnSpawner = u._researchSpawnerTarget;
+
+                        if (returnSpawner && Number.isFinite(returnSpawner.gx) && Number.isFinite(returnSpawner.gy)) {
+                            resumeGx = Math.floor(Number(returnSpawner.gx));
+                            resumeGy = Math.floor(Number(returnSpawner.gy));
+                            resumeCmd = CMD_MOVING;
+                            resumeSrc = 'deferred_worker_state';
+                        } else if (u.targetPos && Number.isFinite(u.targetPos.x) && Number.isFinite(u.targetPos.y)) {
+                            resumeGx = Math.floor(Number(u.targetPos.x) / TILE);
+                            resumeGy = Math.floor(Number(u.targetPos.y) / TILE);
+                            resumeCmd = CMD_MOVING;
+                            resumeSrc = 'deferred_worker_state';
+                        }
+                    }
+
+                    if (!Number.isFinite(resumeGx) || !Number.isFinite(resumeGy)) {
+                        if (u.workerTarget && Number.isFinite(u.workerTarget.gx) && Number.isFinite(u.workerTarget.gy)) {
+                            resumeGx = Math.floor(Number(u.workerTarget.gx));
+                            resumeGy = Math.floor(Number(u.workerTarget.gy));
+                            resumeCmd = CMD_MOVING;
+                            resumeSrc = 'deferred_worker_state';
+                        }
+                    }
+                } else if ((u.commandState === CMD_MOVING || u.commandState === CMD_ATTACK_MOVING || u.workerState === 'MANUAL_MOVE') && u.targetPos && Number.isFinite(u.targetPos.x) && Number.isFinite(u.targetPos.y)) {
+                    resumeGx = Math.floor(Number(u.targetPos.x) / TILE);
+                    resumeGy = Math.floor(Number(u.targetPos.y) / TILE);
+                    if (u.workerState === 'MANUAL_MOVE') resumeCmd = CMD_MOVING;
+                } else if (u.commandState === CMD_ATTACKING) {
+                    let targetRef = null;
+                    if (u.targetUnit && !u.targetUnit.dead) targetRef = u.targetUnit;
+                    else if (u.targetBuilding && Number(u.targetBuilding.energy) > 0) targetRef = u.targetBuilding;
+
+                    if (targetRef && Number.isFinite(targetRef.x) && Number.isFinite(targetRef.y)) {
+                        resumeGx = Math.floor(Number(targetRef.x) / TILE);
+                        resumeGy = Math.floor(Number(targetRef.y) / TILE);
+                    } else if (u.targetPos && Number.isFinite(u.targetPos.x) && Number.isFinite(u.targetPos.y)) {
+                        resumeGx = Math.floor(Number(u.targetPos.x) / TILE);
+                        resumeGy = Math.floor(Number(u.targetPos.y) / TILE);
+                    }
+                }
+                if (Number.isFinite(resumeGx) && Number.isFinite(resumeGy)) {
+                    u._pendingPathTarget = { gx: resumeGx, gy: resumeGy, cmd: resumeCmd, src: resumeSrc };
+                    u.pathIsFallbackAstar = true;
+                    let retryJitter = Math.max(0, Math.floor(Number(u.id) || 0) % 4);
+                    u._astarBudgetRetryTick = gameTime + 1 + retryJitter;
+                }
             }
 
             u._manualMoveIssuedTick = (runtime.manualMoveIssuedTick !== null && runtime.manualMoveIssuedTick !== undefined) ? Math.floor(Number(runtime.manualMoveIssuedTick)) : null;
@@ -1244,6 +1406,11 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u._collectorLastGatherGx = (runtime.collectorLastGatherGx !== null && runtime.collectorLastGatherGx !== undefined) ? Math.floor(Number(runtime.collectorLastGatherGx)) : null;
             u._collectorLastGatherGy = (runtime.collectorLastGatherGy !== null && runtime.collectorLastGatherGy !== undefined) ? Math.floor(Number(runtime.collectorLastGatherGy)) : null;
             
+            u._builderLastWorkX = (runtime.builderLastWorkX !== null && runtime.builderLastWorkX !== undefined) ? Number(runtime.builderLastWorkX) : null;
+            u._builderLastWorkY = (runtime.builderLastWorkY !== null && runtime.builderLastWorkY !== undefined) ? Number(runtime.builderLastWorkY) : null;
+            u._builderLastWorkGx = (runtime.builderLastWorkGx !== null && runtime.builderLastWorkGx !== undefined) ? Math.floor(Number(runtime.builderLastWorkGx)) : null;
+            u._builderLastWorkGy = (runtime.builderLastWorkGy !== null && runtime.builderLastWorkGy !== undefined) ? Math.floor(Number(runtime.builderLastWorkGy)) : null;
+            
             u._builderLastMoveTick = (runtime.builderLastMoveTick !== null && runtime.builderLastMoveTick !== undefined) ? Math.floor(Number(runtime.builderLastMoveTick)) : null;
             u._builderNextRecheckTick = (runtime.builderNextRecheckTick !== null && runtime.builderNextRecheckTick !== undefined) ? Math.floor(Number(runtime.builderNextRecheckTick)) : null;
             u._collectorLastMoveTick = (runtime.collectorLastMoveTick !== null && runtime.collectorLastMoveTick !== undefined) ? Math.floor(Number(runtime.collectorLastMoveTick)) : null;
@@ -1258,10 +1425,55 @@ function applyAuthoritativeStateSnapshot(snapshot) {
             u._energyBlockedUntil = (runtime.energyBlockedUntil !== null && runtime.energyBlockedUntil !== undefined) ? Math.floor(Number(runtime.energyBlockedUntil)) : null;
             u._workerNextIdleRetargetTick = (runtime.workerNextIdleRetargetTick !== null && runtime.workerNextIdleRetargetTick !== undefined) ? Math.floor(Number(runtime.workerNextIdleRetargetTick)) : null;
             u._workerReservedTileIndex = (runtime.workerReservedTileIndex !== null && runtime.workerReservedTileIndex !== undefined) ? Math.floor(Number(runtime.workerReservedTileIndex)) : -1;
+            u._workerLastPathX = (runtime.workerLastPathX !== null && runtime.workerLastPathX !== undefined) ? Number(runtime.workerLastPathX) : null;
+            u._workerLastPathY = (runtime.workerLastPathY !== null && runtime.workerLastPathY !== undefined) ? Number(runtime.workerLastPathY) : null;
+            u._workerLastPathKey = (runtime.workerLastPathKey !== null && runtime.workerLastPathKey !== undefined) ? String(runtime.workerLastPathKey) : null;
+            u._workerLastPathTick = (runtime.workerLastPathTick !== null && runtime.workerLastPathTick !== undefined) ? Math.floor(Number(runtime.workerLastPathTick)) : null;
+            u._workerPathStallTicks = (runtime.workerPathStallTicks !== null && runtime.workerPathStallTicks !== undefined) ? Math.floor(Number(runtime.workerPathStallTicks)) : 0;
             u._lastIdleStateTime = (runtime.lastIdleStateTime !== null && runtime.lastIdleStateTime !== undefined) ? Math.floor(Number(runtime.lastIdleStateTime)) : null;
             u._forcedTargetLastSeenX = (runtime.forcedTargetLastSeenX !== null && runtime.forcedTargetLastSeenX !== undefined) ? Number(runtime.forcedTargetLastSeenX) : null;
             u._forcedTargetLastSeenY = (runtime.forcedTargetLastSeenY !== null && runtime.forcedTargetLastSeenY !== undefined) ? Number(runtime.forcedTargetLastSeenY) : null;
+            u.workerTransferCooldown = (runtime.workerTransferCooldown !== null && runtime.workerTransferCooldown !== undefined) ? Math.floor(Number(runtime.workerTransferCooldown)) : 0;
+            u.healerHasMaterial = !!runtime.healerHasMaterial;
+            u.builderHasMaterial = !!runtime.builderHasMaterial;
+            u.researcherHasMaterial = !!runtime.researcherHasMaterial;
+            u._astarBudgetBlockedUntil = (runtime.astarBudgetBlockedUntil !== null && runtime.astarBudgetBlockedUntil !== undefined) ? Math.floor(Number(runtime.astarBudgetBlockedUntil)) : null;
+            u._astarBudgetRetryTick = (runtime.astarBudgetRetryTick !== null && runtime.astarBudgetRetryTick !== undefined) ? Math.floor(Number(runtime.astarBudgetRetryTick)) : null;
+            u._builderLastWatchX = (runtime.builderLastWatchX !== null && runtime.builderLastWatchX !== undefined) ? Number(runtime.builderLastWatchX) : null;
+            u._builderLastWatchY = (runtime.builderLastWatchY !== null && runtime.builderLastWatchY !== undefined) ? Number(runtime.builderLastWatchY) : null;
+            u._researcherTripWork = (runtime.researcherTripWork !== null && runtime.researcherTripWork !== undefined) ? Math.floor(Number(runtime.researcherTripWork)) : 0;
+            u._researcherTripCost = (runtime.researcherTripCost !== null && runtime.researcherTripCost !== undefined) ? Math.floor(Number(runtime.researcherTripCost)) : 0;
+            u._researcherMaterialReadyTick = (runtime.researcherMaterialReadyTick !== null && runtime.researcherMaterialReadyTick !== undefined) ? Math.floor(Number(runtime.researcherMaterialReadyTick)) : 0;
+            u._scoutTarget = runtime.scoutTarget ? { gx: Math.floor(Number(runtime.scoutTarget.gx)||0), gy: Math.floor(Number(runtime.scoutTarget.gy)||0) } : null;
+            u._nextScoutRetargetTick = (runtime.nextScoutRetargetTick !== null && runtime.nextScoutRetargetTick !== undefined) ? Math.floor(Number(runtime.nextScoutRetargetTick)) : null;
         }
+
+        // Normalize worker timing fields after snapshot restore: only fix impossible future values.
+        // Non-finite values should be left for normal game code initialization.
+        // This prevents over-eager re-evaluation which can cause workers to behave differently post-snapshot.
+        try {
+            const ensureValidTick = (fld) => {
+                if (u && Object.prototype.hasOwnProperty.call(u, fld)) {
+                    let v = u[fld];
+                    if (Number.isFinite(v) && v > gameTime) {
+                        // Future tick value is impossible; clamp to safe past value
+                        u[fld] = Math.max(0, Math.floor(gameTime) - 1);
+                    }
+                    // Non-finite values: leave for normal init code
+                }
+            };
+            // All worker timing fields: only fix impossible future values
+            ensureValidTick('_builderLastMoveTick');
+            ensureValidTick('_builderNextRecheckTick');
+            ensureValidTick('_collectorLastMoveTick');
+            ensureValidTick('_collectorNextRecheckTick');
+            ensureValidTick('_healerLastMoveTick');
+            ensureValidTick('_healerNextRecheckTick');
+            ensureValidTick('_researchLastMoveTick');
+            ensureValidTick('_researchNextRecheckTick');
+            ensureValidTick('_workerNextIdleRetargetTick');
+        } catch (e) {}
+
         delete u.snapshotRefs;
         delete u._snapshotRefs;
         delete u.snapshotRuntime;
@@ -1333,19 +1545,25 @@ function applyAuthoritativeStateSnapshot(snapshot) {
 
     nextUnitId = Math.max(snapshotNextUnitId, units.reduce((m, u) => Math.max(m, Math.floor(Number(u.id) || 0) + 1), 1));
 
-    goldMines = snapshotGoldMines;
-    for (let m of goldMines) {
-        if (!m) continue;
-        let gx = Math.floor(Number(m.gx));
-        let gy = Math.floor(Number(m.gy));
-        setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m);
+    goldMines.length = 0;
+    if (Array.isArray(snapshotGoldMines)) {
+        for (let m of snapshotGoldMines) {
+            if (!m) continue;
+            goldMines.push(m);
+            let gx = Math.floor(Number(m.gx));
+            let gy = Math.floor(Number(m.gy));
+            setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m);
+        }
     }
-    astarMines = snapshotAstarMines;
-    for (let m of astarMines) {
-        if (!m) continue;
-        let gx = Math.floor(Number(m.gx));
-        let gy = Math.floor(Number(m.gy));
-        setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m);
+    astarMines.length = 0;
+    if (Array.isArray(snapshotAstarMines)) {
+        for (let m of snapshotAstarMines) {
+            if (!m) continue;
+            astarMines.push(m);
+            let gx = Math.floor(Number(m.gx));
+            let gy = Math.floor(Number(m.gy));
+            setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m);
+        }
     }
     droppedItems = [];
     initDroppedItemGrid();
@@ -1366,6 +1584,9 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         let floorItem = cloneSnapshotValue(f.item || null);
         let floorItemType = String((floorItem && floorItem.type) || '');
         if (floorItemType && BASE_CARD_TYPES[floorItemType] && BASE_CARD_TYPES[floorItemType].target === 'wall') continue;
+        // Structural entities must be restored from towers/barracks/spawners snapshot arrays, never floorItems.
+        if (floorItemType.startsWith('barrack_')) continue;
+        if (floorItemType === 'spawner' || floorItemType === 'astar_spawner' || floorItemType === 'salvager' || floorItemType === 'builder_spawner' || floorItemType === 'healer_spawner' || floorItemType === 'research') continue;
         grid[gy][gx].item = floorItem;
         grid[gy][gx].owner = Math.floor(Number(f.owner) || 0);
         if (grid[gy][gx].item) setTileEntity(gx, gy, String(grid[gy][gx].item.type || 'floor_item'), grid[gy][gx].item);
@@ -1381,6 +1602,18 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     }
     if (visualRng && typeof visualRng.setState === 'function' && snapshot.visualRngState !== null && snapshot.visualRngState !== undefined) {
         visualRng.setState(snapshot.visualRngState);
+    }
+
+    // Restore pathfinding per-tick budgets to ensure deterministic path request allocation
+    if (Array.isArray(snapshot.pathfindBudgetByPlayer) && snapshot.pathfindBudgetByPlayer.length > 0) {
+        for (let i = 0; i < snapshot.pathfindBudgetByPlayer.length && i < Math.max(0, players.length || 0); i++) {
+            pathfindBudgetByPlayer[i] = Math.max(0, Math.floor(Number(snapshot.pathfindBudgetByPlayer[i]) || 0));
+        }
+    }
+    if (Array.isArray(snapshot.astarNodeBudgetRemainingByPlayer) && snapshot.astarNodeBudgetRemainingByPlayer.length > 0) {
+        for (let i = 0; i < snapshot.astarNodeBudgetRemainingByPlayer.length && i < Math.max(0, players.length || 0); i++) {
+            astarNodeBudgetRemainingByPlayer[i] = Math.max(0, Math.floor(Number(snapshot.astarNodeBudgetRemainingByPlayer[i]) || 0));
+        }
     }
 
     // Snapshot objects are rebuilt from transport payloads; transient drag-box state is cleared,
@@ -1420,6 +1653,16 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     dirtyGrid = true;
     dirtyAreas = true;
     invalidateStaticLayerCache();
+    // Hard-resync must also reset path caches/runtime topology state; stale local cache entries can
+    // make the guest pick different route branches immediately after snapshot apply.
+    if (typeof _bumpPathTopologyVersion === 'function') {
+        _bumpPathTopologyVersion();
+    } else {
+        if (typeof sharedPathCache !== 'undefined' && sharedPathCache && typeof sharedPathCache.clear === 'function') sharedPathCache.clear();
+        if (typeof sharedPartialPathCache !== 'undefined' && sharedPartialPathCache && typeof sharedPartialPathCache.clear === 'function') sharedPartialPathCache.clear();
+        if (typeof sharedSpawnerRouteCache !== 'undefined' && sharedSpawnerRouteCache && typeof sharedSpawnerRouteCache.clear === 'function') sharedSpawnerRouteCache.clear();
+        if (typeof sharedSpawnerRallyTemplateCache !== 'undefined' && sharedSpawnerRallyTemplateCache && typeof sharedSpawnerRallyTemplateCache.clear === 'function') sharedSpawnerRallyTemplateCache.clear();
+    }
     pathfindBudget = 0;
 
     lockstepLocalPacketByTick = {};
@@ -1430,7 +1673,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     lockstepPendingBundleAckByTick = {};
     lockstepPendingCommitByTick = {};
     lockstepCommittedByTick = {};
-    let snapTick = Math.max(0, Math.floor(Number(snapshot.tick) || 0));
+    let snapTick = Math.max(0, Math.floor(Number(snapshot.currentTick) || Number(snapshot.tick) || 0));
     for (let i = Math.max(0, snapTick - 100); i < snapTick; i++) {
         lockstepCommittedByTick[i] = true;
     }
@@ -1441,6 +1684,66 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     lockstepLastResendRequestAtByTick = {};
     lockstepHistoryByTick = {};
     lockstepSnapshotLastSentAtByPeer = {};
+
+    if (Array.isArray(snapshot.lockstepWindowPackets)) {
+        for (let tickEntry of snapshot.lockstepWindowPackets) {
+            let tick = Math.floor(Number(tickEntry && tickEntry.tick));
+            if (!Number.isFinite(tick) || tick < snapTick) continue;
+            let packets = Array.isArray(tickEntry && tickEntry.packets) ? tickEntry.packets : [];
+            if (packets.length <= 0) continue;
+            let packetMap = {};
+            for (let packet of packets) {
+                let restoredPacket = {
+                    tick: Math.floor(Number(packet && packet.tick) || 0),
+                    peerId: String((packet && packet.peerId) || ''),
+                    teamId: Math.floor(Number(packet && packet.teamId) || 0),
+                    actions: Array.isArray(packet && packet.actions) ? packet.actions.map(a => cloneSnapshotValue(a)) : [],
+                    checksum: String((packet && packet.checksum) || '')
+                };
+                if (restoredPacket.tick !== tick || !restoredPacket.peerId) continue;
+                if (typeof validateTickPacket === 'function' && !validateTickPacket(restoredPacket)) continue;
+                packetMap[restoredPacket.peerId] = restoredPacket;
+                if (!isHost && restoredPacket.peerId === String(myPeerId || '')) {
+                    lockstepLocalPacketByTick[tick] = restoredPacket;
+                }
+            }
+            if (Object.keys(packetMap).length > 0) {
+                lockstepHostPacketsByTick[tick] = packetMap;
+                if (isHost && myPeerId && packetMap[myPeerId]) lockstepLocalPacketByTick[tick] = packetMap[myPeerId];
+            }
+        }
+    }
+
+    if (Array.isArray(snapshot.lockstepWindowBundles)) {
+        for (let bundle of snapshot.lockstepWindowBundles) {
+            let restoredBundle = {
+                tick: Math.floor(Number(bundle && bundle.tick) || 0),
+                packets: Array.isArray(bundle && bundle.packets)
+                    ? bundle.packets.map(packet => ({
+                        tick: Math.floor(Number(packet && packet.tick) || 0),
+                        peerId: String((packet && packet.peerId) || ''),
+                        teamId: Math.floor(Number(packet && packet.teamId) || 0),
+                        actions: Array.isArray(packet && packet.actions) ? packet.actions.map(a => cloneSnapshotValue(a)) : [],
+                        checksum: String((packet && packet.checksum) || '')
+                    }))
+                    : [],
+                combinedChecksum: String((bundle && bundle.combinedChecksum) || '')
+            };
+            if (!Number.isFinite(restoredBundle.tick) || restoredBundle.tick < snapTick) continue;
+            if (typeof validateTickBundle === 'function' && !validateTickBundle(restoredBundle)) continue;
+            lockstepBundleByTick[restoredBundle.tick] = restoredBundle;
+        }
+    }
+
+    if (Array.isArray(snapshot.lockstepWindowCommittedTicks)) {
+        for (let tick of snapshot.lockstepWindowCommittedTicks) {
+            let restoredTick = Math.floor(Number(tick));
+            if (!Number.isFinite(restoredTick) || restoredTick < snapTick) continue;
+            lockstepCommittedByTick[restoredTick] = true;
+        }
+    }
+
+    lockstepResyncResumeTick = snapTick;
 
     let st = document.getElementById('lobby-status');
     if (st && !isHost) {
@@ -1466,6 +1769,7 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
     lockstepResyncSessionId = '';
     lockstepResyncPendingAckByPeer = {};
     lockstepResyncSnapshotCache = null;
+    lockstepResyncResumeTick = -1;
     lockstepDesyncDetected = false;
     lockstepExpectedStateHashByTick = {};
     lockstepLocalStateHashByTick = {};
@@ -1535,8 +1839,10 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
             }
         }
     }
+    let _savedSessionId = matchStartSessionId;
     initAudio();
     startGame();
+    matchStartSessionId = _savedSessionId;
     lockstepHashGraceUntilTick = currentTick + Math.max(48, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 8));
 
     if (data && data.stateSnapshot && typeof data.stateSnapshot === 'object') {
@@ -1611,10 +1917,30 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
             replayedToTick
         });
 
+        if (lockstepStrictDebugMode) {
+            if (typeof stopLockstepDebugMatch === 'function') {
+                stopLockstepDebugMatch('history gap detected in strict mode', {
+                    tick: missingTick,
+                    targetTick,
+                    replayedToTick
+                });
+            }
+            return;
+        }
+
         if (connections[0]) {
             connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: missingTick });
             connections[0].send({ type: 'REQUEST_MATCH_SYNC', tick: missingTick, reason: 'history gap' });
             lockstepLastResendRequestAtByTick[missingTick] = now;
+        }
+    }
+
+    // Post-resync grace: pre-grant bundle slots to prevent immediate resend loop
+    // while host rebuilds its tick-bundle pipeline.
+    let graceTickWindow = Math.max(10, Math.floor((LOCKSTEP_PIPELINE_TICKS || 0) * 2));
+    for (let gt = currentTick; gt < currentTick + graceTickWindow; gt++) {
+        if (!lockstepPendingBundleAckByTick[gt]) {
+            lockstepPendingBundleAckByTick[gt] = '__grace__';
         }
     }
 }
@@ -2164,6 +2490,16 @@ function setupConnection(conn) {
             broadcastLobbyState();
             renderOnlineLobby();
         } else if (data.type === 'REQUEST_MATCH_SYNC' && isHost) {
+            if (lockstepStrictDebugMode) {
+                if (typeof stopLockstepDebugMatch === 'function') {
+                    stopLockstepDebugMatch('legacy match sync requested in strict mode', {
+                        tick: Math.floor(Number((data && data.tick) || currentTick) || 0),
+                        fromPeer: String((conn && conn.peer) || ''),
+                        reason: String((data && data.reason) || '')
+                    });
+                }
+                return;
+            }
             if (!gameStarted || gameOver) return;
             let pid = String((conn && conn.peer) || '');
             let now = performance.now();
@@ -2254,6 +2590,15 @@ function setupConnection(conn) {
                 st.style.color = '#fa4';
             }
         } else if (data.type === 'MATCH_STATE_SNAPSHOT' && !isHost) {
+            if (lockstepStrictDebugMode && gameStarted) {
+                if (typeof stopLockstepDebugMatch === 'function') {
+                    stopLockstepDebugMatch('legacy match snapshot received in strict mode', {
+                        tick: currentTick,
+                        sessionId: String((data && data.sessionId) || '')
+                    });
+                }
+                return;
+            }
             pendingJoinAsSpectator = false;
             let snapshotSessionId = String((data && data.sessionId) || '');
             if (snapshotSessionId) lockstepResyncSessionId = snapshotSessionId;
@@ -2266,8 +2611,19 @@ function setupConnection(conn) {
                 try { connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: currentTick }); } catch { }
             }
         } else if (data.type === 'MATCH_STATE_SNAPSHOT_APPLIED' && isHost) {
+            if (lockstepStrictDebugMode) return;
             _markHostResyncAck(conn && conn.peer ? conn.peer : '', data && data.sessionId ? String(data.sessionId) : '');
         } else if (data.type === 'LOCKSTEP_RESYNC_PAUSE' && !isHost) {
+            if (lockstepStrictDebugMode && gameStarted) {
+                if (typeof stopLockstepDebugMatch === 'function') {
+                    stopLockstepDebugMatch('legacy resync pause received in strict mode', {
+                        tick: currentTick,
+                        sessionId: String((data && data.sessionId) || ''),
+                        active: !!(data && data.active)
+                    });
+                }
+                return;
+            }
             let active = !!(data && data.active);
             let sessionId = String((data && data.sessionId) || '');
             if (active) {
@@ -2302,6 +2658,17 @@ function setupConnection(conn) {
                 matchRoleByPeerId[conn.peer] = role;
                 let uid = getPeerProfileUid(conn.peer);
                 if (uid) matchRoleByUid[uid] = role;
+
+                // Treat explicit switch to spectating as an authoritative resignation signal.
+                // This keeps resign working even if the client's lockstep resign action packet
+                // is delayed or dropped during resync/tick-stall conditions.
+                if (role === 'spectating') {
+                    let teamId = getTeamIdForPeer(conn.peer);
+                    if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && typeof queueAction === 'function') {
+                        queueAction({ action: 'forceResignTeam', targetTeam: teamId });
+                    }
+                }
+
                 broadcastLobbyState();
                 renderOnlineLobby();
             }
@@ -2556,6 +2923,7 @@ function resetWorldState() {
     lockstepResyncSessionId = '';
     lockstepResyncPendingAckByPeer = {};
     lockstepResyncSnapshotCache = null;
+    lockstepResyncResumeTick = -1;
     peerPresenceById = {};
     remoteRoleByPeerId = {};
     remotePresenceByPeerId = {};

@@ -43,15 +43,17 @@ function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = n
     let ignoreWalls = !!u.isFlying;
     let cacheProfile = cacheProfileHint || (ignoreWalls ? 'ignore_walls' : null);
     let key = String(targetGx) + ',' + String(targetGy) + '|' + (cacheProfile || 'default') + '|' + (canWalk ? 'cw1' : 'cw0') + '|' + (ignoreWalls ? 'fly1' : 'fly0');
+    let curGx = Math.floor(Number(u.x) / TILE);
+    let curGy = Math.floor(Number(u.y) / TILE);
     if (!Number.isFinite(u._workerLastPathX) || !Number.isFinite(u._workerLastPathY)) {
-        u._workerLastPathX = u.x;
-        u._workerLastPathY = u.y;
+        u._workerLastPathX = curGx;
+        u._workerLastPathY = curGy;
         u._workerPathStallTicks = 0;
     } else {
-        let moved = Math.hypot(u.x - u._workerLastPathX, u.y - u._workerLastPathY);
-        u._workerPathStallTicks = moved >= 1.5 ? 0 : Math.max(0, Number(u._workerPathStallTicks) || 0) + 1;
-        u._workerLastPathX = u.x;
-        u._workerLastPathY = u.y;
+        let movedTiles = Math.abs(curGx - Math.floor(Number(u._workerLastPathX) || curGx)) + Math.abs(curGy - Math.floor(Number(u._workerLastPathY) || curGy));
+        u._workerPathStallTicks = movedTiles > 0 ? 0 : Math.max(0, Number(u._workerPathStallTicks) || 0) + 1;
+        u._workerLastPathX = curGx;
+        u._workerLastPathY = curGy;
     }
 
     let lastTick = Math.floor(Number(u._workerLastPathTick) || -999999);
@@ -62,14 +64,16 @@ function _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, canWalk = n
     }
 
     if (!_canUsePathfindRequestBudget(u.owner, u)) {
-        _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
-        return null;
+        return _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
     }
 
     _consumePathfindRequestBudget(u.owner, u);
     let path = _findPathForUnitTagged('worker_ai', u, startGx, startGy, targetGx, targetGy, ignoreWalls, canWalk, u.owner, cacheProfile);
     if (!path && _lastPathfindAbortedByBudget) {
-        _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
+        path = _makeFallbackPathForUnit(u, startGx, startGy, targetGx, targetGy, u.commandState || CMD_MOVING, 'worker_ai');
+    } else if (path && path.length > 0) {
+        u.pathIsFallbackAstar = false;
+        u._pendingPathTarget = null;
     }
     u._workerLastPathKey = key;
     u._workerLastPathTick = gameTime;
@@ -102,6 +106,25 @@ function updateWorkerAI(u) {
     if (u.workerTransferCooldown > 0) u.workerTransferCooldown--;
 
     if (u.workerState === 'MANUAL_MOVE') {
+        // Manual rally must stay in movement mode until target is reached or explicitly canceled.
+        u.commandState = CMD_MOVING;
+
+        // If pathing state was lost (e.g. after collisions/resync), rebuild from remembered manual target.
+        if ((!u.path || u.pathIndex >= u.path.length) && !u._pendingPathTarget && u.targetPos && Number.isFinite(u.targetPos.x) && Number.isFinite(u.targetPos.y)) {
+            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+            let tgx = Math.floor(Number(u.targetPos.x) / TILE), tgy = Math.floor(Number(u.targetPos.y) / TILE);
+            let dest = findNearestWalkable(tgx, tgy, ugx, ugy, u);
+            let canWalk = getPathCanWalkForUnit(u);
+            let rebuilt = _requestWorkerPath(u, ugx, ugy, dest.x, dest.y, canWalk, null, true);
+            if (rebuilt && rebuilt.length > 0) {
+                u.path = rebuilt;
+                u.pathIndex = (rebuilt.length > 1 && rebuilt[0].x === ugx && rebuilt[0].y === ugy) ? 1 : 0;
+            } else {
+                _makeFallbackPathForUnit(u, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'worker_ai');
+            }
+            return;
+        }
+
         if ((!u.path || u.pathIndex >= u.path.length) && u._pendingPathTarget) {
             if (u.pathIsFallbackAstar) {
                 _tryUpgradeAstarFallbackPath(u);
@@ -246,6 +269,7 @@ function updateWorkerAI(u) {
                             u.path = route.path;
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                             u._builderSpawnerTarget = route.spawner;
+                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                             return;
                         } else {
                             if (u.workerTransferCooldown <= 0) {
@@ -362,6 +386,7 @@ function updateWorkerAI(u) {
                             u.path = route.path;
                             u.pathIndex = 0; u.commandState = CMD_MOVING;
                             u._builderSpawnerTarget = route.spawner;
+                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                         } else {
                             // No spawner or no energy, just keep building for free (but slower)
                             u.workerState = 'BUILDING_IN_PLACE';
@@ -370,6 +395,10 @@ function updateWorkerAI(u) {
                 }
             }
         } else if (u.workerState === 'RETURNING_FOR_GOLD') {
+            // Safeguard: if we're actively moving to spawner with a valid path, stay in this state.
+            if (u.path && u.pathIndex < u.path.length) {
+                return;
+            }
             if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
                 _builderRememberWorkSite(u);
                 _clearWorkerTarget(u);
@@ -400,6 +429,7 @@ function updateWorkerAI(u) {
                     let route = getSpawnerRoute('builder_spawner', null);
                     if (route) {
                         u._builderSpawnerTarget = route.spawner;
+                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                         u.path = route.path;
                         u.pathIndex = 0;
                         u.commandState = CMD_MOVING;
@@ -527,6 +557,7 @@ function updateWorkerAI(u) {
                 u.path = route.path;
                 u.pathIndex = 0; u.commandState = CMD_MOVING;
                 u._builderSpawnerTarget = route.spawner;
+                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
             }
         }
     } else if (u.workerType === 'healer') {
@@ -562,6 +593,7 @@ function updateWorkerAI(u) {
                         u.path = route.path;
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                     } else {
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
@@ -612,6 +644,7 @@ function updateWorkerAI(u) {
                         u.path = route.path;
                         u.pathIndex = 0; u.commandState = CMD_MOVING;
                         u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                         u._healerQueueTripCost = tripCost;
                     } else {
                         u.workerState = 'IDLE';
@@ -643,12 +676,17 @@ function updateWorkerAI(u) {
                     u.path = route.path;
                     u.pathIndex = 0; u.commandState = CMD_MOVING;
                     u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                 } else {
                     u.workerState = 'IDLE';
                     u.commandState = CMD_IDLE;
                 }
             }
         } else if (u.workerState === 'RETURNING_FOR_GOLD') {
+            // Safeguard: if we're actively moving to spawner with a valid path, stay in this state.
+            if (u.path && u.pathIndex < u.path.length) {
+                return;
+            }
             let targetIsQueue = (u.workerTargetType === 'queue');
             if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
                 if (targetIsQueue) _clearHealerQueueCommit(u);
@@ -685,6 +723,7 @@ function updateWorkerAI(u) {
                     let route = getSpawnerRoute('healer_spawner', null);
                     if (route) {
                         u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                         u.path = route.path;
                         u.pathIndex = 0;
                         u.commandState = CMD_MOVING;
@@ -750,6 +789,7 @@ function updateWorkerAI(u) {
                         u.pathIndex = 0;
                         u.commandState = CMD_MOVING;
                         u._researchSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                     } else {
                         u.workerState = 'IDLE';
                         u.commandState = CMD_IDLE;
@@ -801,6 +841,10 @@ function updateWorkerAI(u) {
                 u.commandState = CMD_IDLE;
             }
         } else if (u.workerState === 'RETURNING_FOR_GOLD') {
+            // Safeguard: if we're actively moving to spawner with a valid path, stay in this state.
+            if (u.path && u.pathIndex < u.path.length) {
+                return;
+            }
             if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
                 _clearWorkerTarget(u, 'target_no_work');
                 u.workerState = 'IDLE';
@@ -824,6 +868,7 @@ function updateWorkerAI(u) {
                     let route = getSpawnerRoute('research', null);
                     if (route) {
                         u._researchSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
                         u.path = route.path;
                         u.pathIndex = 0;
                         u.commandState = CMD_MOVING;
@@ -2185,6 +2230,7 @@ function _builderAssignTarget(u, target, myGx, myGy) {
         u.path = route.path;
         u.pathIndex = 0; u.commandState = CMD_MOVING;
         u._builderSpawnerTarget = route.spawner;
+                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
     } else {
         // No spawner or no energy - go build directly (slow mode)
         u.workerState = 'MOVING_TO_BUILD';
@@ -2260,23 +2306,40 @@ function _findBestSpawnerRoute(u, type, canWalk = null, options = null) {
         );
     }
 
+    let finalPath = bestPath;
+    if (!Array.isArray(finalPath) || finalPath.length <= 0) {
+        // Deterministic geometric fallback so route selection does not depend on local cache/path budget state.
+        if (startGx === bestSpawnerGx && startGy === bestSpawnerGy) {
+            finalPath = [{ x: startGx, y: startGy }];
+        } else {
+            finalPath = [
+                { x: startGx, y: startGy },
+                { x: bestSpawnerGx, y: bestSpawnerGy }
+            ];
+        }
+    }
+
     if (routeKey) {
         sharedSpawnerRouteCache.set(routeKey, {
             spawner: bestSpawner,
-            path: bestPath,
+            path: finalPath,
             tick: gameTime,
             version: pathTopologyVersion
         });
         _trimPathCacheIfNeeded(sharedSpawnerRouteCache, SPAWNER_ROUTE_CACHE_MAX_ENTRIES);
     }
-    return { spawner: bestSpawner, path: bestPath };
+    return { spawner: bestSpawner, path: finalPath };
 }
 
 function _findClosestBuilderSpawner(u) {
     let closest = null, bestDist = Infinity;
+    let ux = Math.floor(Number(u && u.x) / TILE);
+    let uy = Math.floor(Number(u && u.y) / TILE);
     for (let s of collectorSpawners) {
         if (s.type === 'builder_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
-            let d = Math.hypot(s.x - u.x, s.y - u.y);
+            let sx = Math.floor(Number(s.gx) || 0);
+            let sy = Math.floor(Number(s.gy) || 0);
+            let d = Math.abs(sx - ux) + Math.abs(sy - uy);
             if (d < bestDist) { bestDist = d; closest = s; continue; }
             if (Math.abs(d - bestDist) <= 1e-9 && closest) {
                 let sy = Math.floor(Number(s.gy) || 0), cy = Math.floor(Number(closest.gy) || 0);
@@ -2290,9 +2353,13 @@ function _findClosestBuilderSpawner(u) {
 
 function _findClosestHealerSpawner(u) {
     let closest = null, bestDist = Infinity;
+    let ux = Math.floor(Number(u && u.x) / TILE);
+    let uy = Math.floor(Number(u && u.y) / TILE);
     for (let s of collectorSpawners) {
         if (s.type === 'healer_spawner' && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
-            let d = Math.hypot(s.x - u.x, s.y - u.y);
+            let sx = Math.floor(Number(s.gx) || 0);
+            let sy = Math.floor(Number(s.gy) || 0);
+            let d = Math.abs(sx - ux) + Math.abs(sy - uy);
             if (d < bestDist) { bestDist = d; closest = s; continue; }
             if (Math.abs(d - bestDist) <= 1e-9 && closest) {
                 let sy = Math.floor(Number(s.gy) || 0), cy = Math.floor(Number(closest.gy) || 0);
@@ -2658,6 +2725,7 @@ function _healerFindTarget(u, myGx, myGy) {
             u.pathIndex = 0;
             u.commandState = CMD_MOVING;
             u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
             u._healerQueueTripCost = tripCost;
             return;
         }
@@ -2697,6 +2765,7 @@ function _healerFindTarget(u, myGx, myGy) {
             u.pathIndex = 0;
             u.commandState = CMD_MOVING;
             u._healerSpawnerTarget = route.spawner;
+                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
             return;
         }
 
@@ -2739,9 +2808,13 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
 
 function _findClosestSpawner(u, type) {
     let closest = null, bestDist = Infinity;
+    let ux = Math.floor(Number(u && u.x) / TILE);
+    let uy = Math.floor(Number(u && u.y) / TILE);
     for (let s of collectorSpawners) {
         if (s.type === type && s.owner === u.owner && s.energy > 0 && !s.underConstruction) {
-            let d = Math.hypot(s.x - u.x, s.y - u.y);
+            let sx = Math.floor(Number(s.gx) || 0);
+            let sy = Math.floor(Number(s.gy) || 0);
+            let d = Math.abs(sx - ux) + Math.abs(sy - uy);
             if (d < bestDist) {
                 bestDist = d;
                 closest = s;
@@ -2803,7 +2876,10 @@ function queueAction(action) {
     let actionLead = Math.max(0, Math.floor(INPUT_DELAY || 0));
     // Host prebuilds bundles up to current+pipeline. Guests must target beyond that window.
     if (isMultiplayer && gameStarted && !isHost) {
-        actionLead = Math.max(actionLead, Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0)) + 1);
+        let pipelineLead = (typeof getEffectiveLockstepPipelineTicks === 'function')
+            ? getEffectiveLockstepPipelineTicks()
+            : Math.max(0, Math.floor(LOCKSTEP_PIPELINE_TICKS || 0));
+        actionLead = Math.max(actionLead, Math.max(0, pipelineLead) + 1);
     }
     let tick = currentTick + actionLead;
     if (isMultiplayer && gameStarted) {
@@ -2883,6 +2959,7 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
 
     interruptWorkerForManualMove(u);
     u.commandState = CMD_MOVING;
+    u.targetPos = { x: targetX, y: targetY };
 
     if (_canUsePathfindRequestBudget(u.owner, u)) {
         _consumePathfindRequestBudget(u.owner, u);
@@ -2933,6 +3010,7 @@ function applyWorkerRallyFromSpawner(u, spawner) {
     let targetGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(rallyTarget.y / TILE)));
     let myGx = Math.floor(u.x / TILE);
     let myGy = Math.floor(u.y / TILE);
+    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
 
     if (isResourceCollectorWorkerType(u.workerType)) {
         let resourceCfg = getResourceCollectorConfigByWorkerType(u.workerType);

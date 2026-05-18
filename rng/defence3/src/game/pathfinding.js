@@ -187,9 +187,9 @@ function _tryConsumeAstarMoveCost(u, tiles = 1) {
     if (amount <= 0) return true;
     let pid = _normalizeOwnerId(u.owner);
     if (pid < 0) return true;
-    if (_getPlayerAstarBudgetRemaining(u.owner) < amount) {
+    let remaining = _getPlayerAstarBudgetRemaining(u.owner);
+    if (remaining < amount) {
         _setUnitAstarBudgetBlockedIndicator(u, 1);
-        return false;
     }
     _consumePlayerAstarStockpile(u.owner, amount, u, 'movement');
     return true;
@@ -209,14 +209,19 @@ function _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks = null) {
 function _markUnitAstarBudgetBlocked(u, cooldownTicks = null) {
     if (!u) return;
     _setUnitAstarBudgetBlockedIndicator(u, cooldownTicks);
-    let cd = Math.max(1, Math.floor(Number(cooldownTicks) || _getAstarBudgetIdleCooldownTicks()));
-    if (u.workerState) {
-        u._workerNextIdleRetargetTick = Math.max(gameTime + cd, Number(u._workerNextIdleRetargetTick) || 0);
-    }
 }
 
 function _makeFallbackPathForUnit(u, sx, sy, ex, ey, cmd = CMD_MOVING, src = 'fallback') {
     if (!u) return null;
+    if (u.isFlying) {
+        let path = _buildDeterministicOpenGridPath(sx, sy, ex, ey);
+        u.pathIsFallbackAstar = false;
+        u.path = path;
+        u.pathIndex = (path && path.length > 1 && path[0].x === sx && path[0].y === sy) ? 1 : 0;
+        u._pendingPathTarget = null;
+        u.commandState = cmd;
+        return path;
+    }
     u.pathIsFallbackAstar = true;
     u.path = null;
     u.pathIndex = 0;
@@ -618,6 +623,54 @@ function _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint = null) 
     return null;
 }
 
+function _buildDeterministicOpenGridPath(sx, sy, ex, ey) {
+    let path = [{ x: sx, y: sy }];
+    let cx = sx;
+    let cy = sy;
+    let totalDx = Math.abs(ex - sx);
+    let totalDy = Math.abs(ey - sy);
+    let stepX = ex > sx ? 1 : (ex < sx ? -1 : 0);
+    let stepY = ey > sy ? 1 : (ey < sy ? -1 : 0);
+    let movedX = 0;
+    let movedY = 0;
+    let preferXOnTie = (((sx + sy + ex + ey) & 1) === 0);
+    let guard = 0;
+    let guardMax = Math.max(1, (GRID_W * GRID_H) + 4);
+
+    while ((cx !== ex || cy !== ey) && guard < guardMax) {
+        guard++;
+        let moveAlongX = false;
+        if (movedX >= totalDx) {
+            moveAlongX = false;
+        } else if (movedY >= totalDy) {
+            moveAlongX = true;
+        } else {
+            let nextXCross = (movedX + 1) * totalDy;
+            let nextYCross = (movedY + 1) * totalDx;
+            if (nextXCross < nextYCross) moveAlongX = true;
+            else if (nextYCross < nextXCross) moveAlongX = false;
+            else moveAlongX = preferXOnTie;
+        }
+
+        if (moveAlongX && stepX !== 0) {
+            cx += stepX;
+            movedX++;
+        } else if (stepY !== 0) {
+            cy += stepY;
+            movedY++;
+        } else if (stepX !== 0) {
+            cx += stepX;
+            movedX++;
+        } else {
+            break;
+        }
+
+        path.push({ x: cx, y: cy });
+    }
+
+    return path;
+}
+
 // ---- A* scratch buffers: reused across calls via epoch trick, avoids per-call alloc ----
 let _astarCap = 0;
 let _astarEpoch = 0;
@@ -841,8 +894,8 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
         _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
         return [{ x: ex, y: ey }];
     }
-    // Cloud portals should be usable for all unit pathing modes whenever owner context is known.
-    let usePortalEdges = (pathOwner !== null);
+    // Cloud portals are only relevant for grounded movement; flying/open-grid paths are handled directly.
+    let usePortalEdges = (!ignoreWalls && pathOwner !== null);
     let movementProfile = _resolveMovementProfile(ignoreWalls, canWalk, cacheProfileHint);
     let cacheKey = null;
     let resumePrefixPath = null;
@@ -888,6 +941,22 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
             _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
             return full;
         }
+    }
+
+    if (ignoreWalls) {
+        let path = _buildDeterministicOpenGridPath(sx, sy, ex, ey);
+        if (resumePrefixPath && resumePrefixPath.length > 0 && path.length > 0) {
+            let merged = resumePrefixPath.slice();
+            for (let i = 1; i < path.length; i++) merged.push(path[i]);
+            path = merged;
+        }
+        if (movementProfile) {
+            sharedPathCache.set(cacheKey, { path, tick: gameTime, version: pathTopologyVersion });
+            sharedPartialPathCache.delete(cacheKey);
+            _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
+        }
+        _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+        return path;
     }
 
     // Resolve cloud tile cache once per call (O(1) per lookup in hot path)

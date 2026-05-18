@@ -416,6 +416,12 @@ function _refreshThingPrecomputedStats(item) {
         if (!Number.isFinite(item.energy) || item.energy < 1) item.energy = 1;
         item.energy = Math.min(item.energy, item.maxEnergy);
         if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
+    } else if (item.underConstruction) {
+        let prevEnergy = Number(item.energy);
+        if (!Number.isFinite(prevEnergy)) prevEnergy = 1;
+        item.maxEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || item.maxEnergy;
+        if (item.preComputed && Number.isFinite(item.preComputed.damage)) item.damage = item.preComputed.damage;
+        item.energy = Math.max(1, Math.min(item.maxEnergy, prevEnergy));
     } else {
         let prevEnergy = Number(item.energy);
         if (!Number.isFinite(prevEnergy)) prevEnergy = Number(item.preComputedBase && item.preComputedBase.maxEnergy) || 1;
@@ -429,8 +435,12 @@ function _refreshThingPrecomputedStats(item) {
 
 function recalculateThingPrecomputedStats() {
     let intervalTicks = getThingStatsRecalcIntervalTicks();
-    let selectedUnitSet = (selectedUnits && selectedUnits.length > 0) ? new Set(selectedUnits) : null;
-    let selectedEntitySet = (selectedEntities && selectedEntities.length > 0) ? new Set(selectedEntities) : null;
+    let selectedUnitSet = null;
+    let selectedEntitySet = null;
+    if (!isMultiplayer || !gameStarted) {
+        if (selectedUnits && selectedUnits.length > 0) selectedUnitSet = new Set(selectedUnits);
+        if (selectedEntities && selectedEntities.length > 0) selectedEntitySet = new Set(selectedEntities);
+    }
     let seen = new Set();
     let seedCursor = 0;
 
@@ -475,7 +485,7 @@ function recalculateUnitEffectiveStats() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
     let dueUnits = [];
     let selectedSet = null;
-    if (selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
+    if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
 
     for (let u of units) {
         if (!u || u.dead) continue;
@@ -493,7 +503,7 @@ function recalculateUnitEffectiveStats() {
             || !Number.isFinite(u.effectiveLevel)
             || !Number.isFinite(u.effectiveStacks);
 
-        // Keep selected units up-to-date in the stats panel despite staggered recalculation.
+        // Never let local-only unit selection affect multiplayer simulation timing.
         if (!needsImmediate && selectedSet && selectedSet.has(u)) needsImmediate = true;
 
         if (needsImmediate || u._effectiveStatsRecalcCounter <= 0) {
@@ -511,6 +521,10 @@ function recalculateUnitEffectiveStats() {
         && spatialUnitsComplex.length > 0
         && CHUNKS_W > 0
         && CHUNKS_H > 0;
+    if (isMultiplayer && gameStarted) {
+        // Lockstep correctness: exact nearby same-type counts matter more than the chunk-prefix approximation.
+        canUseSpatialCounts = false;
+    }
     let unitTypeToSpatialIdx = new Map();
     let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
 
