@@ -1,6 +1,7 @@
 "use strict";
 
 const RESOURCE_FIXED_POINT_SCALE = 1024;
+const RESOURCE_NEGATIVE_PENALTY_BASE = 3.5;
 
 function _toFixedResourceUnits(value) {
     let n = Number(value);
@@ -56,12 +57,13 @@ function _ensurePlayerResourceState(playerId) {
         if (!stockpileKey) continue;
         let currentValue = Number(player[stockpileKey]);
         if (!Number.isFinite(currentValue)) currentValue = 0;
-        if (!Number.isFinite(player._resourceFixedValues[stockpileKey])) {
+        let currentMax = Number(player.resourceMaxValues[stockpileKey]);
+        let hasTrackedMax = Number.isFinite(currentMax) && currentMax > 0;
+        if (!Number.isFinite(player._resourceFixedValues[stockpileKey]) || !hasTrackedMax) {
             player._resourceFixedValues[stockpileKey] = _toFixedResourceUnits(currentValue);
         }
         currentValue = _fromFixedResourceUnits(player._resourceFixedValues[stockpileKey]);
         player[stockpileKey] = currentValue;
-        let currentMax = Number(player.resourceMaxValues[stockpileKey]);
         if (!Number.isFinite(currentMax)) currentMax = Math.max(1, currentValue);
         player.resourceMaxValues[stockpileKey] = Math.max(1, currentMax, currentValue);
         let multiplier = PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey];
@@ -86,7 +88,7 @@ function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
     let currentValue = Number(player[stockpileKey]);
     if (!Number.isFinite(currentValue) || currentValue >= 0) return 1;
     let steps = _getResourcePenaltySteps(currentValue, maxSeen);
-    return Math.max(1, Math.pow(2, steps));
+    return Math.max(1, Math.pow(RESOURCE_NEGATIVE_PENALTY_BASE, steps));
 }
 
 function _hasExplicitResourceStatMapping(resourceKey, kind, statKey) {

@@ -2827,6 +2827,7 @@ function startGame() {
         p.energy = STARTING_MONEY;
         p.astar = STARTING_ASTAR;
         p.resourceMaxValues = {};
+        p._resourceFixedValues = {};
         p.resourceStatMultipliers = {};
         p.popCount = 0;
         p.researchLevels = {};
