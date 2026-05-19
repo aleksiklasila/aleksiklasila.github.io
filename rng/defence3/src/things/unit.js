@@ -6,6 +6,13 @@
 const CMD_IDLE = 0, CMD_MOVING = 1, CMD_ATTACK_MOVING = 2, CMD_ATTACKING = 3, CMD_HOLDING = 4;
 const UNIT_POSITION_QUANTIZATION = 8;
 
+function _isHostileThingVisibleToUnit(unit, target) {
+    if (!unit || !target) return false;
+    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
+    return isGameplayTargetVisibleToPlayer(unit.owner, gx, gy);
+}
+
 function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null) {
     if (!u) return false;
     if (!fromNode || !toNode || !Number.isFinite(fromNode.x) || !Number.isFinite(fromNode.y) || !Number.isFinite(toNode.x) || !Number.isFinite(toNode.y)) {
@@ -362,6 +369,7 @@ class Unit {
         let closestTower = null, closestTowerD = aggroRange;
         for (let t of towers) {
             if (t.owner === this.owner || t.energy <= 0) continue;
+            if (!_isHostileThingVisibleToUnit(this, t)) continue;
             let d = Math.hypot(t.x - this.x, t.y - this.y);
             if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
         }
@@ -376,6 +384,7 @@ class Unit {
         let scanStructList = (list) => {
             for (let b of list) {
                 if (b.owner === this.owner || b.energy <= 0) continue;
+                if (!_isHostileThingVisibleToUnit(this, b)) continue;
                 let d = Math.hypot(b.x - this.x, b.y - this.y);
                 if (d < closestStructD) { closestStructD = d; closestStruct = b; }
             }
@@ -398,6 +407,7 @@ class Unit {
             for (let gx = minGx; gx <= maxGx; gx++) {
                 let cell = grid[gy][gx];
                 if (!cell || !cell.item || cell.owner === this.owner) continue;
+                if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
                 let item = cell.item;
                 if (item.energy <= 0 || item.underConstruction) continue;
                 let d = Math.hypot(item.x - this.x, item.y - this.y);
@@ -462,6 +472,7 @@ class Unit {
         let closestTower = null, closestTowerD = aggroRange;
         for (let t of towers) {
             if (t.owner === this.owner || t.energy <= 0) continue;
+            if (!_isHostileThingVisibleToUnit(this, t)) continue;
             let d = Math.hypot(t.x - this.x, t.y - this.y);
             if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
         }
@@ -476,6 +487,7 @@ class Unit {
         let scanStructList = (list) => {
             for (let b of list) {
                 if (b.owner === this.owner || b.energy <= 0) continue;
+                if (!_isHostileThingVisibleToUnit(this, b)) continue;
                 let d = Math.hypot(b.x - this.x, b.y - this.y);
                 if (d < closestStructD) { closestStructD = d; closestStruct = b; }
             }
@@ -498,6 +510,7 @@ class Unit {
             for (let gx = minGx; gx <= maxGx; gx++) {
                 let cell = grid[gy][gx];
                 if (!cell || !cell.item || cell.owner === this.owner) continue;
+                if (!isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) continue;
                 let item = cell.item;
                 if (item.energy <= 0 || item.underConstruction) continue;
                 let d = Math.hypot(item.x - this.x, item.y - this.y);
@@ -703,7 +716,7 @@ class Unit {
         // Attack building target
         if (this.targetBuilding) {
             let tb = this.targetBuilding;
-            if (tb.energy <= 0) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
+            if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
             let d = Math.hypot(tb.x - this.x, tb.y - this.y);
             if (d <= this.preComputed.attackRange + this.r + 16) {
                 this.attackTarget = tb;

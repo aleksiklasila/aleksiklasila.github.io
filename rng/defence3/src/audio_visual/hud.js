@@ -166,6 +166,95 @@ function _buildResourcePenaltyBarHtml(currentValue, maxSeen) {
         + `</div>`;
 }
 
+const _RESOURCE_PENALTY_POPUP_EXEMPT_STATS = new Set([
+    'upKeep',
+    'popCap',
+    'energy',
+    'maxEnergy',
+    'workerSearchDistance',
+    'visionRange',
+    'visionRangeArea',
+    'attackRange',
+    'attackRangeArea',
+    'blastRadius'
+]);
+
+function _isResourcePenaltyPopupAffectedStat(resourceKey, kind, statKey) {
+    let stockpileKey = String(resourceKey || '').toLowerCase();
+    if (!stockpileKey || !kind || !statKey) return false;
+    if (_RESOURCE_PENALTY_POPUP_EXEMPT_STATS.has(statKey)) return false;
+    return _getResourceKeyForPrecomputedStat(kind, statKey) === stockpileKey;
+}
+
+function _getResourcePenaltyPopupStatEntries(resourceKey, owner = localPlayerId) {
+    let stockpileKey = String(resourceKey || '').toLowerCase();
+    let penaltyMultiplier = Math.max(1, Number(_getPlayerResourcePenaltyMultiplier(owner, stockpileKey)) || 1);
+    let entries = [];
+    let addEntries = (kind, prefix, statKeys) => {
+        for (let statKey of statKeys) {
+            if (!_isResourcePenaltyPopupAffectedStat(stockpileKey, kind, statKey)) continue;
+            let worsensWithPenalty = !!RESEARCH_DECREASE_STATS[statKey];
+            entries.push({
+                label: `${prefix} ${RESEARCH_STAT_LABELS[statKey] || statKey}`,
+                factor: worsensWithPenalty ? penaltyMultiplier : (1 / penaltyMultiplier)
+            });
+        }
+    };
+    addEntries('unit', 'Unit', PRECOMPUTED_UNIT_STAT_KEYS);
+    addEntries('building', 'Building', PRECOMPUTED_BUILDING_STAT_KEYS);
+    return entries;
+}
+
+function _formatResourcePenaltyPopupFactor(value) {
+    let numeric = Number(value);
+    if (!Number.isFinite(numeric)) numeric = 1;
+    return `x${formatBigNumber(numeric, numeric >= 10 ? 1 : 2)}`;
+}
+
+function _buildResourcePenaltyAlgorithmHtml(currentValue, maxSeen, penaltyMultiplier, resourceKey) {
+    let stockpileKey = String(resourceKey || '').toLowerCase();
+    let base = Number(RESOURCE_NEGATIVE_PENALTY_BASE) || 1;
+    let safeCurrent = Number(currentValue) || 0;
+    let safeMax = Math.max(1, Number(maxSeen) || 0);
+    let absCurrent = Math.abs(Math.min(0, safeCurrent));
+    let fasterStatsLine = stockpileKey === 'astar'
+        ? `Affected stats -> base / p`
+        : `Damage / rate stats -> base / p`;
+    let slowerStatsLine = stockpileKey === 'astar'
+        ? ''
+        : `Cooldown / time / cost stats -> base * p`;
+    let html = `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b;font:12px/1.5 Consolas, 'Courier New', monospace;color:#d9e8f6">`;
+    html += `<div>current = ${formatBigNumber(safeCurrent, 1)}</div>`;
+    html += `<div>maxSeen = ${formatBigNumber(safeMax, 1)}</div>`;
+    html += `<div>&gt;= 0 -&gt; p = 1.00</div>`;
+    html += `<div>&lt; 0 -&gt; p = ${formatBigNumber(base, 2)}^(abs(resource) / maxSeen)</div>`;
+    html += `<div>current p = ${formatBigNumber(base, 2)}^(${formatBigNumber(absCurrent, 1)} / ${formatBigNumber(safeMax, 1)}) = ${_formatResourcePenaltyPopupFactor(penaltyMultiplier)}</div>`;
+    html += `<div>${_escapeHtml(fasterStatsLine)}</div>`;
+    if (slowerStatsLine) html += `<div>${_escapeHtml(slowerStatsLine)}</div>`;
+    html += `</div>`;
+    return html;
+}
+
+function _buildResourcePenaltyAffectedStatsHtml(resourceKey, owner = localPlayerId) {
+    let rows = _getResourcePenaltyPopupStatEntries(resourceKey, owner);
+    if (!rows.length) {
+        return `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b;color:#9fb2c4">No affected precomputed stats.</div>`;
+    }
+    let body = rows.map((entry) => {
+        return `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:6px 0;border-top:1px solid rgba(255,255,255,0.06)">`
+            + `<div style="color:#dce9f7">${_escapeHtml(entry.label)}</div>`
+            + `<div style="color:#f0df8d">${_escapeHtml(_formatResourcePenaltyPopupFactor(entry.factor))}</div>`
+            + `</div>`;
+    }).join('');
+    return `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b">`
+        + `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;font-size:11px;color:#8fb1c7;padding-bottom:6px">`
+        + `<div>Affected stat</div>`
+        + `<div>Multiplier</div>`
+        + `</div>`
+        + body
+        + `</div>`;
+}
+
 function ensureResourcePenaltyPopupElements() {
     let popup = document.getElementById('resource-penalty-popup');
     if (popup) return popup;
@@ -207,40 +296,16 @@ function buildResourcePenaltyPopupHtml(resourceKey, owner = localPlayerId) {
     let currentValue = Number(player && player[stockpileKey]);
     if (!Number.isFinite(currentValue)) currentValue = 0;
     let maxSeen = Math.max(1, Number(player && player.resourceMaxValues && player.resourceMaxValues[stockpileKey]) || 0);
-    let penaltyPercent = _getResourcePenaltyPercent(stockpileKey, owner);
     let penaltyMultiplier = Math.max(1, Number(_getPlayerResourcePenaltyMultiplier(owner, stockpileKey)) || 1);
-    let summary = _getResourcePenaltyStatsSummary(stockpileKey);
-    let isPenaltyActive = currentValue < 0;
-    let worsenPercent = penaltyMultiplier * 100;
-    let currentColor = _getHudResourceValueColor(owner, stockpileKey, currentValue);
-    let statusText = isPenaltyActive
-        ? `${cfg.icon} ${cfg.label} is below 0, so its mapped stat penalties are active.`
-        : `${cfg.icon} ${cfg.label} is at or above 0, so it currently has no stat penalty.`;
-    let explanation = stockpileKey === 'astar'
-        ? 'Negative values of this resource cause unit movement speed to get worse according to the above bar. e.g, 50% as good as normal at - max resource'
-        : 'Negative values of this resource cause things to get worse according to the above bar. e.g, 50% as good as normal at - max resource';
 
     let html = `<div style="display:flex;flex-direction:column;gap:10px">`;
     html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">`
-        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div><div style="font-size:18px;color:#dff3ff;font-weight:600">${_escapeHtml(cfg.label)} Penalty</div><div style="font-size:11px;color:#8fb1c7">${_escapeHtml(summary.primaryText)}</div></div></div>`
-        + `<div style="display:flex;gap:10px;flex-wrap:wrap">`
-        + `<div style="min-width:96px;padding:6px 8px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">Current</div><div style="font-size:18px;color:${currentColor}">${formatBigNumber(currentValue, 1)}</div></div>`
-        + `<div style="min-width:96px;padding:6px 8px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">Was Max In Current Game</div><div style="font-size:18px;color:#dfe9f5">${formatBigNumber(maxSeen, 1)}</div></div>`
-        + `</div>`
+        + `<div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px;color:${cfg.color}">${cfg.icon}</span><div style="font-size:18px;color:#dff3ff;font-weight:600">${_escapeHtml(cfg.label)} Effects</div></div>`
+        + `<div style="font-size:12px;color:#a7bed0">p = ${_escapeHtml(_formatResourcePenaltyPopupFactor(penaltyMultiplier))}</div>`
         + `</div>`;
-    html += `<div style="padding:8px 10px;border-radius:6px;border:1px solid ${isPenaltyActive ? '#6a3f3f' : '#35553a'};background:${isPenaltyActive ? 'rgba(96,24,24,0.25)' : 'rgba(24,72,28,0.22)'};color:${isPenaltyActive ? '#ffb3b3' : '#b8f0bb'}">${_escapeHtml(statusText)}</div>`;
     html += _buildResourcePenaltyBarHtml(currentValue, maxSeen);
-    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">`;
-    html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">${_escapeHtml(summary.degradePercentLabel)}</div><div style="font-size:20px;color:${isPenaltyActive ? '#ffd782' : '#9ae69a'}">${formatBigNumber(penaltyPercent, 1)}%</div></div>`;
-    if (summary.worsenPercentLabel) {
-        html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b"><div style="font-size:10px;color:#8fb1c7">${_escapeHtml(summary.worsenPercentLabel)}</div><div style="font-size:20px;color:${isPenaltyActive ? '#ffad93' : '#9ae69a'}">${formatBigNumber(isPenaltyActive ? worsenPercent : 100, 1)}%</div></div>`;
-    }
-    html += `</div>`;
-    html += `<div style="padding:8px 10px;border:1px solid #2f4457;border-radius:6px;background:#0f151b">`
-        + `<div style="font-size:11px;color:#8fb1c7;margin-bottom:4px">Affected stats</div>`
-        + `<div style="font-size:13px;color:#dce9f7">${_escapeHtml(summary.primaryLabel)}</div>`
-        + `</div>`;
-    html += `<div style="font-size:12px;line-height:1.45;color:#a7bed0">${_escapeHtml(explanation)}</div>`;
+    html += _buildResourcePenaltyAlgorithmHtml(currentValue, maxSeen, penaltyMultiplier, stockpileKey);
+    html += _buildResourcePenaltyAffectedStatsHtml(stockpileKey, owner);
     html += `</div>`;
     return html;
 }

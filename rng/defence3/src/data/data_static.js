@@ -263,17 +263,17 @@ const RESOURCE_COLLECTOR_UNIT_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg =>
 // ============================================================
 const BASE_CARD_TYPES = {
     // Towers (target: wall)
-    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", visionRange: 0.6, cd: 2.0, damage: 8, upKeep: 0.5, target: 'wall', towerEnergy: 30 },
-    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", visionRange: 0.6, cd: 1.25, damage: 5, upKeep: 0.4, target: 'wall', towerEnergy: 25 },
-    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", visionRange: 0.6, cd: 1.75, damage: 10, wetDuration: 7, upKeep: 0.55, target: 'wall', towerEnergy: 95 },
-    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", visionRange: 0.6, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, upKeep: 0.8, target: 'wall', towerEnergy: 200 },
-    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", visionRange: 0.6, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.06, upKeep: 0.95, target: 'wall', towerEnergy: 350 },
-    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", visionRange: 0.8, cd: 7.5, damage: 5, sandDuration: 9, upKeep: 0.6, target: 'wall', towerEnergy: 180 },
-    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", visionRange: 0.6, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, upKeep: 1.2, target: 'wall', towerEnergy: 400 },
-    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", visionRange: 1.6, cd: 12.0, damage: 170, upKeep: 1.4, target: 'wall', towerEnergy: 1500 },
-    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", visionRange: 0.6, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, upKeep: 0.75, target: 'wall', towerEnergy: 150 },
-    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", visionRange: 0, damage: 750, upKeep: 1, target: 'wall', towerEnergy: 300 },
-    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", visionRange: 2.0, cd: 1.4, damage: 1, watchDuration: 5, upKeep: 0.1, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 4.8 },
+    pistol: { name: "Pistol", price: 35, icon: "\u26A1", color: "#964B00", attackRange: 0.6, visionRange: 0.6, cd: 2.0, damage: 8, upKeep: 0.5, target: 'wall', towerEnergy: 30 },
+    smg: { name: "SMG", price: 45, icon: "\u26A1", color: "#aaf", attackRange: 0.6, visionRange: 0.6, cd: 1.25, damage: 5, upKeep: 0.4, target: 'wall', towerEnergy: 25 },
+    water: { name: "Water", price: 74, icon: "\uD83D\uDCA7", color: "#4af", attackRange: 0.6, visionRange: 0.6, cd: 1.75, damage: 10, wetDuration: 7, upKeep: 0.55, target: 'wall', towerEnergy: 95 },
+    poison: { name: "Poison", price: 173, icon: "\uD83E\uDDEA", color: "#2d2", attackRange: 0.6, visionRange: 0.6, cd: 2.5, damage: 3, poisonDps: 28, poisonDuration: 5, upKeep: 0.8, target: 'wall', towerEnergy: 200 },
+    fire: { name: "Fire", price: 375, icon: "\uD83D\uDD25", color: "#f50", attackRange: 0.6, visionRange: 0.6, cd: 5.5, damage: 45, burnDps: 2.25, burnDuration: 3.5, blastDamage: 10, blastRadius: 0.06, upKeep: 0.95, target: 'wall', towerEnergy: 350 },
+    sand_gun: { name: "Sand Gun", price: 60, icon: "\u231B", color: "#c96", attackRange: 0.8, visionRange: 0.8, cd: 7.5, damage: 5, sandDuration: 9, upKeep: 0.6, target: 'wall', towerEnergy: 180 },
+    ice: { name: "Ice", price: 700, icon: "\u2744\uFE0F", color: "#afe", attackRange: 0.6, visionRange: 0.6, cd: 2.0, damage: 65, freezeDps: 6.6, freezeDuration: 3.5, upKeep: 1.2, target: 'wall', towerEnergy: 400 },
+    sniper: { name: "Sniper", price: 1500, icon: "\uD83C\uDFAF", color: "#888", attackRange: 1.6, visionRange: 1.6, cd: 12.0, damage: 170, upKeep: 1.4, target: 'wall', towerEnergy: 1500 },
+    elements: { name: "Elements", price: 50, icon: "\uD83C\uDF08", color: "#fff", attackRange: 0.6, visionRange: 0.6, cd: 1.75, damage: 1, burnDps: 0.2, poisonDps: 0.2, freezeDps: 0.2, burnDuration: 6, poisonDuration: 6, freezeDuration: 6, wetDuration: 7, sandDuration: 9, upKeep: 0.75, target: 'wall', towerEnergy: 150 },
+    laser: { name: "Laser", price: 125, icon: "\u26A1", color: "#f00", attackRange: 0, visionRange: 0, damage: 750, upKeep: 1, target: 'wall', towerEnergy: 300 },
+    watch_tower: { name: "Watch Tower", price: 25, icon: "\uD83D\uDC41\uFE0F", color: "#fd0", attackRange: 2.0, visionRange: 2.0, cd: 1.4, damage: 1, watchDuration: 5, upKeep: 0.1, target: 'wall', towerEnergy: 15, isWatchTower: true, maxVisionRange: 4.8 },
 
     // Floor items
     sand: { name: "Sand", price: 30, icon: "\u231B", color: "#c96", visionRange: 0, sandDuration: 0.5, upKeep: 0.5, target: 'floor' },
@@ -642,7 +642,7 @@ const RESEARCHABLE_UNIT_STATS = {
 };
 
 const PRECOMPUTED_UNIT_STAT_KEYS = ['energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'workerSearchDistance', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
-const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep'];
+const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'attackRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep'];
 const RESOURCE_PRECOMPUTED_STAT_MAP = {
     astar: {
         unit: ['speed'],
@@ -708,6 +708,10 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         visionRange: ({ baseAtLevel1 }) => {
             let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);
             return (Number.isFinite(baseVision) && baseVision > 0) ? (baseVision * 3) : 32;
+        },
+        attackRange: ({ baseAtLevel1 }) => {
+            let baseRange = Number(baseAtLevel1 && baseAtLevel1.attackRange);
+            return (Number.isFinite(baseRange) && baseRange > 0) ? (baseRange * 3) : 32;
         },
         multiplier: ({ key }) => (key === 'farm' || key === 'astar_farm') ? 10 : Infinity,
         efficiency: 3,
