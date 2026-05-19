@@ -2745,6 +2745,7 @@ function computeBaseBuildingStatsAtLevel(type, level) {
         spawnCd: NaN,
         unitPrice: NaN,
         visionRange: NaN,
+        attackRange: NaN,
         multiplier: NaN,
         burnDps: NaN,
         burnDuration: NaN,
@@ -2810,8 +2811,12 @@ function computeBaseBuildingStatsAtLevel(type, level) {
     if (Number.isFinite(def.blastRadius)) out.blastRadius = Math.max(0, def.blastRadius);
     if (Number.isFinite(def.cd)) out.cd = def.cd;
     if (Number.isFinite(def.visionRange)) out.visionRange = def.visionRange;
+    if (Number.isFinite(def.attackRange)) out.attackRange = def.attackRange;
     if (def.target === 'wall' && Number.isFinite(def.visionRange)) {
         out.visionRange = def.visionRange * (1 + (lvl - 1) * linearVisionBonus);
+    }
+    if (def.target === 'wall' && !Number.isFinite(out.attackRange) && Number.isFinite(def.visionRange)) {
+        out.attackRange = Math.max(0, Number(def.visionRange) || 0);
     }
     if (key === 'research') {
         let baseEfficiency = Number.isFinite(def.efficiency) ? def.efficiency : 1;
@@ -3043,6 +3048,7 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
     let cd = Number(values.cd);
     let spawnCd = Number(values.spawnCd);
     let visionRange = Number(values.visionRange);
+    let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
 
     return {
         maxEnergy: Number.isFinite(maxEnergy) ? Math.max(1, Math.floor(maxEnergy)) : NaN,
@@ -3056,6 +3062,8 @@ function _getBuildingPlayerPrecomputedEntry(playerId, buildingKey, level) {
         unitPrice: Number(values.unitPrice),
         visionRange: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
         visionRangeArea: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
+        attackRangeArea,
+        attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
         multiplier: Number(values.multiplier),
         popCap: Number(values.popCap),
         burnDps: Number(values.burnDps),
@@ -3156,6 +3164,10 @@ function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
     else if (statKey === 'visionRange') {
         entry.visionRange = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
         entry.visionRangeArea = entry.visionRange;
+    }
+    else if (statKey === 'attackRange') {
+        entry.attackRangeArea = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
+        entry.attackRange = Number.isFinite(entry.attackRangeArea) ? (entry.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE) : NaN;
     }
     else if (statKey === 'blastRadius') entry.blastRadius = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
     else entry[statKey] = Number(value);

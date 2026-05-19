@@ -37,6 +37,27 @@ function _shouldPreferBuildingTarget(candidate, best, candidateDist, bestDist) {
     return _compareDeterministicBuildingRefs(candidate, best) < 0;
 }
 
+function _isTowerTargetVisibleToOwner(tower, target) {
+    if (!tower || !target) return false;
+    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
+    return isGameplayTargetVisibleToPlayer(tower.owner, gx, gy);
+}
+
+function _getTowerAttackRangeArea(tower) {
+    let attackRangeArea = Math.max(0, Number(tower && tower.currentStats && tower.currentStats.attackRangeArea) || 0);
+    if (attackRangeArea > 0) return attackRangeArea;
+    let attackRangePx = Math.max(0, Number(tower && tower.currentStats && tower.currentStats.attackRange) || 0);
+    if (attackRangePx > 0) return attackRangePx / (AREA_UNIT_TILE_EQUIVALENT * TILE);
+    return Math.max(0, Number(tower && tower.currentStats && tower.currentStats.visionRangeArea) || 0);
+}
+
+function _getTowerAttackRangePx(tower) {
+    let attackRangePx = Math.max(0, Number(tower && tower.currentStats && tower.currentStats.attackRange) || 0);
+    if (attackRangePx > 0) return attackRangePx;
+    return _getTowerAttackRangeArea(tower) * AREA_UNIT_TILE_EQUIVALENT * TILE;
+}
+
 // ============================================================
 // TOWER CLASS
 // ============================================================
@@ -136,6 +157,7 @@ class Tower {
                     for (let u of nearUnits) {
                         if (u.owner === this.owner) continue;
                         if (u.turretImmune) continue;
+                        if (!_isTowerTargetVisibleToOwner(this, u)) continue;
                         let hit = false;
                         if (isVert) { hit = Math.abs(u.x - sx) < u.r + 4 && u.y >= mn && u.y <= mx; }
                         else { hit = Math.abs(u.y - sy) < u.r + 4 && u.x >= mn && u.x <= mx; }
@@ -159,6 +181,7 @@ class Tower {
                         let sortedList = [...list].sort(_compareDeterministicBuildingRefs);
                         for (let b of sortedList) {
                             if (b.owner === this.owner || b.energy <= 0) continue;
+                            if (!_isTowerTargetVisibleToOwner(this, b)) continue;
                             let hit = false;
                             if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
                             else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
@@ -185,8 +208,8 @@ class Tower {
 
     shoot() {
         if (this.cd > 0) return;
-        let rangeArea = Math.max(0, Number(this.currentStats.visionRange) || 0);
-        let rangePx = Number(this.currentStats.visionRange) * AREA_UNIT_TILE_EQUIVALENT * TILE;
+        let rangeArea = _getTowerAttackRangeArea(this);
+        let rangePx = _getTowerAttackRangePx(this);
         let preferredTarget = getTowerPreferredTargetInRange(this, rangePx);
         if (preferredTarget) {
             let target = preferredTarget;
@@ -207,6 +230,7 @@ class Tower {
         let dPrimary = rangePx, dSecondary = rangePx, dImmune = rangePx;
 
         forEachUnitInAreaRange(this.x, this.y, rangeArea, (u) => {
+            if (!_isTowerTargetVisibleToOwner(this, u)) return;
             if (u.turretImmune) return;
             let dx = u.x - this.x;
             let dy = u.y - this.y;
@@ -238,9 +262,9 @@ class Tower {
         if (!target) {
             // Auto-find nearest enemy building: towers first, then barracks/spawners
             let bestDist = rangePx;
-            this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             for (let t of [...towers].sort(_compareDeterministicBuildingRefs)) {
                 if (t === this || t.owner === this.owner || t.energy <= 0) continue;
+                if (!_isTowerTargetVisibleToOwner(this, t)) continue;
                 let d = Math.hypot(t.x - this.x, t.y - this.y);
                 if (_shouldPreferBuildingTarget(t, target, d, bestDist)) {
                     bestDist = d;
@@ -251,6 +275,7 @@ class Tower {
             if (!target) {
                 for (let b of [...barracks].sort(_compareDeterministicBuildingRefs)) {
                     if (b.owner === this.owner || b.energy <= 0) continue;
+                    if (!_isTowerTargetVisibleToOwner(this, b)) continue;
                     let d = Math.hypot(b.x - this.x, b.y - this.y);
                     if (_shouldPreferBuildingTarget(b, target, d, bestDist)) {
                         bestDist = d;
@@ -259,6 +284,7 @@ class Tower {
                 }
                 for (let s of [...collectorSpawners].sort(_compareDeterministicBuildingRefs)) {
                     if (s.owner === this.owner || s.energy <= 0) continue;
+                    if (!_isTowerTargetVisibleToOwner(this, s)) continue;
                     let d = Math.hypot(s.x - this.x, s.y - this.y);
                     if (_shouldPreferBuildingTarget(s, target, d, bestDist)) {
                         bestDist = d;
