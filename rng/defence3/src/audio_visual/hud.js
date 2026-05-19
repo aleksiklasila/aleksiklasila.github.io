@@ -3919,8 +3919,7 @@ function getResearchQueuedEnergyForStat(kind, key, statKey, startLevel, queuedDe
     return total;
 }
 
-function renderResearchThingRowsForPanel(owner, scope, targetArg) {
-    let html = '';
+function getResearchThingPanelSelection(owner, scope) {
     let scopeKey = getResearchPanelScopeKey(owner, scope);
     let selectedThingId = researchPanelOpenState[scopeKey];
     if (!selectedThingId || !RESEARCH_THINGS_BY_ID[selectedThingId]) {
@@ -3929,23 +3928,48 @@ function renderResearchThingRowsForPanel(owner, scope, targetArg) {
         researchPanelOpenState[scopeKey] = selectedThingId;
     }
 
-    html += `<div class="info-row" style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">`;
+    return {
+        scopeKey,
+        selectedThingId,
+        selectedThing: RESEARCH_THINGS_BY_ID[selectedThingId] || null,
+    };
+}
+
+function renderResearchThingSelectorButtons(owner, scope, selectedThingId, opts = {}) {
+    let html = '';
+    let popupLayout = !!opts.popupLayout;
+    let wrapperStyle = popupLayout
+        ? 'display:grid;grid-template-columns:repeat(7, minmax(0, 1fr));gap:6px;align-items:start;'
+        : 'display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start';
+
+    html += `<div class="info-row${popupLayout ? ' research-popup-thing-grid' : ''}" style="${wrapperStyle}">`;
     for (let thing of RESEARCH_THINGS) {
         let thingId = `${thing.kind}:${thing.key}`;
         let isSelected = thingId === selectedThingId;
         let borderRadius = thing.kind === 'unit' ? '50%' : '4px';
-        html += `<button class="info-research-thing-btn" data-owner="${owner}" data-scope="${scope}" data-thing-id="${thingId}" title="${thing.label}" style="width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center">`;
+        let buttonStyle = popupLayout
+            ? `width:100%;height:34px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center`
+            : `width:32px;height:32px;padding:0;border:2px solid ${isSelected ? '#8cf' : '#333'};border-radius:${borderRadius};background:${isSelected ? '#1a2730' : '#111'};cursor:pointer;display:flex;align-items:center;justify-content:center`;
+        html += `<button class="info-research-thing-btn" data-owner="${owner}" data-scope="${scope}" data-thing-id="${thingId}" title="${thing.label}" style="${buttonStyle}">`;
         html += `<img src="${getItemThumbnail(thing.key, 24)}" width="24" height="24" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}">`;
         html += `</button>`;
     }
     html += `</div>`;
+    return html;
+}
 
-    let selectedThing = RESEARCH_THINGS_BY_ID[selectedThingId];
+function renderResearchThingStatsPanel(owner, scope, targetArg, selectedThing, opts = {}) {
+    let popupLayout = !!opts.popupLayout;
+    let html = '';
     if (!selectedThing) return html;
 
     let groupCoordStr = Array.isArray(targetArg) ? targetArg.map(r => `${r.gx},${r.gy}`).join(';') : '';
-    html += `<div style="margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212">`;
-    html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
+    let panelClasses = popupLayout ? 'research-popup-stat-pane' : '';
+    let panelStyle = popupLayout
+        ? 'height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;'
+        : 'margin-top:4px;border:1px solid #2f2f2f;border-radius:4px;padding:4px;background:#121212';
+    html += `<div class="${panelClasses}" style="${panelStyle}">`;
+    if (!popupLayout) html += `<div style="font-size:10px;color:#ddd;margin-bottom:3px">${selectedThing.label}</div>`;
     // research building stats drawing
     for (let stat of (selectedThing.stats || [])) {
         let queuedDepth = scope.startsWith('single:')
@@ -4023,12 +4047,42 @@ function renderResearchThingRowsForPanel(owner, scope, targetArg) {
     return html;
 }
 
+function renderResearchThingRowsForPanel(owner, scope, targetArg) {
+    let html = '';
+    let selection = getResearchThingPanelSelection(owner, scope);
+    html += renderResearchThingSelectorButtons(owner, scope, selection.selectedThingId);
+    if (!selection.selectedThing) return html;
+    html += renderResearchThingStatsPanel(owner, scope, targetArg, selection.selectedThing);
+    return html;
+}
+
+function renderResearchThreeColumnLayout(owner, scope, targetArg, queueHtml, queueCount, queueCap) {
+    let selection = getResearchThingPanelSelection(owner, scope);
+    let html = '';
+    html += `<div class="research-popup-three-col">`;
+    html += `<div class="research-popup-pane research-popup-selector-pane">`;
+    html += `<div class="research-popup-pane-title">Things</div>`;
+    html += renderResearchThingSelectorButtons(owner, scope, selection.selectedThingId, { popupLayout: true });
+    html += `</div>`;
+    html += `<div class="research-popup-pane research-popup-stats-pane">`;
+    html += `<div class="research-popup-pane-title">${selection.selectedThing ? selection.selectedThing.label : 'Stats'}</div>`;
+    html += renderResearchThingStatsPanel(owner, scope, targetArg, selection.selectedThing, { popupLayout: true });
+    html += `</div>`;
+    html += `<div class="research-popup-pane research-popup-queue-pane">`;
+    html += `<div class="research-popup-pane-title">Queue <span style="color:#9cf">${formatInfoFraction(queueCount, queueCap)}</span></div>`;
+    html += `<div class="research-popup-queue-scroll">${queueHtml}</div>`;
+    html += `</div>`;
+    html += `</div>`;
+    return html;
+}
+
 function renderResearchInfo(e) {
     let html = '';
     let queueScope = `single:${e.gx},${e.gy}`;
     let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
     let queueLen = getResearchQueueTotalLength(e);
     let queueCap = getResearchQueueCapacityForPlayer(e.owner);
+    let popupThreeColumnLayout = researchPopupInfoRenderActive;
     let baseVisTiles = getEntityBaseVisibilityRangeTiles(e);
     let effVisTiles = getEntityEffectiveVisibilityRangeTiles(e);
     let baseLevel = e.level || stackCountToLevel(e.stacks || 1);
@@ -4082,17 +4136,28 @@ function renderResearchInfo(e) {
     }
     if (e.owner === localPlayerId && !e.underConstruction) {
         html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-        html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-        html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
-        html += `</div>`;
-        if (queueOpen) {
+        if (popupThreeColumnLayout) {
+            html += renderResearchThreeColumnLayout(
+                e.owner,
+                queueScope,
+                e,
+                renderQueuedResearchTasksForSingleBuilding(e),
+                queueLen,
+                queueCap
+            );
+        } else {
+            html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(queueLen, queueCap)}</span>`;
+            html += `</div>`;
+            if (queueOpen) {
+                html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                html += renderQueuedResearchTasksForSingleBuilding(e);
+                html += `</div>`;
+            }
             html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-            html += renderQueuedResearchTasksForSingleBuilding(e);
+            html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
             html += `</div>`;
         }
-        html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-
-        html += renderResearchThingRowsForPanel(e.owner, `single:${e.gx},${e.gy}`, e);
         html += `</div>`;
     }
     if (e.owner === localPlayerId) {
@@ -4114,6 +4179,7 @@ function renderResearchGroupInfo(group) {
     let e = group[0];
     let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
     let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
+    let popupThreeColumnLayout = researchPopupInfoRenderActive;
     let totalEnergy = 0;
     let totalBaseVis = 0, totalEffVis = 0;
     let totalBaseUpKeep = 0, totalEffUpKeep = 0;
@@ -4181,18 +4247,29 @@ function renderResearchGroupInfo(group) {
         html += renderSpawnerEnergyProgressRow(getSpawnerGroupEnergyProgress(readyGroup));
 
         html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-        html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-        html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
-        html += `</div>`;
+        if (popupThreeColumnLayout) {
+            html += renderResearchThreeColumnLayout(
+                e.owner,
+                queueScope,
+                group,
+                renderQueuedResearchTasksForGroup(group),
+                totalQueue,
+                queueCap
+            );
+        } else {
+            html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+            html += `<span>Queue</span><span>${queueOpen ? '\u25BE' : '\u25B8'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
+            html += `</div>`;
 
-        if (queueOpen) {
+            if (queueOpen) {
+                html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+                html += renderQueuedResearchTasksForGroup(group);
+                html += `</div>`;
+            }
             html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-            html += renderQueuedResearchTasksForGroup(group);
+            html += renderResearchThingRowsForPanel(e.owner, queueScope, group);
             html += `</div>`;
         }
-        html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-
-        html += renderResearchThingRowsForPanel(e.owner, queueScope, group);
         html += `</div>`;
 
         let coordStr = group.map(r => `${r.gx},${r.gy}`).join(';');
@@ -4445,7 +4522,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let panel = panelOverride || document.getElementById('info-panel');
     if (!panel) return;
     let prevFormatBigNumberSuffixStart = activeFormatBigNumberSuffixStart;
-    activeFormatBigNumberSuffixStart = panelOverride ? 1000000 : 1000;
+    let formatBigNumberSuffixStart = Number.isFinite(opts.formatBigNumberSuffixStart)
+        ? Number(opts.formatBigNumberSuffixStart)
+        : (panelOverride ? 1000000 : 1000);
+    activeFormatBigNumberSuffixStart = formatBigNumberSuffixStart;
     let skipGlobalSync = !!opts.skipGlobalSync;
     let subgroupState = (opts && opts.subgroupState && typeof opts.subgroupState === 'object') ? opts.subgroupState : activeSubGroups;
     let refreshThisPanel = () => {
@@ -5341,6 +5421,8 @@ function ensureResearchQueueDragReleaseHooks() {
     window.addEventListener('blur', () => setResearchQueueDragGuard(false, false), true);
 }
 
+let researchPopupInfoRenderActive = false;
+
 function renderResearchPopupContent() {
     let holder = document.getElementById('research-popup-content');
     if (!holder) return;
@@ -5395,17 +5477,23 @@ function renderResearchPopupContent() {
 
     selectedUnits = unitsSnapshot;
     selectedEntities = entitiesSnapshot;
-    updateInfoPanel(infoPanel, {
-        skipGlobalSync: true,
-        subgroupState: subgroupSnapshot,
-        onRefresh: () => {
-            if (!researchQueueDragInProgress) renderResearchPopupContent();
-        },
-        onSubgroupStateChange: (nextState) => {
-            subgroupSnapshot = { ...(nextState || {}) };
-            if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
-        }
-    });
+    researchPopupInfoRenderActive = true;
+    try {
+        updateInfoPanel(infoPanel, {
+            formatBigNumberSuffixStart: 1000,
+            skipGlobalSync: true,
+            subgroupState: subgroupSnapshot,
+            onRefresh: () => {
+                if (!researchQueueDragInProgress) renderResearchPopupContent();
+            },
+            onSubgroupStateChange: (nextState) => {
+                subgroupSnapshot = { ...(nextState || {}) };
+                if (popupSnapshot) popupSnapshot.activeSubGroups = { ...subgroupSnapshot };
+            }
+        });
+    } finally {
+        researchPopupInfoRenderActive = false;
+    }
 
     selectedUnits = prevUnits;
     selectedEntities = prevEntities;

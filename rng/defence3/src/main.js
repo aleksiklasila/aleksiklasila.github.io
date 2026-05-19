@@ -2459,6 +2459,7 @@ function processActions(actions, playerId) {
                     p.researchQueue.push(task);
                     tryAdvancePlayerResearchTask(playerId);
                 }
+                rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'workerAssign') {
             // Assign selected worker units to a specific target
@@ -2582,6 +2583,7 @@ function processActions(actions, playerId) {
             if (!(r && r.owner === playerId && r.type === 'research')) r = null;
             if (r) {
                 let p = ensurePlayerResearchQueueState(playerId);
+                let queueChanged = false;
                 let count = Math.max(1, Math.floor(a.count || 1));
                 for (let i = 0; i < count; i++) {
                     let idx = -1;
@@ -2599,6 +2601,7 @@ function processActions(actions, playerId) {
 
                     if (idx >= 0) {
                         p.researchQueue.splice(idx, 1);
+                        queueChanged = true;
                         continue;
                     }
 
@@ -2606,9 +2609,11 @@ function processActions(actions, playerId) {
                         if (!a.kind || !a.key || !a.statKey || (p.researchTask.kind === a.kind && p.researchTask.key === a.key && p.researchTask.statKey === a.statKey)) {
                             p.researchTask = null;
                             tryAdvancePlayerResearchTask(playerId);
+                            queueChanged = true;
                         }
                     }
                 }
+                if (queueChanged) rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'reorderResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -2648,6 +2653,7 @@ function processActions(actions, playerId) {
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
+                rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'markSalvage') {
             // Toggle salvage mark on a building at gx,gy
