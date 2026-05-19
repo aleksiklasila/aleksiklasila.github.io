@@ -3626,6 +3626,46 @@ function makeResearchTask(owner, kind, key, statKey, projectedLevel) {
     };
 }
 
+function rebasePlayerResearchQueueState(playerId) {
+    let p = ensurePlayerResearchQueueState(playerId);
+    let ordered = [];
+    if (p.researchTask) ordered.push(p.researchTask);
+    if (Array.isArray(p.researchQueue) && p.researchQueue.length > 0) {
+        for (let task of p.researchQueue) {
+            if (task) ordered.push(task);
+        }
+    }
+    if (ordered.length <= 0) return p;
+
+    let queuedLevelsByStat = Object.create(null);
+    for (let task of ordered) {
+        if (!task) continue;
+        let statKey = `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`;
+        let baseLevel = Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0));
+        let priorSameStat = Math.max(0, Math.floor(Number(queuedLevelsByStat[statKey]) || 0));
+        let fromLevel = baseLevel + priorSameStat;
+        let capLevel = (task.kind === 'building' && task.statKey === 'maxLevel')
+            ? Math.max(0, MAX_THING_LEVEL - 1)
+            : MAX_RESEARCH_LEVEL;
+        let atCap = fromLevel >= capLevel;
+        let nextWorkRequired = atCap ? 0 : Math.max(0, Number(getResearchWork(task.kind, task.key, task.statKey, fromLevel)) || 0);
+
+        task.owner = playerId;
+        task.fromLevel = fromLevel;
+        task.toLevel = atCap ? fromLevel : Math.min(capLevel, fromLevel + 1);
+        task.cost = atCap ? 0 : Math.max(0, Number(getResearchCost(task.kind, task.key, task.statKey, fromLevel)) || 0);
+        task.workRequired = nextWorkRequired;
+        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(task.workDone) || 0));
+
+        queuedLevelsByStat[statKey] = priorSameStat + 1;
+    }
+
+    p.researchTask = ordered[0] || null;
+    p.researchQueue.length = 0;
+    for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
+    return p;
+}
+
 function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner, 'unit', unitType, statKey);
     for (let u of units) {
