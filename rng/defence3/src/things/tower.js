@@ -31,6 +31,7 @@ function _compareDeterministicBuildingRefs(a, b) {
 }
 
 function _shouldPreferBuildingTarget(candidate, best, candidateDist, bestDist) {
+    if (candidateDist > bestDist + 1e-9) return false;
     if (!best) return true;
     if (candidateDist < bestDist - 1e-9) return true;
     if (candidateDist > bestDist + 1e-9) return false;

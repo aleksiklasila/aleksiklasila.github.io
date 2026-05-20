@@ -640,6 +640,12 @@ function _prettyUnitTypeLabel(unitType) {
 
 function _prettyBuildingTypeLabel(buildingType) {
     let key = String(buildingType || 'unknown');
+    if (key.startsWith('tower:')) {
+        key = key.slice('tower:'.length);
+    }
+    if (key.startsWith('barrack:')) {
+        return `${_prettyUnitTypeLabel(key.slice('barrack:'.length))} Barrack`;
+    }
     if (key.startsWith('barrack_')) {
         return `${_prettyUnitTypeLabel(key.slice('barrack_'.length))} Barrack`;
     }
@@ -851,16 +857,25 @@ function _compareInfoPanelUnitTypes(a, b) {
 function _getOwnedInfoPanelBuildings(owner) {
     let out = [];
     let seen = new Set();
+
+    let tryAdd = (item) => {
+        if (!item || item.owner !== owner) return;
+        if (seen.has(item)) return;
+        if (_isGoldMineLikeEntity(item) || _isAstarMineLikeEntity(item)) return;
+        if (!(Number(item.energy) > 0) && !item.underConstruction) return;
+        seen.add(item);
+        out.push(item);
+    };
+
+    for (let t of towers) tryAdd(t);
+    for (let b of barracks) tryAdd(b);
+    for (let s of collectorSpawners) tryAdd(s);
+
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
             let cell = grid[y] && grid[y][x];
             if (!cell || cell.owner !== owner || !cell.item) continue;
-            let item = cell.item;
-            if (seen.has(item)) continue;
-            if (_isGoldMineLikeEntity(item) || _isAstarMineLikeEntity(item)) continue;
-            if (!(Number(item.energy) > 0) && !item.underConstruction) continue;
-            seen.add(item);
-            out.push(item);
+            tryAdd(cell.item);
         }
     }
     return out;
@@ -871,6 +886,31 @@ function _getInfoPanelBuildingTypeKey(e) {
     if (e.type === 'barrack') return `barrack:${String(e.unitType || '')}`;
     if (e instanceof Tower) return `tower:${String(e.type || '')}`;
     return String(e.type || 'unknown');
+}
+
+function _getInfoPanelBuildingFilterKeys(e) {
+    let keys = new Set();
+    if (!e) return keys;
+
+    let panelKey = String(_getInfoPanelBuildingTypeKey(e) || '').toLowerCase();
+    if (panelKey) keys.add(panelKey);
+
+    let rawType = String((e && e.type) || '').toLowerCase();
+    if (rawType) keys.add(rawType);
+
+    let statsType = typeof getEntityStatsCalcType === 'function'
+        ? String(getEntityStatsCalcType(e) || '').toLowerCase()
+        : '';
+    if (statsType) keys.add(statsType);
+
+    if (e.type === 'barrack') {
+        let unitType = String(e.unitType || '').toLowerCase();
+        if (unitType) {
+            keys.add(`barrack:${unitType}`);
+            keys.add(`barrack_${unitType}`);
+        }
+    }
+    return keys;
 }
 
 function _isInfoPanelBuildingIdleLike(e) {
@@ -888,6 +928,12 @@ function _getInfoPanelRosterThumbSpec(domain, filterKey) {
         return { thumbKey: filterKey, isUnit: true };
     }
     if (which !== 'buildings') return null;
+    if (key.startsWith('barrack_')) {
+        return { thumbKey: filterKey, isUnit: false };
+    }
+    if (key.startsWith('barrack:')) {
+        return { thumbKey: `barrack_${filterKey.slice(8)}`, isUnit: false };
+    }
     if (key.startsWith('barrack:')) {
         return { thumbKey: `barrack_${filterKey.slice(8)}`, isUnit: false };
     }
@@ -933,7 +979,7 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
         else nextUnits = pool;
     } else if (which === 'buildings') {
         let pool = _getOwnedInfoPanelBuildings(owner);
-        if (filter !== 'total') pool = pool.filter(e => _getInfoPanelBuildingTypeKey(e).toLowerCase() === filter);
+        if (filter !== 'total') pool = pool.filter(e => _getInfoPanelBuildingFilterKeys(e).has(filter));
         let idlePool = pool.filter(_isInfoPanelBuildingIdleLike);
         if (selectMode === 'idle') nextEntities = idlePool;
         else if (selectMode === 'one') nextEntities = [(idlePool.length > 0 ? idlePool : pool)[Math.floor(Math.random() * (idlePool.length > 0 ? idlePool.length : pool.length))]].filter(Boolean);
@@ -948,15 +994,7 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
     } else if (which === 'upkeep-buildings') {
         let pool = _getOwnedInfoPanelBuildings(owner);
         if (filter !== 'total') {
-            pool = pool.filter(e => {
-                let typeKey = String(e && e.type || '').toLowerCase();
-                if (typeKey === filter) return true;
-                if (typeKey === 'barrack') {
-                    let barrackKey = `barrack_${String(e && e.unitType || '').toLowerCase()}`;
-                    if (barrackKey === filter) return true;
-                }
-                return false;
-            });
+            pool = pool.filter(e => _getInfoPanelBuildingFilterKeys(e).has(filter));
         }
         nextEntities = pool;
     }
@@ -4032,6 +4070,25 @@ function getResearchMultiStatGroupKey(stat) {
     return statKey;
 }
 
+function _formatResearchQueuedLevelLabel(level) {
+    return `R${Math.max(0, Math.floor(Number(level) || 0))}`;
+}
+
+function _formatResearchQueuedLevelLabelForMany(levels) {
+    let normalized = [];
+    for (let value of (levels || [])) {
+        let level = Math.max(0, Math.floor(Number(value) || 0));
+        normalized.push(level);
+    }
+    if (normalized.length <= 0) return 'R0';
+    return normalized.every(v => v === normalized[0]) ? _formatResearchQueuedLevelLabel(normalized[0]) : 'RMIX';
+}
+
+function _buildResearchStatSlotHtml(text, widthCh, color = '#9cf', extraStyle = '') {
+    let width = Math.max(1, Number(widthCh) || 1);
+    return `<span style="color:${color};flex:0 0 ${width}ch;min-width:${width}ch;max-width:${width}ch;text-align:left;display:inline-block;font-variant-numeric:tabular-nums;font-family:Consolas,'Courier New',monospace;overflow:hidden;white-space:nowrap;${extraStyle}">${text}</span>`;
+}
+
 function _buildResearchMultiStatEntries(selectedThings) {
     let entries = [];
     let byGroupKey = Object.create(null);
@@ -4095,6 +4152,7 @@ function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedT
         let currentMultiplierLabel = `x${formatResearchMultiplierValue(currentMultiplier)}`;
         let projectedMultiplierLabel = `x${formatResearchMultiplierValue(projectedMultiplier)}`;
         let nextPreviewMultiplierLabel = `x${formatResearchMultiplierValue(nextPreviewMultiplier)}`;
+        let queuedLevelLabel = _formatResearchQueuedLevelLabel(displayToLevel);
         if (stat.statKey === 'maxLevel') {
             currentMultiplierLabel = formatResearchStatValue('maxLevel', currentValue);
             projectedMultiplierLabel = formatResearchStatValue('maxLevel', projectedValue);
@@ -4107,18 +4165,19 @@ function _renderResearchSingleThingStatsPanel(owner, scope, targetArg, selectedT
         html += `<span class="info-research-level-preview-btn" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" data-from-level="${displayFromLevel}" data-to-level="${displayToLevel}" style="color:#8fc;cursor:pointer;flex:0 0 auto;text-align:right;display:inline-block;">${currentMultiplierLabel}->${projectedMultiplierLabel}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:8px;color:#9cf">`;
-        html += `<span style="color:#fd0">${atMax ? 'MAX' : formatInfoCurrency(nextCost)}</span>`;
-        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${nextPreviewMultiplierLabel}</span>`;
-        html += `<span>Q:${queuedDepth}</span>`;
+        html += `<span style="display:flex;align-items:center;gap:0.75ch;color:#9cf;flex:1 1 auto;min-width:0">`;
+        html += _buildResearchStatSlotHtml(atMax ? 'MAX' : formatInfoCurrency(nextCost), 10, '#fd0');
+        html += _buildResearchStatSlotHtml(nextPreviewMultiplierLabel, 5, '#8fc');
+        html += _buildResearchStatSlotHtml(`Q:${queuedDepth}`, 4, '#9cf', 'margin-left:1ch;');
+        html += _buildResearchStatSlotHtml(queuedLevelLabel, 4, '#9cf');
         html += `</span>`;
         if (scope.startsWith('single:')) {
-            html += `<div style="display:flex;align-items:center;gap:4px">`;
+            html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
             html += `<span class="info-research-dequeue-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
             html += `<span class="info-research-buy-btn" data-gx="${targetArg.gx}" data-gy="${targetArg.gy}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
             html += `</div>`;
         } else {
-            html += `<div style="display:flex;align-items:center;gap:4px">`;
+            html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
             html += `<span class="info-research-dequeue-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
             html += `<span class="info-research-buy-group-btn" data-coords="${groupCoordStr}" data-kind="${selectedThing.kind}" data-key="${selectedThing.key}" data-stat-key="${stat.statKey}" style="cursor:${atMax ? 'default' : 'pointer'};color:${canAfford ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
             html += `</div>`;
@@ -4147,6 +4206,7 @@ function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedTh
         let totalQueuedEnergy = 0;
         let totalNextCost = 0;
         let totalQueuedDepth = 0;
+        let projectedResearchLevels = [];
         let currentLabels = [];
         let projectedLabels = [];
         let nextPreviewLabels = [];
@@ -4178,6 +4238,7 @@ function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedTh
                 : NaN;
             totalQueuedEnergy += getResearchQueuedEnergyForStat(thing.kind, thing.key, stat.statKey, currentLevel, globalQueuedDepth);
             totalQueuedDepth += Math.max(0, Number(globalQueuedDepth) || 0);
+            projectedResearchLevels.push(displayToLevel);
             if (!atMax) {
                 totalNextCost += Math.max(0, Number(getResearchCost(thing.kind, thing.key, stat.statKey, projectedLevel)) || 0);
                 anyQueueable = true;
@@ -4195,6 +4256,7 @@ function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedTh
         let currentLabel = currentLabels.every(v => v === currentLabels[0]) ? currentLabels[0] : 'MIX';
         let projectedLabel = projectedLabels.every(v => v === projectedLabels[0]) ? projectedLabels[0] : 'MIX';
         let nextPreviewLabel = nextPreviewLabels.every(v => v === nextPreviewLabels[0]) ? nextPreviewLabels[0] : 'MIX';
+        let queuedLevelLabel = _formatResearchQueuedLevelLabelForMany(projectedResearchLevels);
         let costLabel = anyQueueable ? formatInfoCurrency(totalNextCost) : 'MAX';
         let targetAttrs = scope.startsWith('single:')
             ? `data-gx="${targetArg.gx}" data-gy="${targetArg.gy}"`
@@ -4208,12 +4270,13 @@ function _renderResearchMultiThingStatsPanel(owner, scope, targetArg, selectedTh
         html += `<span style="color:#8fc;flex:0 0 auto;text-align:right;display:inline-block;">${currentLabel}->${projectedLabel}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:8px;color:#9cf">`;
-        html += `<span style="color:#fd0">${costLabel}</span>`;
-        html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${nextPreviewLabel}</span>`;
-        html += `<span>Q:${totalQueuedDepth}</span>`;
+        html += `<span style="display:flex;align-items:center;gap:0.75ch;color:#9cf;flex:1 1 auto;min-width:0">`;
+        html += _buildResearchStatSlotHtml(costLabel, 10, '#fd0');
+        html += _buildResearchStatSlotHtml(nextPreviewLabel, 5, '#8fc');
+        html += _buildResearchStatSlotHtml(`Q:${totalQueuedDepth}`, 4, '#9cf', 'margin-left:1ch;');
+        html += _buildResearchStatSlotHtml(queuedLevelLabel, 4, '#9cf');
         html += `</span>`;
-        html += `<div style="display:flex;align-items:center;gap:4px">`;
+        html += `<div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:0 0 46px;min-width:46px">`;
         html += `<span class="${subClass}" ${targetAttrs} data-owner="${owner}" data-scope="${scope}" data-stat-group-key="${entry.groupKey}" style="cursor:pointer;color:#f66;font-weight:bold;">[-]</span>`;
         html += `<span class="${addClass}" ${targetAttrs} data-owner="${owner}" data-scope="${scope}" data-stat-group-key="${entry.groupKey}" style="cursor:${anyQueueable ? 'pointer' : 'default'};color:${anyQueueable ? '#4f4' : '#242'};font-weight:bold;">[+]</span>`;
         html += `</div>`;

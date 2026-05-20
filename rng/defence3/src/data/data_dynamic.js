@@ -17,15 +17,12 @@ function makeDefaultStartingResourcesConfig() {
     return {
         researchLevels: {},
         spawnCounts: {
+            'building:builder_spawner': { 1: 1 },
             'building:healer_spawner': { 1: 1 },
-            'building:spawner': { 1: 1 },
-            'building:research': { 1: 1 },
-            'building:house': { 6: 2 },
-            'building:astar_spawner': { 1: 1 },
-            'unit:builder_unit': { 1: 3 },
-            'unit:healer_unit': { 1: 3 },
-            'unit:king': { 1: 1 },
-            'unit:astar_collector': { 1: 1 },
+            'building:house': { 6: 1 },
+            'unit:builder_unit': { 1: 1 },
+            'unit:healer_unit': { 1: 1 },
+            'unit:king': { 1: 1 }
         }
     };
 }
@@ -1049,6 +1046,21 @@ function resolveTowerPreferredTarget(tower) {
     return null;
 }
 
+function _isTowerPreferredTargetVisibleToOwner(tower, target) {
+    if (!tower || !target) return false;
+    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
+    return isGameplayTargetVisibleToPlayer(tower.owner, gx, gy);
+}
+
+function _isTowerPreferredTargetWithinRange(tower, target, rangePx) {
+    if (!tower || !target) return false;
+    let r = Math.max(0, Number(rangePx) || 0);
+    let dx = (Number(target.x) || 0) - (Number(tower.x) || 0);
+    let dy = (Number(target.y) || 0) - (Number(tower.y) || 0);
+    return (dx * dx + dy * dy) <= (r * r);
+}
+
 function getTowerPreferredTargetInRange(tower, rangePx) {
     if (!tower) return null;
     let pt = tower.preferredTarget;
@@ -1060,14 +1072,12 @@ function getTowerPreferredTargetInRange(tower, rangePx) {
         tower.preferredTargetSpec = null;
         return null;
     }
-    let ptgx = Math.floor(pt.x / TILE), ptgy = Math.floor(pt.y / TILE);
-    if (!isTileVisibleToPlayer(tower.owner, ptgx, ptgy)) {
+    if (!_isTowerPreferredTargetVisibleToOwner(tower, pt)) {
         tower.preferredTarget = null;
         tower.preferredTargetSpec = null;
         return null;
     }
-    let ptDist = Math.hypot(pt.x - tower.x, pt.y - tower.y);
-    if (ptDist > rangePx) return null;
+    if (!_isTowerPreferredTargetWithinRange(tower, pt, rangePx)) return null;
     tower.preferredTarget = pt;
     if (!tower.preferredTargetSpec) tower.preferredTargetSpec = getTowerTargetSpecFromEntity(pt);
     return pt;
@@ -1551,15 +1561,12 @@ function makeDefaultStartingResourcesConfig() {
     return {
         researchLevels: {},
         spawnCounts: {
+            'building:builder_spawner': { 1: 1 },
             'building:healer_spawner': { 1: 1 },
-            'building:spawner': { 1: 1 },
-            'building:research': { 1: 1 },
-            'building:house': { 6: 2 },
-            'building:astar_spawner': { 1: 1 },
-            'unit:builder_unit': { 1: 3 },
-            'unit:healer_unit': { 1: 3 },
-            'unit:king': { 1: 1 },
-            'unit:astar_collector': { 1: 1 },
+            'building:house': { 6: 1 },
+            'unit:builder_unit': { 1: 1 },
+            'unit:healer_unit': { 1: 1 },
+            'unit:king': { 1: 1 }
         }
     };
 }
