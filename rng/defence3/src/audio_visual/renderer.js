@@ -1823,16 +1823,30 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
             lastFill = color;
         }
     };
+    const getMinimapTilePixelBounds = (startX, endX, y) => {
+        let left = Math.round(startX * scale);
+        let right = Math.round(endX * scale);
+        let top = Math.round(y * scale);
+        let bottom = Math.round((y + 1) * scale);
+        if (right <= left) right = left + Math.max(1, Math.round(tilePx));
+        if (bottom <= top) bottom = top + Math.max(1, Math.round(tilePx));
+        return {
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+        };
+    };
     const drawCell = (gx, gy, color) => {
         setFill(color);
-        c.fillRect(gx * scale, gy * scale, tilePx, tilePx);
+        let bounds = getMinimapTilePixelBounds(gx, gx + 1, gy);
+        c.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
     };
     const drawRun = (startX, endX, y, color) => {
         if (endX <= startX) return;
         setFill(color);
-        let cells = endX - startX;
-        let runW = ((cells - 1) * scale) + tilePx;
-        c.fillRect(startX * scale, y * scale, runW, tilePx);
+        let bounds = getMinimapTilePixelBounds(startX, endX, y);
+        c.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
     };
 
     for (let t of towers) drawCell(t.gx, t.gy, get3DRenderOwnerColor(t.owner));
@@ -1900,13 +1914,26 @@ function drawMinimap() {
         }
     };
 
+    const getMinimapTilePixelBounds = (startX, endX, y) => {
+        let left = Math.round(startX * scale);
+        let right = Math.round(endX * scale);
+        let top = Math.round(y * scale);
+        let bottom = Math.round((y + 1) * scale);
+        if (right <= left) right = left + Math.max(1, Math.round(tilePx));
+        if (bottom <= top) bottom = top + Math.max(1, Math.round(tilePx));
+        return {
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+        };
+    };
+
     const drawMinimapRun = (startX, endX, y, color) => {
         if (endX <= startX) return;
         setMinimapFill(color);
-        let cells = endX - startX;
-        // Width for merged cells keeps the same visual coverage as per-cell fillRect.
-        let runW = ((cells - 1) * scale) + tilePx;
-        minimapCtx.fillRect(startX * scale, y * scale, runW, tilePx);
+        let bounds = getMinimapTilePixelBounds(startX, endX, y);
+        minimapCtx.fillRect(bounds.left, bounds.top, bounds.width, bounds.height);
     };
 
     // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
@@ -2457,19 +2484,19 @@ function ensureRenderContextsInitialized() {
     if (!minimapCtx) return false;
     minimapCtx.imageSmoothingEnabled = false;
 
-    let mmDpr = window.devicePixelRatio || 1;
-    if (minimapCanvas.width !== MINIMAP_SIZE * mmDpr || minimapCanvas.height !== MINIMAP_SIZE * mmDpr) {
-        minimapCanvas.width = MINIMAP_SIZE * mmDpr;
-        minimapCanvas.height = MINIMAP_SIZE * mmDpr;
+    let minimapSizePx = MINIMAP_SIZE + 'px';
+    if (minimapCanvas.width !== MINIMAP_SIZE || minimapCanvas.height !== MINIMAP_SIZE || minimapCanvas.style.width !== minimapSizePx || minimapCanvas.style.height !== minimapSizePx) {
+        minimapCanvas.width = MINIMAP_SIZE;
+        minimapCanvas.height = MINIMAP_SIZE;
         minimapCanvas.style.width = MINIMAP_SIZE + 'px';
         minimapCanvas.style.height = MINIMAP_SIZE + 'px';
-        minimapCtx.setTransform(mmDpr, 0, 0, mmDpr, 0, 0);
-        minimapCtx.imageSmoothingEnabled = false;
         _minimapStaticCanvas = null;
         _minimapStaticCtx = null;
         _minimapStaticDirty = true;
         _requestStaticCacheCommit();
     }
+    minimapCtx.setTransform(1, 0, 0, 1, 0, 0);
+    minimapCtx.imageSmoothingEnabled = false;
 
     viewW = gameArea.clientWidth;
     viewH = gameArea.clientHeight;
