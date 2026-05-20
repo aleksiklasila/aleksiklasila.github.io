@@ -941,14 +941,23 @@ function initInput() {
         return best ? best.ref : null;
     }
 
-    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
+    function _makeSplitUnitCommandPoint(targetX, targetY, actionName = 'move', extra = null) {
+        let point = { action: actionName, targetX, targetY };
+        if (extra && Number.isFinite(extra.targetId)) point.targetId = extra.targetId;
+        if (extra && Number.isFinite(extra.targetGx)) point.targetGx = extra.targetGx;
+        if (extra && Number.isFinite(extra.targetGy)) point.targetGy = extra.targetGy;
+        return point;
+    }
+
+    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move', extra = null) {
         if (!unitIds || unitIds.length === 0) return;
+        let commandPoint = _makeSplitUnitCommandPoint(targetX, targetY, actionName, extra);
         if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
-            multiUnitCommandPoints.push({ x: targetX, y: targetY });
+            multiUnitCommandPoints.push(commandPoint);
         } else {
-            multiUnitCommandPoints = [{ x: targetX, y: targetY }];
+            multiUnitCommandPoints = [commandPoint];
         }
-        if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
+        if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [commandPoint];
 
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
         for (let i = 0; i < unitIds.length; i++) buckets[i % multiUnitCommandPoints.length].push(unitIds[i]);
@@ -956,7 +965,15 @@ function initInput() {
         for (let i = 0; i < buckets.length; i++) {
             if (buckets[i].length === 0) continue;
             let rp = multiUnitCommandPoints[i];
-            queueAction({ action: actionName, unitIds: buckets[i], targetX: rp.x, targetY: rp.y });
+            queueAction({
+                action: rp.action || actionName,
+                unitIds: buckets[i],
+                targetX: rp.targetX,
+                targetY: rp.targetY,
+                targetId: rp.targetId,
+                targetGx: rp.targetGx,
+                targetGy: rp.targetGy,
+            });
         }
     }
 
@@ -1140,21 +1157,8 @@ function initInput() {
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                if (!(isCtrlMulti && multiRallyPoints.length > 0)) multiRallyPoints = [];
-                for (let i = 0; i < selSpawners.length; i++) {
-                    let b = selSpawners[i];
-                    let rp = (isCtrlMulti && multiRallyPoints.length > 0)
-                        ? multiRallyPoints[i % multiRallyPoints.length]
-                        : _resolveSpawnerRallyPointForClick(b, world.x, world.y, clickedEnemyUnit);
-                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
-                    b.rallyX = rp.x;
-                    b.rallyY = rp.y;
-                    b.rallyTargetUnitId = rp.targetUnitId || null;
-                }
-                if (isCtrlMulti) {
-                    let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
-                    multiRallyPoints.push({ x: seed.x, y: seed.y, targetUnitId: seed.targetUnitId || null });
-                }
+                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
+                applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
                 issuedStructureCommand = true;
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
@@ -1313,8 +1317,7 @@ function initInput() {
                     let unitIds = combatUnits.map(u => u.id);
                     if (targetUnit) {
                         if (isCtrlMulti) {
-                            // Allow enemy clicks to be part of multi-point command chains.
-                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attackMove');
+                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attack', { targetId: targetUnit.id });
                         } else {
                             queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
                             multiUnitCommandPoints = [];
@@ -1327,8 +1330,7 @@ function initInput() {
                         let targetBuildingX = Number.isFinite(targetBuilding.x) ? targetBuilding.x : (targetBuildingGx * TILE + TILE * 0.5);
                         let targetBuildingY = Number.isFinite(targetBuilding.y) ? targetBuilding.y : (targetBuildingGy * TILE + TILE * 0.5);
                         if (isCtrlMulti) {
-                            // Allow enemy clicks to be part of multi-point command chains.
-                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackMove');
+                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackBuilding', { targetGx: targetBuildingGx, targetGy: targetBuildingGy });
                         } else {
                             queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
                             multiUnitCommandPoints = [];

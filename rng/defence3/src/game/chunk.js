@@ -283,7 +283,9 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     if (typeof visitor !== 'function') return false;
     let sourceAreaId = getAreaIdAtWorld(wx, wy);
     if (sourceAreaId < 0) return false;
-    let maxDistance = Math.max(0, Math.floor(Number(rangeAreaUnits) || 0));
+    let numericRangeArea = Math.max(0, Number(rangeAreaUnits) || 0);
+    let maxDistance = Math.max(0, Math.ceil(numericRangeArea));
+    let maxRangePx = numericRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
     let areaIds = getAreaIdsWithinDistance(sourceAreaId, maxDistance);
     if (!areaIds || areaIds.length <= 0) return false;
 
@@ -302,6 +304,11 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;
             if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
             if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
+            let dx = (Number(u.x) || 0) - wx;
+            let dy = (Number(u.y) || 0) - wy;
+            let hitRadius = Math.max(0, Number(u.r) || 0);
+            let maxHitRangePx = maxRangePx + hitRadius;
+            if ((dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
             if (predicate && !predicate(u)) continue;
             if (visitor(u, areaId) === true) return true;
         }

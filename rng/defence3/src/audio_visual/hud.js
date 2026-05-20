@@ -168,6 +168,7 @@ function _buildResourcePenaltyBarHtml(currentValue, maxSeen) {
 
 const _RESOURCE_PENALTY_POPUP_EXEMPT_STATS = new Set([
     'upKeep',
+    'astarCost',
     'popCap',
     'energy',
     'maxEnergy',
@@ -406,10 +407,38 @@ function _toggleInfoSectionCollapsed(sectionKey) {
     return !!infoPanelSectionCollapsed[key];
 }
 
-function _buildCollapsibleInfoSectionTitle(sectionKey, title) {
+function _buildCollapsibleInfoSectionTitle(sectionKey, title, rightHtml = '', selectCfg = null) {
     let collapsed = _isInfoSectionCollapsed(sectionKey);
     let arrow = collapsed ? '▸' : '▾';
-    return `<div class="info-title info-section-toggle" data-section-key="${sectionKey}" style="margin-bottom:2px;cursor:pointer;user-select:none">${arrow} ${title}</div>`;
+    let trailingHtml = rightHtml
+        ? `<span style="display:inline-flex;align-items:center;gap:4px;flex:0 0 auto">${rightHtml}</span>`
+        : '';
+    let titleHtml = '';
+    if (selectCfg && selectCfg.domain) {
+        let safeDomain = _escapeHtml(String(selectCfg.domain || ''));
+        let safeFilter = _escapeHtml(String(selectCfg.filterKey || 'total'));
+        let safeMode = _escapeHtml(String(selectCfg.mode || 'all'));
+        let safeTitle = _escapeHtml(String(selectCfg.title || title || 'Select'));
+        titleHtml = `<button type="button" class="info-title info-player-status-select-btn" data-domain="${safeDomain}" data-filter="${safeFilter}" data-mode="${safeMode}" title="${safeTitle}" style="cursor:pointer;user-select:none;flex:0 0 56px;min-width:56px;max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;background:#1a1f26;border:1px solid #354453;border-radius:4px;padding:1px 6px;color:#dce9f7;font:inherit;line-height:1.2">${_escapeHtml(String(title || ''))}</button>`;
+    } else {
+        titleHtml = `<div class="info-title info-section-toggle" data-section-key="${sectionKey}" style="cursor:pointer;user-select:none;flex:0 0 56px;min-width:56px;max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_escapeHtml(String(title || ''))}</div>`;
+    }
+    return `<div style="display:flex;align-items:center;justify-content:flex-start;gap:4px;margin-bottom:2px">`
+        + `<button type="button" class="info-section-toggle" data-section-key="${sectionKey}" title="${collapsed ? 'Expand' : 'Collapse'} ${_escapeHtml(String(title || 'section'))}" style="cursor:pointer;user-select:none;flex:0 0 auto;width:18px;min-width:18px;height:18px;line-height:1;background:transparent;border:0;padding:0;color:#ddd;font:inherit;text-align:center">${arrow}</button>`
+        + titleHtml
+        + trailingHtml
+        + `<div class="info-section-toggle" data-section-key="${sectionKey}" style="cursor:pointer;user-select:none;flex:1 1 auto;min-width:0;height:18px"></div>`
+        + `</div>`;
+}
+
+function _buildInfoPanelRosterModeButtonHtml(domain, filterKey, mode, label, title, widthPx = 35) {
+    let safeDomain = _escapeHtml(String(domain || 'units'));
+    let safeFilter = _escapeHtml(String(filterKey || 'total'));
+    let safeMode = _escapeHtml(String(mode || 'all'));
+    let safeLabel = _escapeHtml(String(label || ''));
+    let safeTitle = _escapeHtml(String(title || safeLabel));
+    let width = Math.max(20, Math.floor(Number(widthPx) || 35));
+    return `<button type="button" class="info-player-status-select-btn" data-domain="${safeDomain}" data-filter="${safeFilter}" data-mode="${safeMode}" style="cursor:pointer;color:#ddd;width:${width}px;min-width:${width}px;max-width:${width}px;height:20px;text-align:center;background:#161616;border:1px solid #333;border-radius:3px;padding:0;font:inherit;line-height:1" title="${safeTitle}">${safeLabel}</button>`;
 }
 
 function _getWindowSecondsForMetric(windowState, metric) {
@@ -540,16 +569,20 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         let thingHtml = label
             ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
             : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
-        return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+        return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + `<button class="info-energy-delta-window-btn" data-metric="${metric}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
             + thingHtml
-            + `<span class="info-value" style="color:${color(value)}">${fmt(value)} ⚡/ s</span>`
+            + `<span class="info-value" style="color:${color(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmt(value)} ⚡/ s</span>`
             + `</div>`;
     };
 
-    let html = _buildCollapsibleInfoSectionTitle('energyDelta', '⚡ Delta');
+    let totalSec = getEnergyDeltaWindowSeconds('total');
+    let totalValue = getPlayerEnergyDeltaRate(owner, '', totalSec) - getUpkeepForMetric('total');
+    let energyDeltaHeaderControls = _buildInfoPanelRosterModeButtonHtml('all-owned', 'total', 'all', 'All', 'Select all owned units and buildings', 28)
+        + `<button class="info-energy-delta-window-btn" data-metric="total" title="Window: ${totalSec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${totalSec}s</button>`
+        + `<span class="info-value" style="color:${color(totalValue)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmt(totalValue)} ⚡/ s</span>`;
+    let html = _buildCollapsibleInfoSectionTitle('energyDelta', '⚡/ s', energyDeltaHeaderControls);
     if (!_isInfoSectionCollapsed('energyDelta')) {
-        html += row('total', '', null, 'Total', 'total', 'units');
         html += row('collect', 'collect', { thumbKey: 'collector', isUnit: true }, '', 'collector', 'units');
         html += row('salvage', 'salvage', { thumbKey: 'salvager_unit', isUnit: true }, '', 'salvager_unit', 'units');
         html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
@@ -563,10 +596,10 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
                 let buildingUpkeep = Math.max(0, Number(upkeepBuildingTypes[buildingType]) || 0);
                 let sec = getEnergyDeltaWindowSeconds('total');
                 let thingHtml = _buildInfoPanelThingSelectableVisualHtml('buildings', buildingType, { thumbKey: buildingType, isUnit: false }, 40, `Select all ${buildingType}`);
-                html += `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+                html += `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
                     + `<button class="info-energy-delta-window-btn" data-metric="building_${buildingType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
                     + thingHtml
-                    + `<span class="info-value" style="color:#f88">-${fmt(buildingUpkeep)} ⚡/ s</span>`
+                    + `<span class="info-value" style="color:#f88;flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">-${fmt(buildingUpkeep)} ⚡/ s</span>`
                     + `</div>`;
             }
         }
@@ -698,17 +731,20 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         let thingHtml = label
             ? _buildInfoPanelThingSelectableLabelHtml(domain, filterKey, label, thumbSpec, 103, `Select all ${label || filterKey}`)
             : _buildInfoPanelThingSelectableVisualHtml(domain, filterKey, thumbSpec, 40, `Select all ${filterKey}`);
-        return `<div class="info-row" style="margin:0;gap:8px;align-items:center">`
+        return `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
             + secBtn(metric, sec)
             + thingHtml
-            + `<span class="info-value" style="color:${colorDelta(value)}">${fmtDelta(value)} ★/ s</span>`
+            + `<span class="info-value" style="color:${colorDelta(value)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmtDelta(value)} ★ / s</span>`
             + `</div>`;
     };
 
-    let html = _buildCollapsibleInfoSectionTitle('astarDelta', '★ Delta');
+    let totalSec = getAstarWindowSeconds('total');
+    let totalValue = _getPlayerAstarDeltaRate(owner, totalSec, null);
+    let astarHeaderControls = _buildInfoPanelRosterModeButtonHtml('all-owned', 'total', 'all', 'All', 'Select all owned units and buildings', 28)
+        + `<button class="info-astar-window-btn" data-metric="total" title="Window: ${totalSec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${totalSec}s</button>`
+        + `<span class="info-value" style="color:${colorDelta(totalValue)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmtDelta(totalValue)} ★ / s</span>`;
+    let html = _buildCollapsibleInfoSectionTitle('astarDelta', '★ / s', astarHeaderControls);
     if (!_isInfoSectionCollapsed('astarDelta')) {
-        html += deltaRow('total', null, null, 'Total', 'total', 'units');
-
         html += deltaRow('astarCollector', ev => ev.unitType === 'astar_collector', { thumbKey: 'astar_collector', isUnit: true }, '', 'astar_collector', 'units');
         html += deltaRow('king', ev => ev.unitMetric === 'king', { thumbKey: 'king', isUnit: true }, '', 'king', 'units');
         html += deltaRow('collector', ev => ev.unitMetric === 'collector', { thumbKey: 'collector', isUnit: true }, '', 'collector', 'units');
@@ -885,7 +921,10 @@ function selectInfoPanelPlayerRoster(domain, filterKey, mode, owner = localPlaye
 
     let nextUnits = [];
     let nextEntities = [];
-    if (which === 'units') {
+    if (which === 'all-owned') {
+        nextUnits = _getOwnedInfoPanelUnits(owner);
+        nextEntities = _getOwnedInfoPanelBuildings(owner);
+    } else if (which === 'units') {
         let pool = _getOwnedInfoPanelUnits(owner);
         if (filter !== 'total') pool = pool.filter(u => String(u.unitType || '').toLowerCase() === filter);
         let idlePool = pool.filter(_isInfoPanelUnitIdleLike);
@@ -963,9 +1002,11 @@ function buildInfoPanelIdleWorkersHtml(owner) {
     let unitIdleTotal = ownedUnits.filter(_isInfoPanelUnitIdleLike).length;
     let buildingIdleTotal = ownedBuildings.filter(_isInfoPanelBuildingIdleLike).length;
 
-    let html = _buildCollapsibleInfoSectionTitle('units', 'Units');
+    let unitHeaderControls = _buildInfoPanelRosterModeButtonHtml('units', 'total', 'all', 'All', 'Select all units', 28)
+        + _buildInfoPanelRosterModeButtonHtml('units', 'total', 'idle', 'Idle', 'Select idle units', 35)
+        + `<span class="info-value" style="color:#ddd;flex:0 0 72px;min-width:72px;padding-left:6px;text-align:right;font-variant-numeric:tabular-nums">${unitIdleTotal} / ${ownedUnits.length}</span>`;
+    let html = _buildCollapsibleInfoSectionTitle('units', 'Units', unitHeaderControls);
     if (!_isInfoSectionCollapsed('units')) {
-        html += _buildInfoPanelRosterRow('units', 'total', 'All', unitIdleTotal, ownedUnits.length, 'units');
         let sortedUnitTypes = Array.from(unitGroups.keys()).sort(_compareInfoPanelUnitTypes);
         for (let unitType of sortedUnitTypes) {
             let entry = unitGroups.get(unitType);
@@ -974,9 +1015,11 @@ function buildInfoPanelIdleWorkersHtml(owner) {
     }
     html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
 
-    html += _buildCollapsibleInfoSectionTitle('buildings', 'Buildings');
+    let buildingHeaderControls = _buildInfoPanelRosterModeButtonHtml('buildings', 'total', 'all', 'All', 'Select all buildings', 28)
+        + _buildInfoPanelRosterModeButtonHtml('buildings', 'total', 'idle', 'Idle', 'Select idle buildings', 35)
+        + `<span class="info-value" style="color:#ddd;flex:0 0 72px;min-width:72px;padding-left:6px;text-align:right;font-variant-numeric:tabular-nums">${buildingIdleTotal} / ${ownedBuildings.length}</span>`;
+    html += _buildCollapsibleInfoSectionTitle('buildings', 'Buildings', buildingHeaderControls);
     if (!_isInfoSectionCollapsed('buildings')) {
-        html += _buildInfoPanelRosterRow('buildings', 'total', 'All', buildingIdleTotal, ownedBuildings.length, 'buildings');
         let sortedBuildingTypes = Array.from(buildingGroups.keys()).sort((a, b) => {
             let aLabel = (buildingGroups.get(a) || {}).label || a;
             let bLabel = (buildingGroups.get(b) || {}).label || b;
