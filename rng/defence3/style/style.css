@@ -869,17 +869,18 @@
         /* INFO PANEL (inside right panel) */
         #info-panel,
         #research-popup-info-panel {
-            padding: 8px;
+            padding: 8px 18px 8px 8px;
             font-size: 11px;
             overflow-y: auto;
-            overflow-x: visible;
+            overflow-x: hidden;
+            scrollbar-gutter: stable both-edges;
             flex: 1;
             min-height: 0;
             display: none;
         }
 
         #research-popup-info-panel {
-            padding: 2px;
+            padding: 2px 12px 2px 2px;
         }
 
         .subgroup-toggle:hover {

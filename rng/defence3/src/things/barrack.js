@@ -152,8 +152,11 @@ function spawnQueuedUnitFromSpawner(spawner) {
         }
 
         if (spawner.type === 'barrack') {
+            if (!rallyPath || rallyPath.length <= 0) {
+                rallyPath = _makeFallbackPathForUnit(u, spawnPos.x, spawnPos.y, rgx, rgy, CMD_ATTACK_MOVING, 'spawner_rally');
+            }
             u.path = rallyPath;
-            u.pathIndex = 0;
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
             if (u.path && u.path.length > 0) u.commandState = CMD_ATTACK_MOVING;
         } else {
             if (!rallyPath || rallyPath.length <= 0) {
