@@ -57,6 +57,36 @@ function getTeamIdForPeer(peerId) {
     return Number.isFinite(tid) ? tid : -1;
 }
 
+function setMatchRoleForTeam(teamId, role, options = {}) {
+    let normalizedRole = normalizeMatchRole(role, '');
+    let tid = Number.isFinite(teamId) ? Math.floor(teamId) : Math.floor(Number(teamId));
+    if (!normalizedRole || !Number.isFinite(tid) || tid < 0) return false;
+
+    let setup = computeTeamSetupFromLobby();
+    let touched = false;
+    for (let lp of (lobbyPlayers || [])) {
+        if (!lp || !lp.peerId) continue;
+        if (setup.teamByPeer[lp.peerId] !== tid) continue;
+        matchRoleByPeerId[lp.peerId] = normalizedRole;
+        let uid = getPeerProfileUid(lp.peerId) || String(lp.uid || '').trim();
+        if (uid) matchRoleByUid[uid] = normalizedRole;
+        touched = true;
+    }
+
+    if (myPeerId && setup.teamByPeer[myPeerId] === tid) {
+        matchRoleByPeerId[myPeerId] = normalizedRole;
+        let myUid = getPeerProfileUid(myPeerId) || String(localPersistentPeerId || '').trim();
+        if (myUid) matchRoleByUid[myUid] = normalizedRole;
+        touched = true;
+    }
+
+    if (isHost && touched && options.broadcast !== false) {
+        broadcastLobbyState();
+        renderOnlineLobby();
+    }
+    return touched;
+}
+
 function ensureMatchLoadOverlayElement() {
     let el = document.getElementById('match-load-overlay');
     if (el) return el;
@@ -2055,6 +2085,8 @@ function getPeerMatchState(peerId, setup = null) {
         return 'playing';
     }
 
+    if (Number.isFinite(teamId) && resignedTeams.has(teamId)) return 'spectator';
+
     if (!isHost) {
         let remoteRole = normalizeMatchRole(remoteRoleByPeerId[peerId], '');
         if (remoteRole === 'spectating') return 'spectator';
@@ -2063,7 +2095,6 @@ function getPeerMatchState(peerId, setup = null) {
     }
 
     if (!getPeerConnectionState(peerId)) return 'left';
-    if (Number.isFinite(teamId) && resignedTeams.has(teamId)) return 'spectator';
     return 'playing';
 }
 

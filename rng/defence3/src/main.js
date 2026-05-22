@@ -5,6 +5,7 @@ const UPKEEP_FIXED_SCALE = 1024;
 
 // ============================================================
 function _stableNumberOr(v, fallback = 0) {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
     let n = Number(v);
     return Number.isFinite(n) ? n : fallback;
 }
@@ -37,8 +38,35 @@ function _compareThingsDeterministic(a, b) {
     return 0;
 }
 
+let _deterministicUnitBaseOrderCache = [];
+let _deterministicUnitBaseOrderCacheLength = -1;
+let _deterministicUnitBaseOrderCacheNextUnitId = -1;
+
+function _compareUnitsDeterministicById(a, b) {
+    let aid = _stableNumberOr(a && a.id, -1);
+    let bid = _stableNumberOr(b && b.id, -1);
+    if (aid !== bid) return aid - bid;
+    return _compareThingsDeterministic(a, b);
+}
+
+function _getDeterministicUnitBaseOrder() {
+    if (
+        _deterministicUnitBaseOrderCacheLength === units.length &&
+        _deterministicUnitBaseOrderCacheNextUnitId === nextUnitId &&
+        _deterministicUnitBaseOrderCache.length === units.length
+    ) {
+        return _deterministicUnitBaseOrderCache;
+    }
+    let order = units.slice();
+    if (order.length > 1) order.sort(_compareUnitsDeterministicById);
+    _deterministicUnitBaseOrderCache = order;
+    _deterministicUnitBaseOrderCacheLength = units.length;
+    _deterministicUnitBaseOrderCacheNextUnitId = nextUnitId;
+    return order;
+}
+
 function _buildDeterministicUnitUpdateOrderForTick() {
-    let order = units.slice().sort(_compareThingsDeterministic);
+    let order = _getDeterministicUnitBaseOrder().slice();
     if (order.length <= 1) return order;
     let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
     for (let i = order.length - 1; i > 0; i--) {
@@ -243,7 +271,7 @@ function gameTick() {
     // Resolve deferred pathfinding from previous ticks fairly.
     // A rotating cursor prevents early-array units from starving later units.
     if (units.length > 0) {
-        let orderedUnits = units.slice().sort(_compareThingsDeterministic);
+        let orderedUnits = _getDeterministicUnitBaseOrder();
         let start = pendingPathResolveCursor % orderedUnits.length;
         let checked = 0;
         let pendingBuckets = [[], [], [], [], []];
@@ -2553,13 +2581,21 @@ function processActions(actions, playerId) {
                 b._pendingRallyDetach = false;
             }
         } else if (a.action === 'resign') {
-            resignedTeams.add(playerId);
+            if (!resignedTeams.has(playerId)) {
+                resignedTeams.add(playerId);
+                eliminateTeamAssets(playerId);
+                if (typeof setMatchRoleForTeam === 'function') setMatchRoleForTeam(playerId, 'spectating');
+            }
             if (playerId === localPlayerId) enterSpectateMode('defeated');
             checkWinCondition();
         } else if (a.action === 'forceResignTeam') {
             let targetTeam = Number.isFinite(a.targetTeam) ? Math.floor(a.targetTeam) : null;
             if (targetTeam !== null) {
-                resignedTeams.add(targetTeam);
+                if (!resignedTeams.has(targetTeam)) {
+                    resignedTeams.add(targetTeam);
+                    eliminateTeamAssets(targetTeam);
+                    if (typeof setMatchRoleForTeam === 'function') setMatchRoleForTeam(targetTeam, 'spectating');
+                }
                 if (targetTeam === localPlayerId) enterSpectateMode('defeated');
                 checkWinCondition();
             }
@@ -4013,6 +4049,46 @@ function requestHardLockstepResync(tick, reason = 'tick timeout', now = performa
     return true;
 }
 
+function requestHostHardLockstepResync(tick, missingPeerIds = [], reason = 'missing peer tick', now = performance.now()) {
+    if (isStrictHardLockstepDebugMode()) return false;
+    if (!isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return false;
+    if (typeof _startHostResyncPause !== 'function') return false;
+    let t = Math.floor(Number(tick));
+    if (!Number.isFinite(t) || t < 0) return false;
+
+    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
+        return false;
+    }
+
+    if (lockstepHardResyncInFlightUntil && now < lockstepHardResyncInFlightUntil) {
+        return false;
+    }
+
+    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, getLockstepPostSnapshotGraceMs());
+    if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) {
+        return false;
+    }
+
+    let missingPeers = Array.isArray(missingPeerIds)
+        ? missingPeerIds.map(pid => String(pid || '')).filter(pid => !!pid).sort()
+        : [];
+    let resyncReason = String(reason || 'missing peer tick');
+    if (missingPeers.length > 0) {
+        resyncReason += `: missing packet from ${missingPeers.join(',')}`;
+    }
+
+    lockstepLastHardResyncRequestAt = now;
+    lockstepHardResyncInFlightUntil = now + minGap;
+    waitingForRemoteSince = now;
+    logLockstepWarning('Host lockstep stalled; starting full match sync', {
+        tick: t,
+        reason: resyncReason,
+        missingPeerIds: missingPeers
+    });
+    _startHostResyncPause(resyncReason, false);
+    return true;
+}
+
 function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
     if (isStrictHardLockstepDebugMode()) return;
     if (isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
@@ -4023,6 +4099,18 @@ function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
     if (!startedAt) return;
     if ((now - startedAt) < LOCKSTEP_HARD_RESYNC_MS) return;
     requestHardLockstepResync(t, reason, now);
+}
+
+function maybeRequestHostHardLockstepResync(now, tick, missingPeerIds = [], reason = 'missing peer tick') {
+    if (isStrictHardLockstepDebugMode()) return;
+    if (!isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
+    let t = Math.floor(Number(tick));
+    if (!Number.isFinite(t) || t < 0) return;
+
+    let startedAt = Number(waitingForRemoteSince) || 0;
+    if (!startedAt) return;
+    if ((now - startedAt) < LOCKSTEP_HARD_RESYNC_MS) return;
+    requestHostHardLockstepResync(t, missingPeerIds, reason, now);
 }
 
 function processDeferredGuestLockstepWindow(now, tick) {
@@ -4236,6 +4324,7 @@ function driveStrictLockstep(now, tick) {
                 }
                 lockstepLastResendRequestAtByTick[t] = now;
             }
+            maybeRequestHostHardLockstepResync(now, t, missing, 'missing tick packet');
             return;
         }
 

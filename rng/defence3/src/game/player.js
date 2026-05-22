@@ -16,6 +16,9 @@ function enterSpectateMode(mode = 'defeated') {
     selectedEntities = [];
     activeSubGroups = {};
     attackMoveMode = false;
+    if (isMultiplayer && gameStarted && typeof setMatchRoleForTeam === 'function') {
+        setMatchRoleForTeam(localPlayerId, 'spectating');
+    }
     if (isMultiplayer && !isHost && gameStarted && connections[0]) {
         try { connections[0].send({ type: 'MATCH_ROLE_UPDATE', role: 'spectating' }); } catch { }
     }
