@@ -30,6 +30,22 @@ function _compareDeterministicBuildingRefs(a, b) {
     return ay - by;
 }
 
+let _deterministicTowerBuildingOrderCacheTick = -1;
+let _deterministicTowerBuildingOrderCache = new WeakMap();
+
+function _getDeterministicBuildingRefsForTick(buildings) {
+    if (!Array.isArray(buildings) || buildings.length <= 1) return buildings || [];
+    if (_deterministicTowerBuildingOrderCacheTick !== gameTime) {
+        _deterministicTowerBuildingOrderCacheTick = gameTime;
+        _deterministicTowerBuildingOrderCache = new WeakMap();
+    }
+    let cached = _deterministicTowerBuildingOrderCache.get(buildings);
+    if (cached) return cached;
+    let order = buildings.slice().sort(_compareDeterministicBuildingRefs);
+    _deterministicTowerBuildingOrderCache.set(buildings, order);
+    return order;
+}
+
 function _shouldPreferBuildingTarget(candidate, best, candidateDist, bestDist) {
     if (candidateDist > bestDist + 1e-9) return false;
     if (!best) return true;
@@ -38,8 +54,25 @@ function _shouldPreferBuildingTarget(candidate, best, candidateDist, bestDist) {
     return _compareDeterministicBuildingRefs(candidate, best) < 0;
 }
 
-function _isTowerTargetVisibleToOwner(tower, target) {
+function _shouldPreferBuildingTargetSquared(candidate, best, candidateDist2, bestDist2) {
+    if (candidateDist2 > bestDist2) return false;
+    if (!best) return true;
+    if (candidateDist2 < bestDist2) return true;
+    return _compareDeterministicBuildingRefs(candidate, best) < 0;
+}
+
+function _isTargetVisibleInRawVisibilityGrid(rawVisibilityGrid, target) {
+    if (!rawVisibilityGrid || !target) return false;
+    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
+    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
+    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
+    let row = rawVisibilityGrid[gy];
+    return !!(row && row[gx] > 0);
+}
+
+function _isTowerTargetVisibleToOwner(tower, target, rawVisibilityGrid = null) {
     if (!tower || !target) return false;
+    if (rawVisibilityGrid) return _isTargetVisibleInRawVisibilityGrid(rawVisibilityGrid, target);
     let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
     let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
     return isGameplayTargetVisibleToPlayer(tower.owner, gx, gy);
@@ -144,8 +177,13 @@ class Tower {
         }
         if (this.type.startsWith('cloud')) return;
 
+        let ownerRawVisibility = getRawVisibilityGridForPlayer(this.owner);
+
         if (this.type === 'laser') {
             this.laserState = 0;
+            let sortedTowerRefs = _getDeterministicBuildingRefsForTick(towers);
+            let sortedBarrackRefs = _getDeterministicBuildingRefsForTick(barracks);
+            let sortedSpawnerRefs = _getDeterministicBuildingRefsForTick(collectorSpawners);
             for (let other of this.connectedLasers) {
                 if (this.gx < other.gx || (this.gx === other.gx && this.gy < other.gy)) {
                     let dmg = this.currentStats.damage + other.currentStats.damage;
@@ -158,7 +196,7 @@ class Tower {
                     for (let u of nearUnits) {
                         if (u.owner === this.owner) continue;
                         if (u.turretImmune) continue;
-                        if (!_isTowerTargetVisibleToOwner(this, u)) continue;
+                        if (!_isTowerTargetVisibleToOwner(this, u, ownerRawVisibility)) continue;
                         let hit = false;
                         if (isVert) { hit = Math.abs(u.x - sx) < u.r + 4 && u.y >= mn && u.y <= mx; }
                         else { hit = Math.abs(u.y - sy) < u.r + 4 && u.x >= mn && u.x <= mx; }
@@ -177,26 +215,28 @@ class Tower {
                             }
                         }
                     }
-                    // Check Buildings - iterate in deterministic ID order
-                    for (let list of [towers, barracks, collectorSpawners]) {
-                        let sortedList = [...list].sort(_compareDeterministicBuildingRefs);
-                        for (let b of sortedList) {
+                    // Check buildings using shared deterministic per-tick order.
+                    let applyLaserToBuildings = (list) => {
+                        for (let i = 0; i < list.length; i++) {
+                            let b = list[i];
                             if (b.owner === this.owner || b.energy <= 0) continue;
-                            if (!_isTowerTargetVisibleToOwner(this, b)) continue;
+                            if (!_isTowerTargetVisibleToOwner(this, b, ownerRawVisibility)) continue;
                             let hit = false;
                             if (isVert) { hit = Math.abs(b.x - sx) < 18 && b.y >= mn && b.y <= mx; }
                             else { hit = Math.abs(b.y - sy) < 18 && b.x >= mn && b.x <= mx; }
-                            if (hit) {
-                                hitAny = true;
-                                let prevEnergy = b.energy;
-                                b.energy -= dmg / 60;
-                                pushHostileDamageAlert(b, prevEnergy - b.energy, this.owner);
-                                recordDamageVisual(b, prevEnergy - b.energy, this.owner);
-                                if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
-                                if (b.energy <= 0) destroyBuilding(b);
-                            }
+                            if (!hit) continue;
+                            hitAny = true;
+                            let prevEnergy = b.energy;
+                            b.energy -= dmg / 60;
+                            pushHostileDamageAlert(b, prevEnergy - b.energy, this.owner);
+                            recordDamageVisual(b, prevEnergy - b.energy, this.owner);
+                            if (gameTime % 10 === 0) createExplosion(b.x, b.y, "#f84", 1);
+                            if (b.energy <= 0) destroyBuilding(b);
                         }
-                    }
+                    };
+                    applyLaserToBuildings(sortedTowerRefs);
+                    applyLaserToBuildings(sortedBarrackRefs);
+                    applyLaserToBuildings(sortedSpawnerRefs);
                     if (hitAny) this.laserState = 1;
                 }
             }
@@ -204,13 +244,15 @@ class Tower {
         }
 
         if (this.cd > 0) { this.cd--; return; }
-        this.shoot();
+        this.shoot(ownerRawVisibility);
     }
 
-    shoot() {
+    shoot(ownerRawVisibility = null) {
         if (this.cd > 0) return;
+        if (!ownerRawVisibility) ownerRawVisibility = getRawVisibilityGridForPlayer(this.owner);
         let rangeArea = _getTowerAttackRangeArea(this);
         let rangePx = _getTowerAttackRangePx(this);
+        let rangePxSq = rangePx * rangePx;
         let preferredTarget = getTowerPreferredTargetInRange(this, rangePx);
         if (preferredTarget) {
             let target = preferredTarget;
@@ -228,22 +270,21 @@ class Tower {
             return;
         }
         let bestPrimary = null, bestSecondary = null, bestImmune = null;
-        let dPrimary = rangePx, dSecondary = rangePx, dImmune = rangePx;
+        let dPrimarySq = rangePxSq, dSecondarySq = rangePxSq, dImmuneSq = rangePxSq;
 
         forEachUnitInAreaRange(this.x, this.y, rangeArea, (u) => {
-            if (!_isTowerTargetVisibleToOwner(this, u)) return;
+            if (!_isTowerTargetVisibleToOwner(this, u, ownerRawVisibility)) return;
             if (u.turretImmune) return;
             let dx = u.x - this.x;
             let dy = u.y - this.y;
             let d2 = dx * dx + dy * dy;
-            if (d2 > rangePx * rangePx) return;
-            let d = Math.sqrt(d2);
+            if (d2 > rangePxSq) return;
 
             let immune = (this.type === 'fire' && u.fireResistant) || (this.type === 'water' && u.waterResistant) ||
                 (this.type === 'poison' && u.poisonResistant) || (this.type === 'ice' && u.iceResistant) ||
                 (this.type === 'elements' && (u.waterResistant || u.fireResistant || u.poisonResistant || u.iceResistant));
 
-            if (immune) { if (d < dImmune) { dImmune = d; bestImmune = u; } }
+            if (immune) { if (d2 < dImmuneSq) { dImmuneSq = d2; bestImmune = u; } }
             else {
                 let affected = false;
                 if (this.type === 'fire') affected = u.burning > 0;
@@ -252,8 +293,8 @@ class Tower {
                 else if (this.type === 'ice') affected = u.frozen > 0;
                 else if (this.type === 'sand_gun') affected = u.sandy > 0;
                 else if (this.type === 'watch_tower') affected = u.watched > 0;
-                if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
-                else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
+                if (!affected) { if (d2 < dPrimarySq) { dPrimarySq = d2; bestPrimary = u; } }
+                else { if (d2 < dSecondarySq) { dSecondarySq = d2; bestSecondary = u; } }
             }
         }, { enemyOfPlayer: this.owner });
 
@@ -262,33 +303,39 @@ class Tower {
         // If no unit target, try closest enemy building
         if (!target) {
             // Auto-find nearest enemy building: towers first, then barracks/spawners
-            let bestDist = rangePx;
-            for (let t of [...towers].sort(_compareDeterministicBuildingRefs)) {
+            let bestDistSq = rangePxSq;
+            for (let t of _getDeterministicBuildingRefsForTick(towers)) {
                 if (t === this || t.owner === this.owner || t.energy <= 0) continue;
-                if (!_isTowerTargetVisibleToOwner(this, t)) continue;
-                let d = Math.hypot(t.x - this.x, t.y - this.y);
-                if (_shouldPreferBuildingTarget(t, target, d, bestDist)) {
-                    bestDist = d;
+                if (!_isTowerTargetVisibleToOwner(this, t, ownerRawVisibility)) continue;
+                let dx = t.x - this.x;
+                let dy = t.y - this.y;
+                let d2 = dx * dx + dy * dy;
+                if (_shouldPreferBuildingTargetSquared(t, target, d2, bestDistSq)) {
+                    bestDistSq = d2;
                     target = t;
                 }
             }
             // Try barracks and spawners (lower priority, only if no tower found)
             if (!target) {
-                for (let b of [...barracks].sort(_compareDeterministicBuildingRefs)) {
+                for (let b of _getDeterministicBuildingRefsForTick(barracks)) {
                     if (b.owner === this.owner || b.energy <= 0) continue;
-                    if (!_isTowerTargetVisibleToOwner(this, b)) continue;
-                    let d = Math.hypot(b.x - this.x, b.y - this.y);
-                    if (_shouldPreferBuildingTarget(b, target, d, bestDist)) {
-                        bestDist = d;
+                    if (!_isTowerTargetVisibleToOwner(this, b, ownerRawVisibility)) continue;
+                    let dx = b.x - this.x;
+                    let dy = b.y - this.y;
+                    let d2 = dx * dx + dy * dy;
+                    if (_shouldPreferBuildingTargetSquared(b, target, d2, bestDistSq)) {
+                        bestDistSq = d2;
                         target = b;
                     }
                 }
-                for (let s of [...collectorSpawners].sort(_compareDeterministicBuildingRefs)) {
+                for (let s of _getDeterministicBuildingRefsForTick(collectorSpawners)) {
                     if (s.owner === this.owner || s.energy <= 0) continue;
-                    if (!_isTowerTargetVisibleToOwner(this, s)) continue;
-                    let d = Math.hypot(s.x - this.x, s.y - this.y);
-                    if (_shouldPreferBuildingTarget(s, target, d, bestDist)) {
-                        bestDist = d;
+                    if (!_isTowerTargetVisibleToOwner(this, s, ownerRawVisibility)) continue;
+                    let dx = s.x - this.x;
+                    let dy = s.y - this.y;
+                    let d2 = dx * dx + dy * dy;
+                    if (_shouldPreferBuildingTargetSquared(s, target, d2, bestDistSq)) {
+                        bestDistSq = d2;
                         target = s;
                     }
                 }
