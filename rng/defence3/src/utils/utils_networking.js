@@ -347,6 +347,21 @@ function _getPlayingPeerIdsForResyncPause() {
         if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
         out.push(pid);
     }
+
+    // During early match start, role maps can lag behind lockstep participant tracking.
+    // Fall back to active lockstep peers so resync pause does not instantly self-complete.
+    if (out.length <= 0 && typeof getActiveMatchPeerIds === 'function') {
+        let activeIds = getActiveMatchPeerIds();
+        let activeSet = new Set(Array.isArray(activeIds) ? activeIds.map(pid => String(pid || '')) : []);
+        for (let c of connections) {
+            if (!c || !c.peer) continue;
+            let pid = String(c.peer);
+            if (!pid || !activeSet.has(pid)) continue;
+            if (typeof isPeerExplicitlyRemoved === 'function' && isPeerExplicitlyRemoved(pid)) continue;
+            out.push(pid);
+        }
+    }
+
     return out;
 }
 
@@ -2952,6 +2967,7 @@ function resetWorldState() {
     lockstepLastBundleSentAtByTick = {};
     lockstepLastFinalizeSentAtByTick = {};
     lockstepLastResendRequestAtByTick = {};
+    lockstepHostHardResyncRequestedByTick = {};
     nextLocalActionSeq = 1;
     waitingForRemoteSince = 0;
     lockstepLastHardResyncRequestAt = 0;
