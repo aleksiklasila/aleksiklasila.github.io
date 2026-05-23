@@ -272,9 +272,9 @@ function _withPathfindContext(source, owner, unit, fn) {
     }
 }
 
-function _findPathForUnitTagged(sourceTag, unit, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null) {
+function _findPathForUnitTagged(sourceTag, unit, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
     let owner = _normalizeOwnerId(pathOwner);
-    return _withPathfindContext(sourceTag, owner, unit, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint));
+    return _withPathfindContext(sourceTag, owner, unit, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
 }
 
 function _newPathfindPerfTick() {
@@ -857,7 +857,7 @@ function isWalkableTileFor(unit, gx, gy) {
     return grid[gy][gx].type !== TYPE_WALL;
 }
 
-function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null) {
+function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
     let perfStart = performance.now();
     let sourceTag = _activePathfindSource || PATH_SOURCE_UNSPECIFIED;
     let ownerForBudget = _normalizeOwnerId(pathOwner !== null ? pathOwner : _activePathfindOwner);
@@ -976,6 +976,9 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
 
     let startKey = sy * gridW + sx;
     let endKey = ey * gridW + ex;
+    let bestReachableKey = startKey;
+    let bestReachableH = Math.abs(ex - sx) + Math.abs(ey - sy);
+    let bestReachableG = 0;
 
     // Init start node
     gScoreGen[startKey] = epoch;
@@ -1049,6 +1052,12 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
 
         let cx = curKey % gridW, cy = (curKey / gridW) | 0;
         let cg = gScoreVal[curKey];
+        let curH = Math.abs(ex - cx) + Math.abs(ey - cy);
+        if (curH < bestReachableH || (curH === bestReachableH && (cg < bestReachableG || (cg === bestReachableG && curKey < bestReachableKey)))) {
+            bestReachableKey = curKey;
+            bestReachableH = curH;
+            bestReachableG = cg;
+        }
 
         // Expand 4 cardinal neighbors inline (no array allocation)
         for (let di = 0; di < 8; di += 2) {
@@ -1121,6 +1130,37 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
         }
     }
 
+    if (!abortedByBudget && allowClosestReachableFallback && bestReachableKey >= 0 && bestReachableKey !== startKey) {
+        let bestEffortPath = [];
+        let k = bestReachableKey;
+        let guard = 0;
+        while (k >= 0 && guard <= (GRID_W * GRID_H)) {
+            guard++;
+            bestEffortPath.push({ x: k % gridW, y: (k / gridW) | 0 });
+            if (k === startKey) break;
+            let parent = astarFrom[k];
+            if (!Number.isFinite(parent) || parent < 0 || parent === k) break;
+            k = parent;
+        }
+        bestEffortPath.reverse();
+
+        if (resumePrefixPath && resumePrefixPath.length > 0 && bestEffortPath.length > 0) {
+            let merged = resumePrefixPath.slice();
+            for (let i = 1; i < bestEffortPath.length; i++) merged.push(bestEffortPath[i]);
+            bestEffortPath = merged;
+        }
+
+        if (bestEffortPath.length > 1) {
+            if (movementProfile) {
+                sharedPathCache.set(cacheKey, { path: bestEffortPath, tick: gameTime, version: pathTopologyVersion });
+                sharedPartialPathCache.delete(cacheKey);
+                _trimPathCacheIfNeeded(sharedPathCache, PATH_CACHE_MAX_ENTRIES);
+            }
+            _recordPathfindCall(sourceTag, performance.now() - perfStart, false);
+            return bestEffortPath;
+        }
+    }
+
     if (movementProfile && !abortedByBudget) {
         sharedPathCache.set(cacheKey, { path: null, tick: gameTime, version: pathTopologyVersion });
         sharedPartialPathCache.delete(cacheKey);
@@ -1130,6 +1170,6 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     return null;
 }
 
-function findPathAStarTagged(sourceTag, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null) {
-    return _withPathfindContext(sourceTag, pathOwner, null, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint));
+function findPathAStarTagged(sourceTag, sx, sy, ex, ey, ignoreWalls = false, canWalk = null, pathOwner = null, cacheProfileHint = null, allowClosestReachableFallback = true) {
+    return _withPathfindContext(sourceTag, pathOwner, null, () => findPathAStar(sx, sy, ex, ey, ignoreWalls, canWalk, pathOwner, cacheProfileHint, allowClosestReachableFallback));
 }

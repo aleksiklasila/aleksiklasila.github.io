@@ -422,6 +422,11 @@ class Unit {
     }
 
     doMoving(spd) {
+        let isNearIssuedTarget = () => {
+            if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
+            let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
+            return Math.hypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
+        };
         if (this.unitType === 'scout') {
             if (this.path && this.pathIndex < this.path.length) {
                 if (this.followPath(spd)) {
@@ -446,20 +451,38 @@ class Unit {
         }
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
+            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING && isNearIssuedTarget()) {
+                this._pendingPathTarget = null;
+                this.pathIsFallbackAstar = false;
+                this.targetPos = null;
+                this.commandState = CMD_IDLE;
+            }
             // Keep move command active while waiting for deferred pathfinding.
             return;
         }
         if (this.followPath(spd)) {
             if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
                 this.path = null;
+                if (isNearIssuedTarget()) {
+                    this._pendingPathTarget = null;
+                    this.pathIsFallbackAstar = false;
+                    this.targetPos = null;
+                    this.commandState = CMD_IDLE;
+                }
                 return;
             }
             this.commandState = CMD_IDLE;
             this.path = null;
+            this.targetPos = null;
         }
     }
 
     doAttackMoving(spd) {
+        let isNearIssuedTarget = () => {
+            if (!(this.targetPos && Number.isFinite(this.targetPos.x) && Number.isFinite(this.targetPos.y))) return false;
+            let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
+            return Math.hypot(Number(this.targetPos.x) - Number(this.x), Number(this.targetPos.y) - Number(this.y)) <= tol;
+        };
         // Check for nearby enemies first
         let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
         let closest = _findClosestEnemyUnitByChunks(this.owner, this.x, this.y, aggroRange);
@@ -525,16 +548,29 @@ class Unit {
         }
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
+            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING && isNearIssuedTarget()) {
+                this._pendingPathTarget = null;
+                this.pathIsFallbackAstar = false;
+                this.targetPos = null;
+                this.commandState = CMD_IDLE;
+            }
             // Keep attack-move active while waiting for deferred pathfinding.
             return;
         }
         if (this.followPath(spd)) {
             if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
                 this.path = null;
+                if (isNearIssuedTarget()) {
+                    this._pendingPathTarget = null;
+                    this.pathIsFallbackAstar = false;
+                    this.targetPos = null;
+                    this.commandState = CMD_IDLE;
+                }
                 return;
             }
             this.commandState = CMD_IDLE;
             this.path = null;
+            this.targetPos = null;
         }
     }
 
