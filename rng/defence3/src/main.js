@@ -5,7 +5,6 @@ const UPKEEP_FIXED_SCALE = 1024;
 
 // ============================================================
 function _stableNumberOr(v, fallback = 0) {
-    if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
     let n = Number(v);
     return Number.isFinite(n) ? n : fallback;
 }
@@ -38,35 +37,8 @@ function _compareThingsDeterministic(a, b) {
     return 0;
 }
 
-let _deterministicUnitBaseOrderCache = [];
-let _deterministicUnitBaseOrderCacheLength = -1;
-let _deterministicUnitBaseOrderCacheNextUnitId = -1;
-
-function _compareUnitsDeterministicById(a, b) {
-    let aid = _stableNumberOr(a && a.id, -1);
-    let bid = _stableNumberOr(b && b.id, -1);
-    if (aid !== bid) return aid - bid;
-    return _compareThingsDeterministic(a, b);
-}
-
-function _getDeterministicUnitBaseOrder() {
-    if (
-        _deterministicUnitBaseOrderCacheLength === units.length &&
-        _deterministicUnitBaseOrderCacheNextUnitId === nextUnitId &&
-        _deterministicUnitBaseOrderCache.length === units.length
-    ) {
-        return _deterministicUnitBaseOrderCache;
-    }
-    let order = units.slice();
-    if (order.length > 1) order.sort(_compareUnitsDeterministicById);
-    _deterministicUnitBaseOrderCache = order;
-    _deterministicUnitBaseOrderCacheLength = units.length;
-    _deterministicUnitBaseOrderCacheNextUnitId = nextUnitId;
-    return order;
-}
-
 function _buildDeterministicUnitUpdateOrderForTick() {
-    let order = _getDeterministicUnitBaseOrder().slice();
+    let order = units.slice().sort(_compareThingsDeterministic);
     if (order.length <= 1) return order;
     let s = (((gameTime + 1) * 1664525) + ((order.length + 1) * 1013904223)) >>> 0;
     for (let i = order.length - 1; i > 0; i--) {
@@ -195,16 +167,13 @@ function _getThingUpKeepPerSecond(thing) {
     return def.target === 'wall' ? 3 : 1;
 }
 
-function _getThingUpKeepFixedPerSecond(thing) {
-    let perSecond = _getThingUpKeepPerSecond(thing);
-    return Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
-}
-
 function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
     if (!thing || !breakdowns) return;
     let owner = Number.isFinite(Number(thing.owner)) ? Math.floor(Number(thing.owner)) : -1;
     if (owner < 0 || owner >= breakdowns.length) return;
-    let perSecondFixed = _getThingUpKeepFixedPerSecond(thing);
+    let perSecond = _getThingUpKeepPerSecond(thing);
+    if (!(perSecond > 0)) return;
+    let perSecondFixed = Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0));
     if (!(perSecondFixed > 0)) return;
 
     let row = breakdowns[owner];
@@ -271,7 +240,7 @@ function gameTick() {
     // Resolve deferred pathfinding from previous ticks fairly.
     // A rotating cursor prevents early-array units from starving later units.
     if (units.length > 0) {
-        let orderedUnits = _getDeterministicUnitBaseOrder();
+        let orderedUnits = units.slice().sort(_compareThingsDeterministic);
         let start = pendingPathResolveCursor % orderedUnits.length;
         let checked = 0;
         let pendingBuckets = [[], [], [], [], []];
@@ -309,7 +278,6 @@ function gameTick() {
                 if (u.path && u.path.length > 0) {
                     u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
                     u.commandState = pt.cmd;
-                    u.pathIsFallbackAstar = false;
                     u._pendingPathTarget = null;
                 } else {
                     _markUnitAstarBudgetBlocked(u, 1);
@@ -333,7 +301,6 @@ function gameTick() {
     // Destroy dead towers
     for (let i = towers.length - 1; i >= 0; i--) {
         if (towers[i].energy <= 0) destroyBuilding(towers[i]);
-        else _accumulateUpKeepForThing(upKeepTickBreakdown, towers[i], false);
     }
 
     // Projectiles
@@ -388,7 +355,6 @@ function gameTick() {
     }
     for (let i = barracks.length - 1; i >= 0; i--) {
         if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
-        else _accumulateUpKeepForThing(upKeepTickBreakdown, barracks[i], false);
     }
 
     // Collector/Salvager spawners (barrack-like) - use deterministic shuffle
@@ -400,7 +366,6 @@ function gameTick() {
     }
     for (let i = collectorSpawners.length - 1; i >= 0; i--) {
         if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
-        else _accumulateUpKeepForThing(upKeepTickBreakdown, collectorSpawners[i], false);
     }
 
     processGlobalSpawnerQueue();
@@ -590,104 +555,10 @@ function initInput() {
         return best;
     }
 
-    function _resolveManualRallyWorldPoint(owner, worldX, worldY) {
-        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
-        gx = Math.max(0, Math.min(GRID_W - 1, gx));
-        gy = Math.max(0, Math.min(GRID_H - 1, gy));
-
-        // Visibility-safe behavior:
-        // - Hidden tile: keep exact clicked point (do not leak occupancy/pathability).
-        // - Visible tile: snap to nearest walkable if blocked.
-        if (!isTileVisibleToPlayer(owner, gx, gy)) {
-            return { x: worldX, y: worldY };
-        }
-
-        let dest = findNearestWalkable(gx, gy, gx, gy, null);
-        if (!dest || !Number.isFinite(dest.x) || !Number.isFinite(dest.y)) {
-            return { x: worldX, y: worldY };
-        }
-        return {
-            x: dest.x * TILE + TILE * 0.5,
-            y: dest.y * TILE + TILE * 0.5,
-        };
-    }
-
-    function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyHit = null) {
+    function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyUnit = null) {
         if (!spawner) return { x: worldX, y: worldY, targetUnitId: null };
-        let manualPoint = _resolveManualRallyWorldPoint(localPlayerId, worldX, worldY);
-
-        function _findOpenApproachTileNearTarget(targetGx, targetGy, fromGx, fromGy) {
-            let maxRadius = Math.max(GRID_W, GRID_H);
-            for (let r = 1; r <= maxRadius; r++) {
-                let candidates = [];
-                for (let x = targetGx - r; x <= targetGx + r; x++) {
-                    candidates.push({ x, y: targetGy - r });
-                    candidates.push({ x, y: targetGy + r });
-                }
-                for (let y = targetGy - r + 1; y <= targetGy + r - 1; y++) {
-                    candidates.push({ x: targetGx - r, y });
-                    candidates.push({ x: targetGx + r, y });
-                }
-
-                candidates.sort((a, b) => {
-                    let da = Math.hypot(a.x - fromGx, a.y - fromGy);
-                    let db = Math.hypot(b.x - fromGx, b.y - fromGy);
-                    if (da !== db) return da - db;
-                    if (a.y !== b.y) return a.y - b.y;
-                    return a.x - b.x;
-                });
-
-                for (let c of candidates) {
-                    if (c.x < 0 || c.x >= GRID_W || c.y < 0 || c.y >= GRID_H) continue;
-                    if (!isTileVisibleToPlayer(localPlayerId, c.x, c.y)) continue;
-                    if (getTileEntityRef(c.x, c.y)) continue;
-                    if (typeof isWalkableTileFor === 'function') {
-                        if (!isWalkableTileFor(null, c.x, c.y)) continue;
-                    } else {
-                        if (grid[c.y][c.x].type === TYPE_WALL) continue;
-                    }
-                    return { x: c.x, y: c.y };
-                }
-            }
-            return null;
-        }
-
-        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
-        gx = Math.max(0, Math.min(GRID_W - 1, gx));
-        gy = Math.max(0, Math.min(GRID_H - 1, gy));
-        if (!isTileVisibleToPlayer(localPlayerId, gx, gy)) {
-            return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
-        }
-        let hit = clickedEnemyHit;
-        if (!hit) hit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(worldX, worldY, true), worldX, worldY);
-
-        if (hit && hit.kind === 'unit' && spawner.type === 'barrack') {
-            return { x: hit.ref.x, y: hit.ref.y, targetUnitId: hit.ref.id };
-        }
-
-        // Enemy structure/item click should behave like mine-click rally: snap to a nearby walkable tile.
-        if (hit && hit.kind !== 'unit') {
-            let tgx = null, tgy = null;
-            if (hit.kind === 'item') {
-                tgx = Number.isFinite(hit.gx) ? hit.gx : null;
-                tgy = Number.isFinite(hit.gy) ? hit.gy : null;
-            } else if (hit.ref && Number.isFinite(hit.ref.gx) && Number.isFinite(hit.ref.gy)) {
-                tgx = hit.ref.gx;
-                tgy = hit.ref.gy;
-            }
-            if (Number.isFinite(tgx) && Number.isFinite(tgy) && isTileVisibleToPlayer(localPlayerId, tgx, tgy)) {
-                let dest = _findOpenApproachTileNearTarget(tgx, tgy, spawner.gx, spawner.gy);
-                if (!dest) {
-                    // Fallback keeps old behavior if no clear perimeter tile was found.
-                    dest = findNearestWalkable(tgx, tgy, spawner.gx, spawner.gy, null);
-                }
-                if (dest && Number.isFinite(dest.x) && Number.isFinite(dest.y)) {
-                    return { x: dest.x * TILE + TILE * 0.5, y: dest.y * TILE + TILE * 0.5, targetUnitId: null };
-                }
-            }
-            // Enemy structure click was explicit: if we could not derive an approach tile,
-            // still keep the player's clicked rally point instead of snapping to own anchors.
-            return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
+        if (clickedEnemyUnit && spawner.type === 'barrack') {
+            return { x: clickedEnemyUnit.x, y: clickedEnemyUnit.y, targetUnitId: clickedEnemyUnit.id };
         }
 
         let anchor = null;
@@ -712,7 +583,7 @@ function initInput() {
         if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
             return { x: anchor.x, y: anchor.y, targetUnitId: null };
         }
-        return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
+        return { x: worldX, y: worldY, targetUnitId: null };
     }
 
     function isRallyCapableEntity(ent) {
@@ -1066,23 +937,14 @@ function initInput() {
         return best ? best.ref : null;
     }
 
-    function _makeSplitUnitCommandPoint(targetX, targetY, actionName = 'move', extra = null) {
-        let point = { action: actionName, targetX, targetY };
-        if (extra && Number.isFinite(extra.targetId)) point.targetId = extra.targetId;
-        if (extra && Number.isFinite(extra.targetGx)) point.targetGx = extra.targetGx;
-        if (extra && Number.isFinite(extra.targetGy)) point.targetGy = extra.targetGy;
-        return point;
-    }
-
-    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move', extra = null) {
+    function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move') {
         if (!unitIds || unitIds.length === 0) return;
-        let commandPoint = _makeSplitUnitCommandPoint(targetX, targetY, actionName, extra);
         if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
-            multiUnitCommandPoints.push(commandPoint);
+            multiUnitCommandPoints.push({ x: targetX, y: targetY });
         } else {
-            multiUnitCommandPoints = [commandPoint];
+            multiUnitCommandPoints = [{ x: targetX, y: targetY }];
         }
-        if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [commandPoint];
+        if (multiUnitCommandPoints.length === 0) multiUnitCommandPoints = [{ x: targetX, y: targetY }];
 
         let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
         for (let i = 0; i < unitIds.length; i++) buckets[i % multiUnitCommandPoints.length].push(unitIds[i]);
@@ -1090,15 +952,7 @@ function initInput() {
         for (let i = 0; i < buckets.length; i++) {
             if (buckets[i].length === 0) continue;
             let rp = multiUnitCommandPoints[i];
-            queueAction({
-                action: rp.action || actionName,
-                unitIds: buckets[i],
-                targetX: rp.targetX,
-                targetY: rp.targetY,
-                targetId: rp.targetId,
-                targetGx: rp.targetGx,
-                targetGy: rp.targetGy,
-            });
+            queueAction({ action: actionName, unitIds: buckets[i], targetX: rp.x, targetY: rp.y });
         }
     }
 
@@ -1277,13 +1131,26 @@ function initInput() {
             if (localDefeated) return;
             if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
             let isCtrlMulti = isCtrlMultiCommand(e);
-            let enemyClickHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+            let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
             let issuedStructureCommand = false;
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, enemyClickHit);
-                applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
+                if (!(isCtrlMulti && multiRallyPoints.length > 0)) multiRallyPoints = [];
+                for (let i = 0; i < selSpawners.length; i++) {
+                    let b = selSpawners[i];
+                    let rp = (isCtrlMulti && multiRallyPoints.length > 0)
+                        ? multiRallyPoints[i % multiRallyPoints.length]
+                        : _resolveSpawnerRallyPointForClick(b, world.x, world.y, clickedEnemyUnit);
+                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
+                    b.rallyX = rp.x;
+                    b.rallyY = rp.y;
+                    b.rallyTargetUnitId = rp.targetUnitId || null;
+                }
+                if (isCtrlMulti) {
+                    let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
+                    multiRallyPoints.push({ x: seed.x, y: seed.y, targetUnitId: seed.targetUnitId || null });
+                }
                 issuedStructureCommand = true;
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
@@ -1293,7 +1160,7 @@ function initInput() {
             if (selTowers.length > 0) {
                 // Pick nearest clicked enemy target (unit/building/item) by center distance.
                 let towerTarget = null;
-                let targetHit = enemyClickHit;
+                let targetHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
                 if (targetHit) {
                     if (targetHit.kind === 'unit') towerTarget = { type: 'unit', id: targetHit.ref.id };
                     else if (targetHit.kind === 'tower') towerTarget = { type: 'tower', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
@@ -1425,7 +1292,7 @@ function initInput() {
                 if (combatUnits.length > 0) {
                     let targetUnit = null, targetBuilding = null;
                     let targetBuildingGx = null, targetBuildingGy = null;
-                    let combatHit = enemyClickHit;
+                    let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
                     if (combatHit) {
                         if (combatHit.kind === 'unit') targetUnit = combatHit.ref;
                         else {
@@ -1441,7 +1308,13 @@ function initInput() {
                     }
                     let unitIds = combatUnits.map(u => u.id);
                     if (targetUnit) {
-                        applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, isCtrlMulti, 'attack', { targetId: targetUnit.id });
+                        if (isCtrlMulti) {
+                            // Allow enemy clicks to be part of multi-point command chains.
+                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attackMove');
+                        } else {
+                            queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
+                            multiUnitCommandPoints = [];
+                        }
                         if (workerIds.length > 0) {
                             // Keep mixed selections moving; workers cannot attack unit targets directly.
                             queueAction({ action: 'move', unitIds: workerIds, targetX: targetUnit.x, targetY: targetUnit.y });
@@ -1449,9 +1322,13 @@ function initInput() {
                     } else if (targetBuilding) {
                         let targetBuildingX = Number.isFinite(targetBuilding.x) ? targetBuilding.x : (targetBuildingGx * TILE + TILE * 0.5);
                         let targetBuildingY = Number.isFinite(targetBuilding.y) ? targetBuilding.y : (targetBuildingGy * TILE + TILE * 0.5);
-                        // For clicked enemy structures/items, use attack-move semantics so
-                        // command points always stick even when direct attack targeting is not currently valid.
-                        applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, isCtrlMulti, 'attackMove');
+                        if (isCtrlMulti) {
+                            // Allow enemy clicks to be part of multi-point command chains.
+                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackMove');
+                        } else {
+                            queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
+                            multiUnitCommandPoints = [];
+                        }
                         if (workerIds.length > 0) {
                             // Keep mixed selections moving; workers cannot attack building targets directly.
                             queueAction({ action: 'move', unitIds: workerIds, targetX: targetBuildingX, targetY: targetBuildingY });
@@ -1684,8 +1561,7 @@ function initInput() {
             let isCtrlMulti = isCtrlMultiCommand(e);
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], worldX, worldY, null);
-                applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
+                applyRallyTargets(selSpawners, worldX, worldY, isCtrlMulti);
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
             }
@@ -2394,7 +2270,6 @@ function processActions(actions, playerId) {
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                         if (u.path && u.path.length > 0) {
                             u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                            u.pathIsFallbackAstar = false;
                             u._pendingPathTarget = null;
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_MOVING, 'player_commands');
@@ -2426,7 +2301,6 @@ function processActions(actions, playerId) {
                         u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                         if (u.path && u.path.length > 0) {
                             u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                            u.pathIsFallbackAstar = false;
                             u._pendingPathTarget = null;
                         } else {
                             u.path = _makeFallbackPathForUnit(u, ugx, ugy, targetGx, targetGy, CMD_ATTACK_MOVING, 'player_commands');
@@ -2456,7 +2330,6 @@ function processActions(actions, playerId) {
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = (u.path.length > 1 && u.path[0].x === ugx && u.path[0].y === ugy) ? 1 : 0;
-                                u.pathIsFallbackAstar = false;
                                 u._pendingPathTarget = null;
                             } else {
                                 u.path = null;
@@ -2489,7 +2362,6 @@ function processActions(actions, playerId) {
                             u.path = _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, u.isFlying, getPathCanWalkForUnit(u), u.owner);
                             if (u.path && u.path.length > 0) {
                                 u.pathIndex = 0;
-                                u.pathIsFallbackAstar = false;
                                 u._pendingPathTarget = null;
                             } else {
                                 u.path = null;
@@ -2502,9 +2374,6 @@ function processActions(actions, playerId) {
                         }
                     }
                 }
-            } else if (Number.isFinite(a.targetX) && Number.isFinite(a.targetY)) {
-                // Target disappeared (or became invalid) before processing: continue toward the clicked tile.
-                processActions([{ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }], playerId);
             }
         } else if (a.action === 'stop') {
             for (let u of units) {
@@ -2513,10 +2382,6 @@ function processActions(actions, playerId) {
                     if (u.workerState) {
                         _clearWorkerTarget(u);
                         clearWorkerTaskMemoryForFreeRetarget(u);
-                        u.targetPos = null;
-                        u.pathIndex = 0;
-                        u.pathIsFallbackAstar = false;
-                        u._manualMoveIssuedTick = null;
                         u.workerState = 'IDLE';
                     }
                 }
@@ -2582,7 +2447,6 @@ function processActions(actions, playerId) {
                     p.researchQueue.push(task);
                     tryAdvancePlayerResearchTask(playerId);
                 }
-                rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'workerAssign') {
             // Assign selected worker units to a specific target
@@ -2671,21 +2535,13 @@ function processActions(actions, playerId) {
                 b._pendingRallyDetach = false;
             }
         } else if (a.action === 'resign') {
-            if (!resignedTeams.has(playerId)) {
-                resignedTeams.add(playerId);
-                eliminateTeamAssets(playerId);
-                if (typeof setMatchRoleForTeam === 'function') setMatchRoleForTeam(playerId, 'spectating');
-            }
+            resignedTeams.add(playerId);
             if (playerId === localPlayerId) enterSpectateMode('defeated');
             checkWinCondition();
         } else if (a.action === 'forceResignTeam') {
             let targetTeam = Number.isFinite(a.targetTeam) ? Math.floor(a.targetTeam) : null;
             if (targetTeam !== null) {
-                if (!resignedTeams.has(targetTeam)) {
-                    resignedTeams.add(targetTeam);
-                    eliminateTeamAssets(targetTeam);
-                    if (typeof setMatchRoleForTeam === 'function') setMatchRoleForTeam(targetTeam, 'spectating');
-                }
+                resignedTeams.add(targetTeam);
                 if (targetTeam === localPlayerId) enterSpectateMode('defeated');
                 checkWinCondition();
             }
@@ -2714,7 +2570,6 @@ function processActions(actions, playerId) {
             if (!(r && r.owner === playerId && r.type === 'research')) r = null;
             if (r) {
                 let p = ensurePlayerResearchQueueState(playerId);
-                let queueChanged = false;
                 let count = Math.max(1, Math.floor(a.count || 1));
                 for (let i = 0; i < count; i++) {
                     let idx = -1;
@@ -2732,7 +2587,6 @@ function processActions(actions, playerId) {
 
                     if (idx >= 0) {
                         p.researchQueue.splice(idx, 1);
-                        queueChanged = true;
                         continue;
                     }
 
@@ -2740,11 +2594,9 @@ function processActions(actions, playerId) {
                         if (!a.kind || !a.key || !a.statKey || (p.researchTask.kind === a.kind && p.researchTask.key === a.key && p.researchTask.statKey === a.statKey)) {
                             p.researchTask = null;
                             tryAdvancePlayerResearchTask(playerId);
-                            queueChanged = true;
                         }
                     }
                 }
-                if (queueChanged) rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'reorderResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -2784,7 +2636,6 @@ function processActions(actions, playerId) {
                 p.researchTask = ordered[0] || null;
                 p.researchQueue.length = 0;
                 for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
-                rebasePlayerResearchQueueState(playerId);
             }
         } else if (a.action === 'markSalvage') {
             // Toggle salvage mark on a building at gx,gy
@@ -2859,34 +2710,23 @@ function processActions(actions, playerId) {
                 if (!a.target) { t.preferredTarget = null; t.preferredTargetSpec = null; continue; }
                 if (a.target.type === 'unit') {
                     let tu = units.find(u => u.id === a.target.id && !u.dead && u.owner !== playerId);
-                    let ugx = tu ? Math.floor(tu.x / TILE) : -1;
-                    let ugy = tu ? Math.floor(tu.y / TILE) : -1;
-                    if (tu && isGameplayTargetVisibleToPlayer(playerId, ugx, ugy)) {
-                        t.preferredTarget = tu;
-                        t.preferredTargetSpec = { type: 'unit', id: tu.id };
-                    } else {
-                        t.preferredTarget = null;
-                        t.preferredTargetSpec = null;
-                    }
+                    t.preferredTarget = tu || null;
+                    t.preferredTargetSpec = tu ? { type: 'unit', id: tu.id } : null;
                 } else if (a.target.type === 'tower') {
                     let tb = getTowerAtTile(a.target.gx, a.target.gy);
-                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
-                    t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId && visible) ? tb : null;
+                    t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId) ? tb : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'tower', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'barrack') {
                     let b = getBarrackAtTile(a.target.gx, a.target.gy);
-                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
-                    t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId && visible) ? b : null;
+                    t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId) ? b : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'barrack', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'spawner') {
                     let s = getSpawnerAtTile(a.target.gx, a.target.gy);
-                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
-                    t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId && visible) ? s : null;
+                    t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId) ? s : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'spawner', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'item') {
                     let item = getFloorItemAtTile(a.target.gx, a.target.gy);
-                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
-                    t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId && visible) ? item : null;
+                    t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId) ? item : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'item', gx: a.target.gx, gy: a.target.gy } : null;
                 } else {
                     t.preferredTarget = null;
@@ -2979,7 +2819,6 @@ function startGame() {
         p.energy = STARTING_MONEY;
         p.astar = STARTING_ASTAR;
         p.resourceMaxValues = {};
-        p._resourceFixedValues = {};
         p.resourceStatMultipliers = {};
         p.popCount = 0;
         p.researchLevels = {};
@@ -3224,6 +3063,13 @@ function startGame() {
         let pid = teams[i];
         let pos = spawns[i] || spawns[0];
         teamSpawnPos[pid] = pos;
+
+        let builderSpawner = new BuilderSpawner(pos.gx, pos.gy, pid);
+        completeStarterBuilding(builderSpawner, 'builder_spawner', pid, 1);
+        collectorSpawners.push(builderSpawner);
+        grid[pos.gy][pos.gx].item = builderSpawner;
+        grid[pos.gy][pos.gx].owner = pid;
+        setTileEntity(pos.gx, pos.gy, 'builder_spawner', builderSpawner);
     }
 
     for (let pid of teams) {
@@ -3340,15 +3186,12 @@ function hashStringLockstep(s) {
     return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-function computeTickPacketChecksum(tick, peerId, teamId, actions, stateHashTick = -1, stateHash = '', stateDigest = null) {
+function computeTickPacketChecksum(tick, peerId, teamId, actions) {
     return hashStringLockstep(stableSerializeForLockstep({
         tick: Math.floor(tick),
         peerId: String(peerId || ''),
         teamId: Math.floor(Number(teamId) || 0),
-        actions: Array.isArray(actions) ? actions : [],
-        stateHashTick: Math.floor(Number(stateHashTick) || -1),
-        stateHash: String(stateHash || ''),
-        stateDigest: stateDigest && typeof stateDigest === 'object' ? stateDigest : null
+        actions: Array.isArray(actions) ? actions : []
     }));
 }
 
@@ -3369,45 +3212,6 @@ function logLockstepWarning(reason, details = {}) {
     try {
         console.warn('[LOCKSTEP]', reason, details);
     } catch { }
-}
-
-function isStrictHardLockstepDebugMode() {
-    return !!lockstepStrictDebugMode;
-}
-
-function getEffectiveLockstepPipelineTicks() {
-    if (isStrictHardLockstepDebugMode()) return 0;
-    return Math.max(0, Math.floor(Number(LOCKSTEP_PIPELINE_TICKS) || 0));
-}
-
-function getEffectiveLockstepStateCheckInterval() {
-    if (isStrictHardLockstepDebugMode()) return 1;
-    return Math.max(1, Math.floor(Number(LOCKSTEP_STATE_CHECK_INTERVAL) || 1));
-}
-
-function stopLockstepDebugMatch(reason, details = null) {
-    let stopReason = String(reason || 'lockstep stopped');
-    let stopTick = Number.isFinite(Number(details && details.tick))
-        ? Math.floor(Number(details.tick))
-        : currentTick;
-
-    lockstepFatalStopActive = true;
-    lockstepFatalStopTick = stopTick;
-    lockstepFatalStopReason = stopReason;
-    lockstepFatalStopDetails = details || null;
-    lockstepDesyncDetected = true;
-    waitingForRemoteSince = performance.now();
-
-    try {
-        console.error('[LOCKSTEP STOP]', stopReason, details || {});
-    } catch { }
-
-    let st = document.getElementById('lobby-status');
-    if (st) {
-        st.textContent = 'Lockstep stopped: ' + stopReason;
-        st.style.color = '#f88';
-    }
-    return true;
 }
 
 function isPeerExplicitlyRemoved(peerId) {
@@ -3521,43 +3325,18 @@ function getActiveMatchPeerIds() {
     return ids;
 }
 
-function getOutgoingTickStateHashPayload(tick) {
-    let packetTick = Math.floor(Number(tick));
-    if (!Number.isFinite(packetTick)) packetTick = currentTick;
-    let stateHashTick = packetTick - 1;
-    if (!Number.isFinite(stateHashTick) || stateHashTick < 0) {
-        return {
-            stateHashTick: -1,
-            stateHash: '',
-            stateDigest: null
-        };
-    }
-
-    let stateHash = String(lockstepLocalStateHashByTick[stateHashTick] || '');
-    let stateDigest = LOCKSTEP_DEBUG_HASH_DETAILS ? (lockstepLocalStateDigestByTick[stateHashTick] || null) : null;
-    return {
-        stateHashTick,
-        stateHash,
-        stateDigest: stateDigest && typeof stateDigest === 'object' ? stateDigest : null
-    };
-}
-
 function buildLocalTickPacket(tick) {
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0 || !myPeerId) return null;
     let actions = (localInputBuffer[t] || []).map(a => normalizeLockstepPayload({ ...a, teamId: localPlayerId }));
-    let hashPayload = getOutgoingTickStateHashPayload(t);
     let packet = {
         tick: t,
         peerId: myPeerId,
         teamId: localPlayerId,
-        actions,
-        stateHashTick: hashPayload.stateHashTick,
-        stateHash: hashPayload.stateHash,
-        stateDigest: hashPayload.stateDigest
+        actions
     };
     packet = normalizeLockstepPayload(packet) || packet;
-    packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions, packet.stateHashTick, packet.stateHash, packet.stateDigest);
+    packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
     lockstepLocalPacketByTick[t] = packet;
     return packet;
 }
@@ -3570,10 +3349,7 @@ function validateTickPacket(packet) {
     if (!peerId) return false;
     let teamId = Math.floor(Number(packet.teamId) || 0);
     let actions = Array.isArray(packet.actions) ? packet.actions : [];
-    let stateHashTick = Math.floor(Number(packet.stateHashTick) || -1);
-    let stateHash = String(packet.stateHash || '');
-    let stateDigest = (packet.stateDigest && typeof packet.stateDigest === 'object') ? packet.stateDigest : null;
-    let expected = computeTickPacketChecksum(t, peerId, teamId, actions, stateHashTick, stateHash, stateDigest);
+    let expected = computeTickPacketChecksum(t, peerId, teamId, actions);
     return String(packet.checksum || '') === expected;
 }
 
@@ -3587,16 +3363,6 @@ function validateTickBundle(bundle) {
     }
     let expected = computeTickBundleChecksum(t, packets);
     return String(bundle.combinedChecksum || '') === expected;
-}
-
-function shouldIgnoreIncomingLockstepTick(tick) {
-    let t = Math.floor(Number(tick));
-    if (!Number.isFinite(t) || t < 0) return true;
-    if (lockstepResyncPauseActive) return true;
-    if (Number.isFinite(lockstepResyncResumeTick) && lockstepResyncResumeTick >= 0 && t > lockstepResyncResumeTick) {
-        return true;
-    }
-    return false;
 }
 
 function sendLocalTickPacket(tick, force = false) {
@@ -3618,7 +3384,7 @@ function sendLocalTickPacket(tick, force = false) {
 function sendLocalTickPacketWindow(tick, force = false) {
     let baseTick = Math.floor(Number(tick));
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
-    let endTick = baseTick + getEffectiveLockstepPipelineTicks();
+    let endTick = baseTick + LOCKSTEP_PIPELINE_TICKS;
     for (let t = baseTick; t <= endTick; t++) {
         sendLocalTickPacket(t, force);
     }
@@ -3632,21 +3398,11 @@ function handleIncomingTickPacket(conn, data) {
     packet.peerId = connPeerId || String(packet.peerId || '');
     packet.tick = Math.floor(Number(packet.tick));
     if (!Number.isFinite(packet.tick) || packet.tick < 0 || !packet.peerId) return;
-    if (shouldIgnoreIncomingLockstepTick(packet.tick)) return;
     packet.teamId = Math.floor(Number(packet.teamId) || 0);
     packet.actions = Array.isArray(packet.actions) ? packet.actions.map(a => normalizeLockstepPayload(a)) : [];
     packet = normalizeLockstepPayload(packet) || packet;
 
     if (!validateTickPacket(packet)) {
-        if (isStrictHardLockstepDebugMode()) {
-            stopLockstepDebugMatch('invalid tick packet', {
-                tick: packet.tick,
-                packetPeerId: packet.peerId,
-                fromPeer: connPeerId || null,
-                packet
-            });
-            return;
-        }
         logLockstepWarning('Packet checksum mismatch; requesting resend', {
             tick: packet.tick,
             packetPeerId: packet.peerId,
@@ -3654,28 +3410,6 @@ function handleIncomingTickPacket(conn, data) {
         });
         conn.send({ type: 'TICK_RESEND_REQUEST', tick: packet.tick, packetPeerId: packet.peerId });
         return;
-    }
-
-    if (isStrictHardLockstepDebugMode()) {
-        let remoteHashTick = Math.floor(Number(packet.stateHashTick) || -1);
-        let remoteHash = String(packet.stateHash || '');
-        if (remoteHashTick >= 0 && remoteHash) {
-            let localHash = String(lockstepLocalStateHashByTick[remoteHashTick] || '');
-            if (localHash && localHash !== remoteHash) {
-                stopLockstepDebugMatch('peer state hash mismatch', {
-                    tick: remoteHashTick,
-                    packetTick: packet.tick,
-                    peerId: packet.peerId,
-                    expected: localHash,
-                    local: remoteHash,
-                    details: summarizeLockstepDigestMismatch(
-                        lockstepLocalStateDigestByTick[remoteHashTick] || null,
-                        packet.stateDigest && typeof packet.stateDigest === 'object' ? packet.stateDigest : null
-                    )
-                });
-                return;
-            }
-        }
     }
 
     if (lockstepCommittedByTick[packet.tick] || lockstepBundleByTick[packet.tick]) {
@@ -3688,7 +3422,7 @@ function handleIncomingTickPacket(conn, data) {
     if (packet.teamId !== enforcedTeamId || packet.actions.some(a => Math.floor(Number(a && a.teamId) || 0) !== enforcedTeamId)) {
         packet.teamId = enforcedTeamId;
         packet.actions = packet.actions.map(a => normalizeLockstepPayload({ ...(a || {}), teamId: enforcedTeamId }));
-        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions, packet.stateHashTick, packet.stateHash, packet.stateDigest);
+        packet.checksum = computeTickPacketChecksum(packet.tick, packet.peerId, packet.teamId, packet.actions);
     }
 
     if (!lockstepHostPacketsByTick[packet.tick]) lockstepHostPacketsByTick[packet.tick] = {};
@@ -3771,7 +3505,6 @@ function handleIncomingTickBundle(conn, data) {
     if (matchStartWaitingForReady) matchStartWaitingForReady = false;
     let t = Math.floor(Number(bundle.tick));
     if (!Number.isFinite(t) || t < 0) return;
-    if (shouldIgnoreIncomingLockstepTick(t)) return;
     bundle.tick = t;
     lockstepPendingBundleByTick[t] = bundle;
 }
@@ -3800,7 +3533,6 @@ function handleIncomingTickCommit(conn, data) {
     if (isHost) return;
     let t = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(t) || t < 0) return;
-    if (shouldIgnoreIncomingLockstepTick(t)) return;
     lockstepPendingCommitByTick[t] = String(data.combinedChecksum || '');
 }
 
@@ -3835,42 +3567,6 @@ function computeLockstepStateDigest(tick) {
         }
         return Math.min(cfgCap, housePop);
     };
-    let getPlayerResourceFixedValue = (player, resourceKey) => {
-        let fixedMap = player && player._resourceFixedValues;
-        return Math.floor(Number(fixedMap && fixedMap[resourceKey]) || 0);
-    };
-    let serializeFixedMap = (fixedMap) => {
-        let out = {};
-        if (!fixedMap || typeof fixedMap !== 'object') return out;
-        let keys = Object.keys(fixedMap).sort();
-        for (let i = 0; i < keys.length; i++) {
-            let key = keys[i];
-            let value = Math.floor(Number(fixedMap[key]) || 0);
-            if (value > 0) out[key] = value;
-        }
-        return out;
-    };
-    let getPlayerUpKeepFixedSnapshot = (owner) => {
-        let row = _upKeepRateByPlayer[Math.max(0, Math.floor(Number(owner) || 0))];
-        if (!row) {
-            return {
-                totalFixed: 0,
-                unitsFixed: 0,
-                buildingsFixed: 0,
-                turretsFixed: 0,
-                unitTypesFixed: {},
-                buildingTypesFixed: {}
-            };
-        }
-        return {
-            totalFixed: Math.floor(Number(row._totalFixed) || 0),
-            unitsFixed: Math.floor(Number(row._unitsFixed) || 0),
-            buildingsFixed: Math.floor(Number(row._buildingsFixed) || 0),
-            turretsFixed: Math.floor(Number(row._turretsFixed) || 0),
-            unitTypesFixed: serializeFixedMap(row._unitTypesFixed),
-            buildingTypesFixed: serializeFixedMap(row._buildingTypesFixed)
-        };
-    };
 
     let digest = {
         tick: Number.isFinite(t) ? t : currentTick,
@@ -3879,12 +3575,9 @@ function computeLockstepStateDigest(tick) {
             idx,
             money: quantizeLockstepNumber(p && p.money),
             energy: quantizeLockstepNumber(p && p.energy),
-            energyFixed: getPlayerResourceFixedValue(p, 'energy'),
             astar: quantizeLockstepNumber(p && p.astar),
-            astarFixed: getPlayerResourceFixedValue(p, 'astar'),
             popCount: Math.floor(Number((p && p.popCount) || 0)),
-            popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0)),
-            upKeep: getPlayerUpKeepFixedSnapshot(idx)
+            popCap: Math.floor(Number(computePopCapFromGrid(idx) || 0))
         })),
         units: units
             .filter(u => u && !u.dead)
@@ -3892,22 +3585,12 @@ function computeLockstepStateDigest(tick) {
                 id: Math.floor(Number(u.id) || 0),
                 owner: Math.floor(Number(u.owner) || 0),
                 type: String(u.unitType || ''),
-                baseLevel: Math.max(1, Math.floor(getUnitBaseLevel(u) || 1)),
-                effectiveLevel: Math.max(1, Math.floor(getUnitEffectiveLevel(u) || 1)),
                 x: quantizeLockstepUnitPosition(u.x),
                 y: quantizeLockstepUnitPosition(u.y),
                 energy: quantizeLockstepNumber(u.energy),
-                upKeepFixed: _getThingUpKeepFixedPerSecond(u),
                 cmd: Math.floor(Number(u.commandState) || 0),
                 workerState: String(u.workerState || ''),
-                workerTargetType: String(u.workerTargetType || ''),
                 workerType: String(u.workerType || ''),
-                workerTransferCooldown: Math.floor(Number(u.workerTransferCooldown) || 0),
-                healerHasMaterial: !!u.healerHasMaterial,
-                healerQueueTripCost: Math.floor(Number(u._healerQueueTripCost) || 0),
-                pathIndex: Math.floor(Number(u.pathIndex) || 0),
-                pathLen: Array.isArray(u.path) ? u.path.length : 0,
-                hasPendingPath: !!u._pendingPathTarget,
                 stack: Math.floor(Number(u.stackCount || 1))
             }))
             .sort((a, b) => a.id - b.id),
@@ -3919,9 +3602,7 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(tw.owner) || 0),
                 type: String(tw.type || ''),
                 level: Math.floor(Number(tw.level) || 1),
-                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(tw, getThingBaseLevel(tw)) || 1)),
                 energy: quantizeLockstepNumber(tw.energy),
-                upKeepFixed: _getThingUpKeepFixedPerSecond(tw),
                 underConstruction: !!tw.underConstruction,
                 isUpgrading: !!tw.isUpgrading
             }))
@@ -3934,9 +3615,7 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(b.owner) || 0),
                 unitType: String(b.unitType || ''),
                 level: Math.floor(Number(b.level) || 1),
-                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(b, getThingBaseLevel(b)) || 1)),
                 energy: quantizeLockstepNumber(b.energy),
-                upKeepFixed: _getThingUpKeepFixedPerSecond(b),
                 queueLen: Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0,
                 underConstruction: !!b.underConstruction,
                 isUpgrading: !!b.isUpgrading
@@ -3950,9 +3629,7 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(s.owner) || 0),
                 type: String(s.type || ''),
                 level: Math.floor(Number(s.level) || 1),
-                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(s, getThingBaseLevel(s)) || 1)),
                 energy: quantizeLockstepNumber(s.energy),
-                upKeepFixed: _getThingUpKeepFixedPerSecond(s),
                 queueLen: Array.isArray(s.spawnQueue) ? s.spawnQueue.length : 0,
                 underConstruction: !!s.underConstruction,
                 isUpgrading: !!s.isUpgrading
@@ -3986,9 +3663,7 @@ function computeLockstepStateDigest(tick) {
                 owner: Math.floor(Number(cell.owner) || 0),
                 type: String(cell.item.type || ''),
                 level: Math.floor(Number(cell.item.level) || 1),
-                effectiveLevel: Math.max(1, Math.floor(getThingEffectiveLevel(cell.item, getThingBaseLevel(cell.item)) || 1)),
                 energy: quantizeLockstepNumber(cell.item.energy),
-                upKeepFixed: _getThingUpKeepFixedPerSecond(cell.item),
                 underConstruction: !!cell.item.underConstruction,
                 isUpgrading: !!cell.item.isUpgrading
             });
@@ -4056,12 +3731,12 @@ function maybeCompareLockstepStateHash(tick) {
     delete lockstepExpectedStateDigestByTick[t];
     delete lockstepLocalStateDigestByTick[t];
 
+    if (Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
+
     if (expected === local) return;
 
-    if (!isStrictHardLockstepDebugMode() && Number.isFinite(lockstepHashGraceUntilTick) && t <= lockstepHashGraceUntilTick) return;
-
     let now = performance.now();
-    if (!isStrictHardLockstepDebugMode() && Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
+    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
         logLockstepWarning('State hash mismatch ignored during post-snapshot grace window', {
             tick: t,
             expected,
@@ -4073,6 +3748,15 @@ function maybeCompareLockstepStateHash(tick) {
 
     let mismatchSummary = summarizeLockstepDigestMismatch(expectedDigest, localDigest);
 
+    lockstepDesyncDetected = true;
+    waitingForRemoteSince = now;
+    logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
+        tick: t,
+        expected,
+        local,
+        details: mismatchSummary
+    });
+
     if (connections[0] && mismatchSummary) {
         connections[0].send({
             type: 'TICK_STATE_HASH_MISMATCH_REPORT',
@@ -4083,25 +3767,6 @@ function maybeCompareLockstepStateHash(tick) {
         });
     }
 
-    if (isStrictHardLockstepDebugMode()) {
-        stopLockstepDebugMatch('state hash mismatch', {
-            tick: t,
-            expected,
-            local,
-            details: mismatchSummary
-        });
-        return;
-    }
-
-    lockstepDesyncDetected = true;
-    waitingForRemoteSince = now;
-    logLockstepWarning('State hash mismatch; pausing lockstep and requesting hard resync', {
-        tick: t,
-        expected,
-        local,
-        details: mismatchSummary
-    });
-
     requestHardLockstepResync(t, 'state hash mismatch', now);
 }
 
@@ -4109,7 +3774,6 @@ function handleIncomingTickStateHash(conn, data) {
     if (isHost) return;
     let t = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(t) || t < 0) return;
-    if (shouldIgnoreIncomingLockstepTick(t)) return;
     lockstepExpectedStateHashByTick[t] = String(data.stateHash || '');
     if (data && data.stateDigest && typeof data.stateDigest === 'object') {
         lockstepExpectedStateDigestByTick[t] = data.stateDigest;
@@ -4118,7 +3782,6 @@ function handleIncomingTickStateHash(conn, data) {
 }
 
 function requestHardLockstepResync(tick, reason = 'tick timeout', now = performance.now()) {
-    if (isStrictHardLockstepDebugMode()) return false;
     if (isHost || !isMultiplayer || !gameStarted) return false;
     let conn = connections[0];
     if (!conn) return false;
@@ -4150,48 +3813,7 @@ function requestHardLockstepResync(tick, reason = 'tick timeout', now = performa
     return true;
 }
 
-function requestHostHardLockstepResync(tick, missingPeerIds = [], reason = 'missing peer tick', now = performance.now()) {
-    if (isStrictHardLockstepDebugMode()) return false;
-    if (!isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return false;
-    if (typeof _startHostResyncPause !== 'function') return false;
-    let t = Math.floor(Number(tick));
-    if (!Number.isFinite(t) || t < 0) return false;
-
-    if (Number.isFinite(lockstepPostSnapshotGraceUntilAt) && now < lockstepPostSnapshotGraceUntilAt) {
-        return false;
-    }
-
-    if (lockstepHardResyncInFlightUntil && now < lockstepHardResyncInFlightUntil) {
-        return false;
-    }
-
-    let minGap = Math.max(LOCKSTEP_HARD_RESYNC_MS, getLockstepPostSnapshotGraceMs());
-    if (lockstepLastHardResyncRequestAt && (now - lockstepLastHardResyncRequestAt) < minGap) {
-        return false;
-    }
-
-    let missingPeers = Array.isArray(missingPeerIds)
-        ? missingPeerIds.map(pid => String(pid || '')).filter(pid => !!pid).sort()
-        : [];
-    let resyncReason = String(reason || 'missing peer tick');
-    if (missingPeers.length > 0) {
-        resyncReason += `: missing packet from ${missingPeers.join(',')}`;
-    }
-
-    lockstepLastHardResyncRequestAt = now;
-    lockstepHardResyncInFlightUntil = now + minGap;
-    waitingForRemoteSince = now;
-    logLockstepWarning('Host lockstep stalled; starting full match sync', {
-        tick: t,
-        reason: resyncReason,
-        missingPeerIds: missingPeers
-    });
-    _startHostResyncPause(resyncReason, false);
-    return true;
-}
-
 function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
-    if (isStrictHardLockstepDebugMode()) return;
     if (isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return;
@@ -4202,37 +3824,16 @@ function maybeRequestHardLockstepResync(now, tick, reason = 'tick timeout') {
     requestHardLockstepResync(t, reason, now);
 }
 
-function maybeRequestHostHardLockstepResync(now, tick, missingPeerIds = [], reason = 'missing peer tick') {
-    if (isStrictHardLockstepDebugMode()) return;
-    if (!isHost || !isMultiplayer || !gameStarted || matchStartWaitingForReady || lockstepResyncPauseActive) return;
-    let t = Math.floor(Number(tick));
-    if (!Number.isFinite(t) || t < 0) return;
-
-    let startedAt = Number(waitingForRemoteSince) || 0;
-    if (!startedAt) return;
-    if ((now - startedAt) < LOCKSTEP_HARD_RESYNC_MS) return;
-    requestHostHardLockstepResync(t, missingPeerIds, reason, now);
-}
-
 function processDeferredGuestLockstepWindow(now, tick) {
     if (isHost) return;
     let baseTick = Math.floor(Number(tick));
     if (!Number.isFinite(baseTick) || baseTick < 0) return;
-    let endTick = baseTick + getEffectiveLockstepPipelineTicks();
+    let endTick = baseTick + LOCKSTEP_PIPELINE_TICKS;
 
     for (let t = baseTick; t <= endTick; t++) {
         let pendingBundle = lockstepPendingBundleByTick[t];
         if (pendingBundle) {
             if (!validateTickBundle(pendingBundle)) {
-                if (isStrictHardLockstepDebugMode()) {
-                    stopLockstepDebugMatch('invalid tick bundle', {
-                        tick: t,
-                        combinedChecksum: String(pendingBundle.combinedChecksum || ''),
-                        bundle: pendingBundle
-                    });
-                    delete lockstepPendingBundleByTick[t];
-                    return;
-                }
                 let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
                 if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                     logLockstepWarning('Bundle checksum mismatch; requesting resend', {
@@ -4260,13 +3861,6 @@ function processDeferredGuestLockstepWindow(now, tick) {
 
         let bundle = lockstepBundleByTick[t];
         if (!bundle) {
-            if (isStrictHardLockstepDebugMode()) {
-                stopLockstepDebugMatch('commit received before bundle', {
-                    tick: t,
-                    commitChecksum: String(pendingCommitChecksum || '')
-                });
-                return;
-            }
             let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
             if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                 logLockstepWarning('Commit received before bundle; requesting resend', { tick: t });
@@ -4277,15 +3871,6 @@ function processDeferredGuestLockstepWindow(now, tick) {
         }
 
         if (String(bundle.combinedChecksum || '') !== pendingCommitChecksum) {
-            if (isStrictHardLockstepDebugMode()) {
-                stopLockstepDebugMatch('commit checksum mismatch', {
-                    tick: t,
-                    bundleChecksum: String(bundle.combinedChecksum || ''),
-                    commitChecksum: String(pendingCommitChecksum || '')
-                });
-                delete lockstepPendingCommitByTick[t];
-                return;
-            }
             let lastReq = lockstepLastResendRequestAtByTick[t] || 0;
             if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
                 logLockstepWarning('Commit checksum mismatch; requesting resend', {
@@ -4379,7 +3964,6 @@ function handleIncomingTickResendRequest(conn, data) {
 
 function driveStrictLockstep(now, tick) {
     if (!isMultiplayer) return;
-    if (lockstepFatalStopActive) return;
     if (lockstepResyncPauseActive) {
         if (!waitingForRemoteSince) waitingForRemoteSince = now;
         return;
@@ -4403,29 +3987,13 @@ function driveStrictLockstep(now, tick) {
         let pmap = lockstepHostPacketsByTick[t] || {};
         let missing = participants.filter(pid => !pmap[pid]);
         if (missing.length > 0) {
+            // Instead of just requesting resend forever, trigger a hard resync for all players
             if (!waitingForRemoteSince) waitingForRemoteSince = now;
-            if (isStrictHardLockstepDebugMode()) return;
-            let lastReq = lockstepLastResendRequestAtByTick[t];
-            if (!lastReq) {
-                lockstepLastResendRequestAtByTick[t] = now;
-            } else if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS) {
-                for (let pid of missing) {
-                    if (pid === myPeerId) {
-                        sendLocalTickPacket(t, true);
-                        continue;
-                    }
-                    let conn = connections.find(c => c && c.peer === pid);
-                    if (conn) {
-                        logLockstepWarning('Missing tick packet; requesting resend from peer', {
-                            tick: t,
-                            packetPeerId: pid
-                        });
-                        conn.send({ type: 'TICK_RESEND_REQUEST', tick: t, packetPeerId: pid });
-                    }
-                }
-                lockstepLastResendRequestAtByTick[t] = now;
-            }
-            maybeRequestHostHardLockstepResync(now, t, missing, 'missing tick packet');
+            logLockstepWarning('Missing tick(s) detected; pausing lockstep and requesting hard resync', {
+                tick: t,
+                missingPeers: missing
+            });
+            maybeRequestHardLockstepResync(now, t, 'missing tick(s)');
             return;
         }
 
@@ -4433,17 +4001,15 @@ function driveStrictLockstep(now, tick) {
         sendHostBundle(t);
         maybeCommitHostTick(t);
 
-        for (let pt = t + 1; pt <= t + getEffectiveLockstepPipelineTicks(); pt++) {
+        for (let pt = t + 1; pt <= t + LOCKSTEP_PIPELINE_TICKS; pt++) {
             maybeBuildHostBundle(pt);
             sendHostBundle(pt);
             maybeCommitHostTick(pt);
         }
 
-        if (!isStrictHardLockstepDebugMode()) {
-            let recentStart = Math.max(0, t - Math.max(2, getEffectiveLockstepPipelineTicks()));
-            for (let rt = recentStart; rt < t; rt++) {
-                sendHostFinalize(rt);
-            }
+        let recentStart = Math.max(0, t - Math.max(2, LOCKSTEP_PIPELINE_TICKS));
+        for (let rt = recentStart; rt < t; rt++) {
+            sendHostFinalize(rt);
         }
         return;
     }
@@ -4456,31 +4022,20 @@ function driveStrictLockstep(now, tick) {
             if (!waitingForRemoteSince) waitingForRemoteSince = now;
             return;
         }
-        if (isStrictHardLockstepDebugMode()) {
-            if (!waitingForRemoteSince) waitingForRemoteSince = now;
-            return;
-        }
-        let lastReq = lockstepLastResendRequestAtByTick[t];
-        if (!lastReq) {
-            lockstepLastResendRequestAtByTick[t] = now;
-        } else if ((now - lastReq) >= LOCKSTEP_RESEND_REQUEST_MS && connections[0]) {
-            logLockstepWarning('Tick not committed in time; requesting resend', {
-                tick: t,
-                hasBundle: !!lockstepBundleByTick[t],
-                hasPendingBundle: !!lockstepPendingBundleByTick[t],
-                hasPendingCommit: !!lockstepPendingCommitByTick[t],
-                bundleAckQueued: !!lockstepPendingBundleAckByTick[t]
-            });
-            connections[0].send({ type: 'TICK_RESEND_REQUEST', tick: t });
-            lockstepLastResendRequestAtByTick[t] = now;
-        }
+        // Instead of just requesting resend forever, trigger a hard resync for all players
+        logLockstepWarning('Tick not committed in time; pausing lockstep and requesting hard resync', {
+            tick: t,
+            hasBundle: !!lockstepBundleByTick[t],
+            hasPendingBundle: !!lockstepPendingBundleByTick[t],
+            hasPendingCommit: !!lockstepPendingCommitByTick[t],
+            bundleAckQueued: !!lockstepPendingBundleAckByTick[t]
+        });
         maybeRequestHardLockstepResync(now, t, 'tick not committed in time');
     }
 }
 
 function isStrictTickReady(tick) {
     if (!isMultiplayer) return true;
-    if (lockstepFatalStopActive) return false;
     if (lockstepResyncPauseActive) return false;
     if (matchStartWaitingForReady) return false;
     if (!isHost && lockstepDesyncDetected) return false;
@@ -4519,9 +4074,6 @@ function runOneTick() {
                     peerId: p.peerId,
                     teamId: p.teamId,
                     actions: Array.isArray(p.actions) ? p.actions.map(a => ({ ...a })) : [],
-                    stateHashTick: Math.floor(Number(p.stateHashTick) || -1),
-                    stateHash: String(p.stateHash || ''),
-                    stateDigest: p.stateDigest && typeof p.stateDigest === 'object' ? cloneSnapshotValue(p.stateDigest) : null,
                     checksum: p.checksum
                 })),
                 combinedChecksum: b.combinedChecksum
@@ -4560,11 +4112,9 @@ function runOneTick() {
     if (currentTick % TICK_RATE === 0) sampleGameStats();
     requestResearchPopupRefresh();
 
-    if (isMultiplayer && (processedTick % getEffectiveLockstepStateCheckInterval()) === 0) {
+    if (isMultiplayer && (processedTick % LOCKSTEP_STATE_CHECK_INTERVAL) === 0) {
         let stateDigest = computeLockstepStateDigest(processedTick);
         let stateHash = hashStringLockstep(stableSerializeForLockstep(stateDigest));
-        lockstepLocalStateHashByTick[processedTick] = stateHash;
-        if (LOCKSTEP_DEBUG_HASH_DETAILS) lockstepLocalStateDigestByTick[processedTick] = stateDigest;
         if (isHost) {
             connections.forEach(c => {
                 if (c) {
@@ -4574,12 +4124,14 @@ function runOneTick() {
                 }
             });
         } else {
+            lockstepLocalStateHashByTick[processedTick] = stateHash;
+            if (LOCKSTEP_DEBUG_HASH_DETAILS) lockstepLocalStateDigestByTick[processedTick] = stateDigest;
             maybeCompareLockstepStateHash(processedTick);
         }
     }
 
     if (isMultiplayer && !isHost) {
-        let pruneBefore = processedTick - Math.max(200, getEffectiveLockstepStateCheckInterval() * 20);
+        let pruneBefore = processedTick - Math.max(200, LOCKSTEP_STATE_CHECK_INTERVAL * 20);
         for (let key of Object.keys(lockstepExpectedStateHashByTick)) {
             let t = Math.floor(Number(key));
             if (Number.isFinite(t) && t < pruneBefore) {
@@ -4602,10 +4154,6 @@ function runOneTick() {
         _tpsDisplay = Math.round(_tpsTickCount * 1000 / (tpsNow - _tpsLastTime));
         _tpsTickCount = 0;
         _tpsLastTime = tpsNow;
-    }
-
-    if (Number.isFinite(lockstepResyncResumeTick) && lockstepResyncResumeTick >= 0 && processedTick >= lockstepResyncResumeTick) {
-        lockstepResyncResumeTick = -1;
     }
 
     currentTick++;
