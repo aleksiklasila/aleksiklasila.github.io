@@ -590,10 +590,104 @@ function initInput() {
         return best;
     }
 
-    function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyUnit = null) {
+    function _resolveManualRallyWorldPoint(owner, worldX, worldY) {
+        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+        gx = Math.max(0, Math.min(GRID_W - 1, gx));
+        gy = Math.max(0, Math.min(GRID_H - 1, gy));
+
+        // Visibility-safe behavior:
+        // - Hidden tile: keep exact clicked point (do not leak occupancy/pathability).
+        // - Visible tile: snap to nearest walkable if blocked.
+        if (!isTileVisibleToPlayer(owner, gx, gy)) {
+            return { x: worldX, y: worldY };
+        }
+
+        let dest = findNearestWalkable(gx, gy, gx, gy, null);
+        if (!dest || !Number.isFinite(dest.x) || !Number.isFinite(dest.y)) {
+            return { x: worldX, y: worldY };
+        }
+        return {
+            x: dest.x * TILE + TILE * 0.5,
+            y: dest.y * TILE + TILE * 0.5,
+        };
+    }
+
+    function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyHit = null) {
         if (!spawner) return { x: worldX, y: worldY, targetUnitId: null };
-        if (clickedEnemyUnit && spawner.type === 'barrack') {
-            return { x: clickedEnemyUnit.x, y: clickedEnemyUnit.y, targetUnitId: clickedEnemyUnit.id };
+        let manualPoint = _resolveManualRallyWorldPoint(localPlayerId, worldX, worldY);
+
+        function _findOpenApproachTileNearTarget(targetGx, targetGy, fromGx, fromGy) {
+            let maxRadius = Math.max(GRID_W, GRID_H);
+            for (let r = 1; r <= maxRadius; r++) {
+                let candidates = [];
+                for (let x = targetGx - r; x <= targetGx + r; x++) {
+                    candidates.push({ x, y: targetGy - r });
+                    candidates.push({ x, y: targetGy + r });
+                }
+                for (let y = targetGy - r + 1; y <= targetGy + r - 1; y++) {
+                    candidates.push({ x: targetGx - r, y });
+                    candidates.push({ x: targetGx + r, y });
+                }
+
+                candidates.sort((a, b) => {
+                    let da = Math.hypot(a.x - fromGx, a.y - fromGy);
+                    let db = Math.hypot(b.x - fromGx, b.y - fromGy);
+                    if (da !== db) return da - db;
+                    if (a.y !== b.y) return a.y - b.y;
+                    return a.x - b.x;
+                });
+
+                for (let c of candidates) {
+                    if (c.x < 0 || c.x >= GRID_W || c.y < 0 || c.y >= GRID_H) continue;
+                    if (!isTileVisibleToPlayer(localPlayerId, c.x, c.y)) continue;
+                    if (getTileEntityRef(c.x, c.y)) continue;
+                    if (typeof isWalkableTileFor === 'function') {
+                        if (!isWalkableTileFor(null, c.x, c.y)) continue;
+                    } else {
+                        if (grid[c.y][c.x].type === TYPE_WALL) continue;
+                    }
+                    return { x: c.x, y: c.y };
+                }
+            }
+            return null;
+        }
+
+        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+        gx = Math.max(0, Math.min(GRID_W - 1, gx));
+        gy = Math.max(0, Math.min(GRID_H - 1, gy));
+        if (!isTileVisibleToPlayer(localPlayerId, gx, gy)) {
+            return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
+        }
+        let hit = clickedEnemyHit;
+        if (!hit) hit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(worldX, worldY, true), worldX, worldY);
+
+        if (hit && hit.kind === 'unit' && spawner.type === 'barrack') {
+            return { x: hit.ref.x, y: hit.ref.y, targetUnitId: hit.ref.id };
+        }
+
+        // Enemy structure/item click should behave like mine-click rally: snap to a nearby walkable tile.
+        if (hit && hit.kind !== 'unit') {
+            let tgx = null, tgy = null;
+            if (hit.kind === 'item') {
+                tgx = Number.isFinite(hit.gx) ? hit.gx : null;
+                tgy = Number.isFinite(hit.gy) ? hit.gy : null;
+            } else if (hit.ref && Number.isFinite(hit.ref.gx) && Number.isFinite(hit.ref.gy)) {
+                tgx = hit.ref.gx;
+                tgy = hit.ref.gy;
+            }
+            if (Number.isFinite(tgx) && Number.isFinite(tgy) && isTileVisibleToPlayer(localPlayerId, tgx, tgy)) {
+                let dest = _findOpenApproachTileNearTarget(tgx, tgy, spawner.gx, spawner.gy);
+                if (!dest) {
+                    // Fallback keeps old behavior if no clear perimeter tile was found.
+                    dest = findNearestWalkable(tgx, tgy, spawner.gx, spawner.gy, null);
+                }
+                if (dest && Number.isFinite(dest.x) && Number.isFinite(dest.y)) {
+                    return { x: dest.x * TILE + TILE * 0.5, y: dest.y * TILE + TILE * 0.5, targetUnitId: null };
+                }
+            }
+            // Enemy structure click was explicit: if we could not derive an approach tile,
+            // still keep the player's clicked rally point instead of snapping to own anchors.
+            return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
         }
 
         let anchor = null;
@@ -618,7 +712,7 @@ function initInput() {
         if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
             return { x: anchor.x, y: anchor.y, targetUnitId: null };
         }
-        return { x: worldX, y: worldY, targetUnitId: null };
+        return { x: manualPoint.x, y: manualPoint.y, targetUnitId: null };
     }
 
     function isRallyCapableEntity(ent) {
@@ -1183,12 +1277,12 @@ function initInput() {
             if (localDefeated) return;
             if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
             let isCtrlMulti = isCtrlMultiCommand(e);
-            let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
+            let enemyClickHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
             let issuedStructureCommand = false;
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
+                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, enemyClickHit);
                 applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
                 issuedStructureCommand = true;
             } else if (!isCtrlMulti) {
@@ -1199,7 +1293,7 @@ function initInput() {
             if (selTowers.length > 0) {
                 // Pick nearest clicked enemy target (unit/building/item) by center distance.
                 let towerTarget = null;
-                let targetHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                let targetHit = enemyClickHit;
                 if (targetHit) {
                     if (targetHit.kind === 'unit') towerTarget = { type: 'unit', id: targetHit.ref.id };
                     else if (targetHit.kind === 'tower') towerTarget = { type: 'tower', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
@@ -1331,7 +1425,7 @@ function initInput() {
                 if (combatUnits.length > 0) {
                     let targetUnit = null, targetBuilding = null;
                     let targetBuildingGx = null, targetBuildingGy = null;
-                    let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                    let combatHit = enemyClickHit;
                     if (combatHit) {
                         if (combatHit.kind === 'unit') targetUnit = combatHit.ref;
                         else {
@@ -1347,12 +1441,7 @@ function initInput() {
                     }
                     let unitIds = combatUnits.map(u => u.id);
                     if (targetUnit) {
-                        if (isCtrlMulti) {
-                            applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, true, 'attack', { targetId: targetUnit.id });
-                        } else {
-                            queueAction({ action: 'attack', unitIds, targetId: targetUnit.id, targetX: targetUnit.x, targetY: targetUnit.y });
-                            multiUnitCommandPoints = [];
-                        }
+                        applyUnitCommandTargets(unitIds, targetUnit.x, targetUnit.y, isCtrlMulti, 'attack', { targetId: targetUnit.id });
                         if (workerIds.length > 0) {
                             // Keep mixed selections moving; workers cannot attack unit targets directly.
                             queueAction({ action: 'move', unitIds: workerIds, targetX: targetUnit.x, targetY: targetUnit.y });
@@ -1360,12 +1449,9 @@ function initInput() {
                     } else if (targetBuilding) {
                         let targetBuildingX = Number.isFinite(targetBuilding.x) ? targetBuilding.x : (targetBuildingGx * TILE + TILE * 0.5);
                         let targetBuildingY = Number.isFinite(targetBuilding.y) ? targetBuilding.y : (targetBuildingGy * TILE + TILE * 0.5);
-                        if (isCtrlMulti) {
-                            applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, true, 'attackBuilding', { targetGx: targetBuildingGx, targetGy: targetBuildingGy });
-                        } else {
-                            queueAction({ action: 'attackBuilding', unitIds, targetGx: targetBuildingGx, targetGy: targetBuildingGy });
-                            multiUnitCommandPoints = [];
-                        }
+                        // For clicked enemy structures/items, use attack-move semantics so
+                        // command points always stick even when direct attack targeting is not currently valid.
+                        applyUnitCommandTargets(unitIds, targetBuildingX, targetBuildingY, isCtrlMulti, 'attackMove');
                         if (workerIds.length > 0) {
                             // Keep mixed selections moving; workers cannot attack building targets directly.
                             queueAction({ action: 'move', unitIds: workerIds, targetX: targetBuildingX, targetY: targetBuildingY });
@@ -1598,7 +1684,8 @@ function initInput() {
             let isCtrlMulti = isCtrlMultiCommand(e);
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                applyRallyTargets(selSpawners, worldX, worldY, isCtrlMulti);
+                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], worldX, worldY, null);
+                applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
             }
@@ -2415,6 +2502,9 @@ function processActions(actions, playerId) {
                         }
                     }
                 }
+            } else if (Number.isFinite(a.targetX) && Number.isFinite(a.targetY)) {
+                // Target disappeared (or became invalid) before processing: continue toward the clicked tile.
+                processActions([{ action: 'attackMove', unitIds: a.unitIds, targetX: a.targetX, targetY: a.targetY }], playerId);
             }
         } else if (a.action === 'stop') {
             for (let u of units) {
@@ -2769,23 +2859,34 @@ function processActions(actions, playerId) {
                 if (!a.target) { t.preferredTarget = null; t.preferredTargetSpec = null; continue; }
                 if (a.target.type === 'unit') {
                     let tu = units.find(u => u.id === a.target.id && !u.dead && u.owner !== playerId);
-                    t.preferredTarget = tu || null;
-                    t.preferredTargetSpec = tu ? { type: 'unit', id: tu.id } : null;
+                    let ugx = tu ? Math.floor(tu.x / TILE) : -1;
+                    let ugy = tu ? Math.floor(tu.y / TILE) : -1;
+                    if (tu && isGameplayTargetVisibleToPlayer(playerId, ugx, ugy)) {
+                        t.preferredTarget = tu;
+                        t.preferredTargetSpec = { type: 'unit', id: tu.id };
+                    } else {
+                        t.preferredTarget = null;
+                        t.preferredTargetSpec = null;
+                    }
                 } else if (a.target.type === 'tower') {
                     let tb = getTowerAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId) ? tb : null;
+                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
+                    t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId && visible) ? tb : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'tower', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'barrack') {
                     let b = getBarrackAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId) ? b : null;
+                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
+                    t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId && visible) ? b : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'barrack', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'spawner') {
                     let s = getSpawnerAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId) ? s : null;
+                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
+                    t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId && visible) ? s : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'spawner', gx: a.target.gx, gy: a.target.gy } : null;
                 } else if (a.target.type === 'item') {
                     let item = getFloorItemAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId) ? item : null;
+                    let visible = isGameplayTargetVisibleToPlayer(playerId, a.target.gx, a.target.gy);
+                    t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId && visible) ? item : null;
                     t.preferredTargetSpec = t.preferredTarget ? { type: 'item', gx: a.target.gx, gy: a.target.gy } : null;
                 } else {
                     t.preferredTarget = null;
