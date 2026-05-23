@@ -3867,6 +3867,13 @@ function getQueuedResearchTaskPreview(owner, orderedTasks, taskIndex) {
     return { fromLevel, toLevel, atMax, cost, work, fromValue, toValue };
 }
 
+function _renderResearchQueueThingIconHtml(thing, size = 20) {
+    if (!thing || !thing.key) return '';
+    let s = Math.max(12, Math.floor(Number(size) || 20));
+    let radius = thing.kind === 'unit' ? '50%' : '4px';
+    return `<span style="display:inline-flex;align-items:center;justify-content:center;width:${s}px;height:${s}px;border:1px solid #2b2b2b;border-radius:${radius};background:#111;overflow:hidden;flex:0 0 auto"><img src="${getItemThumbnail(thing.key, s)}" width="${s}" height="${s}" style="display:block;${thing.kind === 'unit' ? 'border-radius:50%;' : ''}"></span>`;
+}
+
 function renderQueuedResearchTasksForSingleBuilding(e) {
     let html = '';
     let orderedTasks = getResearchOrderedTasksForSingleBuilding(e);
@@ -3882,8 +3889,9 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
         if (!preview) continue;
         let thing = getResearchThing(t.kind, t.key);
         let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
-        let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
         let statLabel = stat ? stat.label : (t.statKey || 'stat');
+        let thingVisual = _renderResearchQueueThingIconHtml(thing, 18);
+        let thingTextFallback = thing ? '' : `${t.kind}:${t.key} / `;
         let canAfford = !preview.atMax;
         let selectedThingLevel = getResearchPreviewThingLevel();
         let baseValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, 0, selectedThingLevel);
@@ -3898,7 +3906,7 @@ function renderQueuedResearchTasksForSingleBuilding(e) {
 
         html += `<div class="info-research-queue-item" data-owner="${e.owner}" data-gx="${e.gx}" data-gy="${e.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
+        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button>${thingVisual}<span title="${thing ? thing.label : `${t.kind}:${t.key}`}">${thingTextFallback}${statLabel}</span></span>`;
         html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">${queueItemValueLabel}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
@@ -3943,8 +3951,9 @@ function renderQueuedResearchTasksForGroup(group) {
         if (!preview) continue;
         let thing = getResearchThing(t.kind, t.key);
         let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
-        let thingLabel = thing ? thing.label : `${t.kind}:${t.key}`;
         let statLabel = stat ? stat.label : (t.statKey || 'stat');
+        let thingVisual = _renderResearchQueueThingIconHtml(thing, 18);
+        let thingTextFallback = thing ? '' : `${t.kind}:${t.key} / `;
         let canAfford = !preview.atMax;
         let selectedThingLevel = getResearchPreviewThingLevel();
         let baseValue = getResearchStatValueAtLevel(t.kind, t.key, t.statKey, 0, selectedThingLevel);
@@ -3956,7 +3965,7 @@ function renderQueuedResearchTasksForGroup(group) {
 
         html += `<div class="info-research-queue-item" data-owner="${owner}" data-gx="${anchor.gx}" data-gy="${anchor.gy}" data-active="${t.isActiveTask ? '1' : '0'}" data-pending-index="${pendingIndex}" style="padding:4px;border:1px solid #242424;border-radius:4px;background:#101010;">`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap">`;
-        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button><span>${thingLabel} / ${statLabel}</span></span>`;
+        html += `<span style="display:flex;align-items:center;gap:4px;color:#bbb"><button type="button" class="info-research-stat-matrix-btn" data-kind="${t.kind}" data-key="${t.key}" data-stat-key="${t.statKey}" data-from-level="${preview.fromLevel}" data-to-level="${preview.toLevel}" style="cursor:pointer;background:#111;color:#9cf;border:1px solid #355;border-radius:3px;padding:0 5px;height:18px;line-height:16px;font-size:10px;">M</button>${thingVisual}<span title="${thing ? thing.label : `${t.kind}:${t.key}`}">${thingTextFallback}${statLabel}</span></span>`;
         html += `<span style="color:#8fc;min-width:54px;text-align:right;display:inline-block;">x${formatResearchMultiplierValue(projectedMultiplier)}</span>`;
         html += `</div>`;
         html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px">`;
