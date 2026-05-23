@@ -5,46 +5,15 @@ let pathfindConsumedUnitIdSetsByPlayer = [];
 
 function _ensurePathfindRequesterBudgetArrays() {
     let count = Math.max(0, players.length || 0);
-    while (pathfindAllowedUnitIdSetsByPlayer.length < count) pathfindAllowedUnitIdSetsByPlayer.push(new Set());
     while (pathfindConsumedUnitIdSetsByPlayer.length < count) pathfindConsumedUnitIdSetsByPlayer.push(new Set());
-    if (pathfindAllowedUnitIdSetsByPlayer.length > count) pathfindAllowedUnitIdSetsByPlayer.length = count;
     if (pathfindConsumedUnitIdSetsByPlayer.length > count) pathfindConsumedUnitIdSetsByPlayer.length = count;
 }
 
 function _rebuildDeterministicPathfindRequestSlotsPerTick() {
     _ensurePathfindRequesterBudgetArrays();
-    let byOwner = [];
     let count = Math.max(0, players.length || 0);
     for (let pid = 0; pid < count; pid++) {
-        byOwner[pid] = [];
-        pathfindAllowedUnitIdSetsByPlayer[pid].clear();
         pathfindConsumedUnitIdSetsByPlayer[pid].clear();
-    }
-
-    for (let i = 0; i < units.length; i++) {
-        let u = units[i];
-        if (!u || u.dead) continue;
-        let pid = _normalizeOwnerId(u.owner);
-        if (pid < 0 || pid >= count) continue;
-        let unitId = Math.floor(Number(u.id));
-        if (!Number.isFinite(unitId)) continue;
-        byOwner[pid].push(unitId);
-    }
-
-    let cap = Math.max(0, Math.floor(Number(MAX_PATHS_PER_TICK) || 0));
-    for (let pid = 0; pid < count; pid++) {
-        let ids = byOwner[pid];
-        if (!ids || ids.length <= 0 || cap <= 0) continue;
-        ids.sort((a, b) => a - b);
-        let limit = Math.min(cap, ids.length);
-        if (limit <= 0) continue;
-
-        // Rotate grant order each tick so lower IDs don't permanently monopolize slots.
-        let rotation = Math.max(0, Math.floor(Number(gameTime) || 0)) % ids.length;
-        let allowed = pathfindAllowedUnitIdSetsByPlayer[pid];
-        for (let i = 0; i < limit; i++) {
-            allowed.add(ids[(rotation + i) % ids.length]);
-        }
     }
 }
 
@@ -105,25 +74,26 @@ function _getPlayerAstarIterationBudgetRemaining(owner) {
 
 function _canUsePathfindRequestBudget(owner, requester = null) {
     let pid = _normalizeOwnerId(owner);
-    if (pid < 0) return pathfindBudget < MAX_PATHS_PER_TICK;
-
-    if (pathfindBudgetByPlayer[pid] >= MAX_PATHS_PER_TICK) return false;
+    if (pid < 0) {
+        if (isMultiplayer && gameStarted) return true;
+        return pathfindBudget < MAX_PATHS_PER_TICK;
+    }
     let requesterId = _getRequesterUnitId(requester);
-    if (!Number.isFinite(requesterId)) return true;
+    if (!Number.isFinite(requesterId)) {
+        if (isMultiplayer && gameStarted) return true;
+        return pathfindBudgetByPlayer[pid] < MAX_PATHS_PER_TICK;
+    }
 
     _ensurePathfindRequesterBudgetArrays();
     let consumed = pathfindConsumedUnitIdSetsByPlayer[pid];
     if (consumed && consumed.has(requesterId)) return false;
-
-    let allowed = pathfindAllowedUnitIdSetsByPlayer[pid];
-    if (!allowed || allowed.size <= 0) return true;
-    return allowed.has(requesterId);
+    return true;
 }
 
 function _consumePathfindRequestBudget(owner, requester = null) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0) {
-        pathfindBudget++;
+        if (!(isMultiplayer && gameStarted)) pathfindBudget++;
         return;
     }
     let requesterId = _getRequesterUnitId(requester);
@@ -133,7 +103,9 @@ function _consumePathfindRequestBudget(owner, requester = null) {
         if (consumed && consumed.has(requesterId)) return;
         if (consumed) consumed.add(requesterId);
     }
-    pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
+    if (!(isMultiplayer && gameStarted)) {
+        pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
+    }
 }
 
 function _consumeAstarNodeBudget(owner, count = 1, unit = null, sourceTag = null) {
