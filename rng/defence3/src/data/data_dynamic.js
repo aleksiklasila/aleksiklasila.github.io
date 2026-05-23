@@ -1089,8 +1089,13 @@ function resolveTowerPreferredTargetVisual(tower) {
     if (!spec) return null;
     if (spec.type === 'unit') {
         let u = units.find(x => x.id === spec.id && !x.dead);
+        if (u) {
+            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+            if (!isGameplayTargetVisibleToPlayer(tower.owner, ugx, ugy)) return null;
+        }
         return u ? { x: u.x, y: u.y, locked: true } : null;
     }
+    if (!isGameplayTargetVisibleToPlayer(tower.owner, spec.gx, spec.gy)) return null;
     if (spec.type === 'tower') {
         let t = getTowerAtTile(spec.gx, spec.gy);
         if (!(t && t.energy > 0)) t = null;
@@ -1119,9 +1124,14 @@ function getTowerPreferredTargetDisplay(tower) {
     if (!spec) return 'None';
     if (spec.type === 'unit') {
         let u = units.find(x => x.id === spec.id && !x.dead);
+        if (u) {
+            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
+            if (!isGameplayTargetVisibleToPlayer(tower.owner, ugx, ugy)) return 'None';
+        }
         if (u) return `Unit ${u.id} (${Math.floor(u.x / TILE)},${Math.floor(u.y / TILE)})`;
         return `Unit ${spec.id}`;
     }
+    if (!isGameplayTargetVisibleToPlayer(tower.owner, spec.gx, spec.gy)) return 'None';
     let label = spec.type === 'tower' ? 'Tower' : spec.type === 'barrack' ? 'Barrack' : spec.type === 'spawner' ? 'Spawner' : 'Item';
     return `${label} (${spec.gx},${spec.gy})`;
 }
@@ -3827,6 +3837,8 @@ function applyUnitLevelScaling(unit, level) {
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.basePreComputed = unit.preComputedBase;
     unit.preComputed = unit.preComputedEffective;
+    let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
+    unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = unit.preComputedBase.maxEnergy;
     unit.energy = Math.max(1, Math.min(unit.preComputedBase.maxEnergy, Math.floor(prevEnergyAbs)));
 
@@ -3843,6 +3855,8 @@ function applyUnitEffectiveScaling(unit, effectiveLevel) {
 
     unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
     unit.preComputed = unit.preComputedEffective;
+    let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
+    unit.isFlying = !!unitDef.isFlying;
     unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;
     if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
     unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
