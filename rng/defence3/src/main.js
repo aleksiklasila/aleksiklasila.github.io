@@ -557,6 +557,13 @@ function initInput() {
 
     function _resolveSpawnerRallyPointForClick(spawner, worldX, worldY, clickedEnemyUnit = null) {
         if (!spawner) return { x: worldX, y: worldY, targetUnitId: null };
+
+        let clickGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(worldX / TILE)));
+        let clickGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(worldY / TILE)));
+        if (!isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy)) {
+            return { x: worldX, y: worldY, targetUnitId: null };
+        }
+
         if (clickedEnemyUnit && spawner.type === 'barrack') {
             return { x: clickedEnemyUnit.x, y: clickedEnemyUnit.y, targetUnitId: clickedEnemyUnit.id };
         }
@@ -679,7 +686,7 @@ function initInput() {
             for (let u of units) {
                 if (u.owner === localPlayerId || u.dead) continue;
                 let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-                if (!isTileVisible(ugx, ugy)) continue;
+                if (!isGameplayTargetVisibleToPlayer(localPlayerId, ugx, ugy)) continue;
                 out.push({
                     kind: 'unit',
                     ref: u,
@@ -693,21 +700,21 @@ function initInput() {
         }
         for (let t of towers) {
             if (t.owner === localPlayerId || t.energy <= 0) continue;
-            if (!isTileVisible(t.gx, t.gy)) continue;
+            if (!isGameplayTargetVisibleToPlayer(localPlayerId, t.gx, t.gy)) continue;
             out.push({ kind: 'tower', ref: t, x: t.x, y: t.y, hitShape: { kind: 'rect', hw: 15, hh: 15 }, hitRadius: 20, hitZ: 20 });
         }
         for (let b of barracks) {
             if (b.owner === localPlayerId || b.energy <= 0) continue;
-            if (!isTileVisible(b.gx, b.gy)) continue;
+            if (!isGameplayTargetVisibleToPlayer(localPlayerId, b.gx, b.gy)) continue;
             out.push({ kind: 'barrack', ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         for (let s of collectorSpawners) {
             if (s.owner === localPlayerId || s.energy <= 0) continue;
-            if (!isTileVisible(s.gx, s.gy)) continue;
+            if (!isGameplayTargetVisibleToPlayer(localPlayerId, s.gx, s.gy)) continue;
             out.push({ kind: 'spawner', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let clickGx = Math.floor(worldX / TILE), clickGy = Math.floor(worldY / TILE);
-        if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isTileVisible(clickGx, clickGy)) {
+        if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy)) {
             let cell = grid[clickGy][clickGx];
             if (cell.item && cell.item.energy > 0 && cell.owner !== localPlayerId) {
                 out.push({
@@ -1131,7 +1138,10 @@ function initInput() {
             if (localDefeated) return;
             if (selectedBuildItem) { selectedBuildItem = null; requestBuildMenuRefresh(); stopBuildPlacementDrag(); return; }
             let isCtrlMulti = isCtrlMultiCommand(e);
-            let clickedEnemyUnit = findEnemyUnitNear(world.x, world.y);
+            let clickGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(world.x / TILE)));
+            let clickGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(world.y / TILE)));
+            let clickTileVisible = isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy);
+            let clickedEnemyUnit = clickTileVisible ? findEnemyUnitNear(world.x, world.y) : null;
             let issuedStructureCommand = false;
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
@@ -1184,6 +1194,15 @@ function initInput() {
                 updateInfoPanel();
                 return;
             }
+
+            // Non-visible tiles must always use direct location commands (no target snapping).
+            if (!clickTileVisible && activeUnits.length > 0) {
+                let allIds = activeUnits.map(u => u.id);
+                applyUnitCommandTargets(allIds, world.x, world.y, isCtrlMulti, 'move');
+                updateInfoPanel();
+                return;
+            }
+
             // Right-click own barrack to queue unit (only if no workers or combat units selected)
             if (selSpawners.length === 0 && activeUnits.length === 0) {
                 let ownBarrackHits = [];
