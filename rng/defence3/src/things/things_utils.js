@@ -1009,7 +1009,11 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
 }
 
 function destroyBuilding(building) {
-    if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower')) {
+    let buildingType = String((building && building.type) || '');
+    let typeDef = BASE_CARD_TYPES[buildingType] || null;
+    let isWallTargetType = !!(typeDef && typeDef.target === 'wall');
+
+    if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower') || isWallTargetType) {
         let idx = towers.indexOf(building);
         if (idx !== -1) towers.splice(idx, 1);
         clearTileEntity(building.gx, building.gy, building);
@@ -1024,6 +1028,7 @@ function destroyBuilding(building) {
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
+        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
         recalculateAdjacency();
     } else if (building instanceof CollectorSpawner || building instanceof AstarSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
         let idx = collectorSpawners.indexOf(building);
@@ -1031,11 +1036,13 @@ function destroyBuilding(building) {
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
+        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
     } else if (building.type) {
         // Floor item
         clearTileEntity(building.gx, building.gy, building);
         grid[building.gy][building.gx].item = null;
         grid[building.gy][building.gx].owner = -1;
+        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
     }
     createExplosion(building.x, building.y, '#f44', 10);
     playSound('building_destroyed', building.x, building.y);
