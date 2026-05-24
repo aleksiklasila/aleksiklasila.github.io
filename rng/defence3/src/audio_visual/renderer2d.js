@@ -897,7 +897,11 @@ function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false,
 }
 
 function _markCombinedBgTileDirty(gx, gy, pad = 0, terrainChanged = false) {
-    _markCombinedBgRectDirty(gx - pad, gy - pad, gx + pad, gy + pad, false, terrainChanged);
+    let safePad = Math.max(0, Math.floor(Number(pad) || 0));
+    // Terrain edits draw wall/floor fills and strokes that can bleed one tile over,
+    // so expand dirty rect to avoid leaving thin stale edge fragments.
+    if (terrainChanged) safePad = Math.max(safePad, 1);
+    _markCombinedBgRectDirty(gx - safePad, gy - safePad, gx + safePad, gy + safePad, false, terrainChanged);
 }
 
 function _markCombinedBgAreaDirty(areaId, pad = 1) {
