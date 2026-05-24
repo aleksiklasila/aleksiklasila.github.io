@@ -1053,15 +1053,17 @@ function _isTowerPreferredTargetVisibleToOwner(tower, target) {
     return isGameplayTargetVisibleToPlayer(tower.owner, gx, gy);
 }
 
-function _isTowerPreferredTargetWithinRange(tower, target, rangePx) {
+function _isTowerPreferredTargetWithinRange(tower, target, rangeArea) {
     if (!tower || !target) return false;
-    let r = Math.max(0, Number(rangePx) || 0);
-    let dx = (Number(target.x) || 0) - (Number(tower.x) || 0);
-    let dy = (Number(target.y) || 0) - (Number(tower.y) || 0);
-    return (dx * dx + dy * dy) <= (r * r);
+    let maxAreaDistance = Math.max(0, Math.floor(Number(rangeArea) || 0));
+    let sourceAreaId = getAreaIdAtWorld(tower.x, tower.y);
+    let targetAreaId = getAreaIdAtWorld(target.x, target.y);
+    if (sourceAreaId < 0 || targetAreaId < 0) return false;
+    let dist = getAreaDistance(sourceAreaId, targetAreaId);
+    return dist >= 0 && dist <= maxAreaDistance;
 }
 
-function getTowerPreferredTargetInRange(tower, rangePx) {
+function getTowerPreferredTargetInRange(tower, rangeArea) {
     if (!tower) return null;
     let pt = tower.preferredTarget;
     if (!pt || pt.dead || (pt.energy !== undefined && pt.energy <= 0) || (pt.owner !== undefined && pt.owner === tower.owner)) {
@@ -1077,7 +1079,7 @@ function getTowerPreferredTargetInRange(tower, rangePx) {
         tower.preferredTargetSpec = null;
         return null;
     }
-    if (!_isTowerPreferredTargetWithinRange(tower, pt, rangePx)) return null;
+    if (!_isTowerPreferredTargetWithinRange(tower, pt, rangeArea)) return null;
     tower.preferredTarget = pt;
     if (!tower.preferredTargetSpec) tower.preferredTargetSpec = getTowerTargetSpecFromEntity(pt);
     return pt;

@@ -40,6 +40,20 @@ function _quantizeUnitWorldCoord(value) {
     return Math.round(n * UNIT_POSITION_QUANTIZATION) / UNIT_POSITION_QUANTIZATION;
 }
 
+function _getUnitAttackRangeArea(unit) {
+    return Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
+}
+
+function _isTargetWithinUnitAttackAreaRange(unit, target) {
+    if (!unit || !target) return false;
+    let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
+    let sourceAreaId = getAreaIdAtWorld(unit.x, unit.y);
+    let targetAreaId = getAreaIdAtWorld(target.x, target.y);
+    if (sourceAreaId < 0 || targetAreaId < 0) return false;
+    let dist = getAreaDistance(sourceAreaId, targetAreaId);
+    return dist >= 0 && dist <= Math.floor(rangeArea);
+}
+
 class Unit {
     constructor(unitType, owner, x, y) {
         this.id = nextUnitId++;
@@ -710,7 +724,7 @@ class Unit {
                 this._forcedTargetLastSeenY = this.targetUnit.y;
             }
             let d = Math.hypot(this.targetUnit.x - this.x, this.targetUnit.y - this.y);
-            if (d <= this.preComputed.attackRange + this.r + this.targetUnit.r) {
+            if (_isTargetWithinUnitAttackAreaRange(this, this.targetUnit)) {
                 this.attackTarget = this.targetUnit;
                 this.path = null;
                 // In range - attack
@@ -754,7 +768,7 @@ class Unit {
             let tb = this.targetBuilding;
             if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
             let d = Math.hypot(tb.x - this.x, tb.y - this.y);
-            if (d <= this.preComputed.attackRange + this.r + 16) {
+            if (_isTargetWithinUnitAttackAreaRange(this, tb)) {
                 this.attackTarget = tb;
                 this.path = null;
                 if (this.attackTimer <= 0) {
@@ -1200,7 +1214,7 @@ function canUnitAutoRetaliate(unit) {
         !unit.workerState &&
         (unit.commandState === CMD_IDLE || unit.commandState === CMD_HOLDING) &&
         Number(unit.preComputed && unit.preComputed.attackDamage) > 0 &&
-        Number(unit.preComputed && unit.preComputed.attackRange) > 0
+        Number(unit.preComputed && unit.preComputed.attackRangeArea) > 0
     );
 }
 
