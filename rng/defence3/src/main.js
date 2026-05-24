@@ -1161,21 +1161,8 @@ function initInput() {
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
             if (selSpawners.length > 0) {
-                if (!(isCtrlMulti && multiRallyPoints.length > 0)) multiRallyPoints = [];
-                for (let i = 0; i < selSpawners.length; i++) {
-                    let b = selSpawners[i];
-                    let rp = (isCtrlMulti && multiRallyPoints.length > 0)
-                        ? multiRallyPoints[i % multiRallyPoints.length]
-                        : _resolveSpawnerRallyPointForClick(b, world.x, world.y, clickedEnemyUnit);
-                    queueAction({ action: 'setRally', gx: b.gx, gy: b.gy, targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
-                    b.rallyX = rp.x;
-                    b.rallyY = rp.y;
-                    b.rallyTargetUnitId = rp.targetUnitId || null;
-                }
-                if (isCtrlMulti) {
-                    let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
-                    multiRallyPoints.push({ x: seed.x, y: seed.y, targetUnitId: seed.targetUnitId || null });
-                }
+                let seed = _resolveSpawnerRallyPointForClick(selSpawners[0], world.x, world.y, clickedEnemyUnit);
+                applyRallyTargets(selSpawners, seed.x, seed.y, isCtrlMulti, seed.targetUnitId || null);
                 issuedStructureCommand = true;
             } else if (!isCtrlMulti) {
                 multiRallyPoints = [];
