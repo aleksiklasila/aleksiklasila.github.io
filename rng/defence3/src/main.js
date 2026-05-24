@@ -3097,13 +3097,6 @@ function startGame() {
         let pid = teams[i];
         let pos = spawns[i] || spawns[0];
         teamSpawnPos[pid] = pos;
-
-        let builderSpawner = new BuilderSpawner(pos.gx, pos.gy, pid);
-        completeStarterBuilding(builderSpawner, 'builder_spawner', pid, 1);
-        collectorSpawners.push(builderSpawner);
-        grid[pos.gy][pos.gx].item = builderSpawner;
-        grid[pos.gy][pos.gx].owner = pid;
-        setTileEntity(pos.gx, pos.gy, 'builder_spawner', builderSpawner);
     }
 
     for (let pid of teams) {
