@@ -1411,11 +1411,7 @@ function getUnitRenderActionRangeArea(u) {
     if (u.workerType === 'collector' || u.workerType === 'astar_collector' || u.workerType === 'salvager' || u.workerType === 'builder' || u.workerType === 'healer' || u.workerType === 'researcher') {
         return (24 / TILE) / AREA_UNIT_TILE_EQUIVALENT;
     }
-    let atkRange = Math.max(0, Number(u.preComputed && u.preComputed.attackRangeArea) || 0);
-    if (atkRange <= 0 && Number.isFinite(u.preComputed && u.preComputed.attackRange)) {
-        atkRange = ((Number(u.preComputed.attackRange) || 0) / TILE) / AREA_UNIT_TILE_EQUIVALENT;
-    }
-    return Math.max(0, atkRange);
+    return Math.max(0, Number(u.preComputed && u.preComputed.attackRangeArea) || 0);
 }
 
 function getUnitRenderActionRangePx(u) {
