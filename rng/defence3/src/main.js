@@ -209,6 +209,12 @@ function gameTick() {
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();
     let upKeepTickBreakdown = Array.from({ length: players.length }, () => _createEmptyUpKeepBreakdown());
+    let upKeepBuildingSeen = new Set();
+    let accumulateBuildingUpKeep = (thing) => {
+        if (!thing || upKeepBuildingSeen.has(thing)) return;
+        upKeepBuildingSeen.add(thing);
+        _accumulateUpKeepForThing(upKeepTickBreakdown, thing, false);
+    };
 
     let floorChanged = false;
     for (let y = 0; y < GRID_H; y++) {
@@ -216,7 +222,7 @@ function gameTick() {
             let cell = grid[y][x];
             let item = cell.item;
             if (!item) continue;
-            _accumulateUpKeepForThing(upKeepTickBreakdown, item, false);
+            accumulateBuildingUpKeep(item);
             if (tickStatusEffects(item)) {
                 clearTileEntity(item.gx, item.gy, item);
                 cell.item = null;
@@ -302,6 +308,9 @@ function gameTick() {
     for (let i = towers.length - 1; i >= 0; i--) {
         if (towers[i].energy <= 0) destroyBuilding(towers[i]);
     }
+    for (let i = 0; i < towers.length; i++) {
+        accumulateBuildingUpKeep(towers[i]);
+    }
 
     // Projectiles
     for (let i = projectiles.length - 1; i >= 0; i--) { if (!projectiles[i].update()) projectiles.splice(i, 1); }
@@ -356,6 +365,9 @@ function gameTick() {
     for (let i = barracks.length - 1; i >= 0; i--) {
         if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
     }
+    for (let i = 0; i < barracks.length; i++) {
+        accumulateBuildingUpKeep(barracks[i]);
+    }
 
     // Collector/Salvager spawners (barrack-like) - use deterministic shuffle
     let spawnerUpdateOrder = _buildDeterministicBuildingUpdateOrderForTick(collectorSpawners, 30);
@@ -366,6 +378,9 @@ function gameTick() {
     }
     for (let i = collectorSpawners.length - 1; i >= 0; i--) {
         if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
+    }
+    for (let i = 0; i < collectorSpawners.length; i++) {
+        accumulateBuildingUpKeep(collectorSpawners[i]);
     }
 
     processGlobalSpawnerQueue();
