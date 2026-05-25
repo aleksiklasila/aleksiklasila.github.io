@@ -482,6 +482,7 @@ function updateWorkerAI(u) {
             } else if (gameTime % 20 === 0) {
                 // Last-resort slow trickle when no full material transfer is possible.
                 addPlayerResource(owner, 'energy', -1);
+                recordEnergyDelta(owner, 'builder', -1);
                 buildStep = 1;
             }
 

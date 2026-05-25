@@ -588,18 +588,40 @@ function buildInfoPanelEnergyDeltaHtml(owner) {
         html += row('research', 'research', { thumbKey: 'researcher_unit', isUnit: true }, '', 'researcher_unit', 'units');
         html += row('builder', 'builder', { thumbKey: 'builder_unit', isUnit: true }, '', 'builder_unit', 'units');
         html += row('healer', 'healer', { thumbKey: 'healer_unit', isUnit: true }, '', 'healer_unit', 'units');
+
+        // Keep worker rows explicit, but also show any remaining unit upkeep types
+        // so the rows reconcile with the total panel value.
+        let explicitWorkerTypes = new Set(['collector', 'salvager_unit', 'researcher_unit', 'builder_unit', 'healer_unit']);
+        let otherUnitKeys = Object.keys(upkeepUnitTypes)
+            .filter(k => (Number(upkeepUnitTypes[k]) || 0) > 0 && !explicitWorkerTypes.has(k))
+            .sort((a, b) => _prettyUnitTypeLabel(a).localeCompare(_prettyUnitTypeLabel(b)));
+        if (otherUnitKeys.length > 0) {
+            html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+            for (let unitType of otherUnitKeys) {
+                let unitUpkeep = Math.max(0, Number(upkeepUnitTypes[unitType]) || 0);
+                let unitValue = -unitUpkeep;
+                let sec = getEnergyDeltaWindowSeconds(`unit_${unitType}`);
+                let thingHtml = _buildInfoPanelThingSelectableVisualHtml('units', unitType, { thumbKey: unitType, isUnit: true }, 40, `Select all ${unitType}`);
+                html += `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
+                    + `<button class="info-energy-delta-window-btn" data-metric="unit_${unitType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
+                    + thingHtml
+                    + `<span class="info-value" style="color:${color(unitValue)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmt(unitValue)} ⚡/ s</span>`
+                    + `</div>`;
+            }
+        }
         
         let buildingKeys = Object.keys(upkeepBuildingTypes).filter(k => (Number(upkeepBuildingTypes[k]) || 0) > 0).sort((a, b) => _prettyBuildingTypeLabel(a).localeCompare(_prettyBuildingTypeLabel(b)));
         if (buildingKeys.length > 0) {
             html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
             for (let buildingType of buildingKeys) {
                 let buildingUpkeep = Math.max(0, Number(upkeepBuildingTypes[buildingType]) || 0);
+                let buildingValue = -buildingUpkeep;
                 let sec = getEnergyDeltaWindowSeconds('total');
                 let thingHtml = _buildInfoPanelThingSelectableVisualHtml('buildings', buildingType, { thumbKey: buildingType, isUnit: false }, 40, `Select all ${buildingType}`);
                 html += `<div class="info-row" style="margin:0;gap:6px;align-items:center">`
                     + `<button class="info-energy-delta-window-btn" data-metric="building_${buildingType}" title="Window: ${sec}s (click to cycle 1s/10s/30s/60s)" style="cursor:pointer;background:#1b1b1b;color:#9dd;border:1px solid #3b4a52;border-radius:3px;font-size:10px;line-height:1;padding:1px 5px;min-width:34px;text-align:center">${sec}s</button>`
                     + thingHtml
-                    + `<span class="info-value" style="color:#f88;flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">-${fmt(buildingUpkeep)} ⚡/ s</span>`
+                    + `<span class="info-value" style="color:${color(buildingValue)};flex:0 0 84px;min-width:84px;padding-left:4px;text-align:right;font-variant-numeric:tabular-nums">${fmt(buildingValue)} ⚡/ s</span>`
                     + `</div>`;
             }
         }
