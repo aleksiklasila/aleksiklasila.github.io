@@ -3596,11 +3596,87 @@ function getPlayerResearchQueueTotalLength(playerId) {
     return (task ? 1 : 0) + queue.length;
 }
 
+function _researchTasksEquivalent(a, b) {
+    if (!a || !b) return false;
+    return String(a.kind || '') === String(b.kind || '')
+        && String(a.key || '') === String(b.key || '')
+        && String(a.statKey || '') === String(b.statKey || '')
+        && Math.max(0, Math.floor(Number(a.fromLevel) || 0)) === Math.max(0, Math.floor(Number(b.fromLevel) || 0))
+        && Math.max(0, Math.floor(Number(a.toLevel) || 0)) === Math.max(0, Math.floor(Number(b.toLevel) || 0));
+}
+
+function _normalizeResearchTaskForOwner(task, owner) {
+    if (!task || typeof task !== 'object') return null;
+    let kind = String(task.kind || '');
+    let key = String(task.key || '');
+    let statKey = String(task.statKey || '');
+    if (!kind || !key || !statKey) return null;
+    if (!getResearchStatEntry(kind, key, statKey)) return null;
+
+    let normalizedOwner = Math.max(0, Math.floor(Number(owner) || 0));
+    let capLevel = (kind === 'building' && statKey === 'maxLevel')
+        ? Math.max(0, MAX_THING_LEVEL - 1)
+        : MAX_RESEARCH_LEVEL;
+
+    let fromLevel = Math.max(0, Math.floor(Number(task.fromLevel) || 0));
+    let toLevel = Math.max(fromLevel, Math.floor(Number(task.toLevel) || (fromLevel + 1)));
+    if (fromLevel >= capLevel) {
+        toLevel = fromLevel;
+    } else {
+        toLevel = Math.min(capLevel, Math.max(fromLevel + 1, toLevel));
+    }
+
+    let workRequired = Number(task.workRequired);
+    if (!Number.isFinite(workRequired) || workRequired < 0) {
+        workRequired = fromLevel >= capLevel ? 0 : getResearchWork(kind, key, statKey, fromLevel);
+    }
+    workRequired = Math.max(0, Number(workRequired) || 0);
+
+    let cost = Number(task.cost);
+    if (!Number.isFinite(cost) || cost < 0) {
+        cost = fromLevel >= capLevel ? 0 : getResearchCost(kind, key, statKey, fromLevel);
+    }
+    cost = Math.max(0, Number(cost) || 0);
+
+    let workDone = Math.max(0, Number(task.workDone) || 0);
+    if (workRequired > 0) workDone = Math.min(workRequired, workDone);
+    else workDone = 0;
+
+    task.owner = normalizedOwner;
+    task.kind = kind;
+    task.key = key;
+    task.statKey = statKey;
+    task.fromLevel = fromLevel;
+    task.toLevel = toLevel;
+    task.cost = cost;
+    task.workRequired = workRequired;
+    task.workDone = workDone;
+    return task;
+}
+
 function tryAdvancePlayerResearchTask(playerId) {
     let p = ensurePlayerResearchQueueState(playerId);
-    if (!p.researchTask && p.researchQueue.length > 0) {
-        p.researchTask = p.researchQueue.shift();
-        if (p.researchTask) p.researchTask.workDone = Math.max(0, p.researchTask.workDone || 0);
+    while (true) {
+        if (p.researchTask) {
+            p.researchTask = _normalizeResearchTaskForOwner(p.researchTask, playerId);
+        }
+
+        // Safety net: never let a completed/invalid active task stall the queue at 100%.
+        if (p.researchTask) {
+            let required = Math.max(0, Number(p.researchTask.workRequired) || 0);
+            let done = Math.max(0, Number(p.researchTask.workDone) || 0);
+            if (!(required > 0) || done >= required) {
+                applyResearchCompletion(playerId, p.researchTask);
+                p.researchTask = null;
+                continue;
+            }
+            break;
+        }
+
+        if (!Array.isArray(p.researchQueue) || p.researchQueue.length <= 0) break;
+        let nextTask = _normalizeResearchTaskForOwner(p.researchQueue.shift(), playerId);
+        if (!nextTask) continue;
+        p.researchTask = nextTask;
     }
     return p.researchTask;
 }
@@ -3789,8 +3865,20 @@ function applyResearchCompletion(owner, task) {
 function completeActiveResearchTaskForPlayer(owner, completedTask) {
     if (!Number.isFinite(owner) || !completedTask) return;
     let p = ensurePlayerResearchQueueState(owner);
-    if (p.researchTask !== completedTask) return;
-    applyResearchCompletion(owner, completedTask);
+    p.researchTask = _normalizeResearchTaskForOwner(p.researchTask, owner);
+    if (!p.researchTask) {
+        tryAdvancePlayerResearchTask(owner);
+        return;
+    }
+
+    let isMatchingTask = (p.researchTask === completedTask) || _researchTasksEquivalent(p.researchTask, completedTask);
+    if (!isMatchingTask) {
+        let required = Math.max(0, Number(p.researchTask.workRequired) || 0);
+        let done = Math.max(0, Number(p.researchTask.workDone) || 0);
+        if (required > 0 && done < required) return;
+    }
+
+    applyResearchCompletion(owner, p.researchTask);
     p.researchTask = null;
     tryAdvancePlayerResearchTask(owner);
 }

@@ -90,8 +90,11 @@ function _fixedToUpKeep(value) {
 
 function _addUpKeepFixed(row, fixedAmount, bucket) {
     if (!row || !(fixedAmount > 0)) return;
-    row._totalFixed = (Math.floor(Number(row._totalFixed) || 0) + fixedAmount);
-    row.total = _fixedToUpKeep(row._totalFixed);
+    if (!bucket) {
+        row._totalFixed = (Math.floor(Number(row._totalFixed) || 0) + fixedAmount);
+        row.total = _fixedToUpKeep(row._totalFixed);
+        return;
+    }
 
     if (bucket === 'units') {
         row._unitsFixed = (Math.floor(Number(row._unitsFixed) || 0) + fixedAmount);
