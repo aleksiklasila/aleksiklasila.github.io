@@ -512,9 +512,9 @@
         const TICK_MS = 1000 / TICK_RATE;
 
         const WEAPON_REGISTRY = {
-            'pistol': { name: "Pistol", type: 'projectile', damage: 35, range: 100, fireRateMs: 250, speed: 80, maxAmmo: 60 },
+            'pistol': { name: "Sludge Blaster", type: 'projectile', damage: 14, range: 100, fireRateMs: 120, speed: 110, maxAmmo: 60, pellets: 2, spread: 0.08, color: 0x66ff8c, glow: 0x38ff8b },
             'knife': { name: "Combat Knife", type: 'melee', damage: 45, range: 2.5, fireRateMs: 500, maxAmmo: -1 },
-            'shotgun': { name: "Shotgun", type: 'projectile', damage: 20, range: 50, fireRateMs: 800, speed: 70, maxAmmo: 24, pellets: 6, spread: 0.15 }
+            'shotgun': { name: "Sludge Shotgun", type: 'projectile', damage: 10, range: 50, fireRateMs: 350, speed: 95, maxAmmo: 24, pellets: 10, spread: 0.26, color: 0x8dffb5, glow: 0x41ff91 }
         };
 
         // New upgrade system for radial shop selection
@@ -634,6 +634,7 @@
         let mapMesh = null; // Collision mesh for bullets
         let mapGroup = null; // ThreeJS Group for map
         let mapBodies = []; // Physics bodies for map
+        let localGun = null;
         // Wave system removed - using infinite spawn mode
 
         // Assets
@@ -1293,11 +1294,22 @@
                 pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints]);
             }
 
-            // Z: [id, x, y, z, yaw, level] (now includes Y for vertical navigation and level for visual indicators)
+            // Z: [id, x, y, z, yaw, level, hp, maxHp, sizeScale]
+            // Include health and scale data so clients can reproduce zombie visuals correctly.
             const zData = [];
             for (let zid in zombies) {
                 const z = zombies[zid];
-                zData.push([zid, parseFloat(z.x.toFixed(2)), parseFloat(z.y.toFixed(2)), parseFloat(z.z.toFixed(2)), parseFloat(z.yaw.toFixed(2)), z.level || 0]);
+                zData.push([
+                    zid,
+                    parseFloat(z.x.toFixed(2)),
+                    parseFloat(z.y.toFixed(2)),
+                    parseFloat(z.z.toFixed(2)),
+                    parseFloat(z.yaw.toFixed(2)),
+                    z.level || 0,
+                    Math.ceil(z.hp || 0),
+                    Math.ceil(z.maxHp || 1),
+                    parseFloat((z.sizeScale || 1).toFixed(2))
+                ]);
             }
 
             // B: [x, y, z] (Bullets are simple visual particles mostly)
@@ -1611,19 +1623,29 @@
                     }
                 });
 
-                // Interpolate Zombies (now with Y coordinate and level)
+                // Interpolate Zombies (now with Y coordinate, level, health, and scale)
                 const currentZombieIds = [];
                 next[2].forEach(nz => {
                     currentZombieIds.push(nz[0]);
                     const pz = prev[2].find(z => z[0] === nz[0]);
                     if (!zombies[nz[0]]) zombies[nz[0]] = { id: nz[0] };
                     if (pz) {
-                        // nz format: [id, x, y, z, yaw, level]
+                        // nz format: [id, x, y, z, yaw, level, hp, maxHp, sizeScale]
+                        const prevHp = Number.isFinite(pz[6]) ? pz[6] : (Number.isFinite(nz[6]) ? nz[6] : 0);
+                        const nextHp = Number.isFinite(nz[6]) ? nz[6] : prevHp;
+                        const prevMaxHp = Number.isFinite(pz[7]) ? pz[7] : (Number.isFinite(nz[7]) ? nz[7] : 1);
+                        const nextMaxHp = Number.isFinite(nz[7]) ? nz[7] : prevMaxHp;
+                        const prevScale = Number.isFinite(pz[8]) ? pz[8] : (Number.isFinite(nz[8]) ? nz[8] : 1);
+                        const nextScale = Number.isFinite(nz[8]) ? nz[8] : prevScale;
+
                         zombies[nz[0]].x = lerp(pz[1], nz[1], clampedRatio);
                         zombies[nz[0]].y = lerp(pz[2], nz[2], clampedRatio);
                         zombies[nz[0]].z = lerp(pz[3], nz[3], clampedRatio);
                         zombies[nz[0]].yaw = nz[4];
                         zombies[nz[0]].level = nz[5] || 0;
+                        zombies[nz[0]].hp = Math.round(lerp(prevHp, nextHp, clampedRatio));
+                        zombies[nz[0]].maxHp = Math.round(lerp(prevMaxHp, nextMaxHp, clampedRatio));
+                        zombies[nz[0]].sizeScale = lerp(prevScale, nextScale, clampedRatio);
                     } else {
                         // New zombie, snap
                         zombies[nz[0]].x = nz[1];
@@ -1631,6 +1653,9 @@
                         zombies[nz[0]].z = nz[3];
                         zombies[nz[0]].yaw = nz[4];
                         zombies[nz[0]].level = nz[5] || 0;
+                        zombies[nz[0]].hp = nz[6] || 0;
+                        zombies[nz[0]].maxHp = nz[7] || 1;
+                        zombies[nz[0]].sizeScale = nz[8] || 1;
                     }
                 });
 
@@ -1667,6 +1692,7 @@
 
             if (!isHost) clientInterpolate();
 
+            updateBlobAnimations(dt);
             updateEntityAnimations(dt);
             // Update Shop UI (check for points and auto-show)
             updateShopUI();
@@ -1749,8 +1775,13 @@
                 if (meshes[id].isObject3D) {
                     // Smooth visual interpolation?
                     // For now, snap
-                    meshes[id].position.set(p.x, p.y, p.z); // GLTF origin usually at feet
+                    const bobOffset = meshes[id].userData.isBlob ? (meshes[id].userData.visualOffsetY || 0) : 0;
+                    meshes[id].position.set(p.x, p.y + bobOffset, p.z); // GLTF origin usually at feet
                     meshes[id].rotation.y = p.yaw + Math.PI; // Adjust GLTF facing (often +Z, we need -Z?)
+                    if (meshes[id].userData.isBlob) {
+                        const healthRatio = p.maxHp ? Math.max(0.75, Math.min(1, p.hp / p.maxHp)) : 1;
+                        meshes[id].scale.setScalar((meshes[id].userData.baseScale || 1) * healthRatio);
+                    }
 
                     // Animation State
                     // Calc velocity
@@ -1817,17 +1848,19 @@
                 // Skip rendering if mesh is still loading
                 if (!meshes[zid] || !meshes[zid].isObject3D) continue;
 
-                meshes[zid].position.set(z.x, z.y, z.z);
+                const bobOffset = meshes[zid].userData.isBlob ? (meshes[zid].userData.visualOffsetY || 0) : 0;
+                meshes[zid].position.set(z.x, z.y + bobOffset, z.z);
                 meshes[zid].rotation.y = z.yaw + Math.PI;
+                if (meshes[zid].userData.isBlob) {
+                    const healthRatio = z.maxHp ? Math.max(0.65, Math.min(1, z.hp / z.maxHp)) : 1;
+                    const scaleFactor = Number.isFinite(z.sizeScale) ? z.sizeScale : 1;
+                    const sizeScale = scaleFactor * (0.85 + healthRatio * 0.2);
+                    meshes[zid].scale.setScalar(sizeScale);
+                }
 
                 // Update level color if level changed
                 if (meshes[zid].userData.currentLevel !== z.level) {
                     applyZombieLevelColor(zid, z.level || 0);
-                }
-
-                // Update level label position if exists
-                if (meshes[zid].userData.levelLabel) {
-                    meshes[zid].userData.levelLabel.lookAt(camera.position);
                 }
 
                 // Calc velocity for anim
@@ -1844,12 +1877,39 @@
             // Render Bullets
             while (bulletMeshes.length > bullets.length) scene.remove(bulletMeshes.pop());
             while (bulletMeshes.length < bullets.length) {
-                const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+                const b = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.28, 14, 14),
+                    new THREE.MeshStandardMaterial({ color: 0x5ef45f, emissive: 0x24a93d, emissiveIntensity: 2.2, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.96, depthWrite: false })
+                );
+                b.frustumCulled = false;
                 scene.add(b);
                 bulletMeshes.push(b);
             }
             for (let i = 0; i < bullets.length; i++) {
-                bulletMeshes[i].position.set(bullets[i].x, bullets[i].y, bullets[i].z);
+                const bullet = bullets[i];
+                bulletMeshes[i].position.set(bullet.x, bullet.y, bullet.z);
+                bulletMeshes[i].scale.setScalar((bullet.size || 0.22) * (1 + Math.sin(performance.now() * 0.02 + i) * 0.14));
+                if (bulletMeshes[i].material) {
+                    bulletMeshes[i].material.color.set(bullet.color || 0x5ef45f);
+                    bulletMeshes[i].material.emissive.set(bullet.glow || 0x24a93d);
+                    bulletMeshes[i].material.opacity = 0.88 + Math.sin(performance.now() * 0.03 + i) * 0.05;
+                }
+            }
+
+            if (!isHost && players[myId] && !players[myId].dead) {
+                if (!localGun) {
+                    localGun = createStylizedGun();
+                    scene.add(localGun);
+                }
+                localGun.visible = true;
+                localGun.position.copy(camera.position);
+                localGun.quaternion.copy(camera.quaternion);
+                localGun.position.add(new THREE.Vector3(0.24, -0.18, -0.42).applyQuaternion(camera.quaternion));
+                localGun.rotation.x += 0.05;
+                localGun.rotation.y += 0.03;
+                localGun.userData.glow.material.opacity = 0.45 + Math.sin(performance.now() * 0.01) * 0.08;
+            } else if (localGun) {
+                localGun.visible = false;
             }
 
             renderer.render(scene, camera);
@@ -1873,7 +1933,139 @@
             // RAPIER.renderDebugToGraphics(world); // (if using PIXI/etc, but for Three we need manual buffer copy)
         }
 
-        // Apply level-based visual indicator to zombie mesh (label only, no tinting)
+        function createBlobVisual(type, color, scale = 1) {
+            const group = new THREE.Group();
+            group.userData.isBlob = true;
+            group.userData.bobPhase = Math.random() * Math.PI * 2;
+            group.userData.baseScale = scale;
+            group.userData.parts = [];
+
+            const makeMaterial = (baseColor) => new THREE.MeshStandardMaterial({
+                color: baseColor,
+                emissive: new THREE.Color(baseColor).multiplyScalar(0.25),
+                emissiveIntensity: 0.9,
+                roughness: 0.3,
+                metalness: 0.1,
+                transparent: false,
+                opacity: 1.0,
+                depthWrite: true,
+                depthTest: true,
+                flatShading: false
+            });
+
+            const coreRadius = (type === 'zombie' ? 1.3 : 0.7) * scale;
+            const sideRadius = (type === 'zombie' ? 0.6 : 0.35) * scale;
+            const tailRadius = (type === 'zombie' ? 0.45 : 0.26) * scale;
+
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(coreRadius, 2), makeMaterial(color));
+            core.position.set(0, 0.08 * scale, 0);
+            core.frustumCulled = false;
+            group.add(core);
+            group.userData.parts.push(core);
+            group.userData.core = core;
+
+            const left = new THREE.Mesh(new THREE.IcosahedronGeometry(sideRadius, 1), makeMaterial(color));
+            left.position.set(-0.58 * scale, -0.18 * scale, 0.12 * scale);
+            left.frustumCulled = false;
+            group.add(left);
+            group.userData.parts.push(left);
+
+            const right = new THREE.Mesh(new THREE.IcosahedronGeometry(sideRadius, 1), makeMaterial(color));
+            right.position.set(0.58 * scale, -0.16 * scale, -0.1 * scale);
+            right.frustumCulled = false;
+            group.add(right);
+            group.userData.parts.push(right);
+
+            const tail = new THREE.Mesh(new THREE.IcosahedronGeometry(tailRadius, 1), makeMaterial(color));
+            tail.position.set(0, -0.63 * scale, 0.16 * scale);
+            tail.frustumCulled = false;
+            group.add(tail);
+            group.userData.parts.push(tail);
+
+            if (type === 'player') {
+                const eye = new THREE.Mesh(new THREE.SphereGeometry(0.08 * scale, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                eye.position.set(0.12 * scale, 0.18 * scale, 0.58 * scale);
+                eye.frustumCulled = false;
+                group.add(eye);
+                group.userData.eye = eye;
+            }
+
+            if (type === 'zombie') {
+                const marker = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.16 * scale, 10, 10),
+                    new THREE.MeshBasicMaterial({ color: 0x34ff7a, transparent: true, opacity: 0.9, depthWrite: false })
+                );
+                marker.position.set(0, 0.25 * scale, 0);
+                marker.frustumCulled = false;
+                marker.renderOrder = 999;
+                group.add(marker);
+                group.userData.marker = marker;
+            }
+
+            group.frustumCulled = false;
+
+            return group;
+        }
+
+        function createStylizedGun() {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(0.18, 0.16, 0.8),
+                new THREE.MeshStandardMaterial({ color: 0x1f2a24, emissive: 0x071a0d, roughness: 0.3, metalness: 0.8 })
+            );
+            body.position.set(0, 0, -0.18);
+            group.add(body);
+
+            const grip = new THREE.Mesh(
+                new THREE.BoxGeometry(0.12, 0.3, 0.2),
+                new THREE.MeshStandardMaterial({ color: 0x14251b, roughness: 0.45, metalness: 0.9 })
+            );
+            grip.position.set(0, -0.2, -0.05);
+            group.add(grip);
+
+            const barrel = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.04, 0.05, 0.45, 12),
+                new THREE.MeshStandardMaterial({ color: 0x2f5d3d, emissive: 0x144423, roughness: 0.2, metalness: 0.4 })
+            );
+            barrel.rotation.z = Math.PI / 2;
+            barrel.position.set(0.12, 0.03, -0.5);
+            group.add(barrel);
+
+            const reservoir = new THREE.Mesh(
+                new THREE.BoxGeometry(0.11, 0.12, 0.25),
+                new THREE.MeshStandardMaterial({ color: 0x6cff8c, emissive: 0x2dff7d, emissiveIntensity: 2.2, roughness: 0.18, metalness: 0.12, transparent: true, opacity: 0.78 })
+            );
+            reservoir.position.set(0.01, 0.02, -0.12);
+            group.add(reservoir);
+
+            const glow = new THREE.Mesh(
+                new THREE.SphereGeometry(0.08, 14, 14),
+                new THREE.MeshStandardMaterial({ color: 0x6cff8c, emissive: 0x2dff7d, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.08, transparent: true, opacity: 0.72 })
+            );
+            glow.position.set(0.01, 0.02, -0.02);
+            group.add(glow);
+
+            group.userData.glow = glow;
+            group.scale.set(1.2, 1.2, 1.2);
+            return group;
+        }
+
+        function updateBlobAnimations(dt) {
+            const time = performance.now() * 0.001;
+            for (const mesh of Object.values(meshes)) {
+                if (!mesh || !mesh.isObject3D || !mesh.userData.isBlob) continue;
+                const bob = Math.sin(time * 3 + mesh.userData.bobPhase) * 0.03;
+                mesh.rotation.z = Math.sin(time * 2 + mesh.userData.bobPhase) * 0.08;
+                mesh.rotation.x = Math.sin(time * 2.4 + mesh.userData.bobPhase) * 0.05;
+                mesh.userData.parts?.forEach((part, index) => {
+                    const scale = 1 + Math.sin(time * 4 + index + mesh.userData.bobPhase) * 0.025;
+                    part.scale.setScalar(scale);
+                });
+                mesh.userData.visualOffsetY = bob * dt * 60;
+            }
+        }
+
+        // Apply level-based tinting to zombie meshes without any floating text
         function applyZombieLevelColor(zid, level) {
             const mesh = meshes[zid];
             if (!mesh || !mesh.isObject3D) return;
@@ -1881,54 +2073,22 @@
             // Store current level
             mesh.userData.currentLevel = level;
 
-            // Get color for label based on level (clamp to max index)
+            // Get color based on level (clamp to max index)
             const colorIndex = Math.min(level, ZOMBIE_LEVEL_COLORS.length - 1);
             const color = new THREE.Color(ZOMBIE_LEVEL_COLORS[colorIndex]);
 
-            // Add floating level indicator sprite (only for level > 0)
-            if (level > 0) {
-                // Remove old label if exists
-                if (mesh.userData.levelLabel) {
-                    mesh.remove(mesh.userData.levelLabel);
-                }
-
-                // Create canvas texture for level label
-                const canvas = document.createElement('canvas');
-                canvas.width = 128;
-                canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-
-                // Draw background
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-                ctx.beginPath();
-                ctx.roundRect(4, 4, 120, 56, 8);
-                ctx.fill();
-
-                // Draw level text
-                ctx.fillStyle = '#' + color.getHexString();
-                ctx.font = 'bold 32px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText('LV' + level, 64, 42);
-
-                // Create sprite
-                const texture = new THREE.CanvasTexture(canvas);
-                const spriteMat = new THREE.SpriteMaterial({
-                    map: texture,
-                    transparent: true,
-                    depthTest: false
+            if (mesh.userData.isBlob) {
+                mesh.userData.parts?.forEach(part => {
+                    if (part.material) {
+                        part.material.color.copy(color);
+                        part.material.emissive.copy(color).multiplyScalar(0.08);
+                    }
                 });
-                const sprite = new THREE.Sprite(spriteMat);
-                sprite.scale.set(1.5, 0.75, 1);
-                sprite.position.set(0, 2.5, 0); // Above zombie head
+            }
 
-                mesh.add(sprite);
-                mesh.userData.levelLabel = sprite;
-            } else {
-                // Remove label for level 0
-                if (mesh.userData.levelLabel) {
-                    mesh.remove(mesh.userData.levelLabel);
-                    mesh.userData.levelLabel = null;
-                }
+            if (mesh.userData.levelLabel) {
+                mesh.remove(mesh.userData.levelLabel);
+                mesh.userData.levelLabel = null;
             }
         }
 
@@ -2101,7 +2261,20 @@
                     const vx = -Math.sin(effectiveYaw) * Math.cos(effectivePitch) * speed;
                     const vy = Math.sin(effectivePitch) * speed;
                     const vz = -Math.cos(effectiveYaw) * Math.cos(effectivePitch) * speed;
-                    bullets.push({ x: p.x, y: p.y + 0.5, z: p.z, vx, vy, vz, life: 2.0, dmg: stats.damage, owner: pid });
+                    bullets.push({
+                        x: p.x,
+                        y: p.y + 0.5,
+                        z: p.z,
+                        vx,
+                        vy,
+                        vz,
+                        life: stats.pellets ? 0.85 : 1.05,
+                        dmg: stats.damage * (0.9 + Math.random() * 0.2),
+                        owner: pid,
+                        color: stats.color || 0xfff0a8,
+                        glow: stats.glow || 0x66ff88,
+                        size: 0.06 + Math.random() * 0.03
+                    });
                 }
             } else {
                 // Melee
@@ -2126,7 +2299,7 @@
             }
         }
 
-        function spawnZombie(inheritedBoosts = []) {
+        function spawnZombie(inheritedBoosts = [], options = {}) {
             // Check max zombie cap
             if (Object.keys(zombies).length >= MAX_ZOMBIES) {
                 console.log("Max zombies reached, not spawning");
@@ -2194,7 +2367,7 @@
                 // If still no spawn point, retry later
                 if (!spawnNode) {
                     console.log("No valid spawn found, retrying in 500ms");
-                    setTimeout(() => spawnZombie(inheritedBoosts), 500);
+                    setTimeout(() => spawnZombie(inheritedBoosts, options), 500);
                     return false;
                 }
             }
@@ -2215,13 +2388,12 @@
                 }
 
                 // Calculate stats based on boosts
-                const level = boosts.length;
+                const level = Math.max(0, boosts.length + (options.levelOffset || 0));
                 let speed = ZOMBIE_SPEED;
-                let baseHp = 50 + Math.floor(totalZombiesKilled / 5) * 10;
+                let baseHp = 55 + Math.floor(totalZombiesKilled / 5) * 10 + level * 22;
                 let upImpulse = 8;
                 let damage = 0.5;
-
-                // Apply boost effects
+                const sizeScale = options.sizeScale || (1.1 + Math.random() * 0.45 + level * 0.14);
                 boosts.forEach(boost => {
                     const config = ZOMBIE_BOOSTS[boost];
                     if (boost === 'speed') speed *= config.multiplier;
@@ -2247,7 +2419,8 @@
                     boosts,
                     speed,
                     damage,
-                    upImpulse
+                    upImpulse,
+                    sizeScale
                 };
 
                 const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
@@ -2526,87 +2699,14 @@
         }
 
         async function createEntityVisual(id, type) {
-            // type: 'player' | 'zombie'
-            const assets = GameAssets[type];
-            if (!assets || !assets.base) {
-                // Fallback Cube
-                const color = type === 'player' ? 0x0088ff : 0x00ff00;
-                const m = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshLambertMaterial({ color }));
-                scene.add(m);
-                return m;
-            }
-
-            // Load base model if not cached (THREE.Cache enabled? or manual)
-            // We already loaded it? No, we have Blob URLs. We need to load the GLTF structure.
-            // CACHE: We should load the GLTF *once* and reuse using SkeletonUtils.clone
-            // But we haven't implemented a pre-loader. 
-            // We should do lazy loading with a cache.
-
-            if (!GameAssets[type].gltf) {
-                GameAssets[type].gltf = await loadGLB(assets.base);
-                // Also load external animations if any
-                // e.g. assets['walk'], assets['attack']
-                GameAssets[type].clips = {};
-
-                // Harvest animations from base
-                if (GameAssets[type].gltf.animations) {
-                    GameAssets[type].gltf.animations.forEach(c => {
-                        GameAssets[type].clips[c.name.toLowerCase()] = c;
-                        // Map 'mixamo.com' or generic names to standard idle/walk?
-                        // Simple heuristic: if name contains 'walk', map to 'walk'
-                        if (c.name.toLowerCase().includes('walk')) GameAssets[type].clips['walk'] = c;
-                        if (c.name.toLowerCase().includes('idle')) GameAssets[type].clips['idle'] = c;
-                        if (c.name.toLowerCase().includes('attack') || c.name.toLowerCase().includes('knife')) GameAssets[type].clips['attack'] = c;
-                    });
-                }
-
-                // Load separate files
-                for (let action in assets) {
-                    if (action === 'base' || action === 'gltf' || action === 'clips' || action === 'config') continue;
-                    try {
-                        const animGltf = await loadGLB(assets[action]);
-                        if (animGltf.animations.length > 0) {
-                            // Assume the first animation in the file is the one we want
-                            GameAssets[type].clips[action] = animGltf.animations[0];
-                        }
-                    } catch (e) { console.warn("Failed to load anim:", action, e); }
-                }
-                // If no idle found, use the first one as default
-                if (!GameAssets[type].clips['idle'] && GameAssets[type].gltf.animations.length > 0) {
-                    console.log(`No 'idle' animation found for ${type}, using first available: ${GameAssets[type].gltf.animations[0].name}`);
-                    GameAssets[type].clips['idle'] = GameAssets[type].gltf.animations[0];
-                }
-                console.log(`Final Clips for ${type}:`, Object.keys(GameAssets[type].clips));
-            }
-
-            const model = SkeletonUtils.clone(GameAssets[type].gltf.scene);
-
-            // Apply JSON Config
-            const config = GameAssets[type].config;
-            const wrapper = new THREE.Group();
-
-            if (config) {
-                if (config.scale) model.scale.set(config.scale[0], config.scale[1], config.scale[2]);
-                if (config.rotation) model.rotation.set(
-                    THREE.MathUtils.degToRad(config.rotation[0]),
-                    THREE.MathUtils.degToRad(config.rotation[1]),
-                    THREE.MathUtils.degToRad(config.rotation[2])
-                );
-                if (config.location) model.position.set(config.location[0], config.location[1], config.location[2]);
-            }
-
-            wrapper.add(model);
-
-            // Setup Mixer (Targeting the SkinnedMesh root)
-            const mixer = new THREE.AnimationMixer(model);
-            mixermap[id] = mixer;
-
-            // UserData on wrapper for easy access
-            wrapper.userData.clips = GameAssets[type].clips;
+            const color = type === 'player' ? 0x4fd8ff : 0x3dff8e;
+            const wrapper = createBlobVisual(type, color, type === 'player' ? 1.0 : 0.95);
+            wrapper.name = id;
+            wrapper.userData.isEntity = true;
+            wrapper.userData.type = type;
+            wrapper.userData.clips = {};
             wrapper.userData.currentAnim = '';
-
             scene.add(wrapper);
-            console.log(`Created visual for ${type} [${id}]`);
             return wrapper;
         }
 
@@ -2671,6 +2771,8 @@
             const zombieData = zombies[zid];
             const inheritedBoosts = zombieData ? zombieData.boosts || [] : [];
             const zombieLevel = zombieData ? zombieData.level || 0 : 0;
+            const splitChance = zombieData && zombieData.sizeScale > 1.2 ? 0.45 : 0.0;
+            const splitCount = zombieData && zombieData.sizeScale > 1.2 && Math.random() < splitChance ? 2 : 0;
 
             delete zombies[zid];
             if (zombieBodies[zid]) {
@@ -2704,6 +2806,13 @@
             // Then chance for a second zombie based on current count (fewer zombies = higher chance)
             spawnZombie(inheritedBoosts);
 
+            // Smaller zombies can split into two children when they die.
+            if (splitCount > 0) {
+                for (let i = 0; i < splitCount; i++) {
+                    spawnZombie(inheritedBoosts, { sizeScale: Math.max(0.65, (zombieData.sizeScale || 1) * 0.7), levelOffset: -1 });
+                }
+            }
+
             // Second zombie chance: inversely proportional to current zombie count
             // At 0 zombies: 50% chance, at 5 zombies: 25%, at 9 zombies: 5%
             const currentCount = Object.keys(zombies).length;
@@ -2717,13 +2826,14 @@
         function generateShopOptions(pid) {
             if (!players[pid]) return;
             const p = players[pid];
+            const weapons = p.weapons || []; 
 
             // Weight by rarity
             const weights = { common: 50, uncommon: 30, rare: 20 };
             const available = SHOP_UPGRADES.filter(u => {
                 // Skip "once" upgrades player already has
                 if (u.once && u.id === 'shotgun') {
-                    return !p.weapons.some(w => w && w.id === 'shotgun');
+                    return !weapons.some(w => w && w.id === 'shotgun');
                 }
                 return true;
             });
@@ -3173,106 +3283,14 @@
         }
 
         async function createZombieVisual(id) {
-            return new Promise((resolve, reject) => {
-                function setupClone(originalScene) {
-                    const clone = SkeletonUtils.clone(originalScene);
-                    clone.animations = GameAssets.zombie.animations;
-
-                    // Apply Config (Scale, Rotation, Offset)
-                    const config = GameAssets.zombie.config;
-                    if (config) {
-                        if (config.scale) clone.scale.set(config.scale[0], config.scale[1], config.scale[2]);
-                        if (config.rotation) clone.rotation.set(
-                            THREE.MathUtils.degToRad(config.rotation[0]),
-                            THREE.MathUtils.degToRad(config.rotation[1]),
-                            THREE.MathUtils.degToRad(config.rotation[2])
-                        );
-                        if (config.location) {
-                            // This is an offset relative to the entity position
-                            // We handled this by nesting or just offsetting geometry? 
-                            // Usually we just set position, but entity position is controlled by render loop.
-                            // So we should add a wrapper OR offset the child mesh?
-                            // Better: Add the clone to a Group wrapper?
-                            // Actually, if we set position here, renderScene will OVERWRITE it every frame.
-                            // So we need to apply offset to the children or geometry.
-                            // BUT previous logic likely just applied it to the model and render loop set position of the model.
-                            // If render loop does `mesh.position.set(x, y, z)`, it overwrites this.
-                            // FIX: Use a wrapper Group for the visual, and apply config to the inner model.
-                            // OR: Assume render loop handles position, and this 'location' is actually 'pivot offset'?
-                            // If it's pivot offset, we need a wrapper.
-                            // Let's assume wrapper is safer.
-                        }
-                    }
-                    return clone;
-                }
-
-                // Helper to apply config to a wrapper
-                function wrapVisual(visual) {
-                    const config = GameAssets.zombie.config;
-                    if (!config) return visual;
-
-                    // If we have an offset (location), we MUST use a wrapper
-                    // AND if we have rotation/scale, we can apply to visual or wrapper.
-                    // Scale/Rotation is usually for the model itself.
-                    // Position is for offset.
-
-                    if (config.location) {
-                        const wrapper = new THREE.Group();
-                        wrapper.add(visual);
-
-                        // Apply transforms to the INNER visual
-                        if (config.scale) visual.scale.set(config.scale[0], config.scale[1], config.scale[2]);
-                        if (config.rotation) visual.rotation.set(
-                            THREE.MathUtils.degToRad(config.rotation[0]),
-                            THREE.MathUtils.degToRad(config.rotation[1]),
-                            THREE.MathUtils.degToRad(config.rotation[2])
-                        );
-                        visual.position.set(config.location[0], config.location[1], config.location[2]);
-
-                        // The wrapper will be moved by renderScene
-                        // We need to ensure animations are attached to the wrapper so renderScene finds them?
-                        wrapper.animations = visual.animations;
-                        return wrapper;
-                    } else {
-                        // No offset, just apply to visual directly
-                        if (config.scale) visual.scale.set(config.scale[0], config.scale[1], config.scale[2]);
-                        if (config.rotation) visual.rotation.set(
-                            THREE.MathUtils.degToRad(config.rotation[0]),
-                            THREE.MathUtils.degToRad(config.rotation[1]),
-                            THREE.MathUtils.degToRad(config.rotation[2])
-                        );
-                        return visual;
-                    }
-                }
-
-                // 1. Check if model is already loaded/cached
-                if (GameAssets.zombie.scene && GameAssets.zombie.animations) {
-                    const clone = SkeletonUtils.clone(GameAssets.zombie.scene);
-                    clone.animations = GameAssets.zombie.animations;
-                    resolve(wrapVisual(clone));
-                    return;
-                }
-
-                // 2. Load it if not
-                const loader = new GLTFLoader();
-                loader.load(GameAssets.zombie.base, (gltf) => {
-                    // Parse and Setup
-                    GameAssets.zombie.scene = gltf.scene;
-                    GameAssets.zombie.animations = gltf.animations;
-
-                    // Enable shadows
-                    gltf.scene.traverse(node => {
-                        if (node.isMesh) {
-                            node.castShadow = true;
-                            node.receiveShadow = true;
-                        }
-                    });
-
-                    const clone = SkeletonUtils.clone(gltf.scene);
-                    clone.animations = gltf.animations;
-                    resolve(wrapVisual(clone));
-                }, undefined, reject);
-            });
+            const wrapper = createBlobVisual('zombie', 0x3dff8e, 1.05);
+            wrapper.name = id;
+            wrapper.userData.isEntity = true;
+            wrapper.userData.type = 'zombie';
+            wrapper.userData.clips = {};
+            wrapper.userData.currentAnim = '';
+            scene.add(wrapper);
+            return wrapper;
         }
 
         function initThree() {
