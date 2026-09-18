@@ -512,34 +512,43 @@
         const TICK_MS = 1000 / TICK_RATE;
 
         const WEAPON_REGISTRY = {
-            'pistol': { name: "Sludge Blaster", type: 'projectile', damage: 14, range: 100, fireRateMs: 120, speed: 110, maxAmmo: 60, pellets: 2, spread: 0.08, color: 0x66ff8c, glow: 0x38ff8b },
+            'pistol': { name: "Sludge Blaster", type: 'projectile', damage: 14, range: 100, fireRateMs: 120, speed: 110, maxAmmo: 80, pellets: 2, spread: 0.08, color: 0x66ff8c, glow: 0x38ff8b, bulletSize: 0.18 },
             'knife': { name: "Combat Knife", type: 'melee', damage: 45, range: 2.5, fireRateMs: 500, maxAmmo: -1 },
-            'shotgun': { name: "Sludge Shotgun", type: 'projectile', damage: 10, range: 50, fireRateMs: 350, speed: 95, maxAmmo: 24, pellets: 10, spread: 0.26, color: 0x8dffb5, glow: 0x41ff91 }
+            'shotgun': { name: "Sludge Shotgun", type: 'projectile', damage: 10, range: 50, fireRateMs: 350, speed: 95, maxAmmo: 36, pellets: 10, spread: 0.26, color: 0x8dffb5, glow: 0x41ff91, bulletSize: 0.12 }
         };
 
         // New upgrade system for radial shop selection
         const SHOP_UPGRADES = [
             { id: 'heal', name: "Heal +50", rarity: 'common', action: p => { p.hp = Math.min(p.hp + 50, p.maxHp); } },
             {
-                id: 'ammo', name: "+30 Ammo", rarity: 'common', action: p => {
+                id: 'ammo', name: "+40 Ammo", rarity: 'common', action: p => {
                     const w = p.weapons[p.currentSlot];
                     if (w && WEAPON_REGISTRY[w.id] && WEAPON_REGISTRY[w.id].maxAmmo > 0) {
                         const max = p.maxAmmo[w.id] || WEAPON_REGISTRY[w.id].maxAmmo;
-                        w.ammo = Math.min(w.ammo + 30, max);
+                        w.ammo = Math.min(w.ammo + 40, max);
+                    }
+                }
+            },
+            {
+                id: 'inkpack', name: "Sludge Pack +40", rarity: 'common', action: p => {
+                    const w = p.weapons[p.currentSlot];
+                    if (w && WEAPON_REGISTRY[w.id] && WEAPON_REGISTRY[w.id].maxAmmo > 0) {
+                        const max = p.maxAmmo[w.id] || WEAPON_REGISTRY[w.id].maxAmmo;
+                        w.ammo = Math.min(w.ammo + 40, max);
                     }
                 }
             },
             { id: 'maxhp', name: "+20 Max HP", rarity: 'uncommon', action: p => { p.maxHp += 20; p.hp += 20; } },
             {
-                id: 'maxammo', name: "+20 Max Ammo", rarity: 'uncommon', action: p => {
-                    for (let k in p.maxAmmo) p.maxAmmo[k] += 20;
+                id: 'maxammo', name: "+30 Max Ammo", rarity: 'uncommon', action: p => {
+                    for (let k in p.maxAmmo) p.maxAmmo[k] += 30;
                 }
             },
+
             { id: 'firerate', name: "Fire Rate+", rarity: 'rare', action: p => { p.fireRateMultiplier = (p.fireRateMultiplier || 1.0) * 0.85; } },
             {
                 id: 'shotgun', name: "Shotgun", rarity: 'rare', once: true, action: p => {
-                    // Replace current weapon with shotgun
-                    p.weapons[p.currentSlot] = { id: 'shotgun', ammo: 12 };
+                    giveShotgun(p);
                 }
             },
             {
@@ -635,6 +644,13 @@
         let mapGroup = null; // ThreeJS Group for map
         let mapBodies = []; // Physics bodies for map
         let localGun = null;
+        let localWeaponModels = {};
+        let activeWeaponId = null;
+        let weaponKick = 0;
+        let meleeSwing = 0;
+        let lastWeaponAnim = 0;
+        let fxParticles = [];
+        let fxMeshes = [];
         // Wave system removed - using infinite spawn mode
 
         // Assets
@@ -1291,7 +1307,7 @@
                 const p = players[pid];
                 const w = p.weapons[p.currentSlot];
                 const ammo = w ? w.ammo : 0;
-                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints]);
+                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints, w ? w.id : '']);
             }
 
             // Z: [id, x, y, z, yaw, level, hp, maxHp, sizeScale]
@@ -1361,6 +1377,21 @@
                     checkAllReady();
                 }
             }
+        }
+
+        function giveShotgun(p) {
+            if (!p.weapons) p.weapons = [null, null, null, null];
+            while (p.weapons.length < 4) p.weapons.push(null);
+            if (p.weapons.some(w => w && w.id === 'shotgun')) return;
+            let slot = p.weapons.findIndex(w => !w);
+            if (slot < 0) {
+                slot = p.weapons.findIndex(w => w && w.id !== 'knife' && w.id !== 'pistol');
+                if (slot < 0) slot = 2;
+            }
+            p.weapons[slot] = { id: 'shotgun', ammo: 12 };
+            p.currentSlot = slot;
+            if (p.input) p.input.slot = slot;
+            if (p === players[myId]) input.slot = slot;
         }
 
         // ==========================================
@@ -1514,8 +1545,8 @@
 
                 // Initialize local player state for client
                 if (!players[myId]) players[myId] = {};
-                players[myId].weapons = [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null];
-                players[myId].maxAmmo = { pistol: 60, shotgun: 24 };
+                players[myId].weapons = [{ id: 'pistol', ammo: 40 }, { id: 'knife', ammo: -1 }, null, null];
+                players[myId].maxAmmo = { pistol: 80, shotgun: 36 };
                 players[myId].shopPoints = 1; // Start with 1 shop point
                 players[myId].xp = 0;
                 players[myId].level = 1;
@@ -1552,6 +1583,9 @@
                 document.getElementById('hud-layer').style.display = 'none';
                 document.exitPointerLock();
                 document.getElementById('btn-retry').style.display = 'none'; // Clients can't retry
+            }
+            else if (data.type === 'FX') {
+                spawnFx(data.kind, data.x, data.y, data.z, data.extra || {});
             }
         }
         // Client: Send input to host (runs via Web Worker timer)
@@ -1703,7 +1737,7 @@
                 cleanupOrphanedEntities();
             }
 
-            renderScene();
+            renderScene(dt);
         }
 
         function cleanupOrphanedEntities() {
@@ -1730,7 +1764,7 @@
             });
         }
 
-        function renderScene() {
+        function renderScene(dt = 0.016) {
             if (!renderer || !scene) return;
 
             // Camera
@@ -1852,10 +1886,8 @@
                 meshes[zid].position.set(z.x, z.y + bobOffset, z.z);
                 meshes[zid].rotation.y = z.yaw + Math.PI;
                 if (meshes[zid].userData.isBlob) {
-                    const healthRatio = z.maxHp ? Math.max(0.65, Math.min(1, z.hp / z.maxHp)) : 1;
-                    const scaleFactor = Number.isFinite(z.sizeScale) ? z.sizeScale : 1;
-                    const sizeScale = scaleFactor * (0.85 + healthRatio * 0.2);
-                    meshes[zid].scale.setScalar(sizeScale);
+                    const scaleFactor = Number.isFinite(z.sizeScale) ? z.sizeScale : (Number.isFinite(z.baseSizeScale) ? z.baseSizeScale : 1);
+                    meshes[zid].scale.setScalar(scaleFactor);
                 }
 
                 // Update level color if level changed
@@ -1878,8 +1910,22 @@
             while (bulletMeshes.length > bullets.length) scene.remove(bulletMeshes.pop());
             while (bulletMeshes.length < bullets.length) {
                 const b = new THREE.Mesh(
-                    new THREE.SphereGeometry(0.28, 14, 14),
-                    new THREE.MeshStandardMaterial({ color: 0x5ef45f, emissive: 0x24a93d, emissiveIntensity: 2.2, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.96, depthWrite: false })
+                    new THREE.IcosahedronGeometry(0.26, 2),
+                    new THREE.MeshPhysicalMaterial({
+                        color: 0x5ef45f,
+                        emissive: 0x24a93d,
+                        emissiveIntensity: 2.2,
+                        roughness: 0.18,
+                        metalness: 0.06,
+                        clearcoat: 0.7,
+                        clearcoatRoughness: 0.1,
+                        transmission: 0.55,
+                        thickness: 0.22,
+                        transparent: true,
+                        opacity: 0.92,
+                        blending: THREE.AdditiveBlending,
+                        depthWrite: false
+                    })
                 );
                 b.frustumCulled = false;
                 scene.add(b);
@@ -1888,29 +1934,17 @@
             for (let i = 0; i < bullets.length; i++) {
                 const bullet = bullets[i];
                 bulletMeshes[i].position.set(bullet.x, bullet.y, bullet.z);
-                bulletMeshes[i].scale.setScalar((bullet.size || 0.22) * (1 + Math.sin(performance.now() * 0.02 + i) * 0.14));
+                bulletMeshes[i].rotation.set(performance.now() * 0.002 + i, performance.now() * 0.0015 + i * 0.4, 0);
+                bulletMeshes[i].scale.setScalar((bullet.size || 0.22) * (1 + Math.sin(performance.now() * 0.02 + i) * 0.12));
                 if (bulletMeshes[i].material) {
                     bulletMeshes[i].material.color.set(bullet.color || 0x5ef45f);
                     bulletMeshes[i].material.emissive.set(bullet.glow || 0x24a93d);
-                    bulletMeshes[i].material.opacity = 0.88 + Math.sin(performance.now() * 0.03 + i) * 0.05;
+                    bulletMeshes[i].material.opacity = 0.78 + Math.sin(performance.now() * 0.05 + i) * 0.08;
                 }
             }
 
-            if (!isHost && players[myId] && !players[myId].dead) {
-                if (!localGun) {
-                    localGun = createStylizedGun();
-                    scene.add(localGun);
-                }
-                localGun.visible = true;
-                localGun.position.copy(camera.position);
-                localGun.quaternion.copy(camera.quaternion);
-                localGun.position.add(new THREE.Vector3(0.24, -0.18, -0.42).applyQuaternion(camera.quaternion));
-                localGun.rotation.x += 0.05;
-                localGun.rotation.y += 0.03;
-                localGun.userData.glow.material.opacity = 0.45 + Math.sin(performance.now() * 0.01) * 0.08;
-            } else if (localGun) {
-                localGun.visible = false;
-            }
+            updateHeldWeapon(dt);
+            updateFxVisuals(dt);
 
             renderer.render(scene, camera);
         }
@@ -2007,47 +2041,231 @@
             return group;
         }
 
-        function createStylizedGun() {
+        function gunMat(color, opts = {}) {
+            return new THREE.MeshStandardMaterial({
+                color,
+                roughness: opts.roughness ?? 0.32,
+                metalness: opts.metalness ?? 0.72,
+                emissive: opts.emissive ?? 0x000000,
+                emissiveIntensity: opts.emissiveIntensity ?? 0.4
+            });
+        }
+
+        function addGunPart(group, geo, mat, pos, rot) {
+            const mesh = new THREE.Mesh(geo, mat);
+            if (pos) mesh.position.set(pos[0], pos[1], pos[2]);
+            if (rot) mesh.rotation.set(rot[0], rot[1], rot[2]);
+            mesh.frustumCulled = false;
+            group.add(mesh);
+            return mesh;
+        }
+
+        function createBlasterModel() {
             const group = new THREE.Group();
-            const body = new THREE.Mesh(
-                new THREE.BoxGeometry(0.18, 0.16, 0.8),
-                new THREE.MeshStandardMaterial({ color: 0x1f2a24, emissive: 0x071a0d, roughness: 0.3, metalness: 0.8 })
-            );
-            body.position.set(0, 0, -0.18);
-            group.add(body);
+            const dark = gunMat(0x1a2a22, { metalness: 0.9, roughness: 0.28 });
+            const grip = gunMat(0x24332b, { metalness: 0.85, roughness: 0.4 });
+            const sludge = gunMat(0x3d9a5c, { emissive: 0x145c32, emissiveIntensity: 0.55, metalness: 0.35, roughness: 0.22 });
 
-            const grip = new THREE.Mesh(
-                new THREE.BoxGeometry(0.12, 0.3, 0.2),
-                new THREE.MeshStandardMaterial({ color: 0x14251b, roughness: 0.45, metalness: 0.9 })
-            );
-            grip.position.set(0, -0.2, -0.05);
-            group.add(grip);
+            addGunPart(group, new THREE.BoxGeometry(0.16, 0.13, 0.58), dark, [0, 0.02, -0.14]);
+            addGunPart(group, new THREE.BoxGeometry(0.11, 0.24, 0.16), grip, [0, -0.16, 0.02]);
+            addGunPart(group, new THREE.CylinderGeometry(0.045, 0.055, 0.46, 12), sludge, [0, 0.03, -0.52], [Math.PI / 2, 0, 0]);
+            addGunPart(group, new THREE.BoxGeometry(0.1, 0.12, 0.22), sludge, [0.12, -0.02, -0.08]);
+            addGunPart(group, new THREE.BoxGeometry(0.07, 0.03, 0.16), gunMat(0x4cba70, { emissive: 0x1f7a40, emissiveIntensity: 0.5 }), [0, 0.1, -0.18]);
+            addGunPart(group, new THREE.TorusGeometry(0.05, 0.012, 8, 14), dark, [0, 0.03, -0.74], [Math.PI / 2, 0, 0]);
 
-            const barrel = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.04, 0.05, 0.45, 12),
-                new THREE.MeshStandardMaterial({ color: 0x2f5d3d, emissive: 0x144423, roughness: 0.2, metalness: 0.4 })
-            );
-            barrel.rotation.z = Math.PI / 2;
-            barrel.position.set(0.12, 0.03, -0.5);
-            group.add(barrel);
-
-            const reservoir = new THREE.Mesh(
-                new THREE.BoxGeometry(0.11, 0.12, 0.25),
-                new THREE.MeshStandardMaterial({ color: 0x6cff8c, emissive: 0x2dff7d, emissiveIntensity: 2.2, roughness: 0.18, metalness: 0.12, transparent: true, opacity: 0.78 })
-            );
-            reservoir.position.set(0.01, 0.02, -0.12);
-            group.add(reservoir);
-
-            const glow = new THREE.Mesh(
-                new THREE.SphereGeometry(0.08, 14, 14),
-                new THREE.MeshStandardMaterial({ color: 0x6cff8c, emissive: 0x2dff7d, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.08, transparent: true, opacity: 0.72 })
-            );
-            glow.position.set(0.01, 0.02, -0.02);
-            group.add(glow);
-
-            group.userData.glow = glow;
             group.scale.set(1.2, 1.2, 1.2);
+            group.frustumCulled = false;
             return group;
+        }
+
+        function createShotgunModel() {
+            const group = new THREE.Group();
+            const dark = gunMat(0x1c1814, { metalness: 0.55, roughness: 0.45 });
+            const metal = gunMat(0x6a6f66, { metalness: 0.92, roughness: 0.22 });
+            const accent = gunMat(0x2f8a4e, { emissive: 0x145c32, emissiveIntensity: 0.45, metalness: 0.4, roughness: 0.28 });
+
+            addGunPart(group, new THREE.BoxGeometry(0.16, 0.16, 0.72), dark, [0, 0.02, -0.22]);
+            addGunPart(group, new THREE.BoxGeometry(0.12, 0.18, 0.36), dark, [0, -0.04, 0.22]);
+            addGunPart(group, new THREE.BoxGeometry(0.1, 0.22, 0.16), dark, [0, -0.18, 0.08]);
+            addGunPart(group, new THREE.CylinderGeometry(0.038, 0.04, 0.7, 10), metal, [-0.045, 0.05, -0.58], [Math.PI / 2, 0, 0]);
+            addGunPart(group, new THREE.CylinderGeometry(0.038, 0.04, 0.7, 10), metal, [0.045, 0.05, -0.58], [Math.PI / 2, 0, 0]);
+            addGunPart(group, new THREE.BoxGeometry(0.18, 0.08, 0.22), accent, [0, -0.06, -0.32]);
+            addGunPart(group, new THREE.BoxGeometry(0.14, 0.04, 0.2), accent, [0, 0.12, -0.12]);
+
+            group.scale.set(1.15, 1.15, 1.15);
+            group.frustumCulled = false;
+            return group;
+        }
+
+        function createKnifeModel() {
+            const group = new THREE.Group();
+            const handle = gunMat(0x1b241f, { metalness: 0.35, roughness: 0.55 });
+            const guard = gunMat(0x8a9388, { metalness: 0.95, roughness: 0.18 });
+            const blade = gunMat(0xc5d0c8, { metalness: 0.98, roughness: 0.12, emissive: 0x22332a, emissiveIntensity: 0.15 });
+
+            addGunPart(group, new THREE.CylinderGeometry(0.035, 0.04, 0.22, 10), handle, [0, -0.08, 0.08], [0.45, 0, 0]);
+            addGunPart(group, new THREE.BoxGeometry(0.12, 0.03, 0.05), guard, [0, 0.02, -0.02]);
+            const bladeMesh = addGunPart(group, new THREE.BoxGeometry(0.045, 0.018, 0.42), blade, [0, 0.04, -0.24]);
+            bladeMesh.scale.set(1, 1, 1);
+            addGunPart(group, new THREE.ConeGeometry(0.028, 0.1, 6), blade, [0, 0.04, -0.48], [Math.PI / 2, 0, 0]);
+
+            group.scale.set(1.35, 1.35, 1.35);
+            group.frustumCulled = false;
+            return group;
+        }
+
+        function createWeaponModel(id) {
+            if (id === 'shotgun') return createShotgunModel();
+            if (id === 'knife') return createKnifeModel();
+            return createBlasterModel();
+        }
+
+        function getHeldWeaponId() {
+            const p = players[myId];
+            if (!p) return null;
+            const slot = Number.isInteger(input.slot) ? input.slot : p.currentSlot;
+            const w = p.weapons && p.weapons[slot];
+            return (w && w.id) || null;
+        }
+
+        function updateHeldWeapon(dt) {
+            const wId = getHeldWeaponId();
+            const show = !isHost && players[myId] && !players[myId].dead && gameState === 'PLAYING' && wId;
+
+            if (!show) {
+                Object.values(localWeaponModels).forEach(m => { if (m) m.visible = false; });
+                return;
+            }
+
+            if (!localWeaponModels[wId]) {
+                localWeaponModels[wId] = createWeaponModel(wId);
+                scene.add(localWeaponModels[wId]);
+            }
+            if (wId !== activeWeaponId) {
+                Object.keys(localWeaponModels).forEach(id => {
+                    localWeaponModels[id].visible = id === wId;
+                });
+                activeWeaponId = wId;
+            }
+
+            const model = localWeaponModels[wId];
+            model.visible = true;
+            localGun = model;
+
+            const stats = WEAPON_REGISTRY[wId] || WEAPON_REGISTRY.pistol;
+            const fireRate = stats.fireRateMs * ((players[myId] && players[myId].fireRateMultiplier) || 1);
+            if (input.fire && Date.now() - lastWeaponAnim > fireRate) {
+                lastWeaponAnim = Date.now();
+                if (stats.type === 'melee') meleeSwing = 1;
+                else weaponKick = 1;
+            }
+
+            weaponKick = Math.max(0, weaponKick - dt * 8);
+            meleeSwing = Math.max(0, meleeSwing - dt * 5);
+
+            const swing = Math.sin(meleeSwing * Math.PI);
+            let ox = 0.24, oy = -0.18, oz = -0.42;
+            let rx = 0.05, ry = 0.03, rz = 0;
+            if (wId === 'shotgun') {
+                ox = 0.3; oy = -0.24; oz = -0.52;
+                oz += weaponKick * 0.12;
+                rx += weaponKick * 0.18;
+            } else if (wId === 'knife') {
+                ox = 0.18 + swing * 0.22;
+                oy = -0.16 + swing * 0.12;
+                oz = -0.38 - swing * 0.08;
+                rx = 0.35 - swing * 1.15;
+                ry = -0.15 + swing * 0.55;
+                rz = 0.4 - swing * 1.6;
+            } else {
+                oz += weaponKick * 0.08;
+                rx += weaponKick * 0.12;
+            }
+
+            model.position.copy(camera.position);
+            model.quaternion.copy(camera.quaternion);
+            model.position.add(new THREE.Vector3(ox, oy, oz).applyQuaternion(camera.quaternion));
+            model.rotateX(rx);
+            model.rotateY(ry);
+            model.rotateZ(rz);
+        }
+
+        function emitFx(kind, x, y, z, extra = {}) {
+            spawnFx(kind, x, y, z, extra);
+            if (isHost) broadcast({ type: 'FX', kind, x, y, z, extra });
+        }
+
+        function spawnFx(kind, x, y, z, extra = {}) {
+            if (kind === 'slash') {
+                const yaw = extra.yaw || 0;
+                for (let i = 0; i < 10; i++) {
+                    const t = (i / 9) - 0.5;
+                    const ang = yaw + t * 1.6;
+                    fxParticles.push({
+                        x: x - Math.sin(ang) * 0.2,
+                        y: y + t * 0.85,
+                        z: z - Math.cos(ang) * 0.2,
+                        vx: -Math.sin(yaw) * 6,
+                        vy: t * 3,
+                        vz: -Math.cos(yaw) * 6,
+                        life: 0.18,
+                        size: 0.16 + Math.abs(t) * 0.08,
+                        color: 0xf4fff8,
+                        glow: 0x8dffb5
+                    });
+                }
+            } else if (kind === 'meleeHit') {
+                for (let i = 0; i < 16; i++) {
+                    fxParticles.push({
+                        x, y, z,
+                        vx: (Math.random() - 0.5) * 14,
+                        vy: 2 + Math.random() * 10,
+                        vz: (Math.random() - 0.5) * 14,
+                        life: 0.28 + Math.random() * 0.22,
+                        size: 0.07 + Math.random() * 0.1,
+                        color: i % 2 ? 0x9effbc : 0xffffff,
+                        glow: 0x41ff91
+                    });
+                }
+            }
+        }
+
+        function updateFxVisuals(dt = 0.016) {
+            for (let i = fxParticles.length - 1; i >= 0; i--) {
+                const p = fxParticles[i];
+                p.life -= dt;
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+                p.z += p.vz * dt;
+                p.vy -= 12 * dt;
+                if (p.life <= 0) fxParticles.splice(i, 1);
+            }
+
+            while (fxMeshes.length > fxParticles.length) scene.remove(fxMeshes.pop());
+            while (fxMeshes.length < fxParticles.length) {
+                const mesh = new THREE.Mesh(
+                    new THREE.IcosahedronGeometry(0.12, 0),
+                    new THREE.MeshBasicMaterial({
+                        color: 0xffffff,
+                        transparent: true,
+                        opacity: 0.9,
+                        depthWrite: false,
+                        blending: THREE.AdditiveBlending
+                    })
+                );
+                mesh.frustumCulled = false;
+                scene.add(mesh);
+                fxMeshes.push(mesh);
+            }
+
+            for (let i = 0; i < fxParticles.length; i++) {
+                const p = fxParticles[i];
+                const mesh = fxMeshes[i];
+                mesh.position.set(p.x, p.y, p.z);
+                mesh.scale.setScalar(p.size * (0.6 + p.life * 2));
+                mesh.material.color.set(p.color || 0xffffff);
+                mesh.material.opacity = Math.max(0, Math.min(1, p.life * 4));
+            }
         }
 
         function updateBlobAnimations(dt) {
@@ -2214,18 +2432,27 @@
             }
 
             const slot = data[6];
+            const syncedWeaponId = data[12];
             for (let i = 1; i <= 4; i++) {
                 const el = document.getElementById('slot-' + i);
                 if (i === (slot + 1)) el.classList.add('slot-active'); else el.classList.remove('slot-active');
             }
 
+            if (players[myId]) {
+                players[myId].currentSlot = slot;
+                if (!players[myId].weapons) players[myId].weapons = [null, null, null, null];
+                while (players[myId].weapons.length < 4) players[myId].weapons.push(null);
+                if (syncedWeaponId) {
+                    if (!players[myId].weapons[slot]) players[myId].weapons[slot] = { id: syncedWeaponId, ammo: data[7] };
+                    else players[myId].weapons[slot].id = syncedWeaponId;
+                }
+            }
+
             // Get weapon name from registry (supports shotgun)
             let wName = "EMPTY";
-            if (players[myId] && players[myId].weapons && players[myId].weapons[slot]) {
-                const wId = players[myId].weapons[slot].id;
-                if (WEAPON_REGISTRY[wId]) wName = WEAPON_REGISTRY[wId].name.toUpperCase();
-            } else {
-                // Fallback for clients: derive from slot number
+            const wId = syncedWeaponId || (players[myId] && players[myId].weapons && players[myId].weapons[slot] && players[myId].weapons[slot].id);
+            if (wId && WEAPON_REGISTRY[wId]) wName = WEAPON_REGISTRY[wId].name.toUpperCase();
+            else {
                 const defaultNames = ['PISTOL', 'KNIFE', 'EMPTY', 'EMPTY'];
                 wName = defaultNames[slot] || 'EMPTY';
             }
@@ -2273,25 +2500,31 @@
                         owner: pid,
                         color: stats.color || 0xfff0a8,
                         glow: stats.glow || 0x66ff88,
-                        size: 0.06 + Math.random() * 0.03
+                        size: (stats.bulletSize || 0.14) * (0.9 + Math.random() * 0.18)
                     });
                 }
             } else {
                 // Melee
                 const fx = -Math.sin(p.yaw);
                 const fz = -Math.cos(p.yaw);
+                const slashX = p.x + fx * 1.15;
+                const slashY = p.y + 0.45;
+                const slashZ = p.z + fz * 1.15;
+                emitFx('slash', slashX, slashY, slashZ, { yaw: p.yaw });
+
                 for (let zid in zombies) {
                     const z = zombies[zid];
                     const dx = z.x - p.x;
                     const dy = z.y - p.y;
                     const dz = z.z - p.z;
-                    const dist2D = Math.sqrt(dx * dx + dz * dz);
+                    const dist2D = Math.sqrt(dx * dx + dz * dz) || 0.0001;
                     const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
                     if (dist3D < stats.range) {
                         const dot = fx * dx / dist2D + fz * dz / dist2D;
                         if (dot > 0.5) {
                             z.hp -= stats.damage;
+                            emitFx('meleeHit', z.x, z.y + 0.45, z.z);
                             if (z.hp <= 0) killZombie(zid, pid);
                         }
                     }
@@ -2393,7 +2626,7 @@
                 let baseHp = 55 + Math.floor(totalZombiesKilled / 5) * 10 + level * 22;
                 let upImpulse = 8;
                 let damage = 0.5;
-                const sizeScale = options.sizeScale || (1.1 + Math.random() * 0.45 + level * 0.14);
+                const sizeScale = options.sizeScale ?? Math.max(0.1, Math.min(1.0, 0.12 + level * 0.08));
                 boosts.forEach(boost => {
                     const config = ZOMBIE_BOOSTS[boost];
                     if (boost === 'speed') speed *= config.multiplier;
@@ -2420,6 +2653,7 @@
                     speed,
                     damage,
                     upImpulse,
+                    baseSizeScale: sizeScale,
                     sizeScale
                 };
 
@@ -2478,6 +2712,12 @@
                 const body = zombieBodies[zid];
                 if (!body) continue;
 
+                const healthRatio = z.maxHp ? Math.max(0, Math.min(1, z.hp / z.maxHp)) : 1;
+                const sizeScale = Math.max(0.1, Math.min(1.0, (z.baseSizeScale || 0.25) * (0.45 + healthRatio * 0.55)));
+                z.sizeScale = sizeScale;
+                const speedMultiplier = 0.55 + (1 - healthRatio) * 0.45;
+                const currentSpeed = (z.speed || ZOMBIE_SPEED) * speedMultiplier;
+
                 // Find target
                 let min = 999, target = null;
                 for (let pid in players) {
@@ -2525,10 +2765,9 @@
 
                     if (dist3D > 0.1) {
                         // Normalize direction using 3D distance for proper speed
-                        // Use zombie's individual speed (boosted if has speed boosts)
-                        const speed = z.speed || ZOMBIE_SPEED;
-                        let vx = (dx / dist3D) * speed;
-                        let vz = (dz / dist3D) * speed;
+                        // Healthier zombies are larger and slower; wounded zombies are smaller and faster.
+                        let vx = (dx / dist3D) * currentSpeed;
+                        let vz = (dz / dist3D) * currentSpeed;
                         let vy = body.linvel().y;
 
                         // Apply vertical velocity ONLY if climbing/stuck or grounded on slope
@@ -2561,7 +2800,7 @@
                             z.climbImpulseY = 0;
                         } else if (now - z.lastPos.time > 200) { // Check every 200ms
                             const movedDist = Math.sqrt((z.x - z.lastPos.x) ** 2 + (z.z - z.lastPos.z) ** 2);
-                            const expectedDist = speed * 0.2; // Expected movement in 200ms
+                            const expectedDist = currentSpeed * 0.2; // Expected movement in 200ms
 
                             // If moved less than 30% of expected distance, might be stuck
                             if (movedDist < expectedDist * 0.3 && dist2D > 1.5) {
@@ -2955,6 +3194,7 @@
                 } else {
                     conns[hostId].send({ type: 'SHOP_SELECT', idx: selected, upgradeId: upgrade.id });
                     // Optimistically update
+                    upgrade.action(localPlayer);
                     localPlayer.shopPoints--;
                     localPlayer.currentShopOptions = null;
                 }
