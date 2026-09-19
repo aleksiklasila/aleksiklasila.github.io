@@ -19,8 +19,8 @@
 
         canvas {
             display: block;
-            width: 100vw;
-            height: 100vh;
+            width: 100%;
+            height: 100%;
             position: absolute;
             top: 0;
             left: 0;
@@ -90,10 +90,32 @@
             width: 100%;
             height: 100%;
             pointer-events: none;
+            z-index: 200;
+        }
+
+        /* Health Vignette Overlay (Green -> Yellow -> Red) */
+        #health-vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
             height: 100%;
             pointer-events: none;
-            z-index: 200;
+            z-index: 10;
+            transition: background 0.1s ease-out;
+        }
+
+        /* Bottom Damage & Heal Flash Vignette */
+        #action-vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 15;
+            opacity: 0;
+            transition: opacity 0.45s ease-out;
         }
 
         #crosshair {
@@ -119,10 +141,27 @@
             font-weight: bold;
         }
 
+        #hud-bottom-left {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            text-align: left;
+            font-size: 1.2rem;
+            color: #ff0;
+            text-shadow: 2px 2px 0 #000;
+            font-weight: bold;
+        }
+
         #hud-bottom-right {
             position: absolute;
             bottom: 20px;
             right: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
             text-align: right;
             font-size: 1.2rem;
             color: #ff0;
@@ -207,6 +246,20 @@
             border-color: #00f;
         }
 
+        #btn-blade {
+            bottom: 285px;
+            right: 30px;
+            width: 75px;
+            height: 75px;
+            border-color: #00ffd5;
+            background: rgba(0, 255, 213, 0.2);
+            color: #00ffd5;
+        }
+
+        #btn-blade:active {
+            background: rgba(0, 255, 213, 0.5);
+        }
+
         #btn-shop {
             bottom: 180px;
             left: 30px;
@@ -223,18 +276,62 @@
             margin-bottom: 20px;
         }
 
-        .slot-indicator {
-            font-size: 0.8rem;
-            color: #aaa;
-            margin-top: 5px;
+        .slot-indicator,
+        #ui-slots {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 8px;
+            margin-top: 8px;
         }
 
-        .slot-active {
-            color: #0f0;
+        .slot-box {
+            width: 46px;
+            height: 46px;
+            background: rgba(20, 25, 30, 0.85);
+            border: 2px solid #555;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            color: #888;
             font-weight: bold;
-            border: 1px solid #0f0;
-            padding: 2px 5px;
-            background: rgba(0, 50, 0, 0.5);
+            position: relative;
+            box-sizing: border-box;
+            transition: all 0.15s ease;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+        }
+
+        .slot-box.slot-active {
+            border-color: #0f0;
+            color: #0f0;
+            background: rgba(0, 45, 20, 0.9);
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.45), inset 0 0 6px rgba(0, 255, 0, 0.25);
+            transform: scale(1.08);
+        }
+
+        .slot-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            pointer-events: none;
+            filter: drop-shadow(0 0 2px rgba(0, 255, 180, 0.4));
+        }
+
+        .slot-box .slot-key-num {
+            position: absolute;
+            top: 2px;
+            left: 4px;
+            font-size: 0.6rem;
+            color: #aaa;
+            font-family: monospace;
+            line-height: 1;
+        }
+
+        .slot-box.slot-active .slot-key-num {
+            color: #0f0;
         }
 
         #net-stats {
@@ -435,6 +532,8 @@
     </div>
 
     <div id="hud-layer" style="display:none;">
+        <div id="health-vignette"></div>
+        <div id="action-vignette"></div>
         <div id="crosshair"></div>
         <div id="fps-counter"
             style="position: absolute; top: 10px; left: 10px; color: #0f0; font-weight: bold; display: none; font-family: monospace; z-index: 300;">
@@ -447,16 +546,25 @@
             <div id="shop-points-disp" style="font-size:1rem; color:#ff0; display:none">⭐ <span id="shop-pts">0</span>
                 Shop Points</div>
         </div>
-        <div id="hud-bottom-right">
+        <div id="hud-bottom-left">
             <div style="color:#f44">HP: <span id="hp-disp">100</span></div>
-            <div id="ui-weapon" style="color:#fff; font-size: 0.8em; margin-top:5px;">PISTOL</div>
-            <div id="ui-ammo" style="color:#ff0">AMMO: <span id="ammo-disp">30</span></div>
+            <div id="ui-weapon" style="color:#fff; font-size: 0.85em; margin-top:5px;">EMPTY</div>
+            <div id="ui-ammo" style="color:#ff0">AMMO: <span id="ammo-disp">0</span></div>
             <div id="ui-slots" class="slot-indicator">
-                <span id="slot-1" class="slot-active">1</span>
-                <span id="slot-2">2</span>
-                <span id="slot-3">3</span>
-                <span id="slot-4">4</span>
+                <span id="slot-1" class="slot-box slot-active">1</span>
+                <span id="slot-2" class="slot-box">2</span>
+                <span id="slot-3" class="slot-box">3</span>
+                <span id="slot-4" class="slot-box">4</span>
             </div>
+        </div>
+        <div id="hud-bottom-right">
+            <div style="color:#00ffd5; font-size: 0.85em; margin-bottom: 4px; letter-spacing: 0.5px;">BLADE [RMB]</div>
+            <div id="ui-melee-slot" class="slot-box slot-active"
+                style="width: 50px; height: 50px; border-color: #00ffd5; box-shadow: 0 0 10px rgba(0,255,213,0.35);">
+                <span class="slot-key-num" style="color: #00ffd5;">RMB</span>
+                <img id="melee-icon-img" src="" alt="blade" style="width:100%; height:100%; object-fit:contain;">
+            </div>
+            <div id="ui-melee-name" style="color:#00ffd5; font-size: 0.75em; margin-top:4px;">ELEMENTAL BLADE</div>
         </div>
     </div>
 
@@ -494,6 +602,7 @@
         <div id="stick-right" class="stick-zone">
             <div class="stick-nub"></div>
         </div>
+        <div id="btn-blade" class="action-btn">BLADE</div>
         <div id="btn-fire" class="action-btn">FIRE</div>
         <div id="btn-jump" class="action-btn">JUMP</div>
         <div id="btn-shop" class="action-btn">SHOP</div>
@@ -522,45 +631,32 @@
             'shotgun': { name: "Sludge Shotgun", type: 'projectile', damage: 10, range: 50, fireRateMs: 350, speed: 95, maxAmmo: 36, pellets: 10, spread: 0.26, color: 0x8dffb5, glow: 0x41ff91, bulletSize: 0.12 }
         };
 
-        function addWeaponAmmo(p, weaponId, amount) {
-            if (!p || !p.weapons) return;
-            const w = p.weapons.find(item => item && item.id === weaponId);
-            if (!w) return;
-            const max = (p.maxAmmo && p.maxAmmo[weaponId]) || (WEAPON_REGISTRY[weaponId] && WEAPON_REGISTRY[weaponId].maxAmmo) || 999;
-            w.ammo = Math.min(w.ammo + amount, max);
-            // If local player is holding this weapon, update the HUD ammo counter immediately
-            if (p === players[myId] && p.weapons[p.currentSlot] && p.weapons[p.currentSlot].id === weaponId) {
-                const ammoDisp = document.getElementById('ammo-disp');
-                if (ammoDisp) ammoDisp.innerText = w.ammo;
+        function giveWeapon(p, weaponId) {
+            if (!p) return;
+            if (!p.weapons) p.weapons = [null, null, null, null];
+            while (p.weapons.length < 4) p.weapons.push(null);
+
+            const slot = (p.currentSlot >= 0 && p.currentSlot < 4) ? p.currentSlot : 0;
+            const maxAmmo = (p.maxAmmo && p.maxAmmo[weaponId]) || (WEAPON_REGISTRY[weaponId] && WEAPON_REGISTRY[weaponId].maxAmmo) || 999;
+
+            p.weapons[slot] = {
+                id: weaponId,
+                ammo: maxAmmo === -1 ? -1 : maxAmmo
+            };
+            p.currentSlot = slot;
+
+            if (p === players[myId]) {
+                updateSlotUI();
             }
         }
 
-        // New upgrade system for radial shop selection
+        // Upgrade system for radial shop selection (Guns replace current slot with full ammo)
         const SHOP_UPGRADES = [
+            { id: 'pistol', name: "Sludge Blaster", rarity: 'common', action: p => { giveWeapon(p, 'pistol'); } },
+            { id: 'shotgun', name: "Sludge Shotgun", rarity: 'uncommon', action: p => { giveWeapon(p, 'shotgun'); } },
             { id: 'heal', name: "Heal +50", rarity: 'common', action: p => { p.hp = Math.min(p.hp + 50, p.maxHp); } },
-            {
-                id: 'ammo_pistol', name: "Blaster Sludge +40", rarity: 'common', requiresWeapon: 'pistol', action: p => {
-                    addWeaponAmmo(p, 'pistol', 40);
-                }
-            },
-            {
-                id: 'ammo_shotgun', name: "Shotgun Sludge +16", rarity: 'common', requiresWeapon: 'shotgun', action: p => {
-                    addWeaponAmmo(p, 'shotgun', 16);
-                }
-            },
             { id: 'maxhp', name: "+20 Max HP", rarity: 'uncommon', action: p => { p.maxHp += 20; p.hp += 20; } },
-            {
-                id: 'maxammo', name: "+30 Max Ammo", rarity: 'uncommon', action: p => {
-                    for (let k in p.maxAmmo) p.maxAmmo[k] += 30;
-                }
-            },
-
             { id: 'firerate', name: "Fire Rate+", rarity: 'rare', action: p => { p.fireRateMultiplier = (p.fireRateMultiplier || 1.0) * 0.85; } },
-            {
-                id: 'shotgun', name: "Shotgun", rarity: 'rare', once: true, action: p => {
-                    giveShotgun(p);
-                }
-            },
             {
                 id: 'respawn', name: "Revive Team", rarity: 'rare', action: p => {
                     // Respawn all dead players near the buyer
@@ -659,6 +755,7 @@
         let weaponKick = 0;
         let meleeSwing = 0;
         let lastWeaponAnim = 0;
+        let lastMeleeAnim = 0;
         let fxParticles = [];
         let fxMeshes = [];
         // Wave system removed - using infinite spawn mode
@@ -711,7 +808,7 @@
         let fpsLastTime = performance.now();
 
         // Input
-        let input = { x: 0, y: 0, fire: false, jump: false, slot: 0 };
+        let input = { x: 0, y: 0, fire: false, altFire: false, jump: false, slot: 0 };
         let camYaw = 0;
         let camPitch = 0;
 
@@ -1281,6 +1378,7 @@
 
             // Attack Logic
             if (p.input.fire) performAttack(pid);
+            if (p.input.altFire) performMeleeAttack(pid);
 
             // Out of Bounds Logic (Damage 20/sec) OR instant death if falling below -15
             const fallDeathY = mapBounds ? mapBounds.min.y - 10 : -15;
@@ -1311,14 +1409,14 @@
         }
 
         function compressState() {
-            // Minify data for network transport
-            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent, xp, level, xpToNextLevel, shopPoints]
+            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent, xp, level, xpToNextLevel, shopPoints, weaponIdOfCurrent, weaponsSummary]
             const pData = [];
             for (let pid in players) {
                 const p = players[pid];
-                const w = p.weapons[p.currentSlot];
+                const w = p.weapons && p.weapons[p.currentSlot];
                 const ammo = w ? w.ammo : 0;
-                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints, w ? w.id : '']);
+                const weaponsSummary = (p.weapons || []).map(item => item ? [item.id, item.ammo] : null);
+                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints, w ? w.id : '', weaponsSummary]);
             }
 
             // Z: [id, x, y, z, yaw, level, hp, maxHp, sizeScale]
@@ -1354,7 +1452,7 @@
             else if (data.type === 'IN') { // Input
                 if (players[sender]) {
                     const i = data.i;
-                    players[sender].input = { x: i[0], y: i[1], fire: !!i[2], jump: !!i[3], slot: i[4] };
+                    players[sender].input = { x: i[0], y: i[1], fire: !!i[2], jump: !!i[3], slot: i[4], altFire: !!i[7] };
                     players[sender].yaw = i[5];
                     players[sender].pitch = i[6];
                 }
@@ -1393,20 +1491,7 @@
             }
         }
 
-        function giveShotgun(p) {
-            if (!p.weapons) p.weapons = [null, null, null, null];
-            while (p.weapons.length < 4) p.weapons.push(null);
-            if (p.weapons.some(w => w && w.id === 'shotgun')) return;
-            let slot = p.weapons.findIndex(w => !w);
-            if (slot < 0) {
-                slot = p.weapons.findIndex(w => w && w.id !== 'knife' && w.id !== 'pistol');
-                if (slot < 0) slot = 2;
-            }
-            p.weapons[slot] = { id: 'shotgun', ammo: 12 };
-            p.currentSlot = slot;
-            if (p.input) p.input.slot = slot;
-            if (p === players[myId]) input.slot = slot;
-        }
+
 
         // ==========================================
         // 5. CLIENT LOGIC (INTERPOLATION)
@@ -1558,10 +1643,12 @@
                 gameState = 'PLAYING';
 
                 // Initialize local player state for client
-                if (!players[myId]) players[myId] = {};
-                players[myId].weapons = [{ id: 'pistol', ammo: 40 }, { id: 'knife', ammo: -1 }, null, null];
+                players[myId].weapons = [null, null, null, null];
+                players[myId].meleeWeapon = { id: 'knife', ammo: -1 };
+                players[myId].currentSlot = 0;
                 players[myId].maxAmmo = { pistol: 80, shotgun: 36 };
                 players[myId].shopPoints = 1; // Start with 1 shop point
+                updateSlotUI();
                 players[myId].xp = 0;
                 players[myId].level = 1;
                 players[myId].xpToNextLevel = 100;
@@ -1569,10 +1656,10 @@
                 players[myId].selectedShopOption = -1;
 
                 document.getElementById('hud-layer').style.display = 'block'; // Client HUD
-                // Show HUD elements
-                document.getElementById('ui-weapon').style.display = 'block';
-                document.getElementById('ui-ammo').style.display = 'block';
-                document.getElementById('ui-slots').style.display = 'block';
+                const hudBL = document.getElementById('hud-bottom-left');
+                if (hudBL) hudBL.style.display = 'flex';
+                const hudBR = document.getElementById('hud-bottom-right');
+                if (hudBR) hudBR.style.display = 'flex';
 
                 if (!(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))) document.body.requestPointerLock();
                 else document.getElementById('mobile-controls').style.display = 'block';
@@ -1583,10 +1670,11 @@
                 document.getElementById('game-over-screen').classList.add('hidden'); // Fix 1: Hide Game Over
                 document.getElementById('hud-layer').style.display = 'block'; // Ensure HUD is visible (for money/hp)
 
-                // Fix 2: Hide irrelevant HUD
-                document.getElementById('ui-weapon').style.display = 'none';
-                document.getElementById('ui-ammo').style.display = 'none';
-                document.getElementById('ui-slots').style.display = 'none';
+                // Hide bottom HUD clusters in shop
+                const hudBL = document.getElementById('hud-bottom-left');
+                if (hudBL) hudBL.style.display = 'none';
+                const hudBR = document.getElementById('hud-bottom-right');
+                if (hudBR) hudBR.style.display = 'none';
 
                 document.exitPointerLock();
                 document.getElementById('mobile-controls').style.display = 'none';
@@ -1605,10 +1693,10 @@
         // Client: Send input to host (runs via Web Worker timer)
         function clientSendInput() {
             if (hostId && conns[hostId] && conns[hostId].open) {
-                // Compact Input: [x, y, fire, jump, slot, yaw, pitch]
+                // Compact Input: [x, y, fire, jump, slot, yaw, pitch, altFire]
                 conns[hostId].send({
                     type: 'IN',
-                    i: [input.x, input.y, input.fire ? 1 : 0, input.jump ? 1 : 0, input.slot, camYaw, camPitch]
+                    i: [input.x, input.y, input.fire ? 1 : 0, input.jump ? 1 : 0, input.slot, camYaw, camPitch, input.altFire ? 1 : 0]
                 });
             }
         }
@@ -1718,6 +1806,84 @@
         }
 
         // ==========================================
+        // VIGNETTE SYSTEM
+        // ==========================================
+        let _prevVignetteHp = -1;
+        let _actionVignetteTimer = null;
+
+        const _healthVigEl = document.getElementById('health-vignette');
+        const _actionVigEl = document.getElementById('action-vignette');
+
+        function updateHealthVignette() {
+            if (!_healthVigEl) return;
+            // Only show vignette during gameplay
+            const p = players[myId];
+            if (isHost || !p || gameState !== 'PLAYING' || p.dead) {
+                _healthVigEl.style.background = 'none';
+                return;
+            }
+
+            // Use tracked HP value (synced via updateHUD) as fallback
+            const currentHp = (p.hp !== undefined && p.hp >= 0) ? p.hp : _prevVignetteHp;
+            const maxHp = p.maxHp || 100;
+            const ratio = Math.max(0, Math.min(1, currentHp / maxHp));
+
+            let r, g, b, alpha;
+            if (ratio >= 0.70) {
+                // Healthy: green edge — visible but not intrusive
+                r = 0; g = 210; b = 90;
+                alpha = 0.28;
+            } else if (ratio >= 0.35) {
+                // Mid-health: lerp green -> amber, getting stronger
+                const t = (0.70 - ratio) / 0.35; // 0 = green, 1 = yellow
+                r = Math.round(255 * t);
+                g = Math.round(210 + (190 - 210) * t);
+                b = 0;
+                alpha = 0.32 + t * 0.20;
+            } else {
+                // Low health: red, static (no pulse)
+                r = 220; g = 0; b = 0;
+                alpha = 0.45;
+            }
+
+            // Clear center zone — only color the outermost edges/corners
+            const clearZone = 75 + ratio * 9;
+            _healthVigEl.style.background =
+                `radial-gradient(ellipse at center, transparent ${clearZone}%, rgba(${r},${g},${b},${alpha.toFixed(3)}) 100%)`;
+        }
+
+        function triggerVignetteFlash(type) {
+            if (!_actionVigEl) return;
+            // Cancel previous fade-out timer
+            if (_actionVignetteTimer !== null) {
+                clearTimeout(_actionVignetteTimer);
+                _actionVignetteTimer = null;
+            }
+            // Disable transition for instant appear
+            _actionVigEl.style.transition = 'none';
+
+            if (type === 'damage') {
+                _actionVigEl.style.background =
+                    'linear-gradient(to top, rgba(255,30,30,0.32) 0%, rgba(200,0,0,0.08) 10%, transparent 17%)';
+            } else {
+                _actionVigEl.style.background =
+                    'linear-gradient(to top, rgba(0,230,140,0.28) 0%, rgba(0,200,160,0.06) 9%, transparent 16%)';
+            }
+            _actionVigEl.style.opacity = '1';
+
+            // Fade out — slow, gentle
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    _actionVigEl.style.transition = 'opacity 0.9s ease-out';
+                    _actionVigEl.style.opacity = '0';
+                });
+            });
+            _actionVignetteTimer = setTimeout(() => {
+                _actionVignetteTimer = null;
+            }, 1000);
+        }
+
+        // ==========================================
         // 6. RENDER LOOP
         // ==========================================
         function animate() {
@@ -1744,6 +1910,8 @@
             updateEntityAnimations(dt);
             // Update Shop UI (check for points and auto-show)
             updateShopUI();
+            // Update health vignette color every frame
+            updateHealthVignette();
 
             // Periodic cleanup of ghost entities (approx every 1s)
             // Use random chance to avoid missing time window at low FPS
@@ -2175,6 +2343,124 @@
             return createBlasterModel();
         }
 
+        // --- WEAPON ICON 3D RENDERING & SLOT UI ---
+        const weaponIconCache = {};
+
+        function getWeaponIconDataUrl(weaponId) {
+            if (!weaponId) return null;
+            if (weaponIconCache[weaponId]) return weaponIconCache[weaponId];
+
+            try {
+                const iconScene = new THREE.Scene();
+                const iconCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 20);
+
+                const ambLight = new THREE.AmbientLight(0xffffff, 2.0);
+                iconScene.add(ambLight);
+                const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+                dirLight.position.set(3, 4, 3);
+                iconScene.add(dirLight);
+                const rimLight = new THREE.DirectionalLight(0x00ffff, 1.8);
+                rimLight.position.set(-3, -2, -2);
+                iconScene.add(rimLight);
+
+                const model = createWeaponModel(weaponId);
+                if (!model) return null;
+
+                if (weaponId === 'knife') {
+                    iconCamera.position.set(0, 0, 0.85);
+                    model.position.set(0, 0.04, 0);
+                    model.rotation.set(0.12, 0.0, 0.75); // Diagonal blade framing
+                    model.scale.set(1.4, 1.4, 1.4);
+                } else if (weaponId === 'shotgun') {
+                    iconCamera.position.set(0, 0, 1.15);
+                    model.position.set(0, -0.02, 0);
+                    model.rotation.set(0.18, -Math.PI / 3.4, 0.12);
+                    model.scale.set(0.95, 0.95, 0.95);
+                } else { // pistol / sludge blaster
+                    iconCamera.position.set(0, 0, 0.85);
+                    model.position.set(0, 0.02, 0);
+                    model.rotation.set(0.15, -Math.PI / 3.4, 0.12);
+                    model.scale.set(1.15, 1.15, 1.15);
+                }
+                iconCamera.lookAt(0, 0, 0);
+                iconScene.add(model);
+
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = 96;
+                offCanvas.height = 96;
+                const offRenderer = new THREE.WebGLRenderer({ canvas: offCanvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+                offRenderer.setSize(96, 96);
+                offRenderer.setClearColor(0x000000, 0);
+                offRenderer.render(iconScene, iconCamera);
+
+                const dataUrl = offCanvas.toDataURL('image/png');
+                offRenderer.dispose();
+                weaponIconCache[weaponId] = dataUrl;
+                return dataUrl;
+            } catch (e) {
+                console.error("Failed to generate weapon icon for", weaponId, e);
+                return null;
+            }
+        }
+
+        function updateSlotUI() {
+            const p = players[myId];
+            if (!p) return;
+            const weapons = p.weapons || [];
+            const currentSlot = Number.isInteger(input.slot) ? input.slot : (p.currentSlot || 0);
+
+            for (let i = 0; i < 4; i++) {
+                const el = document.getElementById('slot-' + (i + 1));
+                if (!el) continue;
+
+                if (i === currentSlot) {
+                    el.classList.add('slot-active');
+                } else {
+                    el.classList.remove('slot-active');
+                }
+
+                const weapon = weapons[i];
+                if (weapon && weapon.id) {
+                    const iconUrl = getWeaponIconDataUrl(weapon.id);
+                    if (iconUrl) {
+                        el.innerHTML = `<span class="slot-key-num">${i + 1}</span><img src="${iconUrl}" alt="${weapon.id}">`;
+                    } else {
+                        el.innerHTML = `<span class="slot-key-num">${i + 1}</span>${weapon.id.toUpperCase().slice(0, 3)}`;
+                    }
+                } else {
+                    el.innerHTML = `${i + 1}`;
+                }
+            }
+
+            // Populate Secondary Blade slot icon
+            const meleeImg = document.getElementById('melee-icon-img');
+            if (meleeImg) {
+                const knifeIcon = getWeaponIconDataUrl('knife');
+                if (knifeIcon && meleeImg.src !== knifeIcon) {
+                    meleeImg.src = knifeIcon;
+                }
+            }
+
+            // Sync weapon name and ammo displays
+            const curWeapon = weapons[currentSlot];
+            const wNameEl = document.getElementById('ui-weapon');
+            const ammoEl = document.getElementById('ammo-disp');
+            if (wNameEl) {
+                if (curWeapon && curWeapon.id && WEAPON_REGISTRY[curWeapon.id]) {
+                    wNameEl.innerText = WEAPON_REGISTRY[curWeapon.id].name.toUpperCase();
+                } else {
+                    wNameEl.innerText = "EMPTY";
+                }
+            }
+            if (ammoEl) {
+                if (curWeapon) {
+                    ammoEl.innerText = curWeapon.ammo === -1 ? "INF" : curWeapon.ammo;
+                } else {
+                    ammoEl.innerText = "0";
+                }
+            }
+        }
+
         function getHeldWeaponId() {
             const p = players[myId];
             if (!p) return null;
@@ -2184,87 +2470,125 @@
         }
 
         function updateHeldWeapon(dt) {
-            const wId = getHeldWeaponId();
-            const show = !isHost && players[myId] && !players[myId].dead && gameState === 'PLAYING' && wId;
+            const show = !isHost && players[myId] && !players[myId].dead && gameState === 'PLAYING';
 
             if (!show) {
                 Object.values(localWeaponModels).forEach(m => { if (m) m.visible = false; });
                 return;
             }
 
-            if (!localWeaponModels[wId]) {
-                localWeaponModels[wId] = createWeaponModel(wId);
-                scene.add(localWeaponModels[wId]);
-            }
-            if (wId !== activeWeaponId) {
-                Object.keys(localWeaponModels).forEach(id => {
-                    localWeaponModels[id].visible = id === wId;
-                });
-                activeWeaponId = wId;
+            const p = players[myId];
+            const gunId = getHeldWeaponId();
+            const mult = (p && p.fireRateMultiplier) || 1;
+
+            // Trigger primary gun attack animation
+            if (gunId) {
+                const gunStats = WEAPON_REGISTRY[gunId] || WEAPON_REGISTRY.pistol;
+                if (input.fire && (Date.now() - lastWeaponAnim > gunStats.fireRateMs * mult)) {
+                    lastWeaponAnim = Date.now();
+                    weaponKick = 1;
+                }
             }
 
-            const model = localWeaponModels[wId];
-            model.visible = true;
-            localGun = model;
-
-            const stats = WEAPON_REGISTRY[wId] || WEAPON_REGISTRY.pistol;
-            const fireRate = stats.fireRateMs * ((players[myId] && players[myId].fireRateMultiplier) || 1);
-            if (input.fire && Date.now() - lastWeaponAnim > fireRate) {
-                lastWeaponAnim = Date.now();
-                if (stats.type === 'melee') meleeSwing = 1;
-                else weaponKick = 1;
+            // Trigger secondary blade animation (Right click)
+            const knifeStats = WEAPON_REGISTRY['knife'];
+            if (input.altFire && (Date.now() - lastMeleeAnim > knifeStats.fireRateMs * mult)) {
+                lastMeleeAnim = Date.now();
+                meleeSwing = 1;
             }
 
             weaponKick = Math.max(0, weaponKick - dt * 8);
             meleeSwing = Math.max(0, meleeSwing - dt * 5);
 
-            const swing = Math.sin(meleeSwing * Math.PI);
-            let ox = 0.24, oy = -0.18, oz = -0.42;
-            let rx = 0.05, ry = 0.03, rz = 0;
-            if (wId === 'shotgun') {
-                ox = 0.3; oy = -0.24; oz = -0.52;
-                oz += weaponKick * 0.12;
-                rx += weaponKick * 0.18;
-            } else if (wId === 'knife') {
-                // Lower on screen (oy = -0.30), positioned cleanly to the right (ox = 0.28)
+            // Hide unused models
+            Object.keys(localWeaponModels).forEach(id => {
+                localWeaponModels[id].visible = false;
+            });
+
+            // 1. Render Primary Gun on the Left (if equipped in active slot)
+            if (gunId) {
+                if (!localWeaponModels[gunId]) {
+                    localWeaponModels[gunId] = createWeaponModel(gunId);
+                    scene.add(localWeaponModels[gunId]);
+                }
+                const gunModel = localWeaponModels[gunId];
+                gunModel.visible = true;
+
+                // Mirror horizontally and scale moderately to keep view clear
+                gunModel.scale.set(-0.60, 0.60, 0.60);
+
+                const idleTime = performance.now() * 0.003;
+                const gunBobY = Math.sin(idleTime * 1.6 + 1.2) * 0.004;
+                const gunBobX = Math.cos(idleTime * 0.8 + 1.2) * 0.003;
+
+                let ox = -0.30 + gunBobX, oy = -0.29 + gunBobY, oz = -0.34;
+                let rx = 0.12, ry = 0.06, rz = -0.06;
+                if (gunId === 'shotgun') {
+                    ox = -0.34 + gunBobX;
+                    oy = -0.32 + gunBobY;
+                    oz = -0.36;
+                    oz += weaponKick * 0.10;
+                    rx = 0.14 + weaponKick * 0.16;
+                    ry = 0.08;
+                    rz = -0.07;
+                } else {
+                    oz += weaponKick * 0.06;
+                    rx = 0.12 + weaponKick * 0.10;
+                }
+
+                gunModel.position.copy(camera.position);
+                gunModel.quaternion.copy(camera.quaternion);
+                gunModel.position.add(new THREE.Vector3(ox, oy, oz).applyQuaternion(camera.quaternion));
+                gunModel.rotateX(rx);
+                gunModel.rotateY(ry);
+                gunModel.rotateZ(rz);
+            }
+
+            // 2. Render Elemental Blade on the Right (Always shown in right hand)
+            const showKnife = !!(p.meleeWeapon || !gunId || meleeSwing > 0.01);
+            if (showKnife) {
+                if (!localWeaponModels['knife']) {
+                    localWeaponModels['knife'] = createWeaponModel('knife');
+                    scene.add(localWeaponModels['knife']);
+                }
+                const knifeModel = localWeaponModels['knife'];
+                knifeModel.visible = true;
+                knifeModel.scale.set(0.8, 0.8, 0.8);
+
+                const swing = Math.sin(meleeSwing * Math.PI);
                 const idleTime = performance.now() * 0.003;
                 const idleBobY = Math.sin(idleTime * 1.6) * 0.005;
                 const idleBobX = Math.cos(idleTime * 0.8) * 0.003;
 
-                // Base idle position: lower and right, clearing middle and crosshairs
-                ox = 0.28 + idleBobX - swing * 0.16;
-                oy = -0.30 + idleBobY + swing * 0.09;
-                oz = -0.35 - swing * 0.12;
+                let ox = 0.28 + idleBobX - swing * 0.16;
+                let oy = -0.30 + idleBobY + swing * 0.09;
+                let oz = -0.35 - swing * 0.12;
 
-                // Natural ready posture, slicing across when swinging
-                rx = 0.16 + swing * 0.45;
-                ry = -0.28 - swing * 0.65;
-                rz = 0.20 - swing * 1.30;
+                let rx = 0.16 + swing * 0.45;
+                let ry = -0.28 - swing * 0.65;
+                let rz = 0.20 - swing * 1.30;
 
                 // Dynamic elemental pulse on materials and light
                 const pulse = 0.8 + 0.2 * Math.sin(performance.now() * 0.007);
-                if (model.userData && model.userData.emissiveMaterials) {
+                if (knifeModel.userData && knifeModel.userData.emissiveMaterials) {
                     const swingGlow = 1 + swing * 0.9;
-                    for (const m of model.userData.emissiveMaterials) {
+                    for (const m of knifeModel.userData.emissiveMaterials) {
                         if (m && m.userData && m.userData.baseEmissive !== undefined) {
                             m.emissiveIntensity = m.userData.baseEmissive * pulse * swingGlow;
                         }
                     }
                 }
-                if (model.userData && model.userData.elementalLight) {
-                    model.userData.elementalLight.intensity = (0.8 + swing * 1.6) * pulse;
+                if (knifeModel.userData && knifeModel.userData.elementalLight) {
+                    knifeModel.userData.elementalLight.intensity = (0.8 + swing * 1.6) * pulse;
                 }
-            } else {
-                oz += weaponKick * 0.08;
-                rx += weaponKick * 0.12;
-            }
 
-            model.position.copy(camera.position);
-            model.quaternion.copy(camera.quaternion);
-            model.position.add(new THREE.Vector3(ox, oy, oz).applyQuaternion(camera.quaternion));
-            model.rotateX(rx);
-            model.rotateY(ry);
-            model.rotateZ(rz);
+                knifeModel.position.copy(camera.position);
+                knifeModel.quaternion.copy(camera.quaternion);
+                knifeModel.position.add(new THREE.Vector3(ox, oy, oz).applyQuaternion(camera.quaternion));
+                knifeModel.rotateX(rx);
+                knifeModel.rotateY(ry);
+                knifeModel.rotateZ(rz);
+            }
         }
 
         function emitFx(kind, x, y, z, extra = {}) {
@@ -2282,33 +2606,39 @@
                 const fwdY = sinP;
                 const fwdZ = -Math.cos(yaw) * cosP;
                 const rightX = Math.cos(yaw);
+                const rightY = 0;
                 const rightZ = -Math.sin(yaw);
+                const upX = Math.sin(yaw) * sinP;
+                const upY = cosP;
+                const upZ = Math.cos(yaw) * sinP;
 
-                // 1. High-density elemental crescent blade wave arc (20 particles)
-                for (let i = 0; i < 20; i++) {
-                    const t = (i / 19) - 0.5; // -0.5 to 0.5 across the arc
-                    const arcOffset = 1 - Math.abs(t) * 1.6; // curve bulge forward
-                    const px = x + rightX * (t * 1.3) + fwdX * (arcOffset * 0.35);
-                    const py = y - 0.12 + (-t * 0.12) + fwdY * (arcOffset * 0.35);
-                    const pz = z + rightZ * (t * 1.3) + fwdZ * (arcOffset * 0.35);
+                // 1. High-density elemental crescent blade wave arc (22 particles)
+                for (let i = 0; i < 22; i++) {
+                    const t = (i / 21) - 0.5; // -0.5 to 0.5 across the arc
+                    const arcOffset = 1 - Math.abs(t) * 1.5; // curve bulge forward
+                    // Position along the 3D slash plane (tilted accurately with pitch)
+                    const px = x + rightX * (t * 1.3) + upX * (-t * 0.35) + fwdX * (arcOffset * 0.4);
+                    const py = y + rightY * (t * 1.3) + upY * (-t * 0.35) + fwdY * (arcOffset * 0.4);
+                    const pz = z + rightZ * (t * 1.3) + upZ * (-t * 0.35) + fwdZ * (arcOffset * 0.4);
 
                     // Colors: incandescent white-cyan in center, electric teal & ether emerald on wings
                     const isCenter = Math.abs(t) < 0.22;
                     const col = isCenter ? 0xffffff : (Math.abs(t) < 0.38 ? 0x6efff5 : 0x00ffc8);
 
+                    const slashSpeed = 8.5;
                     fxParticles.push({
                         x: px,
                         y: py,
                         z: pz,
-                        vx: fwdX * 7.5 + rightX * (t * 2.2),
-                        vy: fwdY * 7.5 - 0.8 + (-t * 0.4),
-                        vz: fwdZ * 7.5 + rightZ * (t * 2.2),
-                        life: 0.26 + (1 - Math.abs(t)) * 0.1,
+                        vx: fwdX * slashSpeed + rightX * (t * 2.5) + upX * (-t * 0.8),
+                        vy: fwdY * slashSpeed + rightY * (t * 2.5) + upY * (-t * 0.8),
+                        vz: fwdZ * slashSpeed + rightZ * (t * 2.5) + upZ * (-t * 0.8),
+                        life: 0.28 + (1 - Math.abs(t)) * 0.1,
                         size: 0.16 + (1 - Math.abs(t)) * 0.12,
                         color: col,
                         glow: 0x00ffd0,
-                        drag: 0.88,
-                        grav: -3.5
+                        drag: 0.90,
+                        grav: -0.4
                     });
                 }
 
@@ -2316,19 +2646,22 @@
                 for (let i = 0; i < 16; i++) {
                     const t = (Math.random() - 0.5) * 1.2;
                     const sparkCol = Math.random() > 0.4 ? 0x00f0ff : 0x38ffaa;
+                    const spreadR = (Math.random() - 0.5) * 2.5;
+                    const spreadU = (Math.random() - 0.5) * 2.5;
+                    const fwdSpd = 4.5 + Math.random() * 5.5;
                     fxParticles.push({
-                        x: x + rightX * (t * 0.9) + (Math.random() - 0.5) * 0.25,
-                        y: y - 0.12 + (Math.random() - 0.5) * 0.18,
-                        z: z + rightZ * (t * 0.9) + (Math.random() - 0.5) * 0.25,
-                        vx: fwdX * (4 + Math.random() * 5) + (Math.random() - 0.5) * 3,
-                        vy: fwdY * (4 + Math.random() * 5) - 0.9 + (Math.random() - 0.5) * 2,
-                        vz: fwdZ * (4 + Math.random() * 5) + (Math.random() - 0.5) * 3,
+                        x: x + rightX * (t * 0.9) + upX * (t * 0.3) + (Math.random() - 0.5) * 0.25,
+                        y: y + rightY * (t * 0.9) + upY * (t * 0.3) + (Math.random() - 0.5) * 0.25,
+                        z: z + rightZ * (t * 0.9) + upZ * (t * 0.3) + (Math.random() - 0.5) * 0.25,
+                        vx: fwdX * fwdSpd + rightX * spreadR + upX * spreadU,
+                        vy: fwdY * fwdSpd + rightY * spreadR + upY * spreadU,
+                        vz: fwdZ * fwdSpd + rightZ * spreadR + upZ * spreadU,
                         life: 0.28 + Math.random() * 0.16,
                         size: 0.07 + Math.random() * 0.10,
                         color: sparkCol,
                         glow: 0x41ffb5,
-                        drag: 0.92,
-                        grav: -4.0
+                        drag: 0.91,
+                        grav: -0.8
                     });
                 }
             } else if (kind === 'meleeHit') {
@@ -2492,13 +2825,14 @@
                 xp: 0, level: 1, xpToNextLevel: 100, shopPoints: 1,
                 // Shop selection state
                 currentShopOptions: null, selectedShopOption: -1,
-                // Weapons with starting ammo
-                weapons: [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null],
-                maxAmmo: { pistol: 60, shotgun: 24 },
+                // Weapons: 4 gun slots + secondary melee blade
+                weapons: [null, null, null, null],
+                meleeWeapon: { id: 'knife', ammo: -1 },
+                maxAmmo: { pistol: 80, shotgun: 36 },
                 fireRateMultiplier: 1.0,
-                currentSlot: 0, lastFire: 0,
+                currentSlot: 0, lastFire: 0, lastMeleeFire: 0,
                 yaw: 0, pitch: 0, dead: false, ready: false,
-                input: { x: 0, y: 0, fire: false, jump: false, slot: 0, shopOpen: false },
+                input: { x: 0, y: 0, fire: false, altFire: false, jump: false, slot: 0, shopOpen: false },
                 // Jump timing state
                 lastGroundedTime: 0, // Last time player was grounded (for coyote time)
                 lastJumpPressTime: 0 // Last time jump was pressed (for jump buffering)
@@ -2551,8 +2885,16 @@
         }
 
         function updateHUD(data) {
-            // Data: [id, x, y, z, yaw, hp, slot, ammo, xp, level, xpToNextLevel, shopPoints]
-            document.getElementById('hp-disp').innerText = data[5];
+            // Data: [id, x, y, z, yaw, hp, slot, ammo, xp, level, xpToNextLevel, shopPoints, weaponId, weaponsSummary]
+            const newHp = data[5];
+            if (_prevVignetteHp >= 0 && newHp !== _prevVignetteHp) {
+                if (newHp < _prevVignetteHp) triggerVignetteFlash('damage');
+                else triggerVignetteFlash('heal');
+            }
+            _prevVignetteHp = newHp;
+            // Sync HP onto player object so updateHealthVignette can read it
+            if (players[myId]) players[myId].hp = newHp;
+            document.getElementById('hp-disp').innerText = newHp;
 
             // XP/Level display
             const xp = data[8];
@@ -2573,52 +2915,42 @@
                 shopDisp.style.display = 'none';
             }
 
-            // Sync local player shop points for radial shop
+            // Sync local player state
             if (players[myId]) {
                 players[myId].xp = xp;
                 players[myId].level = level;
                 players[myId].xpToNextLevel = xpMax;
                 players[myId].shopPoints = shopPts;
-            }
+                players[myId].currentSlot = data[6];
 
-            const slot = data[6];
-            const syncedWeaponId = data[12];
-            for (let i = 1; i <= 4; i++) {
-                const el = document.getElementById('slot-' + i);
-                if (i === (slot + 1)) el.classList.add('slot-active'); else el.classList.remove('slot-active');
-            }
-
-            if (players[myId]) {
-                players[myId].currentSlot = slot;
-                if (!players[myId].weapons) players[myId].weapons = [null, null, null, null];
-                while (players[myId].weapons.length < 4) players[myId].weapons.push(null);
-                if (syncedWeaponId) {
-                    if (!players[myId].weapons[slot]) players[myId].weapons[slot] = { id: syncedWeaponId, ammo: data[7] };
-                    else players[myId].weapons[slot].id = syncedWeaponId;
+                if (data[13] && Array.isArray(data[13])) {
+                    players[myId].weapons = data[13].map(w => w ? { id: w[0], ammo: w[1] } : null);
+                } else if (data[12]) {
+                    if (!players[myId].weapons) players[myId].weapons = [null, null, null, null];
+                    while (players[myId].weapons.length < 4) players[myId].weapons.push(null);
+                    if (!players[myId].weapons[data[6]]) {
+                        players[myId].weapons[data[6]] = { id: data[12], ammo: data[7] };
+                    } else {
+                        players[myId].weapons[data[6]].id = data[12];
+                        players[myId].weapons[data[6]].ammo = data[7];
+                    }
                 }
             }
 
-            // Get weapon name from registry (supports shotgun)
-            let wName = "EMPTY";
-            const wId = syncedWeaponId || (players[myId] && players[myId].weapons && players[myId].weapons[slot] && players[myId].weapons[slot].id);
-            if (wId && WEAPON_REGISTRY[wId]) wName = WEAPON_REGISTRY[wId].name.toUpperCase();
-            else {
-                const defaultNames = ['PISTOL', 'ELEMENTAL BLADE', 'EMPTY', 'EMPTY'];
-                wName = defaultNames[slot] || 'EMPTY';
-            }
-            document.getElementById('ui-weapon').innerText = wName;
-            document.getElementById('ammo-disp').innerText = data[7] === -1 ? "INF" : data[7];
+            updateSlotUI();
         }
 
         function performAttack(pid) {
             const p = players[pid];
-            const w = p.weapons[p.currentSlot];
-            if (!w) return;
+            if (!p || p.dead) return;
+            const w = p.weapons && p.weapons[p.currentSlot];
+            if (!w || !w.id) return;
             const stats = WEAPON_REGISTRY[w.id];
+            if (!stats) return;
 
             // Apply fire rate multiplier
             const effectiveFireRate = stats.fireRateMs * (p.fireRateMultiplier || 1.0);
-            if (Date.now() - p.lastFire < effectiveFireRate) return;
+            if (Date.now() - (p.lastFire || 0) < effectiveFireRate) return;
             if (w.ammo === 0) return;
 
             p.lastFire = Date.now();
@@ -2657,30 +2989,48 @@
                         size: (stats.bulletSize || 0.14) * (0.9 + Math.random() * 0.18)
                     });
                 }
-            } else {
-                // Melee
-                const fx = -Math.sin(p.yaw);
-                const fz = -Math.cos(p.yaw);
-                const slashX = p.x + fx * 1.15;
-                const slashY = p.y + 0.18;
-                const slashZ = p.z + fz * 1.15;
-                emitFx('slash', slashX, slashY, slashZ, { yaw: p.yaw, pitch: p.pitch || 0 });
+            }
+        }
 
-                for (let zid in zombies) {
-                    const z = zombies[zid];
-                    const dx = z.x - p.x;
-                    const dy = z.y - p.y;
-                    const dz = z.z - p.z;
-                    const dist2D = Math.sqrt(dx * dx + dz * dz) || 0.0001;
-                    const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        function performMeleeAttack(pid) {
+            const p = players[pid];
+            if (!p || p.dead) return;
+            const stats = WEAPON_REGISTRY['knife'];
+            if (!stats) return;
 
-                    if (dist3D < stats.range) {
-                        const dot = fx * dx / dist2D + fz * dz / dist2D;
-                        if (dot > 0.5) {
-                            z.hp -= stats.damage;
-                            emitFx('meleeHit', z.x, z.y + 0.30, z.z);
-                            if (z.hp <= 0) killZombie(zid, pid);
-                        }
+            const effectiveFireRate = stats.fireRateMs * (p.fireRateMultiplier || 1.0);
+            if (Date.now() - (p.lastMeleeFire || 0) < effectiveFireRate) return;
+
+            p.lastMeleeFire = Date.now();
+
+            // Melee (3D aim direction with pitch)
+            const pitch = p.pitch || 0;
+            const cosP = Math.cos(pitch);
+            const sinP = Math.sin(pitch);
+            const fwdX = -Math.sin(p.yaw) * cosP;
+            const fwdY = sinP;
+            const fwdZ = -Math.cos(p.yaw) * cosP;
+
+            const eyeY = p.y + 0.4;
+            const slashX = p.x + fwdX * 1.1;
+            const slashY = eyeY + fwdY * 1.1;
+            const slashZ = p.z + fwdZ * 1.1;
+            emitFx('slash', slashX, slashY, slashZ, { yaw: p.yaw, pitch: pitch });
+
+            for (let zid in zombies) {
+                const z = zombies[zid];
+                const zY = (z.y || 0) + 0.5;
+                const dx = z.x - p.x;
+                const dy = zY - eyeY;
+                const dz = z.z - p.z;
+                const dist3D = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.0001;
+
+                if (dist3D < stats.range) {
+                    const dot3D = (fwdX * dx + fwdY * dy + fwdZ * dz) / dist3D;
+                    if (dot3D > 0.45) {
+                        z.hp -= stats.damage;
+                        emitFx('meleeHit', z.x, zY, z.z);
+                        if (z.hp <= 0) killZombie(zid, pid);
                     }
                 }
             }
@@ -3253,21 +3603,10 @@
         function generateShopOptions(pid) {
             if (!players[pid]) return;
             const p = players[pid];
-            const weapons = p.weapons || []; 
 
             // Weight by rarity
             const weights = { common: 50, uncommon: 30, rare: 20 };
-            const available = SHOP_UPGRADES.filter(u => {
-                // Skip "once" upgrades player already has
-                if (u.once && u.id === 'shotgun') {
-                    return !weapons.some(w => w && w.id === 'shotgun');
-                }
-                // Only show ammo/upgrades for weapons the player actually possesses
-                if (u.requiresWeapon) {
-                    return weapons.some(w => w && w.id === u.requiresWeapon);
-                }
-                return true;
-            });
+            const available = SHOP_UPGRADES;
 
             // Pick 3 weighted random options
             const options = [];
@@ -3444,7 +3783,11 @@
                 players[id].xp = 0;
                 players[id].level = 1;
                 players[id].xpToNextLevel = 100;
-                players[id].shopPoints = 0;
+                players[id].shopPoints = 1;
+                players[id].weapons = [null, null, null, null];
+                players[id].meleeWeapon = { id: 'knife', ammo: -1 };
+                players[id].maxAmmo = { pistol: 80, shotgun: 36 };
+                players[id].currentSlot = 0;
                 players[id].currentShopOptions = null;
             }
 
@@ -3500,8 +3843,9 @@
                 p.fireRateMultiplier = 1.0;
 
                 // Reset weapons and ammo
-                p.weapons = [{ id: 'pistol', ammo: 30 }, { id: 'knife', ammo: -1 }, null, null];
-                p.maxAmmo = { pistol: 60, shotgun: 24 };
+                p.weapons = [null, null, null, null];
+                p.meleeWeapon = { id: 'knife', ammo: -1 };
+                p.maxAmmo = { pistol: 80, shotgun: 36 };
                 p.currentSlot = 0;
 
                 // Reset position to spawn
@@ -3728,14 +4072,26 @@
             return wrapper;
         }
 
+        function onWindowResize() {
+            if (!camera || !renderer) return;
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        }
+
         function initThree() {
             scene = new THREE.Scene(); scene.background = new THREE.Color(0x111111); scene.fog = new THREE.Fog(0x111111, 10, 80);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
             scene.add(new THREE.AmbientLight(0xffffff, 0.4));
             const d = new THREE.DirectionalLight(0xffffff, 0.8); d.position.set(50, 100, 50); scene.add(d);
+            window.addEventListener('resize', onWindowResize);
             requestAnimationFrame(animate);
         }
         function initShopUI() {
@@ -4069,7 +4425,11 @@
 
                 if (e.code === 'Space') input.jump = true;
                 if (e.key === 'Control') input.crouch = true;
-                if (['1', '2', '3', '4'].includes(e.key)) input.slot = parseInt(e.key) - 1;
+                if (['1', '2', '3', '4'].includes(e.key)) {
+                    input.slot = parseInt(e.key) - 1;
+                    if (players[myId]) players[myId].currentSlot = input.slot;
+                    updateSlotUI();
+                }
                 if (e.key === 'p' || e.key === 'P') {
                     fpsVisible = !fpsVisible;
                     document.getElementById('fps-counter').style.display = fpsVisible ? 'block' : 'none';
@@ -4107,10 +4467,10 @@
             window.addEventListener('blur', () => {
                 keys.w = keys.a = keys.s = keys.d = false;
                 input.x = input.y = 0;
-                input.x = input.y = 0;
                 input.jump = false;
                 input.crouch = false;
                 input.fire = false;
+                input.altFire = false;
             });
 
             document.addEventListener('mousemove', e => {
@@ -4125,9 +4485,14 @@
                 if (gameState === 'PLAYING') {
                     if (document.pointerLockElement !== document.body) {
                         document.body.requestPointerLock();
-                    } else if (e.button === 0) {
-                        // Left click = fire
-                        input.fire = true;
+                    } else {
+                        if (e.button === 0) {
+                            // Left click = fire primary gun
+                            input.fire = true;
+                        } else if (e.button === 2) {
+                            // Right click = blade slash
+                            input.altFire = true;
+                        }
                     }
                 }
             });
@@ -4135,6 +4500,8 @@
             document.addEventListener('mouseup', (e) => {
                 if (e.button === 0) {
                     input.fire = false;
+                } else if (e.button === 2) {
+                    input.altFire = false;
                 }
             });
 
@@ -4144,6 +4511,8 @@
             window.addEventListener('wheel', e => {
                 // Scroll wheel always switches weapons
                 if (e.deltaY > 0) input.slot = (input.slot + 1) % 4; else input.slot = (input.slot - 1 + 4) % 4;
+                if (players[myId]) players[myId].currentSlot = input.slot;
+                updateSlotUI();
             });
         }
         function setupMobileControls() {
@@ -4165,6 +4534,7 @@
             handleStick('stick-right', (x, y) => { camYaw -= x * 0.05; camPitch -= y * 0.05; camPitch = Math.max(-1.5, Math.min(1.5, camPitch)); });
             const bf = document.getElementById('btn-fire'); bf.addEventListener('touchstart', e => { e.preventDefault(); input.fire = true; bf.style.background = "rgba(255,0,0,0.5)" }); bf.addEventListener('touchend', e => { e.preventDefault(); input.fire = false; bf.style.background = "rgba(255,0,0,0.2)" });
             const bj = document.getElementById('btn-jump'); bj.addEventListener('touchstart', e => { e.preventDefault(); input.jump = true; bj.style.background = "rgba(0,0,255,0.5)" }); bj.addEventListener('touchend', e => { e.preventDefault(); input.jump = false; bj.style.background = "rgba(255,0,0,0.2)" });
+            const bb = document.getElementById('btn-blade'); if (bb) { bb.addEventListener('touchstart', e => { e.preventDefault(); input.altFire = true; bb.style.background = "rgba(0,255,213,0.5)" }); bb.addEventListener('touchend', e => { e.preventDefault(); input.altFire = false; bb.style.background = "rgba(0,255,213,0.2)" }); }
         }
 
         init();
