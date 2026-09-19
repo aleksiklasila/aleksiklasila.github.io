@@ -477,7 +477,6 @@
         }
     </script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 
 <body>
@@ -492,8 +491,8 @@
             <div style="margin-bottom: 15px;">
                 <label
                     style="cursor:pointer; padding:15px 30px; background:#333; border:2px solid #0a0; color:#0a0; font-size:1rem;">
-                    📁 SELECT MAP (.zip or .glb)
-                    <input type="file" id="map-file" accept=".glb,.gltf,.zip" style="display:none;">
+                    📁 SELECT MAP (.glb)
+                    <input type="file" id="map-file" accept=".glb,.gltf" style="display:none;">
                 </label>
             </div>
             <div id="map-status" style="color:#888; font-size:0.8rem; margin-bottom:15px;">No map loaded</div>
@@ -788,7 +787,6 @@
             // Skybox
             if (GameAssets.skybox.base) URL.revokeObjectURL(GameAssets.skybox.base);
             GameAssets.skybox = { base: null, type: null, config: null };
-            currentMapZipData = null; // Also clear the zip data buffer
         }
 
         // Visuals & Physics
@@ -816,7 +814,6 @@
         let snapshots = [];
         const INTERP_DELAY = 50; // ms to buffer
         let currentMapDataUrl = null; // Store base64 map data for transfer
-        let currentMapZipData = null; // Store raw ZIP data (base64)
 
         // Navigation
         let navNodes = [];
@@ -826,15 +823,13 @@
         const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
         let pendingMapChunks = {}; // For client: { expected, received: [], totalSize }
 
-        function sendMapChunked(conn, dataUrl, isZip = false) {
+        function sendMapChunked(conn, dataUrl) {
             const totalSize = dataUrl.length;
             const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
-            console.log(`Sending map in ${totalChunks} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB) ${isZip ? '(ZIP)' : ''}`);
+            console.log(`Sending map in ${totalChunks} chunks (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
 
-            // Send start message
-            conn.send({ type: 'MAP_START', totalChunks, totalSize, isZip });
+            conn.send({ type: 'MAP_START', totalChunks, totalSize });
 
-            // Send chunks with small delay to avoid overwhelming
             let chunkIndex = 0;
             const sendNext = () => {
                 if (chunkIndex >= totalChunks) return;
@@ -844,7 +839,7 @@
                 conn.send({ type: 'MAP_CHUNK', index: chunkIndex, data: chunk });
                 chunkIndex++;
                 if (chunkIndex < totalChunks) {
-                    setTimeout(sendNext, 50); // 50ms delay between chunks
+                    setTimeout(sendNext, 50);
                 } else {
                     conn.send({ type: 'MAP_END' });
                 }
@@ -853,13 +848,9 @@
         }
 
         function broadcastMapChunked() {
-            if (currentMapZipData) {
+            if (currentMapDataUrl) {
                 for (let peerId in conns) {
-                    sendMapChunked(conns[peerId], currentMapZipData, true);
-                }
-            } else if (currentMapDataUrl) {
-                for (let peerId in conns) {
-                    sendMapChunked(conns[peerId], currentMapDataUrl, false);
+                    sendMapChunked(conns[peerId], currentMapDataUrl);
                 }
             }
         }
@@ -972,131 +963,7 @@
             return url;
         }
 
-        async function processZip(zip, statusEl) {
-            // Helper to load config
-            const loadConfig = async (regex) => {
-                const file = zip.file(regex)[0];
-                if (file) {
-                    try {
-                        const text = await file.async("text");
-                        return JSON.parse(text);
-                    } catch (e) {
-                        console.warn("Failed to parse config:", file.name, e);
-                    }
-                }
-                return null;
-            };
 
-            // Load Configs
-            GameAssets.map.config = (await loadConfig(/^map\/map\.json$/i)) || (await loadConfig(/^map\.json$/i));
-            GameAssets.player.config = (await loadConfig(/^player\/player\.json$/i));
-            GameAssets.zombie.config = (await loadConfig(/^zombie\/zombie\.json$/i));
-            // Skybox Config loaded later or here? Let's check skybox/skybox.json
-            const skyboxConfig = (await loadConfig(/^skybox\/skybox\.json$/i));
-            if (skyboxConfig) GameAssets.skybox.config = skyboxConfig;
-
-
-            console.log("Loaded Configs:", { map: GameAssets.map.config, player: GameAssets.player.config, zombie: GameAssets.zombie.config, skybox: GameAssets.skybox.config });
-
-            // 1. Load Map
-            const mapFile = zip.file(/map\/map\.(glb|gltf)/i)[0] || zip.file(/map\.(glb|gltf)/i)[0];
-            if (!mapFile) throw new Error("No map/map.glb found in zip");
-
-            const mapBlob = await mapFile.async("blob");
-            GameAssets.map.base = URL.createObjectURL(mapBlob);
-
-            // 2. Load Players
-            // Expect player/player.glb, player/player.walk.glb etc
-            const playerFiles = zip.file(/player\/player.*\.glb/i);
-            console.log("Found Player Files:", playerFiles.map(f => f.name));
-
-            for (let pf of playerFiles) {
-                const name = pf.name.split('/').pop().toLowerCase();
-                const blob = await pf.async("blob");
-
-                if (name === 'player.glb') {
-                    GameAssets.player.base = URL.createObjectURL(blob);
-                } else {
-                    const action = name.replace('player.', '').replace('.glb', '');
-                    GameAssets.player[action] = URL.createObjectURL(blob);
-                }
-            }
-
-            // 3. Load Zombies
-            const zombieFiles = zip.file(/zombie\/zombie.*\.glb/i);
-            console.log("Found Zombie Files:", zombieFiles.map(f => f.name));
-
-            for (let zf of zombieFiles) {
-                const name = zf.name.split('/').pop().toLowerCase();
-                const blob = await zf.async("blob");
-
-                if (name === 'zombie.glb') {
-                    GameAssets.zombie.base = URL.createObjectURL(blob);
-                } else {
-                    const action = name.replace('zombie.', '').replace('.glb', '');
-                    GameAssets.zombie[action] = URL.createObjectURL(blob);
-                }
-            }
-
-            // 4. Load Skybox
-            // Now under skybox/ directory
-            const skyboxGlb = zip.file(/skybox\/skybox\.glb/i)[0] || zip.file(/skybox\/skybox\.gltf/i)[0];
-            const skyboxPng = zip.file(/skybox\/skybox\.png/i)[0];
-            // skybox/skybox.json already loaded above
-
-            if (skyboxGlb) {
-                console.log("Found Skybox GLB:", skyboxGlb.name);
-                const blob = await skyboxGlb.async("blob");
-                GameAssets.skybox.base = URL.createObjectURL(blob);
-                GameAssets.skybox.type = 'model';
-                // Config already attached if found
-            } else if (skyboxPng) {
-                console.log("Found Skybox PNG:", skyboxPng.name);
-                const blob = await skyboxPng.async("blob");
-                GameAssets.skybox.base = URL.createObjectURL(blob);
-                GameAssets.skybox.type = 'texture';
-            }
-
-            // Check minimum requirements
-            if (!GameAssets.player.base) throw new Error("Missing player/player.glb");
-            if (!GameAssets.zombie.base) throw new Error("Missing zombie/zombie.glb");
-
-            statusEl.innerText = "⏳ Parsing model...";
-            await loadGltfMap(GameAssets.map.base);
-        }
-
-        async function handleZipUpload(file, statusEl) {
-            statusEl.innerText = "⏳ Unzipping...";
-            try {
-                const zip = await JSZip.loadAsync(file);
-                await processZip(zip, statusEl);
-
-                const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-                statusEl.innerText = "✅ Loaded Zip (" + fileSizeMB + " MB)";
-                statusEl.style.color = "#0f0";
-
-            } catch (err) {
-                console.error(err);
-                statusEl.innerText = "❌ Zip Error: " + err.message;
-                statusEl.style.color = "#f44";
-                throw err;
-            }
-        }
-
-        async function handleZipData(base64Data, statusEl) {
-            if (statusEl) statusEl.innerText = "⏳ Unzipping data...";
-            try {
-                const zip = await JSZip.loadAsync(base64Data, { base64: true });
-                await processZip(zip, statusEl || { innerText: () => { } });
-            } catch (err) {
-                console.error(err);
-                if (statusEl) {
-                    statusEl.innerText = "❌ Zip Error: " + err.message;
-                    statusEl.style.color = "#f44";
-                }
-                throw err;
-            }
-        }
 
         function loadMapFromInput() {
             const fileInput = document.getElementById('map-file');
@@ -1108,49 +975,27 @@
                 const file = fileInput.files[0];
                 const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
 
-                if (file.name.endsWith('.zip')) {
-                    // Handle Zip
-                    statusEl.innerText = "⏳ Reading Zip " + fileSizeMB + " MB...";
-                    statusEl.style.color = "#ff0";
+                statusEl.innerText = "⏳ Reading " + file.name + " (" + fileSizeMB + " MB)...";
+                statusEl.style.color = "#ff0";
 
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        currentMapZipData = e.target.result; // Store raw zip base64
-                        currentMapDataUrl = null;
-                        useGltfMap = true;
-
-                        // We need the BLOB for JSZip, but also the base64 for network
-                        // FileReader gives base64. JSZip can take base64 string
-                        handleZipUpload(file, statusEl).then(() => {
-                            broadcastMapChunked(); // Will send ZIP data
-                        });
-                    };
-                    reader.readAsDataURL(file);
-                } else {
-                    // Standard GLB
-                    currentMapZipData = null;
-                    statusEl.innerText = "⏳ Reading " + file.name + " (" + fileSizeMB + " MB)...";
-                    statusEl.style.color = "#ff0";
-
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        const dataUrl = e.target.result;
-                        currentMapDataUrl = dataUrl;
-                        useGltfMap = true;
-                        statusEl.innerText = "⏳ Parsing model...";
-                        loadGltfMap(dataUrl).then(() => {
-                            statusEl.innerText = "✅ " + file.name + " (" + fileSizeMB + " MB)";
-                            statusEl.style.color = "#0f0";
-                            broadcast({ type: 'MAP_FILE', url: dataUrl });
-                        }).catch(err => {
-                            statusEl.innerText = "❌ Failed: " + err;
-                            statusEl.style.color = "#f44";
-                        });
-                    };
-                    reader.readAsDataURL(file);
-                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const dataUrl = e.target.result;
+                    currentMapDataUrl = dataUrl;
+                    useGltfMap = true;
+                    statusEl.innerText = "⏳ Parsing model...";
+                    loadGltfMap(dataUrl).then(() => {
+                        statusEl.innerText = "✅ " + file.name + " (" + fileSizeMB + " MB)";
+                        statusEl.style.color = "#0f0";
+                        broadcastMapChunked();
+                    }).catch(err => {
+                        statusEl.innerText = "❌ Failed: " + err;
+                        statusEl.style.color = "#f44";
+                    });
+                };
+                reader.readAsDataURL(file);
             } else {
-                // No file - generate default grid map
+                // No file — use default procedural grid map
                 generateMap();
                 rebuildMapPhysics();
                 rebuildMapMesh();
@@ -1217,14 +1062,12 @@
 
             conn.on('open', () => {
                 if (isHost) {
-                    // Send map immediately (chunked for large local files)
-                    if (useGltfMap && currentMapZipData) {
-                        sendMapChunked(conn, currentMapZipData, true);
-                    } else if (useGltfMap && currentMapDataUrl) {
-                        sendMapChunked(conn, currentMapDataUrl, false);
-                    } else if (useGltfMap) {
-                        conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl || '' });
-                    } else {
+                    // Send map to newly connected client
+                    if (useGltfMap && currentMapDataUrl) {
+                        sendMapChunked(conn, currentMapDataUrl);
+                    } else if (useGltfMap && gltfMapUrl) {
+                        conn.send({ type: 'MAP_TYPE', mode: 'GLTF', url: gltfMapUrl });
+                    } else if (!useGltfMap && mapGrid.length > 0) {
                         conn.send({ type: 'MAP_DATA', map: mapGrid });
                     }
                 }
@@ -1569,49 +1412,20 @@
                 if (statusMap) { statusMap.innerText = "⏳ Assembling..."; }
 
                 const fullData = pendingMapChunks.received.join('');
-                const isZip = pendingMapChunks.isZip;
                 pendingMapChunks = {};
 
                 clearMap();
+                useGltfMap = true;
+                console.log("Map assembled, loading (" + (fullData.length / 1024 / 1024).toFixed(2) + " MB)...");
+                if (statusMap) { statusMap.innerText = "⏳ Parsing model..."; }
 
-                if (isZip) {
-                    // It's a zip base64, load it via JSZip
-                    console.log("Client unzipping MAP...");
-                    // Need to convert base64 to something JSZip likes? JSZip handles base64 string if {base64: true}
-                    // Actually loadAsync handles "base64" string if detected or specified.
-                    // The data is a dataURL "data:application/zip;base64,..." or just raw base64?
-                    // FileReader result is DataURL. 
-                    // JSZip.loadAsync(data) supports base64 string.
-
-                    // We need to strip the prefix if it exists 'data:application/xxx;base64,'
-                    let base64 = fullData;
-                    if (base64.includes('base64,')) base64 = base64.split('base64,')[1];
-
-                    // Reuse the handleZipUpload logic but manually
-                    // Or better, let's extract the extraction logic to share it?
-                    // For now, inline for client simplicity or call a shared helper if we adapt handleZipUpload
-
-                    handleZipData(base64, statusMap).then(() => {
-                        console.log("Client loaded ZIP MAP");
-                        if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
-                    }).catch(e => {
-                        console.error("Client failed to load ZIP", e);
-                        if (statusMap) { statusMap.innerText = "❌ Failed: " + e.message; statusMap.style.color = "#f44"; }
-                    });
-
-                } else {
-                    useGltfMap = true;
-                    console.log("Map assembled, loading (" + (fullData.length / 1024 / 1024).toFixed(2) + " MB)...");
-                    if (statusMap) { statusMap.innerText = "⏳ Parsing model..."; }
-
-                    loadGltfMap(fullData).then(() => {
-                        console.log("Client loaded chunked P2P MAP");
-                        if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
-                    }).catch(e => {
-                        console.error("Client failed to load chunked P2P map", e);
-                        if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
-                    });
-                }
+                loadGltfMap(fullData).then(() => {
+                    console.log("Client loaded chunked P2P MAP");
+                    if (statusMap) { statusMap.innerText = "✅ Loaded"; statusMap.style.color = "#0f0"; }
+                }).catch(e => {
+                    console.error("Client failed to load chunked P2P map", e);
+                    if (statusMap) { statusMap.innerText = "❌ Failed"; statusMap.style.color = "#f44"; }
+                });
             }
             else if (data.type === 'MAP_TYPE') {
                 if (data.mode === 'GLTF') {
