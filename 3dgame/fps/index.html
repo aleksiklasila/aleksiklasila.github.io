@@ -1278,14 +1278,14 @@
         }
 
         function compressState() {
-            // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent, xp, level, xpToNextLevel, shopPoints, weaponIdOfCurrent, weaponsSummary]
+                // P: [id, x, y, z, yaw, hp, currentSlot, ammoOfCurrent, xp, level, xpToNextLevel, shopPoints, weaponIdOfCurrent, weaponsSummary, pitch]
             const pData = [];
             for (let pid in players) {
                 const p = players[pid];
                 const w = p.weapons && p.weapons[p.currentSlot];
                 const ammo = w ? w.ammo : 0;
                 const weaponsSummary = (p.weapons || []).map(item => item ? [item.id, item.ammo] : null);
-                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints, w ? w.id : '', weaponsSummary]);
+                pData.push([pid, parseFloat(p.x.toFixed(2)), parseFloat(p.y.toFixed(2)), parseFloat(p.z.toFixed(2)), parseFloat(p.yaw.toFixed(2)), Math.ceil(p.hp), p.currentSlot, ammo, p.xp, p.level, p.xpToNextLevel, p.shopPoints, w ? w.id : '', weaponsSummary, parseFloat((p.pitch || 0).toFixed(3))]);
             }
 
             // Z: [id, x, y, z, yaw, level, hp, maxHp, sizeScale]
@@ -1378,6 +1378,15 @@
 
                 // Sync self ammo/hp/xp immediately (don't interpolate HUD)
                 const pList = data.d[1];
+                // Equipment is render state rather than motion state, so update it
+                // immediately for every player instead of waiting for interpolation.
+                pList.forEach(pd => {
+                    if (!players[pd[0]]) players[pd[0]] = { id: pd[0] };
+                    players[pd[0]].currentSlot = pd[6] || 0;
+                    players[pd[0]].heldWeaponId = pd[12] || null;
+                    players[pd[0]].meleeWeapon = { id: 'knife' };
+                    players[pd[0]].pitch = pd[14] || 0;
+                });
                 const myData = pList.find(p => p[0] === myId);
                 if (myData) {
                     updateHUD(myData);
@@ -1587,6 +1596,7 @@
                             players[np[0]].y = lerp(pp[2], np[2], clampedRatio);
                             players[np[0]].z = lerp(pp[3], np[3], clampedRatio);
                             players[np[0]].yaw = np[4]; // Don't lerp rotation usually
+                            players[np[0]].pitch = np[14] || 0;
                         }
                     } else {
                         const pp = prev[1].find(p => p[0] === np[0]);
@@ -1596,6 +1606,7 @@
                             players[np[0]].y = lerp(pp[2], np[2], clampedRatio);
                             players[np[0]].z = lerp(pp[3], np[3], clampedRatio);
                             players[np[0]].yaw = np[4];
+                            players[np[0]].pitch = np[14] || 0;
                         }
                     }
                 });
@@ -1834,7 +1845,8 @@
                     // For now, snap
                     const bobOffset = meshes[id].userData.isBlob ? (meshes[id].userData.visualOffsetY || 0) : 0;
                     meshes[id].position.set(p.x, p.y + bobOffset, p.z); // GLTF origin usually at feet
-                    meshes[id].rotation.y = p.yaw + Math.PI; // Adjust GLTF facing (often +Z, we need -Z?)
+                    meshes[id].rotation.y = p.yaw;
+                    syncShadowFigureEquipment(meshes[id], p);
                     if (meshes[id].userData.isBlob) {
                         const healthRatio = p.maxHp ? Math.max(0.75, Math.min(1, p.hp / p.maxHp)) : 1;
                         meshes[id].scale.setScalar((meshes[id].userData.baseScale || 1) * healthRatio);
@@ -1846,6 +1858,7 @@
                     const dist = Math.sqrt((p.x - p.lastPos.x) ** 2 + (p.z - p.lastPos.z) ** 2);
                     if (Date.now() - p.lastPos.time > 100) {
                         const speed = dist / ((Date.now() - p.lastPos.time) / 1000);
+                        meshes[id].userData.moveAmount = Math.min(1, speed / 5.5);
                         if (speed > 0.5) playAnimation(id, 'walk', true);
                         else playAnimation(id, 'idle', true);
                         p.lastPos = { x: p.x, z: p.z, time: Date.now() };
@@ -2055,6 +2068,101 @@
             return group;
         }
 
+        // A lightweight, fully procedural player character.  Keeping this in Three
+        // primitives means every client has the same character without needing to
+        // download a custom GLB alongside the map.
+        function createShadowFigureVisual() {
+            const figure = new THREE.Group();
+            figure.userData.isShadowFigure = true;
+            figure.userData.bobPhase = Math.random() * Math.PI * 2;
+            figure.userData.moveAmount = 0;
+
+            const cloth = new THREE.MeshStandardMaterial({ color: 0x10121b, roughness: 0.92, metalness: 0.05 });
+            const clothDark = new THREE.MeshStandardMaterial({ color: 0x05060a, roughness: 1.0, metalness: 0.0 });
+            const leather = new THREE.MeshStandardMaterial({ color: 0x19121c, roughness: 0.75, metalness: 0.16 });
+            const trim = new THREE.MeshStandardMaterial({ color: 0x2b103e, emissive: 0x7d2dcc, emissiveIntensity: 0.9, roughness: 0.35, metalness: 0.25 });
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x9efaff, transparent: true, opacity: 0.9 });
+
+            const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.48, 0.9, 8), cloth);
+            torso.position.y = 0.03;
+            figure.add(torso);
+
+            // Layered hood: a tall cone over a completely shadowed face.
+            const hood = new THREE.Mesh(new THREE.ConeGeometry(0.48, 0.82, 9), cloth);
+            hood.position.y = 0.87;
+            figure.add(hood);
+            const face = new THREE.Mesh(new THREE.SphereGeometry(0.31, 16, 10), clothDark);
+            face.position.set(0, 0.72, -0.12);
+            face.scale.set(0.88, 1.08, 0.72);
+            figure.add(face);
+            const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), eyeMat);
+            const eyeR = eyeL.clone();
+            eyeL.position.set(-0.105, 0.75, -0.325);
+            eyeR.position.set(0.105, 0.75, -0.325);
+            figure.add(eyeL, eyeR);
+
+            const belt = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.042, 6, 12), leather);
+            belt.position.y = -0.30;
+            belt.rotation.x = Math.PI / 2;
+            figure.add(belt);
+
+            const makeLimb = (x, y, length, radius, material) => {
+                const pivot = new THREE.Group();
+                pivot.position.set(x, y, 0);
+                const limb = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.82, radius, length, 7), material);
+                limb.position.y = -length * 0.5;
+                pivot.add(limb);
+                figure.add(pivot);
+                return pivot;
+            };
+            const armL = makeLimb(-0.43, 0.36, 0.88, 0.105, clothDark);
+            const armR = makeLimb(0.43, 0.36, 0.88, 0.105, clothDark);
+            armL.rotation.z = 0.10;
+            armR.rotation.z = -0.10;
+            // These pivots sit at the end of each arm. Equipment is parented to
+            // them, so it follows the walk animation like a held object.
+            const leftHand = new THREE.Group();
+            const rightHand = new THREE.Group();
+            leftHand.position.set(0, -0.83, -0.015);
+            rightHand.position.set(0, -0.83, -0.015);
+            const handGeometry = new THREE.SphereGeometry(0.10, 8, 6);
+            leftHand.add(new THREE.Mesh(handGeometry, clothDark));
+            rightHand.add(new THREE.Mesh(handGeometry, clothDark));
+            armL.add(leftHand);
+            armR.add(rightHand);
+            const legL = makeLimb(-0.18, -0.34, 0.82, 0.135, leather);
+            const legR = makeLimb(0.18, -0.34, 0.82, 0.135, leather);
+            const bootL = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.16, 0.42), clothDark);
+            const bootR = bootL.clone();
+            bootL.position.set(-0.18, -1.01, -0.10);
+            bootR.position.set(0.18, -1.01, -0.10);
+            figure.add(bootL, bootR);
+
+            // A dark cape silhouette with a colored collar band for contrast.
+            const capeShape = new THREE.Shape();
+            capeShape.moveTo(-0.43, 0.40);
+            capeShape.lineTo(-0.62, -0.12);
+            capeShape.lineTo(-0.46, -0.91);
+            capeShape.lineTo(0, -1.08);
+            capeShape.lineTo(0.46, -0.91);
+            capeShape.lineTo(0.62, -0.12);
+            capeShape.lineTo(0.43, 0.40);
+            capeShape.lineTo(-0.43, 0.40);
+            const cape = new THREE.Mesh(new THREE.ShapeGeometry(capeShape), cloth);
+            cape.position.set(0, -0.02, 0.30);
+            cape.rotation.y = Math.PI;
+            cape.material.side = THREE.DoubleSide;
+            figure.add(cape);
+            const collar = new THREE.Mesh(new THREE.TorusGeometry(0.43, 0.035, 6, 12, Math.PI), trim);
+            collar.position.set(0, 0.35, 0.02);
+            collar.rotation.set(Math.PI / 2, 0, 0);
+            figure.add(collar);
+
+            figure.userData.rig = { torso, hood, armL, armR, leftHand, rightHand, legL, legR, bootL, bootR, cape, eyeL, eyeR };
+            figure.traverse(node => { node.frustumCulled = false; });
+            return figure;
+        }
+
         function gunMat(color, opts = {}) {
             return new THREE.MeshStandardMaterial({
                 color,
@@ -2182,6 +2290,45 @@
             if (id === 'shotgun') return createShotgunModel();
             if (id === 'knife') return createKnifeModel();
             return createBlasterModel();
+        }
+
+        // Attach world weapons to hand anchors rather than to the scene. This keeps
+        // their transform in the character's arm hierarchy during every animation.
+        function syncShadowFigureEquipment(figure, player) {
+            if (!figure?.userData.isShadowFigure || !player) return;
+            const rig = figure.userData.rig;
+            const equipment = figure.userData.equipment || (figure.userData.equipment = {});
+            figure.userData.aimPitch = THREE.MathUtils.clamp(player.pitch || 0, -1.15, 1.15);
+            const gunId = player.heldWeaponId || (player.weapons && player.weapons[player.currentSlot]?.id) || null;
+
+            if (equipment.gunId !== gunId) {
+                if (equipment.gun) {
+                    equipment.gun.parent?.remove(equipment.gun);
+                    equipment.gun = null;
+                }
+                equipment.gunId = gunId;
+                if (gunId) {
+                    const gun = createWeaponModel(gunId);
+                    // The model grip is aligned with the right hand. Its X rotation
+                    // is updated every frame to match the replicated aim pitch.
+                    gun.position.set(0.01, 0.13, -0.06);
+                    gun.rotation.set(0, 0, 0.03);
+                    gun.scale.setScalar(gunId === 'shotgun' ? 0.78 : 0.70);
+                    rig.rightHand.add(gun);
+                    equipment.gun = gun;
+                }
+            }
+
+            // Every survivor has a secondary blade on the off-hand. Unlike the
+            // first-person version, this is a real child of the hand pivot.
+            if (!equipment.blade) {
+                const blade = createWeaponModel('knife');
+                blade.position.set(0, 0.08, -0.06);
+                blade.rotation.set(0, 0, -0.10);
+                blade.scale.setScalar(0.75);
+                rig.leftHand.add(blade);
+                equipment.blade = blade;
+            }
         }
 
         // --- WEAPON ICON 3D RENDERING & SLOT UI ---
@@ -2595,7 +2742,47 @@
         function updateBlobAnimations(dt) {
             const time = performance.now() * 0.001;
             for (const mesh of Object.values(meshes)) {
-                if (!mesh || !mesh.isObject3D || !mesh.userData.isBlob) continue;
+                if (!mesh || !mesh.isObject3D) continue;
+                if (mesh.userData.isShadowFigure) {
+                    const rig = mesh.userData.rig;
+                    const move = mesh.userData.moveAmount || 0;
+                    const phase = time * (4 + move * 8) + mesh.userData.bobPhase;
+                    const legStride = Math.sin(phase) * (0.12 + move * 0.58);
+                    // Keep equipped items stable. A full run-cycle on the arm makes
+                    // attached weapon meshes sweep a very large arc and can read as
+                    // flickering on network-interpolated players.
+                    const handSway = Math.sin(phase) * (0.018 + move * 0.055);
+                    const breathe = Math.sin(time * 2 + mesh.userData.bobPhase);
+                    const targetAimPitch = mesh.userData.aimPitch || 0;
+                    const previousAimPitch = mesh.userData.smoothedAimPitch || 0;
+                    const aimPitch = previousAimPitch + (targetAimPitch - previousAimPitch) * Math.min(1, dt * 18);
+                    mesh.userData.smoothedAimPitch = aimPitch;
+                    const aimPose = aimPitch * 0.34;
+                    rig.torso.position.y = 0.03 + breathe * 0.018 + move * 0.015;
+                    rig.hood.rotation.z = breathe * 0.025;
+                    // The shoulders follow aim and the hands rise/fall with it.
+                    // The held models counter the walk swing below so their barrels
+                    // and blades retain the precise replicated aim direction.
+                    rig.armL.rotation.x = -handSway + aimPose;
+                    rig.armR.rotation.x = handSway + aimPose;
+                    rig.leftHand.position.y = -0.83 + aimPitch * 0.16;
+                    rig.rightHand.position.y = -0.83 + aimPitch * 0.16;
+                    rig.legL.rotation.x = legStride * 0.78;
+                    rig.legR.rotation.x = -legStride * 0.78;
+                    rig.bootL.position.z = -0.10 - Math.max(0, -legStride) * 0.16;
+                    rig.bootR.position.z = -0.10 - Math.max(0, legStride) * 0.16;
+                    rig.cape.rotation.y = Math.PI + Math.sin(phase * 0.72) * (0.035 + move * 0.085);
+                    rig.cape.rotation.x = -0.08 - move * 0.12 + breathe * 0.025;
+                    const equipment = mesh.userData.equipment;
+                    if (equipment?.gun) equipment.gun.rotation.x = aimPitch - rig.armR.rotation.x;
+                    if (equipment?.blade) equipment.blade.rotation.x = aimPitch - rig.armL.rotation.x;
+                    const eyePulse = 0.72 + Math.sin(time * 5 + mesh.userData.bobPhase) * 0.25;
+                    rig.eyeL.material.opacity = eyePulse;
+                    rig.eyeR.material.opacity = eyePulse;
+                    mesh.userData.moveAmount = Math.max(0, move - dt * 1.8);
+                    continue;
+                }
+                if (!mesh.userData.isBlob) continue;
                 const bob = Math.sin(time * 3 + mesh.userData.bobPhase) * 0.03;
                 mesh.rotation.z = Math.sin(time * 2 + mesh.userData.bobPhase) * 0.08;
                 mesh.rotation.x = Math.sin(time * 2.4 + mesh.userData.bobPhase) * 0.05;
@@ -3286,7 +3473,9 @@
 
         async function createEntityVisual(id, type) {
             const color = type === 'player' ? 0x4fd8ff : 0x3dff8e;
-            const wrapper = createBlobVisual(type, color, type === 'player' ? 1.0 : 0.95);
+            const wrapper = type === 'player'
+                ? createShadowFigureVisual()
+                : createBlobVisual(type, color, 0.95);
             wrapper.name = id;
             wrapper.userData.isEntity = true;
             wrapper.userData.type = type;
