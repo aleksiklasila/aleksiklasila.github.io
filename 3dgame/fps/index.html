@@ -793,6 +793,7 @@
         let scene, camera, renderer, world;
         let physicsBodies = {};
         let zombieBodies = {};
+        let zombieColliders = {};
         let meshes = {};
         let bulletMeshes = [];
         const bulletGeometry = new THREE.IcosahedronGeometry(0.24, 1);
@@ -3179,6 +3180,11 @@
                     pathTimer: 0,
                     lastPos: null,
                     stuckTime: 0,
+                    lastJumpAt: 0,
+                    lastScrambleAt: 0,
+                    scrambleUntil: 0,
+                    compactUntil: 0,
+                    colliderRadius: 0.38,
                     // Boost system
                     level,
                     boosts,
@@ -3196,12 +3202,14 @@
 
                 const body = world.createRigidBody(bodyDesc);
 
-                const colliderDesc = RAPIER.ColliderDesc.ball(0.5);
+                // A smaller body lets zombies pass tight scene dressing and narrow
+                // gaps while their visual silhouette remains unchanged.
+                const colliderDesc = RAPIER.ColliderDesc.ball(0.38);
                 colliderDesc.setFriction(0.0);
                 // Group 4 (Zombie), Mask 1(Env)|2(Player)|4(Zombie)
                 colliderDesc.setCollisionGroups(0x00040007);
 
-                world.createCollider(colliderDesc, body);
+                zombieColliders[id] = world.createCollider(colliderDesc, body);
                 zombieBodies[id] = body;
 
                 if (level > 0) {
@@ -3221,15 +3229,15 @@
             // Zombie grounded check helper
             function isZombieGrounded(body) {
                 const pos = body.translation();
-                // Rim Casting for Zombie (Radius 0.5)
-                const r = 0.51;
+                // Rim casting follows the compact zombie collision body.
+                const r = 0.39;
                 const origins = [
                     { x: pos.x + r, y: pos.y, z: pos.z },
                     { x: pos.x - r, y: pos.y, z: pos.z },
                     { x: pos.x, y: pos.y, z: pos.z + r },
                     { x: pos.x, y: pos.y, z: pos.z - r }
                 ];
-                const maxToi = 0.7; // Radius 0.5 + 0.2 buffer (slightly more for zombies to climb)
+                const maxToi = 0.62; // Radius 0.38 + small lip-climb buffer
 
                 for (let o of origins) {
                     const ray = new RAPIER.Ray(o, { x: 0, y: -1, z: 0 });
@@ -3243,6 +3251,13 @@
                 const z = zombies[zid];
                 const body = zombieBodies[zid];
                 if (!body) continue;
+                const collider = zombieColliders[zid];
+                const nowForCollider = Date.now();
+                const desiredRadius = z.compactUntil > nowForCollider ? 0.24 : 0.38;
+                if (collider && typeof collider.setRadius === 'function' && z.colliderRadius !== desiredRadius) {
+                    collider.setRadius(desiredRadius);
+                    z.colliderRadius = desiredRadius;
+                }
 
                 const healthRatio = z.maxHp ? Math.max(0, Math.min(1, z.hp / z.maxHp)) : 1;
                 const sizeScale = Math.max(0.1, Math.min(1.0, (z.baseSizeScale || 0.25) * (0.45 + healthRatio * 0.55)));
@@ -3338,31 +3353,43 @@
                             if (movedDist < expectedDist * 0.3 && dist2D > 1.5) {
                                 z.stuckTime = (z.stuckTime || 0) + (now - z.lastPos.time);
 
-                                // If stuck for >150ms and grounded, apply continuous small climbing impulse
-                                if (z.stuckTime > 150 && isZombieGrounded(body)) {
-                                    // Apply a small upward impulse continuously while stuck
-                                    // This allows climbing walls gradually instead of one big hop
-                                    // Use zombie's individual upImpulse (boosted if has climber boosts)
+                                // A short jump lets the smaller collision body climb
+                                // lips, poles, and narrow ledges without route memory.
+                                if (z.stuckTime > 180 && isZombieGrounded(body) && now - z.lastJumpAt > 360) {
                                     const climbStrength = z.upImpulse || 8;
-                                    const maxClimbVelocity = 15; // Cap to prevent flying
-
-                                    // Add to velocity, but cap it
-                                    if (vy < maxClimbVelocity) {
-                                        vy += climbStrength;
-                                        // Clamp to max
-                                        if (vy > maxClimbVelocity) {
-                                            vy = maxClimbVelocity;
-                                        }
-                                    }
+                                    vy = Math.max(vy, Math.min(13, climbStrength * 1.15));
+                                    z.lastJumpAt = now;
                                     z.climbImpulseY = climbStrength;
                                 } else {
                                     z.climbImpulseY = 0;
+                                }
+
+                                // If simple jumps fail, make one short scramble
+                                // attempt: compact the physical body, jump hard, and
+                                // bias the launch to either side of the obstruction.
+                                // This is local recovery, not persistent route memory.
+                                if (z.stuckTime > 650 && now - z.lastScrambleAt > 1000) {
+                                    z.compactUntil = now + 520;
+                                    z.scrambleUntil = now + 520;
+                                    z.scrambleSide = Math.random() < 0.5 ? -1 : 1;
+                                    z.lastScrambleAt = now;
+                                    z.lastJumpAt = now;
+                                    vy = Math.max(vy, Math.min(15, (z.upImpulse || 8) * 1.55));
                                 }
                             } else {
                                 z.stuckTime = 0; // Making progress, reset
                                 z.climbImpulseY = 0;
                             }
                             z.lastPos = { x: z.x, z: z.z, time: now };
+                        }
+
+                        if (z.scrambleUntil > now && dist2D > 0.01) {
+                            const invDist = 1 / dist2D;
+                            const side = z.scrambleSide || 1;
+                            const forwardX = dx * invDist;
+                            const forwardZ = dz * invDist;
+                            vx = (forwardX - forwardZ * side * 0.42) * currentSpeed * 1.45;
+                            vz = (forwardZ + forwardX * side * 0.42) * currentSpeed * 1.45;
                         }
 
                         body.setLinvel({ x: vx, y: vy, z: vz }, true);
@@ -3586,6 +3613,7 @@
                 if (world.getRigidBody(zombieBodies[zid].handle)) world.removeRigidBody(zombieBodies[zid]);
                 delete zombieBodies[zid];
             }
+            delete zombieColliders[zid];
 
             // Track for difficulty scaling
             totalZombiesKilled++;
@@ -3852,6 +3880,7 @@
                     }
                     delete zombieBodies[zid];
                 }
+                delete zombieColliders[zid];
                 delete zombies[zid];
             }
 
@@ -4282,6 +4311,9 @@
             console.log("Created " + navNodes.length + " Nav Nodes. Linking...");
 
             // 2. Link Neighbors (3D distance with height limit)
+            // Keep graph links within what a ball-shaped zombie can physically
+            // traverse. The previous generous limits connected ledges and narrow
+            // gaps that looked valid to A* but were collision dead ends.
             const MAX_HEIGHT_DIFF = 3.0; // Max vertical distance for a connection
             const MAX_SLOPE = 1.5; // Max height per horizontal unit (prevents sheer cliffs)
 
@@ -4307,7 +4339,6 @@
                         const end = new THREE.Vector3(n2.x, n2.y + 1, n2.z);
                         const dir = new THREE.Vector3().subVectors(end, start).normalize();
                         const len = start.distanceTo(end);
-
                         raycaster.set(start, dir);
                         const hits = raycaster.intersectObject(mapMesh, true);
                         let blocked = false;
