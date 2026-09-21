@@ -2412,6 +2412,7 @@ function setupConnection(conn) {
         peerPresenceById[conn.peer] = true;
     }
     conn.on('data', data => {
+        if (typeof Jukebox !== 'undefined' && Jukebox.handle(conn, data)) return;
         if (data.type === 'NET_PING') {
             conn.send({ type: 'NET_PONG', seq: Number(data.seq) || 0 });
         } else if (data.type === 'NET_PONG') {
@@ -2770,6 +2771,7 @@ function setupConnection(conn) {
         }
     });
     conn.on('open', () => {
+        if (typeof Jukebox !== 'undefined') Jukebox.connected(conn);
         if (conn && conn.peer) {
             peerPresenceById[conn.peer] = true;
             if (!isHost || conn.peer === wsHostId) {

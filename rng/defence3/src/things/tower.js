@@ -173,13 +173,7 @@ class Tower {
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
             createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
-            if (this.owner === localPlayerId || true) {
-                let sndType = 'shoot_' + this.type;
-                if (!['shoot_pistol', 'shoot_smg', 'shoot_fire', 'shoot_water', 'shoot_poison', 'shoot_ice', 'shoot_sand_gun', 'shoot_elements'].includes(sndType))
-                    sndType = 'shoot_generic';
-                if (this.owner === localPlayerId) playSound(sndType, this.x, this.y);
-                else if (Math.random() < 0.3) playSound(sndType, this.x, this.y);
-            }
+            playSound('shoot_' + this.type, this.x, this.y);
             return;
         }
         let bestPrimary = null, bestSecondary = null, bestImmune = null;
@@ -246,13 +240,7 @@ class Tower {
             this.cd = secondsToTicks(this.currentStats.cd || 1.5);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
             createExplosion(this.x + Math.cos(this.angle) * 12, this.y + Math.sin(this.angle) * 12, '#fff', 2);
-            if (this.owner === localPlayerId || true) {
-                let sndType = 'shoot_' + this.type;
-                if (!['shoot_pistol', 'shoot_smg', 'shoot_fire', 'shoot_water', 'shoot_poison', 'shoot_ice', 'shoot_sand_gun', 'shoot_elements'].includes(sndType))
-                    sndType = 'shoot_generic';
-                if (this.owner === localPlayerId) playSound(sndType, this.x, this.y);
-                else if (Math.random() < 0.3) playSound(sndType, this.x, this.y); // sparsify enemy turret sounds
-            }
+            playSound('shoot_' + this.type, this.x, this.y);
         }
     }
 

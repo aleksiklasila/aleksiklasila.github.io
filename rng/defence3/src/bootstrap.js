@@ -1,6 +1,7 @@
 // INIT
 // ============================================================
 window.addEventListener('load', () => {
+    Jukebox.init();
     if (!ensureRenderContextsInitialized()) return;
     invalidateStaticLayerCache();
     refreshBackgroundTickMode();

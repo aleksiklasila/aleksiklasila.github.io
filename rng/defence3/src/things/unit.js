@@ -593,7 +593,7 @@ class Unit {
         target.energy -= this.preComputed.attackDamage;
         pushHostileDamageAlert(target, targetEnergyBefore - target.energy, this.owner);
         recordDamageVisual(target, targetEnergyBefore - target.energy, this.owner);
-        if (targetEnergyBefore > target.energy) playSound('melee_hit', target.x, target.y);
+        if (targetEnergyBefore > target.energy) playSound('melee_hit', target.x, target.y, this.unitType);
         tryAutoRetaliateOnHostileDamage(target, this, this.x, this.y);
         this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = target;
@@ -670,7 +670,7 @@ class Unit {
         }
         pushHostileDamageAlert(tb, buildingEnergyBefore - tb.energy, this.owner);
         recordDamageVisual(tb, buildingEnergyBefore - tb.energy, this.owner);
-        if (buildingEnergyBefore > tb.energy) playSound('melee_hit', tb.x, tb.y);
+        if (buildingEnergyBefore > tb.energy) playSound('melee_hit', tb.x, tb.y, this.unitType);
         if (tb.energy <= 0) { destroyBuilding(tb); return true; }
         return false;
     }
