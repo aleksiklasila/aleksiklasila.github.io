@@ -434,6 +434,156 @@
         return { positions, normals, indices };
     }
 
+    // Merged procedural parts: one mesh and one draw per material batch, never
+    // one object/draw per limb. Surface IDs: type-colored cloth, neutral armor, player trim,
+    // eyes and the complete 2D status render (on dedicated rectangular quads).
+    function createFigureData(kind) {
+        let variant = kind;
+        kind = kind.split(':')[0];
+        let positions = [], normals = [], indices = [], uvs = [], details = [];
+        function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1) {
+            let cube = createCubeData(), base = positions.length / 3;
+            for (let i = 0; i < cube.positions.length / 3; i++) {
+                let px = cube.positions[i * 3], py = cube.positions[i * 3 + 1], pz = cube.positions[i * 3 + 2];
+                let width = 1 + (taper - 1) * py;
+                positions.push(x + px * sx * width, y + py * sy, z + pz * sz * width);
+                uvs.push(cube.uvs[i * 2], 1 - cube.uvs[i * 2 + 1]);
+                details.push(surface, joint, pivot, 0);
+            }
+            for (let index of cube.indices) indices.push(base + index);
+        }
+        function panel(x, y, z, width, height, horizontal = false, joint = 0, pivot = 0, worldAligned = false) {
+            let base = positions.length / 3;
+            let corners = horizontal
+                ? [[-.5,0,.5],[.5,0,.5],[.5,0,-.5],[-.5,0,-.5]]
+                : [[.5,0,0],[-.5,0,0],[-.5,1,0],[.5,1,0]];
+            for (let p of corners) {
+                positions.push(x + p[0] * width, y + p[1] * height, z + p[2] * height);
+                details.push(4, joint, pivot, worldAligned ? 1 : 0);
+            }
+            uvs.push(0,0,1,0,1,1,0,1);
+            indices.push(base,base+1,base+2,base,base+2,base+3);
+        }
+        if (kind === 'figure' || kind === 'heavy' || kind === 'worker') {
+            let bulk = kind === 'heavy' ? 1.2 : 1;
+            part(0, .29, 0, .52 * bulk, .39, .34, 0, 0, 0, .76);
+            part(0, .66, 0, .47, .34, .43, 0, 0, 0, .16); // pointed hood
+            part(0, .69, .174, .30, .17, .07, 1);
+            for (let side of [-1, 1]) {
+                part(side * .083, .755, .214, .057, .022, .015, 3);
+                part(side * .16, .04, 0, .15, .28, .17, 1, side, .32);
+                part(side * .16, .015, .055, .18, .09, .28, 1, side, .32);
+                part(side * .32 * bulk, .33, 0, .135, .32, .16, 0, -side, .65);
+                part(side * .32 * bulk, .60, 0, .19, .095, .23, 2, -side, .65);
+            }
+            part(0, .33, 0, .53 * bulk, .055, .36, 2);
+            part(0, .19, -.205, .61, .47, .065, 0, 2, .66, .72); // cape
+            part(0, .29, -.253, .53, .38, .04, 2); // rigid, readable back display
+            panel(0, .31, -.277, .49, .34);
+            if (kind === 'worker') {
+                part(.38, .34, -.10, .19, .26, .22, 2, -1, .65);
+                part(0, .79, 0, .56, .055, .47, 2); // worker helmet brim
+                part(.39, .17, .10, .065, .40, .065, 1, -1, .65);
+                part(.39, .48, .10, .28, .09, .12, 2, -1, .65); // tool
+            } else if (kind === 'figure') {
+                part(.36, .22, .12, .05, .40, .06, 2, -1, .65); // blade
+            }
+            if (kind === 'heavy') part(-.43, .26, .12, .24, .32, .10, 2, 1, .65);
+            if (variant.endsWith(':king')) for (let x of [-.18,0,.18]) part(x,.88,0,.07,.14,.12,2);
+            if (variant.endsWith(':elemental')) {
+                for (let side of [-1,1]) part(side*.34,.67,0,.15,.16,.19,2,0,0,.1);
+            }
+        } else if (kind === 'bird') {
+            part(0,.30,0,.30,.25,.64,1,0,0,.65);
+            part(0,.49,.25,.25,.21,.26,0,0,0,.55);
+            part(0,.51,.43,.11,.06,.22,2,0,0,.1); // beak
+            for (let side of [-1,1]) {
+                part(side*.10,.60,.37,.045,.025,.035,3);
+                part(side*.35,.43,-.04,.48,.065,.40,1,side*3);
+                for (let feather=0;feather<3;feather++) {
+                    part(side*(.55+feather*.085),.42,-.12-feather*.10,.30,.045,.19,feather===0?0:2,side*3,0,.15);
+                }
+            }
+            part(0,.30,-.39,.33,.06,.35,2,0,0,.15);
+            panel(0,.58,-.10,.43,.42,true);
+            if (variant.endsWith(':support')) {
+                part(0,.17,0,.31,.11,.28,0);
+                part(0,.18,.145,.06,.09,.018,3);
+            }
+        } else if (kind === 'mole') {
+            part(0,.07,0,.67,.39,.73,0,0,0,.55);
+            part(0,.14,.39,.27,.17,.28,1,0,0,.12);
+            for (let side of [-1,1]) part(side*.34,.025,.19,.19,.09,.40,2,side,.20);
+            panel(0,.465,-.03,.48,.46,true);
+        } else if (kind === 'serpent') {
+            part(0, .02, 0, .78, .55, .85, 0, 0, 0, .62);
+            part(0, .54, 0, .40, .22, .50, 2, 0, 0, .12);
+            part(0, .27, .37, .48, .06, .04, 3);
+            panel(0, .78, 0, .52, .50, true);
+        } else {
+            part(0, 0, 0, 1, .12, 1, 1);
+            part(0, .12, 0, .84, .075, .84, 2);
+            if (kind === 'tower') {
+                part(0, .18, 0, .57, .49, .57, 0, 0, 0, .76);
+                part(0, .67, 0, .80, .19, .70, 1);
+                part(0, .73, .31, .21, .14, .66, 2);
+                part(0, .745, .645, .12, .10, .015, 3);
+                panel(0, .88, 0, .73, .73, true, 0, 0, true);
+                if (variant.endsWith(':twin')) for (let side of [-1,1]) part(side*.22,.73,.34,.10,.12,.66,2);
+                if (variant.endsWith(':sniper')) part(0,.74,.56,.12,.10,.65,1);
+                if (variant.endsWith(':energy')) for (let side of [-1,1]) part(side*.27,.49,.10,.12,.21,.16,3);
+            } else if (kind === 'mine') {
+                part(0,.19,0,.91,.30,.91,0);
+                panel(0,.50,0,.86,.86,true);
+            } else if (kind === 'item') {
+                part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
+                panel(0, .79, 0, .74, .74, true);
+                for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
+                if (variant.endsWith(':relay')) for (let side of [-1,1]) part(side*.32,.82,0,.12,.18,.12,3);
+            } else {
+                part(0, .19, 0, .76, .52, .76, 0);
+                for (let x of [-.4, .4]) for (let z of [-.4, .4]) part(x, .17, z, .14, .64, .14, 1);
+                part(0, .72, 0, .91, .16, .90, 1, 0, 0, .67);
+                panel(0, .89, 0, .73, .73, true);
+                part(0, .20, .391, .28, .40, .02, 1);
+                part(0, .61, .405, .40, .045, .02, 3);
+                if (kind === 'spawner') {
+                    part(.30, .82, .24, .07, .18, .07, 2);
+                    part(.30, .94, .24, .14, .06, .14, 3);
+                }
+                if (variant.endsWith(':research')) for (let side of [-1,1]) part(side*.40,.82,.29,.08,.22,.08,3);
+                if (variant.endsWith(':healer')) {
+                    part(0,.30,-.405,.09,.29,.025,3);
+                    part(0,.40,-.42,.29,.09,.025,3);
+                }
+                if (kind === 'barrack') for (let side of [-1,1]) part(side*.40,.80,-.36,.14,.18,.14,2);
+            }
+        }
+        // Separate face vertices keep the intentionally faceted silhouette.
+        normals = computeNormals(positions, indices);
+        return { positions, normals, indices: new Uint32Array(indices), uvs, details: new Float32Array(details) };
+    }
+
+    function proceduralKind(object) {
+        if (object.modelCandidates && object.modelCandidates.length) return null;
+        let key = object.modelKey || '';
+        if (key === 'snake_segment' || key === 'unit_snake') return 'serpent';
+        if (key.startsWith('unit_')) {
+            if (object.isFlying || /flying|scout|healer_unit|researcher_unit/.test(key)) return object.isWorker || /healer|researcher/.test(key) ? 'bird:support' : 'bird';
+            if (key === 'unit_mole') return 'mole';
+            if (key === 'unit_king') return 'heavy:king';
+            if (/tank|heavy|giant|boss/.test(key)) return 'heavy';
+            if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(key)) return 'worker';
+            return /resistant/.test(key) ? 'figure:elemental' : 'figure';
+        }
+        if (key.startsWith('tower_')) return /smg/.test(key) ? 'tower:twin' : /sniper/.test(key) ? 'tower:sniper' : /laser|elements|ice|poison|fire|water/.test(key) ? 'tower:energy' : 'tower';
+        if (key.startsWith('barrack_')) return 'barrack';
+        if (key.startsWith('spawner_')) return /research/.test(key) ? 'spawner:research' : /healer/.test(key) ? 'spawner:healer' : 'spawner';
+        if (key.startsWith('item_')) return /relay|cloud|energy/.test(key) ? 'item:relay' : 'item';
+        if (key.includes('_mine_')) return 'mine';
+        return null;
+    }
+
     function createMesh(gl, positions, normals, indices, uvs) {
         let vertexCount = positions.length / 3;
         let vertexStride = uvs ? 8 : 6;
@@ -1028,6 +1178,121 @@
             };
             bindInstanceAttributes(this.cubeMesh);
             bindInstanceAttributes(this.cylinderMesh);
+            this.figureMeshes = new Map();
+            for (let kind of ['figure', 'figure:elemental', 'heavy', 'heavy:king', 'worker', 'bird', 'bird:support', 'mole', 'serpent', 'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'mine']) {
+                let data = createFigureData(kind);
+                let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
+                bindInstanceAttributes(mesh);
+                gl.bindVertexArray(mesh.vao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+                gl.bufferData(gl.ARRAY_BUFFER, data.details, gl.STATIC_DRAW);
+                gl.enableVertexAttribArray(13);
+                gl.vertexAttribPointer(13, 4, gl.FLOAT, false, 16, 0);
+                this.figureMeshes.set(kind, mesh);
+            }
+            gl.bindVertexArray(null);
+            this.figureProgram = createProgram(gl, `#version 300 es
+                precision highp float;
+                layout(location=0) in vec3 aPosition;
+                layout(location=1) in vec3 aNormal;
+                layout(location=2) in vec2 aUv;
+                layout(location=3) in vec4 m0;
+                layout(location=4) in vec4 m1;
+                layout(location=5) in vec4 m2;
+                layout(location=6) in vec4 m3;
+                layout(location=7) in vec3 color;
+                layout(location=8) in float alpha;
+                layout(location=9) in float moveAmount;
+                layout(location=10) in float phase;
+                layout(location=11) in vec3 trim;
+                layout(location=12) in float light;
+                layout(location=13) in vec4 detail;
+                uniform mat4 uViewProjection;
+                out vec3 vNormal;
+                out vec3 vColor;
+                out vec3 vTrim;
+                out vec2 vUv;
+                out float vAlpha;
+                out float vLight;
+                flat out int vSurface;
+                void main() {
+                    vec3 p = aPosition, n = aNormal;
+                    float angle = sin(phase) * moveAmount * detail.y * .65;
+                    if (detail.y == 2.0) angle = sin(phase + aPosition.y * 3.0) * moveAmount * .10;
+                    float c = cos(angle), s = sin(angle);
+                    p.y -= detail.z;
+                    p.yz = mat2(c, s, -s, c) * p.yz;
+                    p.y += detail.z;
+                    n.yz = mat2(c, s, -s, c) * n.yz;
+                    if (abs(detail.y) == 3.0) {
+                        // Birds flap even while hovering; each wing rotates at its root.
+                        p = aPosition; n = aNormal;
+                        float wing = sin(phase) * sign(detail.y) * .48;
+                        float wc = cos(wing), ws = sin(wing);
+                        p.y -= .43;
+                        p.xy = mat2(wc,ws,-ws,wc) * p.xy;
+                        p.y += .43;
+                        n.xy = mat2(wc,ws,-ws,wc) * n.xy;
+                    }
+                    p.y += abs(sin(phase)) * moveAmount * .018;
+                    mat4 model = mat4(m0, m1, m2, m3);
+                    if (detail.w > .5) {
+                        // Keep the entire HUD rectangle world-aligned. Rotating only
+                        // its UVs would crop the level/health text at oblique angles.
+                        vec2 facing = normalize(m0.xz);
+                        mat2 undoYaw = mat2(facing.x,-facing.y,facing.y,facing.x);
+                        p.xz = undoYaw * p.xz;
+                        n.xz = undoYaw * n.xz;
+                    }
+                    // Inverse scale gives correct lighting even while a building squashes.
+                    vec3 scale2 = vec3(dot(m0.xyz,m0.xyz), dot(m1.xyz,m1.xyz), dot(m2.xyz,m2.xyz));
+                    vNormal = normalize(mat3(model) * (n / max(scale2, vec3(.00001))));
+                    gl_Position = uViewProjection * model * vec4(p, 1);
+                    vColor = color; vTrim = trim; vUv = aUv;
+                    vAlpha = alpha; vLight = light; vSurface = int(detail.x + .5);
+                }
+            `, `#version 300 es
+                precision highp float;
+                in vec3 vNormal;
+                in vec3 vColor;
+                in vec3 vTrim;
+                in vec2 vUv;
+                in float vAlpha;
+                in float vLight;
+                flat in int vSurface;
+                uniform sampler2D uTopTexture;
+                uniform sampler2D uSideTexture;
+                uniform float uHasSideTexture;
+                layout(location=0) out vec4 outColor;
+                layout(location=1) out vec4 outPackedDepth;
+                void main() {
+                    // vTrim is the functional color used by the 2D sprite (farm
+                    // yellow, builder green, etc.); vColor identifies the owner.
+                    // Lift dark palettes without replacing their hue with white.
+                    float peak = max(vTrim.r, max(vTrim.g, vTrim.b));
+                    vec3 typeColor = vTrim * max(1.0, .62 / max(peak, .01));
+                    vec3 base = mix(mix(typeColor, vColor, .12), vec3(.72,.75,.79), .10);
+                    if (vSurface == 1) base = mix(vec3(.22,.26,.32), typeColor, .24);
+                    if (vSurface == 2) base = mix(mix(vColor, typeColor, .18), vec3(.80,.83,.87), .12);
+                    if (vSurface == 3) base = vec3(.48,.94,1.0);
+                    if (vSurface >= 4) {
+                        vec4 texel = texture(uTopTexture,vUv);
+                        base = mix(vec3(.72,.77,.84), texel.rgb, texel.a);
+                    }
+                    float diffuse = max(dot(normalize(vNormal), normalize(vec3(-.42,.86,.31))),0.0);
+                    float shade = vSurface >= 3 ? 1.0 : .65 + diffuse * .35;
+                    float fog = 1.0 - pow(1.0-clamp(vLight,0.0,1.0),1.3)*.42;
+                    outColor = vec4(base * shade * fog,vAlpha);
+                    vec4 depth = fract(gl_FragCoord.z * vec4(16777216.0,65536.0,256.0,1.0));
+                    outPackedDepth = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
+                }
+            `);
+            this.figureUniforms = {
+                viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
+                topTexture: gl.getUniformLocation(this.figureProgram, 'uTopTexture'),
+                sideTexture: gl.getUniformLocation(this.figureProgram, 'uSideTexture'),
+                hasSideTexture: gl.getUniformLocation(this.figureProgram, 'uHasSideTexture')
+            };
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
         }
 
@@ -1654,6 +1919,7 @@
         }
 
         requestModel(object) {
+            if (proceduralKind(object)) return null;
             let key = sanitizeModelKey(object.modelKey);
             if (key === 'cube') return null;
             if (this.meshCache.has(key)) return this.meshCache.get(key);
@@ -1928,7 +2194,9 @@
         drawTexturedCubeInstances(objects, topTexture, sideTexture = null) {
             if (!objects || objects.length <= 0 || !topTexture) return;
             let gl = this.gl;
-            let mesh = this.getPrimitiveMesh(objects[0]);
+            let kind = proceduralKind(objects[0]);
+            let mesh = kind ? this.figureMeshes.get(kind) : this.getPrimitiveMesh(objects[0]);
+            let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
             this.ensureCubeInstanceCapacity(objects.length);
             for (let index = 0; index < objects.length; index++) {
                 let object = objects[index];
@@ -1956,19 +2224,23 @@
                 this.cubeInstanceArray[base + 23] = sideColor[1];
                 this.cubeInstanceArray[base + 24] = sideColor[2];
                 this.cubeInstanceArray[base + 25] = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
+                if (kind) {
+                    this.cubeInstanceArray[base + 20] = object.moveAmount || 0;
+                    this.cubeInstanceArray[base + 21] = object.walkPhase || 0;
+                }
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
-            gl.useProgram(this.texturedCubeProgram);
+            gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             gl.bindVertexArray(mesh.vao);
-            gl.uniformMatrix4fv(this.texturedCubeUniforms.viewProjection, false, this.tmpViewProjection);
+            gl.uniformMatrix4fv(uniforms.viewProjection, false, this.tmpViewProjection);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, topTexture);
-            gl.uniform1i(this.texturedCubeUniforms.topTexture, 0);
+            gl.uniform1i(uniforms.topTexture, 0);
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_2D, sideTexture);
-            gl.uniform1i(this.texturedCubeUniforms.sideTexture, 1);
-            gl.uniform1f(this.texturedCubeUniforms.hasSideTexture, sideTexture ? 1 : 0);
+            gl.uniform1i(uniforms.sideTexture, 1);
+            gl.uniform1f(uniforms.hasSideTexture, sideTexture ? 1 : 0);
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
@@ -2014,12 +2286,14 @@
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${object.renderShape || 'box'}`;
+                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${proceduralKind(object) || object.renderShape || 'box'}`;
                     let group = targetGroups.get(groupKey);
                     if (!group) {
                         group = {
                             topTexture: this.getTopTexture(object.topTextureKey, object.topTextureCanvas),
-                            sideTexture: object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
+                            // Procedural panels use the full 2D status canvas; avoid
+                            // uploading the obsolete audio texture for these models.
+                            sideTexture: !proceduralKind(object) && object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
                             objects: []
                         };
                         targetGroups.set(groupKey, group);

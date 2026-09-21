@@ -683,6 +683,10 @@
         const PLAYER_SPEED = 8.0;
         const ZOMBIE_SPEED = 6.0;
         const JUMP_FORCE = 8.0;
+        // These are deliberately independent from player jumps: zombies use them
+        // for short, repeated wall hops instead of trying to fly to a waypoint.
+        const ZOMBIE_WALL_PROBE_INTERVAL_MS = 90;
+        const ZOMBIE_WALL_HOP_INTERVAL_MS = 300;
         const COYOTE_TIME_MS = 150; // Grace period after leaving ground where jump still works
         const JUMP_BUFFER_MS = 100; // Grace period where jump input is remembered before landing
 
@@ -3182,6 +3186,10 @@
                     stuckTime: 0,
                     lastJumpAt: 0,
                     lastScrambleAt: 0,
+                    wallProbeAt: 0,
+                    wallContactUntil: 0,
+                    wallHopSide: 1,
+                    wallJumpsRemaining: 1,
                     scrambleUntil: 0,
                     compactUntil: 0,
                     colliderRadius: 0.38,
@@ -3243,6 +3251,33 @@
                     const ray = new RAPIER.Ray(o, { x: 0, y: -1, z: 0 });
                     if (world.castRay(ray, maxToi, true, 0x00080001)) return true;
                 }
+                return false;
+            }
+
+            // Query only the environment, and cache the answer per zombie.  This
+            // keeps wall climbing responsive without adding a raycast every tick.
+            function zombieHasWallAhead(z, body, dirX, dirZ, now) {
+                if (now - (z.wallProbeAt || 0) < ZOMBIE_WALL_PROBE_INTERVAL_MS) {
+                    return now < (z.wallContactUntil || 0);
+                }
+                z.wallProbeAt = now;
+                const length = Math.hypot(dirX, dirZ);
+                if (length < 0.01) return false;
+
+                const invLength = 1 / length;
+                const direction = { x: dirX * invLength, y: 0, z: dirZ * invLength };
+                const pos = body.translation();
+                // A low and a middle probe catch both ledges and full-height walls.
+                const heights = [-0.18, 0.28];
+                for (const height of heights) {
+                    const ray = new RAPIER.Ray({ x: pos.x, y: pos.y + height, z: pos.z }, direction);
+                    if (world.castRay(ray, 0.64, true, 0x00080001)) {
+                        z.wallContactUntil = now + ZOMBIE_WALL_PROBE_INTERVAL_MS * 2;
+                        if (Math.random() < 0.45) z.wallHopSide = Math.random() < 0.5 ? -1 : 1;
+                        return true;
+                    }
+                }
+                z.wallContactUntil = 0;
                 return false;
             }
 
@@ -3340,8 +3375,42 @@
 
                         z.yaw = Math.atan2(dx, dz);
 
-                        // Stuck detection and continuous climbing impulse
                         const now = Date.now();
+                        const wallAhead = dist2D > 0.01 && zombieHasWallAhead(z, body, dx, dz, now);
+                        const grounded = isZombieGrounded(body);
+                        // One extra hop may be spent while pressed to a wall. It is
+                        // replenished only after landing, preventing a wall or a
+                        // stale stuck state from turning into unlimited flight.
+                        if (grounded) z.wallJumpsRemaining = 1;
+
+                        // Treat a wall as a temporary climbing surface.  Capping
+                        // the fall speed makes a zombie stay on it long enough for
+                        // several hops, while the modest sideways drift lets it
+                        // find an edge rather than repeatedly striking one point.
+                        if (wallAhead) {
+                            const climbStrength = z.upImpulse || 8;
+                            // A wall allows one mid-air hop after a ground jump; it
+                            // never continuously refreshes upward velocity.
+                            if (grounded && now - z.lastJumpAt > ZOMBIE_WALL_HOP_INTERVAL_MS) {
+                                vy = Math.max(vy, Math.min(11, climbStrength * 1.05));
+                                z.lastJumpAt = now;
+                            } else if (z.wallJumpsRemaining > 0 && vy <= 0 && now - z.lastJumpAt > ZOMBIE_WALL_HOP_INTERVAL_MS) {
+                                vy = Math.min(9, climbStrength);
+                                z.wallJumpsRemaining--;
+                                z.lastJumpAt = now;
+                            } else if (vy < -2.2) {
+                                vy = -2.2;
+                            }
+
+                            const invDist = 1 / dist2D;
+                            const side = z.wallHopSide || 1;
+                            const forwardX = dx * invDist;
+                            const forwardZ = dz * invDist;
+                            vx = (forwardX - forwardZ * side * 0.28) * currentSpeed * 1.18;
+                            vz = (forwardZ + forwardX * side * 0.28) * currentSpeed * 1.18;
+                        }
+
+                        // Stuck detection and continuous climbing impulse
                         if (!z.lastPos) {
                             z.lastPos = { x: z.x, z: z.z, time: now };
                             z.climbImpulseY = 0;
@@ -3355,9 +3424,9 @@
 
                                 // A short jump lets the smaller collision body climb
                                 // lips, poles, and narrow ledges without route memory.
-                                if (z.stuckTime > 180 && isZombieGrounded(body) && now - z.lastJumpAt > 360) {
+                                if (z.stuckTime > 280 && grounded && now - z.lastJumpAt > 240) {
                                     const climbStrength = z.upImpulse || 8;
-                                    vy = Math.max(vy, Math.min(13, climbStrength * 1.15));
+                                    vy = Math.max(vy, Math.min(14, climbStrength * 1.3));
                                     z.lastJumpAt = now;
                                     z.climbImpulseY = climbStrength;
                                 } else {
@@ -3368,13 +3437,16 @@
                                 // attempt: compact the physical body, jump hard, and
                                 // bias the launch to either side of the obstruction.
                                 // This is local recovery, not persistent route memory.
-                                if (z.stuckTime > 650 && now - z.lastScrambleAt > 1000) {
-                                    z.compactUntil = now + 520;
-                                    z.scrambleUntil = now + 520;
+                                if (z.stuckTime > 700 && grounded && now - z.lastScrambleAt > 800) {
+                                    z.compactUntil = now + 650;
+                                    z.scrambleUntil = now + 650;
                                     z.scrambleSide = Math.random() < 0.5 ? -1 : 1;
                                     z.lastScrambleAt = now;
                                     z.lastJumpAt = now;
-                                    vy = Math.max(vy, Math.min(15, (z.upImpulse || 8) * 1.55));
+                                    // A little forward/back variation prevents a
+                                    // group from all selecting the same escape line.
+                                    z.scrambleForward = 0.72 + Math.random() * 0.75;
+                                    vy = Math.max(vy, Math.min(17, (z.upImpulse || 8) * (1.65 + Math.random() * 0.28)));
                                 }
                             } else {
                                 z.stuckTime = 0; // Making progress, reset
@@ -3388,8 +3460,9 @@
                             const side = z.scrambleSide || 1;
                             const forwardX = dx * invDist;
                             const forwardZ = dz * invDist;
-                            vx = (forwardX - forwardZ * side * 0.42) * currentSpeed * 1.45;
-                            vz = (forwardZ + forwardX * side * 0.42) * currentSpeed * 1.45;
+                            const forwardScale = z.scrambleForward || 1;
+                            vx = (forwardX * forwardScale - forwardZ * side * 0.72) * currentSpeed * 1.7;
+                            vz = (forwardZ * forwardScale + forwardX * side * 0.72) * currentSpeed * 1.7;
                         }
 
                         body.setLinvel({ x: vx, y: vy, z: vz }, true);
