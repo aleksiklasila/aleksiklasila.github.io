@@ -329,6 +329,154 @@ function get3DTopTextureCanvas(key, drawFn) {
     return canvas;
 }
 
+const renderer3dExact2DTextureCache = new Map();
+const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 512;
+
+function cache3DExact2DTexture(signature, entry) {
+    renderer3dExact2DTextureCache.set(signature, entry);
+    if (renderer3dExact2DTextureCache.size > RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) {
+        renderer3dExact2DTextureCache.delete(renderer3dExact2DTextureCache.keys().next().value);
+    }
+}
+
+function quantize3DExactRatio(value, maximum) {
+    if (!(maximum > 0)) return 0;
+    return Math.round(Math.max(0, Math.min(1, (Number(value) || 0) / maximum)) * RENDERER3D_TOP_TEXTURE_SIZE);
+}
+
+function get3DExact2DVisualSignature(entity) {
+    if (!entity) return '';
+    let researchTask = entity.researchTask || null;
+    let maxEnergy = Number(entity.maxEnergy)
+        || Number(entity.preComputed && entity.preComputed.maxEnergy)
+        || Number(entity.preComputedEffective && entity.preComputedEffective.maxEnergy)
+        || 0;
+    let attackTarget = entity.attackTarget || null;
+    return [
+        entity.type || '', entity.unitType || '', Number(entity.owner) || 0,
+        entity.vis || '', entity.color || '', Math.round((Number(entity.r) || 0) * 10),
+        entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '',
+        shouldShowUnitLevels() && entity.unitType ? getUnitLevelLabelText(entity) : '',
+        quantize3DExactRatio(entity.energy, maxEnergy),
+        entity.underConstruction ? 1 : 0, entity.isUpgrading ? 1 : 0,
+        quantize3DExactRatio(entity.stackingWorkDone, Number(entity.stackingWorkRequired) || 0),
+        quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0),
+        researchTask ? quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0,
+        Math.round((Number(entity.angle) || 0) * 128),
+        Number(entity.laserState) || 0,
+        Array.isArray(entity.connectedLasers) ? entity.connectedLasers.length : 0,
+        entity.carryingValue > 0 ? 1 : 0, entity.workerState || '',
+        entity.burning > 0 ? 1 : 0, entity.poisoned > 0 ? 1 : 0,
+        entity.frozen > 0 ? 1 : 0, entity.wet > 0 ? 1 : 0,
+        Number(entity.attackFlash) || 0, entity.attackStyle || '',
+        attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0,
+        attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0,
+        Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0,
+        entity.researcherHasMaterial ? 1 : 0
+    ].join('|');
+}
+
+// Render through the same draw method as the 2D renderer. This deliberately
+// includes its cached level sprite, progress bars, status colors and outlines.
+function get3DExact2DTexture(entity) {
+    if (!entity || typeof entity.draw !== 'function') return null;
+    let signature = get3DExact2DVisualSignature(entity);
+    let entry = renderer3dExact2DTextureCache.get(signature);
+    if (!entry) {
+        let canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._renderer3DExactKey = `2d:${signature}`;
+        entry = { canvas, ctx: canvas.getContext('2d') };
+        cache3DExact2DTexture(signature, entry);
+    }
+    if (entry.canvas._textureVersion) return entry.canvas;
+    let g = entry.ctx;
+    if (!g) return null;
+    let x = Number(entity.x);
+    let y = Number(entity.y);
+    if (!Number.isFinite(x)) x = (Number(entity.gx) || 0) * TILE + TILE * 0.5;
+    if (!Number.isFinite(y)) y = (Number(entity.gy) || 0) * TILE + TILE * 0.5;
+    let scale = 1.8;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - x * scale, entry.canvas.height * 0.5 - y * scale);
+    entity.draw(g);
+    g.restore();
+    g.__drawImagesImmediately = false;
+    entry.canvas._textureVersion = 1;
+    return entry.canvas;
+}
+
+function get3DExact2DFloorTexture(item, owner) {
+    if (!item) return null;
+    let signature = `floor|${Number(owner) || 0}|${get3DExact2DVisualSignature(item)}|${_getFloorItemEnergyBucket(item)}`;
+    let entry = renderer3dExact2DTextureCache.get(signature);
+    if (entry && entry.canvas._textureVersion) return entry.canvas;
+    if (!entry) {
+        let canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._renderer3DExactKey = `2d:${signature}`;
+        entry = { canvas, ctx: canvas.getContext('2d') };
+        cache3DExact2DTexture(signature, entry);
+    }
+    let g = entry.ctx;
+    if (!g) return null;
+    let scale = 1.8;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - TILE * 0.5 * scale, entry.canvas.height * 0.5 - TILE * 0.5 * scale);
+    drawFloorItem(g, { item, owner }, 0, 0);
+    g.restore();
+    g.__drawImagesImmediately = false;
+    entry.canvas._textureVersion = 1;
+    return entry.canvas;
+}
+
+function get3DExact2DMineTexture(kind, amount) {
+    let active = Number(amount) > 0;
+    let label = showGoldMineAmountText ? formatBigNumber(Math.max(0, Number(amount) || 0), 0) : '';
+    let signature = `mine|${kind}|${active ? 1 : 0}|${label}`;
+    let entry = renderer3dExact2DTextureCache.get(signature);
+    if (entry && entry.canvas._textureVersion) return entry.canvas;
+    if (!entry) {
+        let canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._renderer3DExactKey = `2d:${signature}`;
+        entry = { canvas, ctx: canvas.getContext('2d') };
+        cache3DExact2DTexture(signature, entry);
+    }
+    let g = entry.ctx;
+    if (!g) return null;
+    let scale = 1.8;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - TILE * 0.5 * scale, entry.canvas.height * 0.5 - TILE * 0.5 * scale);
+    queueDrawImage(g, kind === 'astar' ? _getAstarMineTileSprite(active) : _getGoldMineTileSprite(active), 0, 0, TILE, TILE);
+    if (label) {
+        g.font = 'bold 8px Arial';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.shadowColor = 'rgba(0,0,0,0.9)';
+        g.shadowBlur = 2;
+        g.fillStyle = kind === 'astar' ? (active ? '#f0f0f0' : '#999') : (active ? '#fffbe8' : '#bbb');
+        g.fillText(label, TILE * 0.5, TILE * 0.5);
+    }
+    g.restore();
+    g.__drawImagesImmediately = false;
+    entry.canvas._textureVersion = 1;
+    return entry.canvas;
+}
+
 function get3DSharedAudioTextureKeyForPlayer(owner, variant = 'default') {
     return `shared_audio_player:${Number.isFinite(owner) ? owner : -1}:${variant || 'default'}`;
 }
@@ -1339,6 +1487,7 @@ function build3DFrameData() {
                 sideTextureAngle: getAudioReactiveSideTextureAngle(pointGx, pointGy, (Number(unit.id) || 0) * 131 + i)
             });
         }
+        let snake2DTexture = get3DExact2DTexture(unit);
         push3DRenderObject(target, {
             modelKey: `unit_${unit.unitType || 'snake'}`,
             x: headX / TILE,
@@ -1351,8 +1500,8 @@ function build3DFrameData() {
             rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
             tint: ownerTint,
             renderShape: 'cylinder',
-            topTextureKey: `unit:${unit.unitType}:${unit.owner}:${unitStatus.keySuffix}`,
-            topTextureCanvas: get3DUnitTopTexture(unit, unit.owner, unitStatus),
+            topTextureKey: snake2DTexture._renderer3DExactKey,
+            topTextureCanvas: snake2DTexture,
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake'),
             sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake', Number(unit.owner) || 0, '#3dff64'),
             sideTint: get3DDamageFlashTint(unit, '#3dff64'),
@@ -1379,6 +1528,7 @@ function build3DFrameData() {
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        let mine2DTexture = get3DExact2DMineTexture('gold', m.gold);
         push3DRenderObject(objects, {
             modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
             x: m.gx + 0.5 + reactiveOffsetX * audioMove,
@@ -1390,10 +1540,8 @@ function build3DFrameData() {
             heightMode: 'mine',
             tint: '#f0c83a',
             alpha: 1,
-            topTextureKey: `gold_mine:${m.gold > 0 ? 'active' : 'empty'}`,
-            topTextureCanvas: get3DTopTextureCanvas(`gold_mine:${m.gold > 0 ? 'active' : 'empty'}`, (g) => {
-                draw3DSpriteIntoTopTexture(g, _getGoldMineTileSprite(m.gold > 0), 8);
-            }),
+            topTextureKey: mine2DTexture._renderer3DExactKey,
+            topTextureCanvas: mine2DTexture,
             sideTextureKey: get3DSharedAudioTextureKeyForMine('gold', 'gold_mine'),
             sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11),
             sideTint: '#f0c83a'
@@ -1409,6 +1557,7 @@ function build3DFrameData() {
         let fxLevel = fxSoundRow ? fxSoundRow[m.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
+        let mine2DTexture = get3DExact2DMineTexture('astar', m.astar);
         push3DRenderObject(objects, {
             modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
             x: m.gx + 0.5 + reactiveOffsetX * audioMove,
@@ -1420,11 +1569,8 @@ function build3DFrameData() {
             heightMode: 'mine',
             tint: '#d8d8e8',
             alpha: 1,
-            topTextureKey: `astar_mine:${m.astar > 0 ? 'active' : 'empty'}`,
-            topTextureCanvas: get3DTopTextureCanvas(`astar_mine:${m.astar > 0 ? 'active' : 'empty'}`, (g) => {
-                g.fillStyle = '#888'; g.beginPath(); g.arc(32, 32, 18, 0, Math.PI * 2); g.fill();
-                g.fillStyle = '#fff'; g.font = 'bold 28px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('★', 32, 33);
-            }),
+            topTextureKey: mine2DTexture._renderer3DExactKey,
+            topTextureCanvas: mine2DTexture,
             sideTextureKey: get3DSharedAudioTextureKeyForMine('astar', 'astar_mine'),
             sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23),
             sideTint: '#d8d8e8'
@@ -1447,6 +1593,7 @@ function build3DFrameData() {
             let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
             let itemStatus = get3DBuildingTextureStatus(cell.item);
             let itemSideVariant = get3DFloorItemSideVisualizationVariant(cell.item);
+            let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
             push3DRenderObject(objects, {
                 modelKey: `item_${cell.item.type || 'floor'}`,
                 x: x + 0.5 + reactiveOffsetX * audioMove,
@@ -1459,8 +1606,8 @@ function build3DFrameData() {
                 rotationY: -(Number(cell.item.angle) || 0),
                 tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
                 alpha: get3DConstructionAlpha(cell.item),
-                topTextureKey: `item:${cell.item.type}:${_getFloorItemEnergyBucket(cell.item)}:${itemStatus.keySuffix}`,
-                topTextureCanvas: get3DTopTextureForFloorItem(cell.item, itemStatus),
+                topTextureKey: item2DTexture._renderer3DExactKey,
+                topTextureCanvas: item2DTexture,
                 sideTextureKey: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSharedAudioTextureKeyForPlayer(cell.owner, itemSideVariant) : '',
                 sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null,
                 sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
@@ -1479,6 +1626,7 @@ function build3DFrameData() {
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let towerStatus = get3DBuildingTextureStatus(t);
         let towerSideVariant = get3DTowerSideVisualizationVariant(t);
+        let tower2DTexture = get3DExact2DTexture(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
             x: t.x / TILE + reactiveOffsetX * audioMove,
@@ -1491,8 +1639,8 @@ function build3DFrameData() {
             rotationY: Math.PI * 0.5 - (Number(t.angle) || 0),
             tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
             alpha: get3DConstructionAlpha(t),
-            topTextureKey: `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
-            topTextureCanvas: get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
+            topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
+            topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(t.owner, towerSideVariant),
             sideTextureCanvas: get3DSideAudioTextureForPlayer(t.owner, towerSideVariant, Number(t.owner) || 0, (t.baseStats && t.baseStats.color) || null),
             sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
@@ -1518,6 +1666,7 @@ function build3DFrameData() {
         }
         let spawnerStatus = get3DBuildingTextureStatus(s, spawnerExtraBars);
         let spawnerSideVariant = get3DSpawnerSideVisualizationVariant(s);
+        let spawner2DTexture = get3DExact2DTexture(s);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
             x: s.x / TILE + reactiveOffsetX * audioMove,
@@ -1529,8 +1678,8 @@ function build3DFrameData() {
             visibilitySource: s,
             tint: get3DDamageFlashTint(s, get3DRenderOwnerColor(s.owner)),
             alpha: get3DConstructionAlpha(s),
-            topTextureKey: `spawner:${s.type}:${s.owner}:${spawnerStatus.keySuffix}`,
-            topTextureCanvas: get3DBuildingTopTexture(
+            topTextureKey: spawner2DTexture ? spawner2DTexture._renderer3DExactKey : `spawner:${s.type}:${s.owner}:${spawnerStatus.keySuffix}`,
+            topTextureCanvas: spawner2DTexture || get3DBuildingTopTexture(
                 s.type === 'astar_spawner' ? 'spawner_astar' :
                     s.type === 'salvager' ? 'spawner_salvager' :
                         s.type === 'builder_spawner' ? 'spawner_builder' :
@@ -1560,6 +1709,7 @@ function build3DFrameData() {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
         let barrackStatus = get3DBuildingTextureStatus(b, barrackExtraBars);
+        let barrack2DTexture = get3DExact2DTexture(b);
         push3DRenderObject(objects, {
             modelKey: `barrack_${b.unitType || 'norm'}`,
             x: b.x / TILE + reactiveOffsetX * audioMove,
@@ -1571,8 +1721,8 @@ function build3DFrameData() {
             visibilitySource: b,
             tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
             alpha: get3DConstructionAlpha(b),
-            topTextureKey: `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
-            topTextureCanvas: get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
+            topTextureKey: barrack2DTexture ? barrack2DTexture._renderer3DExactKey : `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
+            topTextureCanvas: barrack2DTexture || get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(b.owner, 'barrack'),
             sideTextureCanvas: get3DSideAudioTextureForPlayer(b.owner, 'barrack', Number(b.owner) || 0, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color),
             sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
@@ -1625,6 +1775,7 @@ function build3DFrameData() {
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
+            let unit2DTexture = get3DExact2DTexture(u);
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,
@@ -1641,8 +1792,8 @@ function build3DFrameData() {
                 isWorker: !!u.isWorker,
                 tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
                 renderShape: 'cylinder',
-                topTextureKey: `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
-                topTextureCanvas: get3DUnitTopTexture(u, u.owner, unitStatus),
+                topTextureKey: unit2DTexture ? unit2DTexture._renderer3DExactKey : `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
+                topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
                 sideTextureKey: get3DSharedAudioTextureKeyForPlayer(u.owner, unitSideVariant),
                 sideTextureCanvas: get3DSideAudioTextureForPlayer(u.owner, unitSideVariant, Number(u.owner) || 0, unitSideColor),
                 sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
@@ -2812,6 +2963,7 @@ function clearRendererTransientVisualCaches(options = null) {
         LEVEL_TEXT_SPRITE_CACHE.clear();
         UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
         renderer3dTopTextureCache.clear();
+        renderer3dExact2DTextureCache.clear();
         if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
             renderer3dInstance.topTextureCache.clear();
         }
@@ -3062,7 +3214,7 @@ function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
     if (!ctx || !image) return;
     let argc = arguments.length - 2;
 
-    if (!_frameDrawImageQueueActive) {
+    if (!_frameDrawImageQueueActive || ctx.__drawImagesImmediately) {
         if (argc === 2) ctx.drawImage(image, a0, a1);
         else if (argc === 4) ctx.drawImage(image, a0, a1, a2, a3);
         else if (argc === 8) ctx.drawImage(image, a0, a1, a2, a3, a4, a5, a6, a7);

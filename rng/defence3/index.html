@@ -203,9 +203,9 @@
         <form id="jukebox-form">
             <label for="jukebox-link">YouTube video link · shared with everyone</label>
             <input id="jukebox-link" type="url" required maxlength="2048" value="https://www.youtube.com/watch?v=9JD2nH4M8Dc&amp;list=RD9JD2nH4M8Dc&amp;start_radio=1">
-            <button type="submit">Play for everyone</button>
+            <button type="submit">Use shared link</button>
         </form>
-        <div class="jukebox-actions"><button id="jukebox-play" type="button">Pause for everyone</button><button id="jukebox-enable" type="button" hidden>Enable here</button></div>
+        <div class="jukebox-actions"><button id="jukebox-enable" type="button" hidden>Enable here</button></div>
         <a id="jukebox-external" href="https://www.youtube.com/watch?v=9JD2nH4M8Dc" target="_blank" rel="noopener noreferrer">Open on YouTube</a>
     </dialog>
 
@@ -431,27 +431,6 @@
                         <label for="btn-render-range">Render range overlay</label>
                         <button id="btn-render-range"
                             style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render range: Turrets</button>
-                    </div>
-                    <div class="settings-row">
-                        <label for="setting-audio">Audio</label>
-                        <label class="settings-toggle" for="setting-audio">
-                            <input type="checkbox" id="setting-audio" style="margin-right:2px; cursor:pointer;">
-                            Enabled
-                        </label>
-                    </div>
-                    <div class="settings-row">
-                        <label for="setting-audio-volume">Sound effects volume</label>
-                        <div class="settings-slider-wrap">
-                            <input type="range" id="setting-audio-volume" min="0" max="100" step="1" value="100">
-                            <span id="setting-audio-volume-value">100%</span>
-                        </div>
-                    </div>
-                    <div class="settings-row">
-                        <label for="setting-background-audio-volume">Background audio</label>
-                        <div class="settings-slider-wrap">
-                            <input type="range" id="setting-background-audio-volume" min="0" max="100" step="1" value="100">
-                            <span id="setting-background-audio-volume-value">100%</span>
-                        </div>
                     </div>
                     <div class="settings-row">
                         <label for="setting-gold-mine-text">Energy mine amount text</label>
