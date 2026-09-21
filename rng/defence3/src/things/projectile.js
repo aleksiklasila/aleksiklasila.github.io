@@ -98,6 +98,7 @@ class Projectile {
 
         pushHostileDamageAlert(t, targetEnergyBefore - t.energy, this.sourceOwner);
     recordDamageVisual(t, targetEnergyBefore - t.energy, this.sourceOwner);
+        if (targetEnergyBefore > t.energy) playSound('impact', t.x, t.y, this.type);
         tryAutoRetaliateOnHostileDamage(t, sourceAttacker, Number.isFinite(this.sx) ? this.sx * TILE + 16 : null, Number.isFinite(this.sy) ? this.sy * TILE + 16 : null);
 
         if (hasBlast) {
@@ -153,6 +154,7 @@ class Projectile {
 
         pushHostileDamageAlert(b, buildingEnergyBefore - b.energy, this.sourceOwner);
     recordDamageVisual(b, buildingEnergyBefore - b.energy, this.sourceOwner);
+        if (buildingEnergyBefore > b.energy) playSound('impact', b.x, b.y, this.type);
 
         createExplosion(this.x, this.y, "#f84", 4);
         if (b.energy <= 0) { createExplosion(b.x, b.y, "#e44", 8); destroyBuilding(b); }

@@ -1407,3 +1407,21 @@
                 flex-basis: 100%;
             }
         }
+
+
+/* Native dialog top layer avoids HUD/sidebar stacking contexts. */
+#jukebox-open, #jukebox-panel button { border:1px solid #48556a; border-radius:5px; color:#dce7f6; background:#1c2635; padding:6px 10px; cursor:pointer; }
+#jukebox-open { font-size:19px; padding:0 8px; flex-shrink:0; }
+#jukebox-panel { margin:auto; width:360px; max-width:calc(100vw - 48px); max-height:calc(100dvh - 48px); overflow:auto; padding:20px; color:#dce7f6; background:#151d29; border:1px solid #48556a; border-radius:12px; box-shadow:0 16px 64px #0009; font-size:13px; }
+#jukebox-panel::backdrop { background:#060b1480; }
+.jukebox-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.jukebox-heading h3 { margin:0; }
+#jukebox-player, #jukebox-panel iframe { display:block; width:240px; height:200px; margin:0 auto; border:0; }
+#jukebox-status { color:#b8c9df; line-height:1.4; font-size:12px; }
+#jukebox-form, .jukebox-volumes { display:grid; gap:8px; margin:16px 0; }
+.jukebox-volumes label { display:flex; justify-content:space-between; }
+.jukebox-volumes input { width:100%; accent-color:#88baff; }
+.jukebox-volumes small { color:#a6b6ca; }
+#jukebox-link { min-width:0; width:100%; box-sizing:border-box; padding:8px; color:#ecf2fa; background:#0c121c; border:1px solid #52637b; border-radius:4px; }
+.jukebox-actions { display:flex; gap:8px; margin:12px 0; }
+#jukebox-panel a { color:#9bccff; font-size:12px; }

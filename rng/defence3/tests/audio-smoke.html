@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>Audio verification</title><pre id="result">Running offline Web Audio checks…</pre>
+<script>
+const TICK_RATE=30,TILE=32;let gameTime=0,gameStarted=true,audioVolume=1,audioBackgroundVolume=1;
+let camera={x:-160,y:-160,zoom:1},viewW=320,viewH=320,renderDimensionMode='2d',renderer3dInstance=null;
+const offline=new OfflineAudioContext(2,48000*3,48000);window.AudioContext=function(){return offline;};
+window.fetch=()=>{throw Error('Unexpected audio download')};
+</script><script src="../src/audio_visual/audio.js"></script><script>
+(async()=>{try{
+initAudio();if(!audioCtx)throw Error('Initialization failed');
+// Run silently with OfflineAudioContext. Open this page via the local server.
+playSound('builder_work',100*TILE,0);
+if(_audioFrameSoundCount!==0||_activeAudioVoices.size)throw Error('Distant event consumed budget');
+const near2d=_getAudioSpatialState(2*TILE,0,12);
+renderDimensionMode='3d';renderer3dInstance={orbitYaw:Math.PI,orbitPitch:.92};
+const near3d=_getAudioSpatialState(2*TILE,0,12);
+if(Math.abs(near2d.gain-near3d.gain)>1e-8||near3d.pan>=0)throw Error('3D listener/pan mismatch');
+renderDimensionMode='2d';renderer3dInstance=null;
+const worker={};
+if(!_noteAmbientSoundTick(worker,'work',10)||_noteAmbientSoundTick(worker,'work',10))throw Error('Ambient throttle failed');
+audioEnabled=false;playSound('place');if(_activeAudioVoices.size)throw Error('Mute failed');audioEnabled=true;
+let count=0;
+for(const [type,recipe] of Object.entries(AUDIO_RECIPES)){
+ const buffer=_generateEffectBuffer(type,'',0,recipe),d=buffer.getChannelData(0);
+ if(!d.every(Number.isFinite)||Math.abs(d[0])>.0001||Math.abs(d[d.length-1])>.0001)throw Error(type+' invalid envelope');
+ gameTime+=30;playSound(type,0,0);count++;
+}
+for(const reach of [4.5,12,24]){let previous=1;for(let d=0;d<=reach+1;d+=.01){let gain=_getAudioSpatialState(d*TILE,0,reach).gain;if(gain>previous+1e-8||previous-gain>.02)throw Error('Discontinuous falloff');previous=gain;}}
+if(_getAudioSpatialState(10*TILE,0,4.5).gain!==0||_getAudioSpatialState(10*TILE,0,24).gain<=0)throw Error('Reach mismatch');
+startBackgroundMusic();startLaserSound(0,0);_updateGeneratedAudioVoices();stopLaserSound();stopBackgroundMusic();
+const rendered=await offline.startRendering();let peak=0,sum=0;for(const value of rendered.getChannelData(0)){if(!Number.isFinite(value))throw Error('Invalid output');peak=Math.max(peak,Math.abs(value));sum+=value*value;}
+if(peak<=.001||peak>=.98)throw Error('Output peak '+peak);
+if(_activeAudioVoices.size)throw Error('Leaked voices '+_activeAudioVoices.size);
+document.getElementById('result').textContent='PASS: '+count+' procedural recipes, smooth distance curves, different quiet/loud reach, loop lifecycle, no downloads, no clipping, all voices released. Peak '+peak.toFixed(3)+', RMS '+Math.sqrt(sum/rendered.length).toFixed(3);
+}catch(e){document.getElementById('result').textContent='FAIL '+e.stack;}})();
+</script>
+

@@ -331,7 +331,7 @@ function gameTick() {
     for (let i = units.length - 1; i >= 0; i--) {
         let u = units[i];
         if (u.dead) {
-            if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y);
+            if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
             // Drop energy on death (bounty)
             let cost = BASE_UNIT_STATS[u.unitType] ? BASE_UNIT_STATS[u.unitType].energy * 0.5 : 5;
             let bounty = Math.floor(cost * 0.1);

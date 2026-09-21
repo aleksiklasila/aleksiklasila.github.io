@@ -15,12 +15,6 @@ let _bgMusicAnalyser = null;
 let _bgMusicAnalyserData = null;
 let _bgMusicReactiveSmoothedLevel = 0;
 let _bgMusicReactiveLevelHistory = [];
-const _audioAssetCache = new Map();
-const _audioAssetPending = new Map();
-const _audioAssetMissing = new Set();
-const AUDIO_ASSET_BASE_PATH = 'assets/audio';
-const AUDIO_ASSET_EXTENSIONS = ['wav', 'mp3'];
-const AUDIO_BACKGROUND_TRACKS = ['background_music', 'background_audio'];
 
 let audioSpatialGrid = [];
 let audioSpatialGridBackground = [];
@@ -43,16 +37,6 @@ let AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_SFX = 0;
 const AUDIO_MASTER_GAIN_MIN = 0;
 const AUDIO_MASTER_GAIN_MAX = 0.85;
 
-const AUDIO_PITCH_SCALE = 0.68;
-const AUDIO_SPATIAL_MIN_GAIN = 0.001;
-const AUDIO_SPATIAL_2D_NEAR_DISTANCE_TILES = 2.5;
-const AUDIO_SPATIAL_2D_FAR_DISTANCE_TILES = 14;
-const AUDIO_SPATIAL_2D_FALLOFF_EXPONENT = 3.8;
-const AUDIO_SPATIAL_2D_HEIGHT_VIEW_FACTOR = 0.34;
-const AUDIO_SPATIAL_3D_NEAR_DISTANCE_TILES = 2.5;
-const AUDIO_SPATIAL_3D_FAR_DISTANCE_TILES = 18;
-const AUDIO_SPATIAL_3D_FALLOFF_EXPONENT = 3.2;
-const AUDIO_SPATIAL_3D_DISTANCE_FACTOR = 1.25;
 const AUDIO_AMBIENT_WORK_MIN_TICKS = 10;
 const AUDIO_REACTIVE_GRID_UPDATE_INTERVAL = 3;
 const AUDIO_REACTIVE_BG_PULSE_SCALE = 0.42;
@@ -213,6 +197,7 @@ function _recordAudioReactiveEmitter(type, worldX, worldY, strength = 0.75) {
 }
 
 function updateAudioReactiveState() {
+    _updateGeneratedAudioVoices();
     _ensureAudioReactiveGrid();
     if (!audioSpatialGrid.length) return;
 
@@ -642,31 +627,31 @@ function handlePopupControlGroupKey(key, assignMode) {
     updateControlGroupBar();
 }
 
-function _scaleFreqValue(v) {
-    return Math.max(20, v * AUDIO_PITCH_SCALE);
-}
-
-function _scaleFreqInput(freq) {
-    if (Array.isArray(freq)) return freq.map(f => _scaleFreqValue(f));
-    return _scaleFreqValue(freq);
-}
-
 function initAudio() {
     if (audioCtx) return;
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         masterGain = audioCtx.createGain();
         applyAudioSettings();
-        masterGain.connect(audioCtx.destination);
+        // A gentle bus compressor keeps overlapping battles from becoming harsh.
+        let compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.knee.value = 18;
+        compressor.ratio.value = 3;
+        compressor.attack.value = .012;
+        compressor.release.value = .22;
+        masterGain.connect(compressor);
+        compressor.connect(audioCtx.destination);
     } catch (e) { audioCtx = null; }
 }
 
 function applyAudioSettings() {
+    if (typeof Jukebox !== 'undefined') Jukebox.applyVolume();
     if (!masterGain) return;
     let volume = Number.isFinite(audioVolume) ? audioVolume : 1;
     volume = Math.max(0, Math.min(1, volume));
     let shapedVolume = Math.pow(volume, 0.8);
-    masterGain.gain.value = AUDIO_MASTER_GAIN_MIN + (AUDIO_MASTER_GAIN_MAX - AUDIO_MASTER_GAIN_MIN) * shapedVolume;
+    masterGain.gain.setTargetAtTime(audioEnabled ? AUDIO_MASTER_GAIN_MIN + (AUDIO_MASTER_GAIN_MAX - AUDIO_MASTER_GAIN_MIN) * shapedVolume : 0, audioCtx.currentTime, .04);
     _applyBackgroundMusicVolume();
 }
 
@@ -677,15 +662,10 @@ function _getBackgroundMusicTargetGain() {
 }
 
 function _applyBackgroundMusicVolume() {
+    if (typeof Jukebox !== 'undefined') Jukebox.applyVolume();
     if (!audioCtx || !_bgMusicNodes || !_bgMusicNodes.gain) return;
-    let targetGain = _getBackgroundMusicTargetGain();
-    let t = audioCtx.currentTime;
-    let param = _bgMusicNodes.gain.gain;
-    let currentValue = Math.max(0.0001, Number(param.value) || 0.0001);
-    param.cancelScheduledValues(t);
-    param.setValueAtTime(currentValue, t);
-    if (targetGain <= 0.0001) param.linearRampToValueAtTime(0.0001, t + 0.08);
-    else param.exponentialRampToValueAtTime(targetGain, t + 0.12);
+    _bgMusicNodes.volume = _getBackgroundMusicTargetGain();
+    _bgMusicNodes.gain.gain.setTargetAtTime(_bgMusicNodes.volume, audioCtx.currentTime, .12);
 }
 
 function _attachBackgroundMusicAnalyser(loopNode) {
@@ -723,6 +703,7 @@ const _audioTypeThrottle = {
     astar_collected:   [2, 6],
     salvage_collected: [2, 6],
     melee_hit:         [4, 4],
+    impact:            [4, 4],
 };
 
 function _canPlaySoundTypeNow(type) {
@@ -754,320 +735,225 @@ function _canPlaySoundTypeNow(type) {
     return true;
 }
 
-function _getAudioSpatialState(worldX, worldY) {
-    if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !Number.isFinite(camera.zoom) || camera.zoom <= 0) {
-        return { gain: 1, pan: 0 };
-    }
-    let worldViewW = viewW / camera.zoom;
-    let worldViewH = viewH / camera.zoom;
-    let cx = camera.x + worldViewW * 0.5;
-    let cy = camera.y + worldViewH * 0.5;
-    let dx = worldX - cx;
-    let dy = worldY - cy;
-    let nx = dx / Math.max(1, worldViewW * 0.5);
-    let sourceTileX = worldX / Math.max(1, TILE);
-    let sourceTileY = worldY / Math.max(1, TILE);
-    let cameraTileX = cx / Math.max(1, TILE);
-    let cameraTileY = cy / Math.max(1, TILE);
-    let cameraHeightTiles = Math.max(0, Math.max(worldViewW, worldViewH) / Math.max(1, TILE) * AUDIO_SPATIAL_2D_HEIGHT_VIEW_FACTOR);
-    let nearDistanceTiles = AUDIO_SPATIAL_2D_NEAR_DISTANCE_TILES;
-    let farDistanceTiles = AUDIO_SPATIAL_2D_FAR_DISTANCE_TILES;
-    let falloffExponent = AUDIO_SPATIAL_2D_FALLOFF_EXPONENT;
+// Procedural sound recipes: [frequency, ending frequency, seconds, noise mix,
+// brightness Hz, volume, reach in tiles, pulse count]. No downloaded samples.
+const AUDIO_RECIPES = {
+    shoot_generic: [150,65,.23,.55,1100,.19,12,1],
+    shoot_pistol: [180,70,.20,.50,1250,.18,12,1],
+    shoot_smg: [145,80,.26,.58,1400,.15,11,3],
+    shoot_sniper: [100,38,.52,.65,1050,.27,23,1],
+    shoot_fire: [95,42,.58,.82,850,.22,18,1],
+    shoot_water: [245,100,.32,.56,1050,.15,10,2],
+    shoot_poison: [155,95,.40,.33,650,.14,9,3],
+    shoot_ice: [340,210,.34,.24,1500,.14,11,2],
+    shoot_sand_gun: [125,65,.38,.87,700,.17,12,2],
+    shoot_elements: [220,140,.48,.28,1250,.18,15,3],
+    shoot_watch_tower: [280,190,.22,.08,1000,.11,8,2],
+    shoot_laser: [190,110,.38,.10,900,.14,14,1],
+    laser_tick: [140,105,.28,.10,700,.10,13,1],
+    melee_hit: [135,55,.19,.52,850,.12,7,1],
+    impact: [115,45,.22,.65,750,.12,8,1],
+    mine_explode: [75,30,.85,.88,700,.27,24,1],
+    unit_death: [160,48,.45,.32,700,.13,9,1],
+    building_destroyed: [85,28,.95,.85,600,.25,22,3],
+    place: [190,115,.22,.28,950,.12,7,1],
+    cant_place: [180,130,.30,.02,600,.12,6,2],
+    builder_work: [160,85,.20,.60,650,.075,4.5,2],
+    heal_tick: [240,300,.48,.02,1000,.075,5,2],
+    research_tick: [190,285,.42,.05,1100,.075,5,3],
+    gold_collected: [260,330,.34,.06,1300,.10,6,2],
+    astar_collected: [220,350,.46,.02,1200,.10,6,3],
+    salvage_collected: [180,240,.28,.35,850,.09,5,2],
+    build_complete: [196,294,.65,.04,1300,.13,10,3],
+    upgrade_complete: [220,330,.78,.02,1400,.14,11,4],
+    alert_damage: [196,165,.45,.04,850,.12,15,2],
+    alert_king_damage: [220,147,.68,.04,850,.17,20,3],
+    victory: [196,392,1.8,.01,1400,.17,16,5],
+    defeat: [220,98,1.7,.03,850,.14,16,4]
+};
+const _generatedAudioBuffers = new Map();
+const _activeAudioVoices = new Set();
+const AUDIO_MAX_ACTIVE_VOICES = 32;
+let _audioVariation = 0;
 
-    if (renderDimensionMode === '3d' && renderer3dInstance) {
-        let visibleWidthTiles = Math.max(1.2, worldViewW / Math.max(1, TILE));
-        let visibleHeightTiles = Math.max(1.2, worldViewH / Math.max(1, TILE));
-        let orbitPitch = Number(renderer3dInstance.orbitPitch);
-        let orbitYaw = Number(renderer3dInstance.orbitYaw);
-        if (!Number.isFinite(orbitPitch)) orbitPitch = 0.92;
-        if (!Number.isFinite(orbitYaw)) orbitYaw = 0;
-        let orbitDistance = Math.max(1.8, Math.max(visibleWidthTiles, visibleHeightTiles) * AUDIO_SPATIAL_3D_DISTANCE_FACTOR);
-        let horizontalDistance = Math.cos(orbitPitch) * orbitDistance;
-        cameraTileX += Math.sin(orbitYaw) * horizontalDistance;
-        cameraTileY += Math.cos(orbitYaw) * horizontalDistance;
-        cameraHeightTiles = Math.max(0, Math.sin(orbitPitch) * orbitDistance);
-        nearDistanceTiles = AUDIO_SPATIAL_3D_NEAR_DISTANCE_TILES;
-        farDistanceTiles = AUDIO_SPATIAL_3D_FAR_DISTANCE_TILES;
-        falloffExponent = AUDIO_SPATIAL_3D_FALLOFF_EXPONENT;
-    }
-
-    let distTiles = Math.hypot(sourceTileX - cameraTileX, sourceTileY - cameraTileY, cameraHeightTiles);
-    let gain = 1;
-    if (distTiles > nearDistanceTiles) {
-        let t = Math.max(0, Math.min(1, (distTiles - nearDistanceTiles) / Math.max(0.001, farDistanceTiles - nearDistanceTiles)));
-        gain = Math.pow(1 - t, falloffExponent);
-    }
-    gain = Math.max(AUDIO_SPATIAL_MIN_GAIN, Math.min(1, gain));
-    let pan = Math.max(-1, Math.min(1, nx * 0.85));
-    return { gain, pan };
+function _audioHash(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+    return h >>> 0;
 }
 
-function _createGainNode(vol, pan = 0) {
-    let g = audioCtx.createGain();
-    g.gain.value = vol;
-    if (audioCtx.createStereoPanner) {
-        let p = audioCtx.createStereoPanner();
-        p.pan.value = Math.max(-1, Math.min(1, Number(pan) || 0));
-        g.connect(p);
-        p.connect(masterGain);
-        g._stereoPanner = p;
-    } else {
-        g.connect(masterGain);
-    }
-    return g;
-}
-
-async function _loadAudioAsset(type) {
-    let normalizedType = String(type || '').trim();
-    if (!normalizedType || !audioCtx) return null;
-    if (_audioAssetCache.has(normalizedType)) return _audioAssetCache.get(normalizedType);
-    if (_audioAssetMissing.has(normalizedType)) return null;
-    if (_audioAssetPending.has(normalizedType)) return _audioAssetPending.get(normalizedType);
-
-    let promise = (async () => {
-        try {
-            for (let ext of AUDIO_ASSET_EXTENSIONS) {
-                let response = await fetch(`${AUDIO_ASSET_BASE_PATH}/${encodeURIComponent(normalizedType)}.${ext}`);
-                if (!response.ok) continue;
-                let arrayBuffer = await response.arrayBuffer();
-                let decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-                _audioAssetCache.set(normalizedType, decoded);
-                return decoded;
-            }
-            _audioAssetMissing.add(normalizedType);
-            return null;
-        } catch {
-            _audioAssetMissing.add(normalizedType);
-            return null;
-        } finally {
-            _audioAssetPending.delete(normalizedType);
+function _getSoundRecipe(type, subtype = '') {
+    let recipe = AUDIO_RECIPES[type] || AUDIO_RECIPES.shoot_generic;
+    let profile = recipe.slice();
+    if (subtype) {
+        // Use the same elemental palette for impacts, with a shorter, duller tail.
+        let element = String(subtype).replace('_resistant', '');
+        let elemental = AUDIO_RECIPES['shoot_' + element];
+        if ((type === 'melee_hit' || type === 'impact') && elemental) {
+            profile = elemental.slice();
+            profile[2] *= .65; profile[4] *= .72; profile[5] *= .65; profile[6] *= .65;
         }
-    })();
-
-    _audioAssetPending.set(normalizedType, promise);
-    return promise;
+        let weight = /tank|boss|king|snake/.test(subtype) ? .70 : /fast|scout|flying/.test(subtype) ? 1.15 : 1;
+        let variation = .94 + (_audioHash(subtype) % 13) / 100;
+        profile[0] *= weight * variation; profile[1] *= weight * variation;
+        if (weight < 1) { profile[2] *= 1.2; profile[5] *= 1.15; profile[6] *= 1.3; }
+    }
+    return profile;
 }
 
-function _playLoadedAudioBuffer(buffer, vol, pan = 0, loop = false) {
-    if (!audioCtx || !buffer || !(vol > 0)) return null;
-    let source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.loop = !!loop;
-    let gainNode = _createGainNode(vol, pan);
-    source.connect(gainNode);
+function _generateEffectBuffer(type, subtype, variant, recipe) {
+    let key = type + ':' + subtype + ':' + variant;
+    if (_generatedAudioBuffers.has(key)) return _generatedAudioBuffers.get(key);
+    let [frequency, endFrequency, duration, noiseMix, cutoff, , , pulses] = recipe;
+    let rate = audioCtx.sampleRate;
+    let buffer = audioCtx.createBuffer(1, Math.ceil(duration * rate), rate);
+    let data = buffer.getChannelData(0), seed = _audioHash(key) || 1;
+    let phase = 0, filteredNoise = 0, filtered = 0;
+    let toneOffset = 1 + (variant - 1) * .025;
+    let filterAmount = 1 - Math.exp(-2 * Math.PI * cutoff / rate);
+    for (let i = 0; i < data.length; i++) {
+        let time = i / rate, progress = time / duration;
+        let pulse = (time * pulses / duration) % 1;
+        let envelope = Math.min(1, time / .012) * Math.pow(1 - progress, 1.7);
+        envelope *= pulses > 1 ? Math.pow(Math.sin(Math.PI * pulse), 2) : 1;
+        let pitch = frequency * Math.pow(endFrequency / frequency, progress) * toneOffset;
+        phase += 2 * Math.PI * pitch / rate;
+        // Local PRNG never consumes the game's random stream.
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        filteredNoise += filterAmount * ((seed / 2147483648 - 1) - filteredNoise);
+        let tone = Math.sin(phase) * .82 + Math.sin(phase * 2) * .12;
+        let sample = tone * (1 - noiseMix) + filteredNoise * noiseMix * 1.8;
+        filtered += filterAmount * (sample - filtered);
+        data[i] = filtered * envelope * .8;
+    }
+    // Bounded even for custom/modded unit names; active sources retain their buffer.
+    if (_generatedAudioBuffers.size >= 192) _generatedAudioBuffers.delete(_generatedAudioBuffers.keys().next().value);
+    _generatedAudioBuffers.set(key, buffer);
+    return buffer;
+}
+
+function _getAudioSpatialState(worldX, worldY, reach = 12) {
+    if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !(camera.zoom > 0)) {
+        return { gain: 1, pan: 0, cutoff: 2800 };
+    }
+    let width = viewW / camera.zoom, height = viewH / camera.zoom;
+    let dx = (worldX - camera.x - width * .5) / TILE;
+    let dy = (worldY - camera.y - height * .5) / TILE;
+    // Listen at the point the player is looking at, not the elevated 3D eye.
+    // Zoom still gently changes level, but cannot push every source past a cutoff.
+    let zoomDistance = Math.max(0, Math.max(width, height) / TILE - 12) * .06;
+    let distance = Math.hypot(dx, dy, zoomDistance);
+    let normalized = distance / Math.max(1, reach);
+    let edge = Math.max(0, 1 - normalized * normalized);
+    let gain = edge * edge / (1 + 3 * normalized * normalized);
+    let yaw = renderDimensionMode === '3d' && renderer3dInstance ? Number(renderer3dInstance.orbitYaw) || 0 : 0;
+    let right = dx * Math.cos(yaw) - dy * Math.sin(yaw);
+    let pan = Math.tanh(right / Math.max(3, width / TILE * .35)) * .8;
+    return { gain, pan, cutoff: 700 + 2100 / (1 + normalized * normalized * 4) };
+}
+
+function _createGeneratedVoice(buffer, volume, worldX, worldY, reach, loop = false) {
+    let spatial = _getAudioSpatialState(worldX, worldY, reach);
+    let source = audioCtx.createBufferSource(); source.buffer = buffer; source.loop = loop;
+    let gain = audioCtx.createGain(); gain.gain.value = 0;
+    let filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.Q.value = .5;
+    filter.frequency.value = spatial.cutoff;
+    let panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+    source.connect(filter); filter.connect(gain);
+    if (panner) { panner.pan.value = spatial.pan; gain.connect(panner); panner.connect(masterGain); }
+    else gain.connect(masterGain);
+    let voice = { source, gain, filter, panner, volume, worldX, worldY, reach, loop, stopping: false };
+    gain.gain.setTargetAtTime(volume * spatial.gain, audioCtx.currentTime, loop ? .15 : .008);
+    _activeAudioVoices.add(voice);
+    source.onended = () => {
+        _activeAudioVoices.delete(voice);
+        source.disconnect(); filter.disconnect(); gain.disconnect();
+        if (panner) panner.disconnect();
+    };
     source.start();
-    return { source, gain: gainNode, panner: gainNode._stereoPanner || null };
+    return voice;
 }
 
-function _playAudioAsset(type, vol, pan = 0, loop = false) {
-    if (!audioCtx || !audioEnabled || !(vol > 0)) return null;
-    let normalizedType = String(type || '').trim();
-    if (!normalizedType) return null;
-
-    let cached = _audioAssetCache.get(normalizedType);
-    if (cached) return _playLoadedAudioBuffer(cached, vol, pan, loop);
-
-    if (!_audioAssetMissing.has(normalizedType)) {
-        _loadAudioAsset(normalizedType);
+function _updateGeneratedAudioVoices() {
+    if (!audioCtx) return;
+    for (let voice of _activeAudioVoices) {
+        if (voice.stopping || voice === _bgMusicNodes) continue;
+        let spatial = _getAudioSpatialState(voice.worldX, voice.worldY, voice.reach);
+        let time = audioCtx.currentTime;
+        voice.gain.gain.setTargetAtTime(audioEnabled ? voice.volume * spatial.gain : 0, time, .075);
+        voice.filter.frequency.setTargetAtTime(spatial.cutoff, time, .10);
+        if (voice.panner) voice.panner.pan.setTargetAtTime(spatial.pan, time, .08);
     }
-    return null;
 }
 
-async function _startLoopedAudioAsset(type, vol, pan = 0) {
-    if (!audioCtx || !audioEnabled || !(vol > 0)) return null;
-    let buffer = _audioAssetCache.get(type);
-    if (!buffer) buffer = await _loadAudioAsset(type);
-    if (!audioEnabled || !buffer) return null;
-    return _playLoadedAudioBuffer(buffer, vol, pan, true);
-}
-
-async function _startFirstLoopedAudioAsset(types, vol, pan = 0) {
-    let keys = Array.isArray(types) ? types : [types];
-    for (let i = 0; i < keys.length; i++) {
-        let loopNode = await _startLoopedAudioAsset(keys[i], vol, pan);
-        if (loopNode) return loopNode;
-    }
-    return null;
+function _stopGeneratedVoice(voice, fade = .15) {
+    if (!voice || voice.stopping) return;
+    voice.stopping = true;
+    let time = audioCtx.currentTime;
+    voice.gain.gain.cancelScheduledValues(time);
+    voice.gain.gain.setTargetAtTime(0, time, fade / 4);
+    voice.source.stop(time + fade);
 }
 
 function _noteAmbientSoundTick(target, key, cooldownTicks = AUDIO_AMBIENT_WORK_MIN_TICKS) {
     if (!target || !key) return true;
-    if (!Number.isFinite(target._ambientSoundTicks)) target._ambientSoundTicks = Object.create(null);
+    if (!target._ambientSoundTicks || typeof target._ambientSoundTicks !== 'object') target._ambientSoundTicks = Object.create(null);
     let nextTick = Number(target._ambientSoundTicks[key]) || 0;
     if (gameTime < nextTick) return false;
     target._ambientSoundTicks[key] = gameTime + Math.max(1, Math.floor(cooldownTicks));
     return true;
 }
 
-// Play a simple tone: type=waveform, freq (hz or array for sequence), dur (s), vol
-function _playTone(freq, dur, vol, wave, detune, pan = 0) {
-    if (!audioCtx) return;
-    if (typeof wave !== 'string') {
-        pan = Number.isFinite(detune) ? detune : pan;
-        detune = Number.isFinite(wave) ? wave : 0;
-        wave = 'triangle';
-    }
-    freq = _scaleFreqInput(freq);
-    let g = _createGainNode(vol, pan);
-    let o = audioCtx.createOscillator();
-    o.type = wave || 'triangle';
-    let t = audioCtx.currentTime;
-    if (detune) o.detune.value = detune;
-    if (Array.isArray(freq)) {
-        let step = dur / freq.length;
-        o.frequency.setValueAtTime(freq[0], t);
-        for (let i = 1; i < freq.length; i++) {
-            let nextTime = t + i * step;
-            o.frequency.linearRampToValueAtTime(freq[i], nextTime);
-        }
-    } else {
-        o.frequency.value = freq;
-    }
-    o.connect(g);
-    let attack = Math.min(0.055, Math.max(0.01, dur * 0.28));
-    let decayTime = Math.max(attack + 0.018, dur * 0.72);
-    let sustainLevel = Math.max(0.001, vol * 0.5);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(vol, t + attack);
-    g.gain.exponentialRampToValueAtTime(sustainLevel, t + decayTime);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.start(t);
-    o.stop(t + dur + 0.05);
-}
-
-// Play a noise burst (white noise filtered)
-function _playNoise(dur, vol, energyFreq, lpFreq, pan = 0) {
-    if (!audioCtx) return;
-    let bufLen = Math.ceil(audioCtx.sampleRate * dur);
-    let buf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
-    let data = buf.getChannelData(0);
-    for (let i = 0; i < bufLen; i++) data[i] = Math.random() * 2 - 1;
-    let src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    let g = _createGainNode(vol, pan);
-    let t = audioCtx.currentTime;
-    let attack = Math.min(0.025, Math.max(0.003, dur * 0.12));
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(vol, t + attack);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.001, vol * 0.42), t + Math.max(attack + 0.01, dur * 0.5));
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    if (lpFreq) {
-        let lp = audioCtx.createBiquadFilter();
-        lp.type = 'lowpass'; lp.frequency.value = lpFreq;
-        src.connect(lp); lp.connect(g);
-    } else {
-        src.connect(g);
-    }
-    src.start(t); src.stop(t + dur);
-}
-
-function playSound(type, worldX, worldY) {
+function playSound(type, worldX, worldY, subtype = '') {
     if (!audioCtx || !audioEnabled) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    if (!_canPlaySoundTypeNow(type)) return;
-    let spatial = (worldX !== undefined) ? _getAudioSpatialState(worldX, worldY) : { gain: 1, pan: 0 };
-    let vol = spatial.gain;
-    let pan = spatial.pan;
-    if (vol < AUDIO_SPATIAL_MIN_GAIN) return;
-    _recordAudioReactiveEmitter(type, worldX, worldY, 0.75);
-    _playAudioAsset(type, vol, pan, false);
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    let recipe = _getSoundRecipe(type, subtype);
+    let spatial = _getAudioSpatialState(worldX, worldY, recipe[6]);
+    // Cull only below -80 dB of full-scale output, after a smooth zero-slope fade.
+    // Inaudible/offscreen events do not consume the audible event budget.
+    if (spatial.gain * recipe[5] < .0001) return;
+    if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES || !_canPlaySoundTypeNow(type)) return;
+    _recordAudioReactiveEmitter(type, worldX, worldY, recipe[5] * 3);
+    let buffer = _generateEffectBuffer(type, subtype, (_audioVariation++) % 3, recipe);
+    _createGeneratedVoice(buffer, recipe[5], worldX, worldY, recipe[6]);
 }
 
-// Laser: start/stop sustained buzz
+function _generateLaserLoopBuffer() {
+    let key = 'generated_laser';
+    if (_generatedAudioBuffers.has(key)) return _generatedAudioBuffers.get(key);
+    // Integer cycles make a seamless, timer-free laser loop.
+    let duration = 2, rate = audioCtx.sampleRate;
+    let buffer = audioCtx.createBuffer(1, duration * rate, rate), data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+        let t = i / rate, tau = 2 * Math.PI;
+        data[i] = (.23 * Math.sin(tau * 110 * t) + .07 * Math.sin(tau * 165 * t)) * (.8 + .2 * Math.cos(tau * 3 * t));
+    }
+    _generatedAudioBuffers.set(key, buffer);
+    return buffer;
+}
+
 function startLaserSound(worldX, worldY) {
     if (!audioCtx || !audioEnabled) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    let spatial = (worldX !== undefined) ? _getAudioSpatialState(worldX, worldY) : { gain: 1, pan: 0 };
-    let targetGain = 0.22 * spatial.gain;
-    if (_laserAudioActive && _laserAudioNodes) {
-        let t = audioCtx.currentTime;
-        _laserAudioNodes.gain.gain.cancelScheduledValues(t);
-        _laserAudioNodes.gain.gain.setValueAtTime(_laserAudioNodes.gain.gain.value, t);
-        _laserAudioNodes.gain.gain.linearRampToValueAtTime(targetGain, t + 0.08);
-        if (_laserAudioNodes.panner) {
-            _laserAudioNodes.panner.pan.cancelScheduledValues(t);
-            _laserAudioNodes.panner.pan.linearRampToValueAtTime(spatial.pan, t + 0.08);
-        }
-        return;
-    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    if (!_laserAudioNodes) _laserAudioNodes = _createGeneratedVoice(_generateLaserLoopBuffer(), .13, worldX, worldY, 15, true);
+    _laserAudioNodes.worldX = worldX; _laserAudioNodes.worldY = worldY;
     _laserAudioActive = true;
-    if (_laserAudioNodes) {
-        try { _laserAudioNodes.source.stop(); } catch (e) { }
-        _laserAudioNodes = null;
-    }
-    let loopNode = _playAudioAsset('laser_tick', targetGain, spatial.pan, true);
-    if (loopNode) {
-        let t = audioCtx.currentTime;
-        loopNode.gain.gain.setValueAtTime(0, t);
-        loopNode.gain.gain.linearRampToValueAtTime(targetGain, t + 0.05);
-        _laserAudioNodes = loopNode;
-    }
 }
+
 function stopLaserSound() {
-    if (!_laserAudioActive || !_laserAudioNodes) return;
-    _laserAudioActive = false;
-    let { gain, source } = _laserAudioNodes;
-    let t = audioCtx.currentTime;
-    gain.gain.setValueAtTime(gain.gain.value, t);
-    gain.gain.linearRampToValueAtTime(0, t + 0.15);
-    setTimeout(() => { try { source.stop(); } catch (e) { } }, 200);
-    _laserAudioNodes = null;
+    _stopGeneratedVoice(_laserAudioNodes);
+    _laserAudioNodes = null; _laserAudioActive = false;
 }
 
 function startBackgroundMusic() {
-    if (!audioCtx || !audioEnabled || _bgMusicNodes) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    _bgMusicAnalyser = null;
-    _bgMusicAnalyserData = null;
-    _bgMusicReactiveSmoothedLevel = 0;
-    _bgMusicReactiveLevelHistory.length = 0;
-    _bgMusicNodes = { pending: true, cancelled: false, source: null, gain: null };
-
-    _startFirstLoopedAudioAsset(AUDIO_BACKGROUND_TRACKS, 0.24, 0).then(loopNode => {
-        if (!_bgMusicNodes || _bgMusicNodes.cancelled || !audioEnabled) {
-            if (loopNode && loopNode.source) {
-                try { loopNode.source.stop(); } catch (e) { }
-            }
-            return;
-        }
-        if (!loopNode) {
-            _bgMusicNodes = null;
-            return;
-        }
-
-        let t = audioCtx.currentTime;
-        let targetGain = Math.max(0.0001, _getBackgroundMusicTargetGain());
-        loopNode.gain.gain.setValueAtTime(0.0001, t);
-        loopNode.gain.gain.exponentialRampToValueAtTime(targetGain, t + 1.2);
-        _attachBackgroundMusicAnalyser(loopNode);
-        _bgMusicNodes = {
-            pending: false,
-            cancelled: false,
-            source: loopNode.source,
-            gain: loopNode.gain,
-            panner: loopNode.panner || null
-        };
-    });
+    if (typeof Jukebox !== 'undefined') Jukebox.start();
 }
 
 function stopBackgroundMusic() {
-    if (!_bgMusicNodes) return;
-    let nodes = _bgMusicNodes;
+    if (typeof Jukebox !== 'undefined') Jukebox.stopLocal();
+    _stopGeneratedVoice(_bgMusicNodes, .6);
     _bgMusicNodes = null;
-    _bgMusicAnalyser = null;
-    _bgMusicAnalyserData = null;
-    _bgMusicReactiveSmoothedLevel = 0;
-    _bgMusicReactiveLevelHistory.length = 0;
-    nodes.cancelled = true;
-    let t = audioCtx ? audioCtx.currentTime : 0;
-    if (!nodes.gain || !nodes.source) return;
-    try {
-        nodes.gain.gain.cancelScheduledValues(t);
-        nodes.gain.gain.setValueAtTime(Math.max(0.0001, nodes.gain.gain.value), t);
-        nodes.gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
-    } catch (e) { }
-    setTimeout(() => {
-        try { nodes.source.stop(); } catch (e) { }
-    }, 600);
+    if (_bgMusicAnalyser) _bgMusicAnalyser.disconnect();
+    _bgMusicAnalyser = null; _bgMusicAnalyserData = null;
+    _bgMusicReactiveSmoothedLevel = 0; _bgMusicReactiveLevelHistory.length = 0;
 }
-

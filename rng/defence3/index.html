@@ -162,6 +162,7 @@
         <span class="hud-pop" id="hud-pop">Pop: 0/200/200</span>
         <span class="hud-time" id="hud-time">0:00</span>
         <span class="hud-time" id="hud-fps" style="color:#666">0 FPS</span>
+        <button id="jukebox-open" type="button" aria-label="Open music and sound settings" title="Music and sound">♫</button>
         <span class="hud-time"
             style="margin-left: auto; display:inline-flex; align-items:center; gap:8px; margin-right:5px;">
             <span id="view-mode-toggle" class="hud-render-toggle" aria-label="Render mode toggle">
@@ -186,6 +187,27 @@
                  style="background:transparent; border:1px solid #744; color:#f99; cursor:pointer; font-size:12px; padding:2px 6px; border-radius:3px; margin-left:6px;">&#9760;</button>
         </span>
     </div>
+
+
+    <dialog id="jukebox-panel" aria-labelledby="jukebox-title">
+        <div class="jukebox-heading"><h3 id="jukebox-title">Music & sound</h3><button id="jukebox-close" type="button" aria-label="Close music settings">✕</button></div>
+        <div id="jukebox-player"></div>
+        <p id="jukebox-status" role="status">Ready</p>
+        <div class="jukebox-volumes">
+            <label for="jukebox-music">Music <output id="jukebox-music-value">100%</output></label>
+            <input id="jukebox-music" type="range" min="0" max="100" step="1" value="100">
+            <label for="jukebox-effects">Sound effects <output id="jukebox-effects-value">100%</output></label>
+            <input id="jukebox-effects" type="range" min="0" max="100" step="1" value="100">
+            <small>Volumes apply only to you. Set to 0 to mute.</small>
+        </div>
+        <form id="jukebox-form">
+            <label for="jukebox-link">YouTube video link · shared with everyone</label>
+            <input id="jukebox-link" type="url" required maxlength="2048" value="https://www.youtube.com/watch?v=9JD2nH4M8Dc&amp;list=RD9JD2nH4M8Dc&amp;start_radio=1">
+            <button type="submit">Play for everyone</button>
+        </form>
+        <div class="jukebox-actions"><button id="jukebox-play" type="button">Pause for everyone</button><button id="jukebox-enable" type="button" hidden>Enable here</button></div>
+        <a id="jukebox-external" href="https://www.youtube.com/watch?v=9JD2nH4M8Dc" target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+    </dialog>
 
     <div id="research-popup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="research-popup-title">
         <div id="research-popup-card">
@@ -418,7 +440,7 @@
                         </label>
                     </div>
                     <div class="settings-row">
-                        <label for="setting-audio-volume">Audio volume</label>
+                        <label for="setting-audio-volume">Sound effects volume</label>
                         <div class="settings-slider-wrap">
                             <input type="range" id="setting-audio-volume" min="0" max="100" step="1" value="100">
                             <span id="setting-audio-volume-value">100%</span>
@@ -641,6 +663,7 @@
     <script src="./src/audio_visual/side_visualizations.js?v=20260516d"></script>
     <script src="./src/audio_visual/renderer.js?v=20260516d"></script>
     <script src="./src/audio_visual/audio.js?v=20260516d"></script>
+    <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260516d"></script>
 
     <script src="./src/game/chunk.js?v=20260516d"></script>
