@@ -397,7 +397,11 @@ function get3DExact2DTexture(entity) {
     let y = Number(entity.y);
     if (!Number.isFinite(x)) x = (Number(entity.gx) || 0) * TILE + TILE * 0.5;
     if (!Number.isFinite(y)) y = (Number(entity.gy) || 0) * TILE + TILE * 0.5;
-    let scale = 1.8;
+    // Fill the 3D panel instead of shrinking the sprite into a wide margin.
+    // Leave room for the existing health/status marks around a unit.
+    let extent = entity.unitType && Number(entity.r) > 0 ? Math.max(TILE, Number(entity.r) * 2 + 12) : TILE;
+    let scale = (entry.canvas.width - 8) / extent;
+    g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
@@ -426,7 +430,8 @@ function get3DExact2DFloorTexture(item, owner) {
     }
     let g = entry.ctx;
     if (!g) return null;
-    let scale = 1.8;
+    let scale = (entry.canvas.width - 8) / TILE;
+    g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
     g.save();
@@ -455,7 +460,8 @@ function get3DExact2DMineTexture(kind, amount) {
     }
     let g = entry.ctx;
     if (!g) return null;
-    let scale = 1.8;
+    let scale = (entry.canvas.width - 8) / TILE;
+    g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
     g.save();
