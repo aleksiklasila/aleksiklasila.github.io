@@ -2223,10 +2223,30 @@ function drawMinimap() {
     // Damage alerts (minimap only)
     drawMinimapAlerts(minimapCtx, scale);
 
-    // Camera viewport rect
-    let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
+    // Camera viewport: exact ground-frustum footprint in 3D, rectangle in 2D.
     minimapCtx.strokeStyle = '#fff'; minimapCtx.lineWidth = 1;
-    minimapCtx.strokeRect(camera.x / TILE * scale, camera.y / TILE * scale, vw / TILE * scale, vh / TILE * scale);
+    let drew3DFrustum = false;
+    if (
+        renderDimensionMode === '3d' &&
+        renderer3dInstance &&
+        typeof renderer3dInstance.getGroundFrustumPolygon === 'function'
+    ) {
+        let footprint = renderer3dInstance.getGroundFrustumPolygon(get3DProjectionSnapshot());
+        if (footprint && footprint.length >= 3) {
+            minimapCtx.beginPath();
+            minimapCtx.moveTo(footprint[0].x * scale, footprint[0].y * scale);
+            for (let i = 1; i < footprint.length; i++) {
+                minimapCtx.lineTo(footprint[i].x * scale, footprint[i].y * scale);
+            }
+            minimapCtx.closePath();
+            minimapCtx.stroke();
+            drew3DFrustum = true;
+        }
+    }
+    if (!drew3DFrustum) {
+        let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
+        minimapCtx.strokeRect(camera.x / TILE * scale, camera.y / TILE * scale, vw / TILE * scale, vh / TILE * scale);
+    }
 }
 
 function isTileVisible(gx, gy) {
