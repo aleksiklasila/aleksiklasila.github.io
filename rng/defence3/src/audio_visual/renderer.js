@@ -1193,7 +1193,7 @@ function push3DRenderObject(target, object) {
     if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
     if (!Number.isFinite(visionRange)) visionRange = _resolveVisionRangeFromSource(object.visibilitySource);
     let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
-    if (Number.isFinite(visionRange) && visionRange > 0) {
+    if (!object.preserveModelHeight && Number.isFinite(visionRange) && visionRange > 0) {
         let visibilityHeight = Math.max(0.18, visionRange / 5);
         resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
     }
@@ -1211,6 +1211,9 @@ function push3DRenderObject(target, object) {
         rotationY: Number(object.rotationY) || 0,
         moveAmount: Math.max(0, Math.min(1, Number(object.moveAmount) || 0)),
         walkPhase: Number(object.walkPhase) || 0,
+        animationMode: Math.max(0, Math.min(6, Math.floor(Number(object.animationMode) || 0))),
+        weaponType: String(object.weaponType || ''),
+        preserveModelHeight: !!object.preserveModelHeight,
         isFlying: !!object.isFlying,
         isWorker: !!object.isWorker,
         tint,
@@ -1348,6 +1351,67 @@ function get3DBoxSelection(screenRect) {
 
 function getBackgroundWorldBoundsForRenderMode() {
     return renderDimensionMode === '3d' ? get3DVisibleWorldBounds() : getVisibleWorldBounds(1);
+}
+
+function getUnit3DActivity(u) {
+    let moving = Math.hypot(u.x - u.prevX, u.y - u.prevY) > 0.01;
+    if (u.attackFlash > 0) return { mode: 1, amount: 1, target: u.attackTarget || null };
+    let state = String(u.workerState || '');
+    if ((u.workerType === 'collector' || u.workerType === 'astar_collector') && u.workerTransferCooldown > 0 && u.carryingValue > 0) return { mode: 3, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'salvager' && u.workerTransferCooldown > 0) return { mode: 4, amount: 1, target: u.workerTarget || null };
+    if (!u.workerType || moving) return { mode: 0, amount: moving ? 1 : 0, target: null };
+    let hasArrived = !u.path || u.pathIndex >= u.path.length;
+    if (u.workerType === 'builder' && (state === 'BUILDING_IN_PLACE' || (state === 'MOVING_TO_BUILD' && hasArrived))) return { mode: 2, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'healer' && (state === 'HEALING' || (state === 'MOVING_TO_HEAL' && hasArrived))) return { mode: 5, amount: 1, target: u.workerTarget || null };
+    if (u.workerType === 'researcher' && (state === 'RESEARCHING' || (state === 'MOVING_TO_RESEARCH' && hasArrived))) return { mode: 6, amount: 1, target: u.workerTarget || null };
+    return { mode: 0, amount: 0, target: null };
+}
+
+function getUnit3DWeaponType(u) {
+    let unitType = String(u && u.unitType || '');
+    let workerType = String(u && u.workerType || '');
+    if (workerType === 'builder') return 'hammer';
+    if (workerType === 'collector' || workerType === 'astar_collector') return 'pickaxe';
+    if (workerType === 'salvager') return 'cutter';
+    if (workerType === 'healer') return 'healer_staff';
+    if (workerType === 'researcher') return 'research_orb';
+    if (unitType === 'king') return 'king_sword';
+    if (unitType === 'boss') return 'great_axe';
+    if (unitType === 'tank') return 'warhammer';
+    if (unitType === 'fast') return 'dual_blades';
+    if (unitType === 'flying' || unitType === 'scout') return 'talons';
+    if (unitType === 'mole') return 'claws';
+    let styleWeapons = {
+        fire: 'fire_blade', water: 'water_trident', ice: 'ice_spear',
+        poison: 'poison_scythe', laser: 'laser_staff', melee: 'sword'
+    };
+    return styleWeapons[String(u && u.attackStyle || 'melee')] || 'sword';
+}
+
+function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
+    if (!activity || activity.mode < 2 || activity.amount <= 0) return;
+    // Physical equipment carries most of the action. Keep only small contact/magic accents.
+    if (activity.mode === 3) return;
+    let palette = {
+        2: ['#ffb52e', '#fff1a8'], 3: [u.workerType === 'astar_collector' ? '#e8e8ff' : '#ffd84d', '#ffffff'],
+        4: ['#ff7043', '#d7e0e8'], 5: ['#62ffb0', '#eafff4'], 6: ['#55bfff', '#c76cff']
+    }[activity.mode];
+    let phase = (gameTime + tickAlpha) / Math.max(1, TICK_RATE) * (activity.mode === 4 ? 12 : 7) + (Number(u.id) || 0) * 1.37;
+    let count = 2;
+    for (let i = 0; i < count; i++) {
+        let p = phase + i * Math.PI * 2 / count;
+        let radius = activity.mode === 5 ? .38 : activity.mode === 6 ? .32 : .24;
+        let burst = activity.mode === 2 || activity.mode === 4;
+        let ox = burst ? Math.cos(p * .63) * .20 : Math.cos(p) * radius;
+        let oz = burst ? .26 + Math.sin(p * .71) * .16 : Math.sin(p) * radius;
+        let oy = burst ? .18 + ((phase * .18 + i / count) % 1) * .42 : .28 + Math.sin(p * 2) * .16 + i * .035;
+        push3DRenderObject(target, {
+            modelKey: `worker_activity_${activity.mode}`,
+            x: x + ox * footprint, y: oy * Math.max(.7, footprint), z: z + oz * footprint,
+            scaleX: burst ? .055 : .07, scaleY: activity.mode === 5 ? .025 : .065, scaleZ: burst ? .025 : .07,
+            rotationY: p, tint: palette[i % palette.length], alpha: .72 + .2 * Math.sin(p), renderShape: activity.mode === 3 || activity.mode === 6 ? 'cylinder' : 'box'
+        });
+    }
 }
 
 function build3DFrameData() {
@@ -1613,8 +1677,9 @@ function build3DFrameData() {
                 y: get3DConstructionLift(cell.item),
                 z: y + 0.5 + reactiveOffsetY * audioMove,
                 scaleX: 0.84,
-                scaleY: 0.14 * getOverlapFlattenScaleForTile(x, y) * (1 + audioHeight),
+                scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * getOverlapFlattenScaleForTile(x, y) * (1 + audioHeight),
                 scaleZ: 0.84,
+                preserveModelHeight: cell.item.type === 'house',
                 visibilitySource: cell.item,
                 rotationY: -(Number(cell.item.angle) || 0),
                 tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
@@ -1787,11 +1852,18 @@ function build3DFrameData() {
         // newly visible exact texture is rasterized within the frame budget.
         let unitStatus = get3DUnitTextureStatus(u);
         let unitSideVariant = get3DUnitSideVisualizationVariant(u);
-        let unitSideColor = (BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null;
+        let unitSideColor = u.unitType === 'collector'
+            ? '#f0a52b'
+            : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
+        let activity = getUnit3DActivity(u);
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
             let unit2DTexture = get3DExact2DTexture(u, true);
+            let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
+            if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
+                facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
+            }
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,
@@ -1801,9 +1873,13 @@ function build3DFrameData() {
                 scaleY: Math.max(0.48, footprint * 1.45) * (1 + audioHeight),
                 scaleZ: footprint,
                 visibilitySource: u,
-                rotationY: Math.atan2(Number(u.vx) || 0, Number(u.vy) || 0),
-                moveAmount: Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
-                walkPhase: (gameTime + tickAlpha) / TICK_RATE * 10 + (Number(u.id) || 0) * 2.399,
+                rotationY: Math.atan2(facingX, facingY || 0.0001),
+                moveAmount: activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
+                walkPhase: activity.mode === 1
+                    ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + tickAlpha) / 8)) * Math.PI
+                    : (gameTime + tickAlpha) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399,
+                animationMode: activity.mode,
+                weaponType: getUnit3DWeaponType(u),
                 isFlying: !!u.isFlying,
                 isWorker: !!u.isWorker,
                 tint: get3DDamageFlashTint(u, get3DRenderOwnerColor(u.owner)),
@@ -1815,6 +1891,7 @@ function build3DFrameData() {
                 sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
                 sideTextureAngle: getAudioReactiveSideTextureAngle(ugx, ugy, (Number(u.id) || 0) + (Number(u.owner) || 0) * 17)
             });
+            pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
         }
     }
 

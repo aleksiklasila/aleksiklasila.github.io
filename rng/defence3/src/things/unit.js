@@ -589,6 +589,8 @@ class Unit {
     }
 
     _performAttackOnUnit(target) {
+        let attackCue = ['fire', 'water', 'ice', 'poison', 'laser'].includes(this.attackStyle) ? 'attack_cast' : 'attack_swing';
+        playSound(attackCue, this.x, this.y, this.unitType);
         let targetEnergyBefore = target.energy;
         target.energy -= this.preComputed.attackDamage;
         pushHostileDamageAlert(target, targetEnergyBefore - target.energy, this.owner);
@@ -631,6 +633,8 @@ class Unit {
     }
 
     _performAttackOnBuilding(tb) {
+        let attackCue = ['fire', 'water', 'ice', 'poison', 'laser'].includes(this.attackStyle) ? 'attack_cast' : 'attack_swing';
+        playSound(attackCue, this.x, this.y, this.unitType);
         let buildingEnergyBefore = tb.energy;
         this.attackTimer = this.preComputed.attackCooldown;
         this.attackTarget = tb;
