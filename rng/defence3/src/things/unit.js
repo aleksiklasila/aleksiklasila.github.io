@@ -293,14 +293,18 @@ class Unit {
         let hadUnitCollision = false;
         if (collisionInterval <= 1 || ((gameTime + this.id) % collisionInterval) === 0) {
             let selfCollisionR = this.getCollisionRadius();
-            let sepRange = selfCollisionR * 2;
+            let crossTeamCollisionPadding = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
+            let sepRange = selfCollisionR * 2 + crossTeamCollisionPadding;
             let pushX = 0, pushY = 0;
             let myLayer = this.getCollisionLayer();
             let collisionCandidates = [];
             forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
                 if (other === this || other.dead) return;
                 if (other.getCollisionLayer() !== myLayer) return;
-                collisionCandidates.push({ other, d2, dx, dy });
+                let collisionPadding = other.owner === this.owner ? 0 : crossTeamCollisionPadding;
+                let minDist = selfCollisionR + other.getCollisionRadius() + collisionPadding;
+                if (d2 >= minDist * minDist) return;
+                collisionCandidates.push({ other, d2, dx, dy, minDist });
             });
             collisionCandidates.sort((a, b) => {
                 let ai = Math.floor(Number(a.other && a.other.id) || 0);
@@ -316,7 +320,7 @@ class Unit {
                 let dx = -entry.dx;
                 let dy = -entry.dy;
                 let d = Math.sqrt(Math.max(0, entry.d2));
-                let minDist = selfCollisionR + other.getCollisionRadius();
+                let minDist = entry.minDist;
                 if (d < minDist) {
                     hadUnitCollision = true;
                     let nx = 0, ny = 0;
