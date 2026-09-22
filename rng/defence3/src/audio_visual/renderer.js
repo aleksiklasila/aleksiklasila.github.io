@@ -330,6 +330,8 @@ const renderer3dExact2DTextureCache = new Map();
 const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1024;
 let renderer3dExactTextureBuildsRemaining = 12;
 let renderer3dExactTextureTimeRemaining = 2;
+let renderer3dExactUnitTextureBuildsRemaining = 12;
+let renderer3dExactUnitTextureTimeRemaining = 2;
 
 function cache3DExact2DTexture(signature, entry) {
     renderer3dExact2DTextureCache.set(signature, entry);
@@ -375,9 +377,40 @@ function get3DExact2DVisualSignature(entity) {
     ].join('|');
 }
 
+function get3DExact2DCapture(entity, x, y, isUnit) {
+    if (!isUnit) return { centerX: x, centerY: y, extent: TILE };
+
+    let radius = Math.max(1, Number(entity && entity.r) || 8);
+    let halfWidth = radius + 3; // body outline and the energy bar overhang
+    let top = y - radius - 7;  // health bar
+    let bottom = y + radius + 3;
+
+    if (shouldShowUnitLevels()) {
+        let labelSprite = _getUnitLevelTextSprite(getUnitLevelLabelText(entity));
+        halfWidth = Math.max(halfWidth, labelSprite.width * 0.5);
+        top -= labelSprite.height;
+    }
+
+    // Worker/carrying glyphs share the health-bar area, but can extend six
+    // logical pixels above and to either side of their center.
+    if (get3DUnitStatusGlyph(entity)) {
+        halfWidth = Math.max(halfWidth, 7);
+        top = Math.min(top, y - radius - 15);
+    }
+
+    let left = x - halfWidth;
+    let right = x + halfWidth;
+    let centerY = (top + bottom) * 0.5;
+    return {
+        centerX: (left + right) * 0.5,
+        centerY,
+        extent: Math.max(right - left, bottom - top)
+    };
+}
+
 // Render through the same draw method as the 2D renderer. This deliberately
 // includes its cached level sprite, progress bars, status colors and outlines.
-function get3DExact2DTexture(entity) {
+function get3DExact2DTexture(entity, useUnitBudget = false) {
     if (!entity || typeof entity.draw !== 'function') return null;
     let signature = get3DExact2DVisualSignature(entity);
     let entry = renderer3dExact2DTextureCache.get(signature);
@@ -389,8 +422,15 @@ function get3DExact2DTexture(entity) {
     if (!entry) {
         // A camera jump must not rasterize hundreds of status panels at once.
         // Callers already have a shared type/owner sprite as a fallback.
-        if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return null;
-        renderer3dExactTextureBuildsRemaining--;
+        // Units are collected after buildings. Give them a separate raster
+        // budget so a dense base cannot permanently starve every unit panel.
+        if (useUnitBudget) {
+            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) return null;
+            renderer3dExactUnitTextureBuildsRemaining--;
+        } else {
+            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return null;
+            renderer3dExactTextureBuildsRemaining--;
+        }
         let canvas = document.createElement('canvas');
         canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
         canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
@@ -406,22 +446,29 @@ function get3DExact2DTexture(entity) {
     let y = Number(entity.y);
     if (!Number.isFinite(x)) x = (Number(entity.gx) || 0) * TILE + TILE * 0.5;
     if (!Number.isFinite(y)) y = (Number(entity.gy) || 0) * TILE + TILE * 0.5;
-    // Fill the 3D panel instead of shrinking the sprite into a wide margin.
-    // Leave room for the existing health/status marks around a unit.
-    let extent = entity.unitType && Number(entity.r) > 0 ? Math.max(TILE, Number(entity.r) * 2 + 12) : TILE;
-    let scale = (entry.canvas.width - 8) / extent;
+    // Unit labels and status marks live above the body in 2D. Center the
+    // capture on that complete footprint instead of on the body alone; the
+    // old tile-centered crop cut level labels off the mounted panel.
+    let capture = get3DExact2DCapture(entity, x, y, useUnitBudget);
+    let scale = (entry.canvas.width - 8) / Math.max(1, capture.extent);
     g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
     g.save();
     g.__drawImagesImmediately = true;
-    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - x * scale, entry.canvas.height * 0.5 - y * scale);
+    g.setTransform(
+        scale, 0, 0, scale,
+        entry.canvas.width * 0.5 - capture.centerX * scale,
+        entry.canvas.height * 0.5 - capture.centerY * scale
+    );
     entity.draw(g);
     g.restore();
     g.__drawImagesImmediately = false;
     entry.canvas._textureVersion = 1;
-    renderer3dExactTextureTimeRemaining -= performance.now() - buildStarted;
+    let buildTime = performance.now() - buildStarted;
+    if (useUnitBudget) renderer3dExactUnitTextureTimeRemaining -= buildTime;
+    else renderer3dExactTextureTimeRemaining -= buildTime;
     return entry.canvas;
 }
 
@@ -1306,6 +1353,8 @@ function getBackgroundWorldBoundsForRenderMode() {
 function build3DFrameData() {
     renderer3dExactTextureBuildsRemaining = 12;
     renderer3dExactTextureTimeRemaining = 2;
+    renderer3dExactUnitTextureBuildsRemaining = 12;
+    renderer3dExactUnitTextureTimeRemaining = 2;
     let bounds = get3DVisibleWorldBounds();
     let alpha = tickAlpha;
     let objects = [];
@@ -1450,7 +1499,7 @@ function build3DFrameData() {
                 sideTextureAngle: getAudioReactiveSideTextureAngle(pointGx, pointGy, (Number(unit.id) || 0) * 131 + i)
             });
         }
-        let snake2DTexture = get3DExact2DTexture(unit);
+        let snake2DTexture = get3DExact2DTexture(unit, true);
         let snakeTextureKey = `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
         push3DRenderObject(target, {
             modelKey: `unit_${unit.unitType || 'snake'}`,
@@ -1733,16 +1782,16 @@ function build3DFrameData() {
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
-        // Below readable panel size, share a type/owner texture so hundreds of
-        // units instance together instead of splitting on health/animation state.
-        let detailedUnit = footprint * (renderer3dInstance ? renderer3dInstance.lodPixelsPerWorld : TILE * camera.zoom) >= 24;
-        let unitStatus = detailedUnit ? get3DUnitTextureStatus(u) : { keySuffix: '' };
+        // The mounted panel is the unit's canonical 2D rendering at every LOD.
+        // The shared status texture remains only a short-lived fallback while a
+        // newly visible exact texture is rasterized within the frame budget.
+        let unitStatus = get3DUnitTextureStatus(u);
         let unitSideVariant = get3DUnitSideVisualizationVariant(u);
         let unitSideColor = (BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null;
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
-            let unit2DTexture = detailedUnit ? get3DExact2DTexture(u) : null;
+            let unit2DTexture = get3DExact2DTexture(u, true);
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,

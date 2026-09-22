@@ -503,8 +503,8 @@
             }
             part(0, .33, 0, .53 * bulk, .055, .36, 2);
             part(0, .19, -.205, .61, .47, .065, 0, 2, .66, .72); // cape
-            part(0, .29, -.253, .53, .38, .04, 2); // rigid, readable back display
-            panel(0, .31, -.277, .49, .34);
+            part(0, .18, -.253, .53, .53, .04, 2); // rigid, readable back display
+            panel(0, .20, -.277, .49, .49);
             if (kind === 'worker') {
                 part(.38, .34, -.10, .19, .26, .22, 2, -1, .65);
                 part(0, .79, 0, .56, .055, .47, 2); // worker helmet brim
@@ -581,7 +581,9 @@
                     part(0,.30,-.405,.09,.29,.025,3);
                     part(0,.40,-.42,.29,.09,.025,3);
                 }
-                if (kind === 'barrack') for (let side of [-1,1]) part(side*.40,.80,-.36,.14,.18,.14,2);
+                // Keep the roof HUD completely unobstructed. The former pair of
+                // player-colored corner blocks covered the first and last parts
+                // of long level labels when the roof was viewed obliquely.
             }
         }
         // Separate face vertices keep the intentionally faceted silhouette.
