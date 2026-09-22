@@ -1200,6 +1200,7 @@ function push3DRenderObject(target, object) {
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
+        pickSource: object.pickSource || object.visibilitySource || null,
         modelKey: object.modelKey || 'cube',
         modelCandidates: Array.isArray(object.modelCandidates) ? object.modelCandidates.slice() : [],
         x: Number(object.x) || 0,
@@ -1545,6 +1546,7 @@ function build3DFrameData() {
             let width = Math.max(0.14, footprint * (0.55 - age * 0.2));
             push3DRenderObject(target, {
                 modelKey: 'snake_segment',
+                pickSource: unit,
                 x: point.x / TILE,
                 y: getUnitHeightOffset(unit) * (0.6 - age * 0.12),
                 z: point.y / TILE,
@@ -1608,6 +1610,7 @@ function build3DFrameData() {
         let mine2DTexture = get3DExact2DMineTexture('gold', m.gold);
         push3DRenderObject(objects, {
             modelKey: m.gold > 0 ? 'gold_mine_active' : 'gold_mine_empty',
+            pickSource: m,
             x: m.gx + 0.5 + reactiveOffsetX * audioMove,
             z: m.gy + 0.5 + reactiveOffsetY * audioMove,
             y: 0,
@@ -1637,6 +1640,7 @@ function build3DFrameData() {
         let mine2DTexture = get3DExact2DMineTexture('astar', m.astar);
         push3DRenderObject(objects, {
             modelKey: m.astar > 0 ? 'astar_mine_active' : 'astar_mine_empty',
+            pickSource: m,
             x: m.gx + 0.5 + reactiveOffsetX * audioMove,
             z: m.gy + 0.5 + reactiveOffsetY * audioMove,
             y: 0,
