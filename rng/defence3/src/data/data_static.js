@@ -117,7 +117,7 @@ const RESOURCE_TYPES = {
         collectorBuildingKey: 'astar_spawner',
         collectorBuildingName: 'A*',
         collectorBuildingIcon: '★',
-        collectorBuildingColor: '#555',
+        collectorBuildingColor: '#432',
         collectorBuildingDescription: 'Spawns A*ers that gather A* from gray mines and refill the shared A* stockpile.',
         collectorUnitKey: 'astar_collector',
         collectorUnitName: 'A* Collector',

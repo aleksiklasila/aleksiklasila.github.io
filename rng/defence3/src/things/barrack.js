@@ -410,7 +410,7 @@ class AstarSpawner {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
         }
-        ctx.fillStyle = '#555'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
+        ctx.fillStyle = '#432'; ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
         ctx.fillStyle = '#f0f0f0';
         ctx.font = 'bold 16px Arial';
         ctx.textAlign = 'center';

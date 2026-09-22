@@ -523,7 +523,7 @@ function getItemThumbnail(key, size) {
         ctx.textBaseline = 'middle';
         ctx.fillText('\u26A1', cx, cy + 1 * s);
     } else if (key === 'astar_spawner') {
-        ctx.fillStyle = '#555'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
+        ctx.fillStyle = '#432'; ctx.fillRect(cx - 12 * s, cy - 12 * s, 24 * s, 24 * s);
         ctx.fillStyle = '#f0f0f0';
         ctx.font = `${Math.max(11, Math.round(14 * s))}px Arial`;
         ctx.textAlign = 'center';
