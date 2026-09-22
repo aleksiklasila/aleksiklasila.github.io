@@ -1048,6 +1048,8 @@
                 precision highp float;
                 in vec2 vUv;
                 uniform sampler2D uTexture;
+                uniform sampler2D uFog;
+                uniform bool uHasFog;
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
                 vec4 packDepth(float depth) {
@@ -1059,6 +1061,10 @@
                 }
                 void main() {
                     outColor = texture(uTexture, vUv);
+                    if (uHasFog) {
+                        vec4 fog = texture(uFog, vUv);
+                        outColor = vec4(mix(outColor.rgb, fog.rgb, fog.a), 1.0);
+                    }
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
             `);
@@ -1105,7 +1111,9 @@
             this.planeUniforms = {
                 viewProjection: gl.getUniformLocation(this.planeProgram, 'uViewProjection'),
                 model: gl.getUniformLocation(this.planeProgram, 'uModel'),
-                texture: gl.getUniformLocation(this.planeProgram, 'uTexture')
+                texture: gl.getUniformLocation(this.planeProgram, 'uTexture'),
+                fog: gl.getUniformLocation(this.planeProgram, 'uFog'),
+                hasFog: gl.getUniformLocation(this.planeProgram, 'uHasFog')
             };
             this.presentUniforms = {
                 packDepth: gl.getUniformLocation(this.presentProgram, 'uPackDepth'),
@@ -1121,6 +1129,9 @@
             this.backgroundTexture = createTexture(gl);
             this.backgroundTextureSize = { width: 0, height: 0 };
             this.backgroundTextureVersion = -1;
+            this.fogTexture = createTexture(gl);
+            this.fogTextureVersion = -1;
+            this.fogTextureSize = { width: 0, height: 0 };
             this.topTextureCache = new Map();
             this.overlayDepthCache = new Map();
             this.overlayDepthFrame = null;
@@ -1528,6 +1539,25 @@
                 gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
             }
             this.backgroundTextureVersion = version;
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            gl.generateMipmap(gl.TEXTURE_2D);
+        }
+
+        uploadFogTexture(source, version) {
+            if (!source) return;
+            let gl = this.gl;
+            let resized = this.fogTextureSize.width !== source.width || this.fogTextureSize.height !== source.height;
+            if (!resized && this.fogTextureVersion === version) return;
+            gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            if (resized) {
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+                this.fogTextureSize = { width: source.width, height: source.height };
+            } else {
+                gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            }
+            this.fogTextureVersion = version;
         }
 
         buildViewProjection(snapshot) {
@@ -1658,6 +1688,7 @@
             let version = Number(sourceCanvas._textureVersion) || 0;
             let cached = this.topTextureCache.get(key);
             if (cached && cached.texture) {
+                cached.lastUsedFrame = this.textureFrame;
                 let sameSize = cached.width === sourceCanvas.width && cached.height === sourceCanvas.height;
                 if (cached.version === version && sameSize) return cached.texture;
                 this.gl.bindTexture(this.gl.TEXTURE_2D, cached.texture);
@@ -1693,7 +1724,7 @@
             this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
             this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
             if (mipmapped) this.gl.generateMipmap(this.gl.TEXTURE_2D);
-            this.topTextureCache.set(key, { texture, version, mipmapped, width: sourceCanvas.width, height: sourceCanvas.height });
+            this.topTextureCache.set(key, { texture, version, mipmapped, width: sourceCanvas.width, height: sourceCanvas.height, lastUsedFrame: this.textureFrame });
             return texture;
         }
 
@@ -2085,11 +2116,16 @@
             let planeWidth = Math.max(1, Number(backgroundBounds.width) || snapshot.camera.visibleWidth);
             let planeHeight = Math.max(1, Number(backgroundBounds.height) || snapshot.camera.visibleHeight);
             this.uploadBackgroundTexture(snapshot.backgroundCanvas, Number.isFinite(snapshot.backgroundVersion) ? snapshot.backgroundVersion : 0);
+            this.uploadFogTexture(snapshot.fogCanvas, snapshot.fogVersion);
             gl.useProgram(this.planeProgram);
             gl.bindVertexArray(this.planeMesh.vao);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.backgroundTexture);
             gl.uniform1i(this.planeUniforms.texture, 0);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
+            gl.uniform1i(this.planeUniforms.fog, 1);
+            gl.uniform1i(this.planeUniforms.hasFog, snapshot.fogCanvas ? 1 : 0);
             gl.uniformMatrix4fv(this.planeUniforms.viewProjection, false, this.tmpViewProjection);
             composeModelMatrix(
                 this.tmpModel,
@@ -2383,6 +2419,7 @@
             if (!this.enabled || !this.supported || !snapshot) return;
             this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
             this.buildViewProjection(snapshot);
+            this.textureFrame = (this.textureFrame || 0) + 1;
 
             let gl = this.gl;
             this.overlayDepthCache.clear();
@@ -2479,6 +2516,17 @@
             this.resolveScene();
             if (needsOverlayDepth) this.captureOverlayDepthFrame();
             this.presentSceneToCanvas();
+            // Delete GPU resources as well as JS entries. Never evict a texture
+            // used in this frame; amortize cleanup after camera sweeps/battles.
+            if (this.topTextureCache.size > 1024) {
+                let remaining = 16;
+                for (let [key, entry] of this.topTextureCache) {
+                    if (entry.lastUsedFrame >= this.textureFrame - 2) continue;
+                    gl.deleteTexture(entry.texture);
+                    this.topTextureCache.delete(key);
+                    if (--remaining <= 0 || this.topTextureCache.size <= 1024) break;
+                }
+            }
             gl.bindVertexArray(null);
             gl.bindTexture(gl.TEXTURE_2D, null);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);

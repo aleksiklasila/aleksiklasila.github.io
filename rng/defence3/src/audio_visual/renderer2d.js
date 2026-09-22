@@ -8,6 +8,37 @@ let _visibilityMaskVersion = -1;
 let _visibilityMaskFullVisibility = false;
 let _combinedBgDirtyFull = true;
 let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
+const _unitBodySprites = new Map();
+let _unitBodySpriteBuildsRemaining = 8;
+
+function drawCachedUnitBody(g, unit, stroke, lineWidth) {
+    // Keep long snake trails and close-up geometry live. Cache only the body:
+    // health, selection, combat effects and worker status remain current.
+    if (unit.isSnake || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
+        drawUnitBodyGeometry(g, unit, stroke, lineWidth);
+        return;
+    }
+    let key = [unit.unitType, unit.vis, unit.r, unit.color, stroke, lineWidth, unit.carryingValue > 0].join('|');
+    let sprite = _unitBodySprites.get(key);
+    if (!sprite && _unitBodySpriteBuildsRemaining > 0) {
+        _unitBodySpriteBuildsRemaining--;
+        let radius = Math.ceil(unit.r * 1.5 + 4);
+        let image = document.createElement('canvas');
+        image.width = image.height = radius * 4;
+        let c = image.getContext('2d');
+        c.setTransform(2, 0, 0, 2, radius * 2 - unit.x * 2, radius * 2 - unit.y * 2);
+        drawUnitBodyGeometry(c, unit, stroke, lineWidth);
+        sprite = { image, radius };
+        if (_unitBodySprites.size >= 512) _unitBodySprites.delete(_unitBodySprites.keys().next().value);
+        _unitBodySprites.set(key, sprite);
+    }
+    if (sprite) {
+        // Immediate draw preserves the ordering of bodies and their live effects.
+        g.drawImage(sprite.image, unit.x - sprite.radius, unit.y - sprite.radius, sprite.radius * 2, sprite.radius * 2);
+    } else {
+        drawUnitBodyGeometry(g, unit, stroke, lineWidth);
+    }
+}
 
 function _drawAreaCoverageOverlay2D(ctx, cells, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY) {
     if (!ctx || !Array.isArray(cells) || cells.length <= 0) return;
@@ -733,6 +764,9 @@ let _areaColorCache = null; // Array: [areaId] -> color string
 let _areaOutlinePathCache = null; // Array: [areaId] -> Path2D
 let _combinedBgCanvas = null; // Full world background (grid + area outlines)
 let _combinedBgCtx = null;
+// World-space mip levels are updated with terrain edits, never with the camera.
+let _backgroundMipLevels = [];
+let _backgroundContentVersion = 0;
 let _combinedTerrainCanvas = null; // Base terrain only (floor/walls)
 let _combinedTerrainCtx = null;
 let _combinedTerrainDirty = true;
@@ -946,10 +980,10 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
 }
 
 function ensureVisibilityMaskCanvas() {
-    if (!_visibilityMaskCanvas || _visibilityMaskCanvas.width !== WORLD_W || _visibilityMaskCanvas.height !== WORLD_H) {
+    if (!_visibilityMaskCanvas || _visibilityMaskCanvas.width !== GRID_W || _visibilityMaskCanvas.height !== GRID_H) {
         _visibilityMaskCanvas = document.createElement('canvas');
-        _visibilityMaskCanvas.width = WORLD_W;
-        _visibilityMaskCanvas.height = WORLD_H;
+        _visibilityMaskCanvas.width = GRID_W;
+        _visibilityMaskCanvas.height = GRID_H;
         _visibilityMaskCtx = _visibilityMaskCanvas.getContext('2d');
         _visibilityMaskVersion = -1;
         _visibilityMaskFullVisibility = false;
@@ -998,7 +1032,7 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
     _visibilityMaskCtx.save();
     _visibilityMaskCtx.imageSmoothingEnabled = true;
-    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, GRID_W, GRID_H, 0, 0, WORLD_W, WORLD_H);
+    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0);
     _visibilityMaskCtx.restore();
     _visibilityMaskVersion = visibilityVersion;
     _visibilityMaskFullVisibility = false;
@@ -1092,6 +1126,9 @@ function rebuildCombinedBackgroundCache() {
         _combinedBgDirtyFull = true;
     }
 
+    let changedRect = _combinedBgDirtyFull
+        ? { minGx: 0, minGy: 0, maxGx: GRID_W - 1, maxGy: GRID_H - 1 }
+        : _combinedBgDirtyBounds;
     if (_combinedBgDirtyFull) {
         _drawCombinedBackgroundRegion(c, 0, 0, GRID_W - 1, GRID_H - 1, true);
     } else if (_combinedBgDirtyBounds) {
@@ -1105,10 +1142,49 @@ function rebuildCombinedBackgroundCache() {
         );
     }
 
+    if (changedRect) updateBackgroundMipLevels(changedRect);
     dirtyGrid = false;
     dirtyAreas = false;
     _combinedBgDirtyFull = false;
     _combinedBgDirtyBounds = null;
+}
+
+function updateBackgroundMipLevels(rect) {
+    let source = _combinedBgCanvas;
+    let level = 0;
+    while (source.width > 128 || source.height > 128) {
+        let width = Math.max(1, Math.ceil(source.width / 2));
+        let height = Math.max(1, Math.ceil(source.height / 2));
+        let mip = _backgroundMipLevels[level];
+        let resized = !mip || mip.width !== width || mip.height !== height;
+        if (resized) {
+            mip = document.createElement('canvas');
+            mip.width = width;
+            mip.height = height;
+            _backgroundMipLevels[level] = mip;
+        }
+        let g = mip.getContext('2d');
+        let x = resized ? 0 : Math.max(0, Math.floor(rect.minGx * TILE * width / WORLD_W) - 2);
+        let y = resized ? 0 : Math.max(0, Math.floor(rect.minGy * TILE * height / WORLD_H) - 2);
+        let right = resized ? width : Math.min(width, Math.ceil((rect.maxGx + 1) * TILE * width / WORLD_W) + 2);
+        let bottom = resized ? height : Math.min(height, Math.ceil((rect.maxGy + 1) * TILE * height / WORLD_H) + 2);
+        g.save();
+        g.beginPath(); g.rect(x, y, right - x, bottom - y); g.clip();
+        g.clearRect(x, y, right - x, bottom - y);
+        g.drawImage(source, 0, 0, width, height);
+        g.restore();
+        source = mip;
+        level++;
+    }
+    _backgroundMipLevels.length = level;
+    _backgroundContentVersion++;
+}
+
+function getBackgroundMip(scale) {
+    let level = Math.max(0, Math.floor(Math.log2(1 / Math.max(0.001, scale))));
+    return level > 0 && _backgroundMipLevels.length
+        ? _backgroundMipLevels[Math.min(level, _backgroundMipLevels.length) - 1]
+        : _combinedBgCanvas;
 }
 
 function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
@@ -1117,7 +1193,9 @@ function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
     let sx = minGx * TILE, sy = minGy * TILE;
     let sw = (maxGx - minGx + 1) * TILE;
     let sh = (maxGy - minGy + 1) * TILE;
-    queueDrawImage(ctx, _combinedBgCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+    let source = getBackgroundMip(camera.zoom * (window.devicePixelRatio || 1));
+    queueDrawImage(ctx, source, sx * source.width / WORLD_W, sy * source.height / WORLD_H,
+        sw * source.width / WORLD_W, sh * source.height / WORLD_H, sx, sy, sw, sh);
 }
 
 function drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy) {
@@ -1146,7 +1224,10 @@ function drawLightingOverlayWorld(ctx, minGx, minGy, maxGx, maxGy) {
     let sw = (maxGx - minGx + 1) * TILE;
     let sh = (maxGy - minGy + 1) * TILE;
     setFrameDrawImageDepth(DRAW_Z_OVERLAY + 1);
-    queueDrawImage(ctx, _visibilityMaskCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    queueDrawImage(ctx, _visibilityMaskCanvas, sx / TILE, sy / TILE, sw / TILE, sh / TILE, sx, sy, sw, sh);
+    ctx.restore();
 }
 
 function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
@@ -1293,6 +1374,7 @@ function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
 }
 
 function draw() {
+    _unitBodySpriteBuildsRemaining = 8;
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
     let minGx = Math.max(0, Math.floor(camera.x / TILE) - 1);
     let minGy = Math.max(0, Math.floor(camera.y / TILE) - 1);
