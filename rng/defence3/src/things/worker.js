@@ -186,6 +186,7 @@ function updateWorkerAI(u) {
                     let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
                     let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
                     u.carryingValue = refund * getUnitBaseLevel(u);
+                    if (owner === localPlayerId) playSound('salvager_work', u.x, u.y);
                     destroyBuilding(u.workerTarget);
                     u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
                     _clearWorkerTarget(u, 'target_missing'); u.workerState = 'RETURNING'; _workerReturnPath(u);
@@ -1043,9 +1044,18 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
         considerCandidate(mine, resourceCfg.mineTileType, 0);
     }
 
-    for (let s of collectorSpawners) {
-        if (!s || s.type !== resourceCfg.farmKey || s.owner !== u.owner || s.underConstruction || !(Number(s.energy) > 0)) continue;
-        considerCandidate(s, resourceCfg.farmKey, 0);
+    // Farms are floor items, not collector spawners. Scan only the search bounds,
+    // in stable tile order, so every lockstep peer sees the same candidates.
+    let minGx = Math.max(0, Math.floor((origin.x - maxSearchPx) / TILE));
+    let maxGx = Math.min(GRID_W - 1, Math.floor((origin.x + maxSearchPx) / TILE));
+    let minGy = Math.max(0, Math.floor((origin.y - maxSearchPx) / TILE));
+    let maxGy = Math.min(GRID_H - 1, Math.floor((origin.y + maxSearchPx) / TILE));
+    for (let gy = minGy; gy <= maxGy; gy++) {
+        for (let gx = minGx; gx <= maxGx; gx++) {
+            let farm = grid[gy][gx].item;
+            if (!_isResourceCollectorTargetValid(farm, resourceCfg.farmKey, u.owner, resourceCfg)) continue;
+            considerCandidate(farm, resourceCfg.farmKey, 0);
+        }
     }
 
     let picked = _pickDistributedWorkerCandidate(u, candidates);
@@ -1116,6 +1126,9 @@ function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
                             dirtyGrid = true;
                         }
                     }
+                }
+                if (owner === localPlayerId && u.workerTargetType !== 'drop') {
+                    playSound(u.workerType === 'astar_collector' ? 'astar_work' : 'collector_work', u.x, u.y);
                 }
                 u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks(u.workerType, u);
                 _rememberResourceCollectorGatherSite(u, u.workerTarget, u.workerTargetType, resourceCfg);

@@ -1011,12 +1011,12 @@ function initInput() {
                     ? multiResearcherAssignTargets
                     : multiHealerAssignTargets;
         if (appendToMultiTargets && multiTargets.length > 0) {
-            multiTargets.push({ targetGx, targetGy });
+            multiTargets.push({ targetType, targetGx, targetGy });
         } else {
             multiTargets.length = 0;
-            multiTargets.push({ targetGx, targetGy });
+            multiTargets.push({ targetType, targetGx, targetGy });
         }
-        if (multiTargets.length === 0) multiTargets.push({ targetGx, targetGy });
+        if (multiTargets.length === 0) multiTargets.push({ targetType, targetGx, targetGy });
 
         let unitIds = workerUnits.map(u => u.id);
         let buckets = Array.from({ length: multiTargets.length }, () => []);
@@ -1030,7 +1030,7 @@ function initInput() {
             queueAction({
                 action: 'workerAssign',
                 unitIds: buckets[i],
-                targetType,
+                targetType: target.targetType,
                 targetGx: target.targetGx,
                 targetGy: target.targetGy
             });
@@ -2444,7 +2444,8 @@ function processActions(actions, playerId) {
                 } else if (isResourceCollectorWorkerType(u.workerType) && _isCollectorGatherTargetType(a.targetType)) {
                     let gather = _getGatherTargetAtForCollectorWorkerType(u.workerType, a.targetGx, a.targetGy, playerId, a.targetType);
                     if (gather && _isValidGatherTargetForCollectorWorkerType(u.workerType, gather.target, gather.type, playerId)) {
-                        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
+                        // Keep the existing collector's reservation. Other selected
+                        // collectors move to this area and find free sources on arrival.
                         if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) {
                             issueWorkerBlockedAssignFallbackMove(u, a.targetGx, a.targetGy);
                             continue;

@@ -177,7 +177,9 @@ function _recordAudioReactiveEmitter(type, worldX, worldY, strength = 0.75) {
         radiusTiles = 8.5;
         lifeTicks = 28;
         baseStrength = Math.max(baseStrength, 0.95);
-    } else if (normalizedType === 'melee_hit' || normalizedType === 'heal_tick' || normalizedType === 'builder_work') {
+    } else if (normalizedType === 'melee_hit' || normalizedType === 'attack_swing' || normalizedType === 'attack_cast' ||
+        normalizedType === 'heal_tick' || normalizedType === 'builder_work' || normalizedType === 'collector_work' ||
+        normalizedType === 'astar_work' || normalizedType === 'salvager_work' || normalizedType === 'research_tick') {
         radiusTiles = 2.8;
         lifeTicks = 8;
         baseStrength *= 0.78;
@@ -697,12 +699,17 @@ const AUDIO_MAX_SOUNDS_PER_FRAME = 6;
 // Throttle rules: [maxPerWindow, windowTicks]
 const _audioTypeThrottle = {
     builder_work:      [3, 6],
+    collector_work:    [3, 8],
+    astar_work:        [2, 8],
+    salvager_work:     [3, 8],
     heal_tick:         [3, 6],
     research_tick:     [3, 6],
     gold_collected:    [3, 6],
     astar_collected:   [2, 6],
     salvage_collected: [2, 6],
     melee_hit:         [4, 4],
+    attack_swing:      [4, 4],
+    attack_cast:       [4, 4],
     impact:            [4, 4],
 };
 
@@ -752,6 +759,12 @@ const AUDIO_RECIPES = {
     shoot_laser: [190,110,.38,.10,900,.14,14,1],
     laser_tick: [140,105,.28,.10,700,.10,13,1],
     melee_hit: [135,55,.19,.52,850,.12,7,1],
+    attack_swing: [105,48,.16,.72,950,.075,7,1],
+    attack_cast: [260,125,.24,.18,1450,.075,9,2],
+    weapon_sword: [145,62,.18,.48,1350,.08,7,1],
+    weapon_axe: [92,38,.28,.70,820,.10,8,1],
+    weapon_hammer: [74,34,.31,.80,680,.11,8,1],
+    weapon_daggers: [210,105,.13,.38,1650,.065,6,2],
     impact: [115,45,.22,.65,750,.12,8,1],
     mine_explode: [75,30,.85,.88,700,.27,24,1],
     unit_death: [160,48,.45,.32,700,.13,9,1],
@@ -759,6 +772,9 @@ const AUDIO_RECIPES = {
     place: [190,115,.22,.28,950,.12,7,1],
     cant_place: [180,130,.30,.02,600,.12,6,2],
     builder_work: [160,85,.20,.60,650,.075,4.5,2],
+    collector_work: [215,145,.24,.22,1050,.07,4.5,2],
+    astar_work: [330,210,.34,.08,1650,.07,5,3],
+    salvager_work: [120,72,.26,.78,1150,.075,4.5,4],
     heal_tick: [240,300,.48,.02,1000,.075,5,2],
     research_tick: [190,285,.42,.05,1100,.075,5,3],
     gold_collected: [260,330,.34,.06,1300,.10,6,2],
@@ -784,6 +800,19 @@ function _audioHash(text) {
 
 function _getSoundRecipe(type, subtype = '') {
     let recipe = AUDIO_RECIPES[type] || AUDIO_RECIPES.shoot_generic;
+    if (type === 'attack_swing') {
+        recipe = /boss/.test(subtype) ? AUDIO_RECIPES.weapon_axe
+            : /tank/.test(subtype) ? AUDIO_RECIPES.weapon_hammer
+                : /fast/.test(subtype) ? AUDIO_RECIPES.weapon_daggers
+                    : AUDIO_RECIPES.weapon_sword;
+    } else if (type === 'attack_cast') {
+        let element = String(subtype).replace('_resistant', '');
+        let elementalWeapon = AUDIO_RECIPES['shoot_' + element];
+        if (elementalWeapon) {
+            recipe = elementalWeapon.slice();
+            recipe[2] *= .72; recipe[5] *= .55; recipe[6] *= .7;
+        }
+    }
     let profile = recipe.slice();
     if (subtype) {
         // Use the same elemental palette for impacts, with a shorter, duller tail.

@@ -458,20 +458,24 @@
     function createFigureData(kind, simplified = false) {
         let variant = kind;
         kind = kind.split(':')[0];
+        let weapon = variant.includes(':') ? variant.slice(variant.indexOf(':') + 1) : '';
         let positions = [], normals = [], indices = [], uvs = [], details = [];
-        function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1) {
+        function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1, yaw = 0) {
             // At strategic zoom, subpixel ornaments turn into noisy gray specks.
             // Keep broad plates (even thin ones), bodies, limbs and sprite panels.
             if (simplified) {
                 let middleSize = sx + sy + sz - Math.min(sx, sy, sz) - Math.max(sx, sy, sz);
                 let mainLimb = Math.abs(joint) === 1 && sy >= .25 && sx >= .13;
-                if (surface === 3 || (middleSize < .18 && !mainLimb)) return;
+                let readableEquipment = !!weapon && (sy >= .20 || sx >= .20 || sz >= .20);
+                if (surface === 3 || (middleSize < .18 && !mainLimb && !readableEquipment)) return;
             }
             let cube = createCubeData(), base = positions.length / 3;
+            let yawCos = Math.cos(yaw), yawSin = Math.sin(yaw);
             for (let i = 0; i < cube.positions.length / 3; i++) {
                 let px = cube.positions[i * 3], py = cube.positions[i * 3 + 1], pz = cube.positions[i * 3 + 2];
                 let width = 1 + (taper - 1) * py;
-                positions.push(x + px * sx * width, y + py * sy, z + pz * sz * width);
+                let localX = px * sx * width, localZ = pz * sz * width;
+                positions.push(x + localX * yawCos + localZ * yawSin, y + py * sy, z - localX * yawSin + localZ * yawCos);
                 uvs.push(cube.uvs[i * 2], 1 - cube.uvs[i * 2 + 1]);
                 details.push(surface, joint, pivot, 0);
             }
@@ -508,14 +512,16 @@
             if (kind === 'worker') {
                 part(.38, .34, -.10, .19, .26, .22, 2, -1, .65);
                 part(0, .79, 0, .56, .055, .47, 2); // worker helmet brim
-                part(.39, .17, .10, .065, .40, .065, 1, -1, .65);
-                part(.39, .48, .10, .28, .09, .12, 2, -1, .65); // tool
-            } else if (kind === 'figure') {
+                if (!weapon) {
+                    part(.39, .17, .10, .065, .40, .065, 1, -1, .65);
+                    part(.39, .48, .10, .28, .09, .12, 2, -1, .65); // fallback tool
+                }
+            } else if (kind === 'figure' && !weapon) {
                 part(.36, .22, .12, .05, .40, .06, 2, -1, .65); // blade
             }
             if (kind === 'heavy') part(-.43, .26, .12, .24, .32, .10, 2, 1, .65);
-            if (variant.endsWith(':king')) for (let x of [-.18,0,.18]) part(x,.88,0,.07,.14,.12,2);
-            if (variant.endsWith(':elemental')) {
+            if (weapon === 'king_sword') for (let x of [-.18,0,.18]) part(x,.88,0,.07,.14,.12,2);
+            if (['fire_blade','water_trident','ice_spear','poison_scythe','laser_staff'].includes(weapon)) {
                 for (let side of [-1,1]) part(side*.34,.67,0,.15,.16,.19,2,0,0,.1);
             }
         } else if (kind === 'bird') {
@@ -531,7 +537,7 @@
             }
             part(0,.30,-.39,.33,.06,.35,2,0,0,.15);
             panel(0,.58,-.10,.43,.42,true);
-            if (variant.endsWith(':support')) {
+            if (weapon === 'healer_staff' || weapon === 'research_orb') {
                 part(0,.17,0,.31,.11,.28,0);
                 part(0,.18,.145,.06,.09,.018,3);
             }
@@ -541,10 +547,22 @@
             for (let side of [-1,1]) part(side*.34,.025,.19,.19,.09,.40,2,side,.20);
             panel(0,.465,-.03,.48,.46,true);
         } else if (kind === 'serpent') {
-            part(0, .02, 0, .78, .55, .85, 0, 0, 0, .62);
-            part(0, .54, 0, .40, .22, .50, 2, 0, 0, .12);
-            part(0, .27, .37, .48, .06, .04, 3);
-            panel(0, .78, 0, .52, .50, true);
+            // The snake reads as a linked fantasy train: low chassis, wheels,
+            // and a boiler/cab, while the head keeps the canonical info panel.
+            part(0,.10,0,.82,.24,.92,0);
+            for (let side of [-1,1]) for (let end of [-1,1]) part(side*.42,.04,end*.27,.16,.20,.25,1);
+            if (weapon === 'car') {
+                part(0,.34,0,.68,.42,.72,0,0,0,.72);
+                part(0,.58,0,.54,.10,.58,2);
+                part(0,.34,.38,.56,.08,.06,3);
+            } else {
+                part(0,.36,-.08,.68,.48,.66,0,0,0,.75);
+                part(0,.55,-.25,.52,.35,.34,2,0,0,.55); // cab
+                part(0,.53,.38,.34,.42,.28,0,0,0,.42); // boiler nose
+                part(0,.83,.30,.15,.34,.15,2); // chimney
+                part(0,.25,.53,.76,.10,.22,2); // cowcatcher
+                panel(0,.88,-.18,.58,.54,true,0,0,true);
+            }
         } else {
             part(0, 0, 0, 1, .12, 1, 1);
             part(0, .12, 0, .84, .075, .84, 2);
@@ -561,10 +579,20 @@
                 part(0,.19,0,.91,.30,.91,0);
                 panel(0,.50,0,.98,.98,true);
             } else if (kind === 'item') {
-                part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
-                panel(0, .85, 0, .96, .96, true, 0, 0, true);
-                for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
-                if (variant.endsWith(':relay')) for (let side of [-1,1]) part(side*.32,.82,0,.12,.18,.12,3);
+                if (weapon === 'house') {
+                    part(0,.22,0,.78,.50,.72,0,0,0,.92); // walls
+                    part(0,.52,0,.92,.12,.84,2); // eaves
+                    part(0,.64,0,.72,.18,.69,0);
+                    part(0,.78,0,.49,.16,.55,2); // stepped roof ridge
+                    part(.25,.79,-.14,.13,.38,.15,1); // chimney
+                    part(0,.20,.375,.25,.38,.035,1); // front door
+                    panel(0,.91,0,.86,.78,true,0,0,true);
+                } else {
+                    part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
+                    panel(0, .85, 0, .96, .96, true, 0, 0, true);
+                    for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
+                    if (variant.endsWith(':relay')) for (let side of [-1,1]) part(side*.32,.82,0,.12,.18,.12,3);
+                }
             } else {
                 part(0, .19, 0, .76, .52, .76, 0);
                 for (let x of [-.4, .4]) for (let z of [-.4, .4]) part(x, .17, z, .14, .64, .14, 1);
@@ -586,6 +614,67 @@
                 // of long level labels when the roof was viewed obliquely.
             }
         }
+
+        // Large, low-poly equipment. Humanoid weapons share the dominant arm's
+        // joint so the existing attack/work poses swing the complete silhouette.
+        let handJoint = kind === 'bird' || kind === 'mole' ? 0 : -1;
+        let handPivot = kind === 'bird' || kind === 'mole' ? 0 : .65;
+        let equipmentYaw = (kind === 'figure' || kind === 'heavy' || kind === 'worker') ? Math.PI * .5 : 0;
+        let wp = (x, y, z, sx, sy, sz, surface = 1, joint = handJoint, pivot = handPivot, taper = 1) =>
+            part(x, y, z, sx, sy, sz, surface, joint, pivot, taper, equipmentYaw);
+        if (weapon === 'sword' || weapon === 'fire_blade') {
+            wp(.40,.25,.15,.07,.32,.07,1); wp(.40,.61,.15,.15,.58,.045,weapon === 'fire_blade' ? 0 : 1,handJoint,handPivot,.25);
+            wp(.40,.35,.15,.36,.07,.07,2); if (weapon === 'fire_blade') wp(.40,.66,.178,.035,.36,.018,3);
+        } else if (weapon === 'king_sword') {
+            wp(.47,.32,.16,.10,.48,.08,2); wp(.47,.71,.16,.21,.66,.055,1,handJoint,handPivot,.18);
+            wp(.47,.46,.16,.57,.09,.075,2); wp(.47,1.05,.16,.12,.12,.07,3,handJoint,handPivot,.05);
+        } else if (weapon === 'dual_blades') {
+            for (let side of [-1,1]) {
+                let joint = -side;
+                wp(side*.38,.29,.14,.055,.25,.055,2,joint,.65); wp(side*.38,.59,.14,.105,.46,.035,1,joint,.65,.18);
+            }
+        } else if (weapon === 'great_axe') {
+            wp(.45,.37,.14,.09,.86,.075,1); wp(.45,.83,.14,.60,.25,.09,2); wp(.68,.83,.14,.20,.38,.055,1,handJoint,handPivot,.15);
+        } else if (weapon === 'warhammer') {
+            wp(.43,.34,.15,.11,.78,.08,1); wp(.43,.78,.15,.62,.25,.13,2); wp(.43,.78,.245,.30,.16,.055,1);
+        } else if (weapon === 'water_trident') {
+            wp(.40,.40,.15,.07,.92,.08,0); wp(.40,.91,.15,.38,.09,.10,2);
+            for (let x of [.24,.40,.56]) wp(x,.99,.15,.065,.31,.075,0,handJoint,handPivot,.12);
+        } else if (weapon === 'ice_spear') {
+            wp(.40,.39,.15,.06,.94,.07,1); wp(.40,.98,.15,.20,.34,.16,0,handJoint,handPivot,.04); wp(.40,.70,.15,.25,.06,.12,2);
+        } else if (weapon === 'poison_scythe') {
+            wp(.42,.39,.15,.07,.95,.08,0); wp(.57,.91,.15,.43,.10,.12,2); wp(.76,.82,.15,.13,.38,.08,0,handJoint,handPivot,.10);
+        } else if (weapon === 'laser_staff') {
+            wp(.40,.39,.15,.08,.91,.09,2); wp(.40,.91,.15,.31,.20,.22,0); wp(.40,.91,.27,.15,.15,.08,3);
+        } else if (weapon === 'hammer') {
+            wp(.40,.35,.13,.09,.70,.07,1); wp(.40,.73,.13,.55,.23,.11,2); wp(.40,.73,.21,.28,.13,.05,1);
+        } else if (weapon === 'pickaxe') {
+            wp(.40,.35,.13,.08,.75,.065,1); wp(.40,.76,.13,.62,.10,.07,2); wp(.67,.70,.13,.18,.26,.045,1,handJoint,handPivot,.12);
+        } else if (weapon === 'cutter') {
+            wp(.40,.35,.14,.12,.47,.075,2); wp(.40,.65,.14,.44,.35,.075,1); wp(.40,.65,.19,.24,.23,.035,3);
+        } else if (weapon === 'healer_staff') {
+            // Paired medical booms are mounted to the wing roots and point forward.
+            for (let side of [-1,1]) {
+                let joint = side * 3;
+                wp(side*.34,.51,.16,.13,.10,.72,1,joint,0); wp(side*.34,.52,.48,.36,.065,.10,2,joint,0);
+                wp(side*.34,.52,.48,.08,.30,.10,2,joint,0); wp(side*.34,.52,.56,.11,.11,.08,3,joint,0);
+            }
+        } else if (weapon === 'research_orb') {
+            // Sensor lances sit on top of both wings instead of floating beside the bird.
+            for (let side of [-1,1]) {
+                let joint = side * 3;
+                wp(side*.38,.53,.12,.11,.10,.68,2,joint,0); wp(side*.38,.54,.46,.21,.21,.19,3,joint,0);
+                wp(side*.38,.54,.46,.32,.04,.31,0,joint,0);
+            }
+        } else if (weapon === 'talons') {
+            // Flying fighters carry slim forward blades on top of their wings.
+            for (let side of [-1,1]) {
+                let joint = side * 3;
+                wp(side*.38,.51,.13,.12,.09,.66,2,joint,0); wp(side*.38,.51,.50,.08,.12,.28,1,joint,0,.08);
+            }
+        } else if (weapon === 'claws') {
+            for (let side of [-1,1]) for (let claw of [-1,0,1]) wp(side*.38 + claw*.045,.05,.38,.035,.06,.38,1,0,0,.05);
+        }
         // Separate face vertices keep the intentionally faceted silhouette.
         normals = computeNormals(positions, indices);
         return { positions, normals, indices: new Uint32Array(indices), uvs, details: new Float32Array(details) };
@@ -594,18 +683,21 @@
     function proceduralKind(object) {
         if (object.modelCandidates && object.modelCandidates.length) return null;
         let key = object.modelKey || '';
-        if (key === 'snake_segment' || key === 'unit_snake') return 'serpent';
+        if (key === 'snake_segment') return 'serpent:car';
+        if (key === 'unit_snake') return 'serpent:engine';
         if (key.startsWith('unit_')) {
-            if (object.isFlying || /flying|scout|healer_unit|researcher_unit/.test(key)) return object.isWorker || /healer|researcher/.test(key) ? 'bird:support' : 'bird';
-            if (key === 'unit_mole') return 'mole';
-            if (key === 'unit_king') return 'heavy:king';
-            if (/tank|heavy|giant|boss/.test(key)) return 'heavy';
-            if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(key)) return 'worker';
-            return /resistant/.test(key) ? 'figure:elemental' : 'figure';
+            let weapon = String(object.weaponType || '');
+            if (object.isFlying || /flying|scout|healer_unit|researcher_unit/.test(key)) return `bird:${weapon || 'talons'}`;
+            if (key === 'unit_mole') return `mole:${weapon || 'claws'}`;
+            if (key === 'unit_king') return `heavy:${weapon || 'king_sword'}`;
+            if (/tank|heavy|giant|boss/.test(key)) return `heavy:${weapon || 'great_axe'}`;
+            if (object.isWorker || /builder|collect|salvag|heal|astar|research/.test(key)) return `worker:${weapon || 'hammer'}`;
+            return `figure:${weapon || (/resistant/.test(key) ? 'fire_blade' : 'sword')}`;
         }
         if (key.startsWith('tower_')) return /smg/.test(key) ? 'tower:twin' : /sniper/.test(key) ? 'tower:sniper' : /laser|elements|ice|poison|fire|water/.test(key) ? 'tower:energy' : 'tower';
         if (key.startsWith('barrack_')) return 'barrack';
         if (key.startsWith('spawner_')) return /research/.test(key) ? 'spawner:research' : /healer/.test(key) ? 'spawner:healer' : 'spawner';
+        if (key === 'item_house') return 'item:house';
         if (key.startsWith('item_')) return /relay|cloud|energy/.test(key) ? 'item:relay' : 'item';
         if (key.includes('_mine_')) return 'mine';
         return null;
@@ -1236,7 +1328,13 @@
             bindInstanceAttributes(this.cubeMesh);
             bindInstanceAttributes(this.cylinderMesh);
             this.figureMeshes = new Map();
-            for (let kind of ['figure', 'figure:elemental', 'heavy', 'heavy:king', 'worker', 'bird', 'bird:support', 'mole', 'serpent', 'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'mine']) {
+            for (let kind of [
+                'figure:sword', 'figure:dual_blades', 'figure:fire_blade', 'figure:water_trident', 'figure:ice_spear', 'figure:poison_scythe', 'figure:laser_staff',
+                'heavy:king_sword', 'heavy:great_axe', 'heavy:warhammer',
+                'worker:hammer', 'worker:pickaxe', 'worker:cutter',
+                'bird:talons', 'bird:healer_staff', 'bird:research_orb', 'mole:claws', 'serpent:car', 'serpent:engine',
+                'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'item:house', 'mine'
+            ]) {
                 for (let simplified of [false, true]) {
                     let data = createFigureData(kind, simplified);
                     let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
@@ -1267,6 +1365,7 @@
                 layout(location=12) in float light;
                 layout(location=13) in vec4 detail;
                 uniform mat4 uViewProjection;
+                uniform float uAnimationMode;
                 out vec3 vNormal;
                 out vec3 vColor;
                 out vec3 vTrim;
@@ -1276,8 +1375,29 @@
                 flat out int vSurface;
                 void main() {
                     vec3 p = aPosition, n = aNormal;
+                    float animationMode = floor(uAnimationMode + .5);
                     float angle = sin(phase) * moveAmount * detail.y * .65;
-                    if (detail.y == 2.0) angle = sin(phase + aPosition.y * 3.0) * moveAmount * .10;
+                    if (animationMode == 1.0) {
+                        // One-shot attack: both arms drive forward while the cape follows through.
+                        angle = abs(detail.y) == 1.0 ? sin(phase) * 1.15 : (detail.y == 2.0 ? -sin(phase) * .16 : 0.0);
+                    } else if (animationMode == 2.0) {
+                        // Builder: dominant tool arm makes a broad hammering arc.
+                        angle = detail.y == -1.0 ? (-.45 + sin(phase) * 1.05) : (detail.y == 1.0 ? sin(phase + 1.4) * .18 : 0.0);
+                    } else if (animationMode == 3.0) {
+                        // Collectors scoop inward with alternating arms.
+                        angle = abs(detail.y) == 1.0 ? sin(phase + sign(detail.y) * 1.2) * .72 : 0.0;
+                    } else if (animationMode == 4.0) {
+                        // Salvager: short, fast cutting strokes.
+                        angle = abs(detail.y) == 1.0 ? sin(phase * 1.7) * (detail.y < 0.0 ? .72 : .22) : 0.0;
+                    } else if (animationMode == 5.0) {
+                        // Healer: wings and limbs open in a slow restorative pulse.
+                        angle = abs(detail.y) == 1.0 ? (.28 + sin(phase * .55) * .22) * sign(detail.y) : 0.0;
+                    } else if (animationMode == 6.0) {
+                        // Researcher: asymmetric instrument-tuning motion.
+                        angle = abs(detail.y) == 1.0 ? sin(phase * .8 + (detail.y > 0.0 ? 0.0 : 1.8)) * .48 : 0.0;
+                    } else if (detail.y == 2.0) {
+                        angle = sin(phase + aPosition.y * 3.0) * moveAmount * .10;
+                    }
                     float c = cos(angle), s = sin(angle);
                     p.y -= detail.z;
                     p.yz = mat2(c, s, -s, c) * p.yz;
@@ -1286,13 +1406,18 @@
                     if (abs(detail.y) == 3.0) {
                         // Birds flap even while hovering; each wing rotates at its root.
                         p = aPosition; n = aNormal;
-                        float wing = sin(phase) * sign(detail.y) * .48;
+                        float wingScale = animationMode == 5.0 ? .72 : (animationMode == 6.0 ? .34 : .48);
+                        float wing = sin(phase) * sign(detail.y) * wingScale;
                         float wc = cos(wing), ws = sin(wing);
                         p.y -= .43;
                         p.xy = mat2(wc,ws,-ws,wc) * p.xy;
                         p.y += .43;
                         n.xy = mat2(wc,ws,-ws,wc) * n.xy;
                     }
+                    if (animationMode == 1.0) p.z += sin(phase) * .16;
+                    if (animationMode == 2.0) p.y -= max(0.0, sin(phase)) * .035;
+                    if (animationMode == 5.0) p.y += (sin(phase * .55) + 1.0) * .035;
+                    if (animationMode == 6.0) p.y += sin(phase * .8 + aPosition.x * 2.0) * .018;
                     p.y += abs(sin(phase)) * moveAmount * .018;
                     mat4 model = mat4(m0, m1, m2, m3);
                     if (detail.w > .5) {
@@ -1361,6 +1486,7 @@
             `);
             this.figureUniforms = {
                 spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
+                animationMode: gl.getUniformLocation(this.figureProgram, 'uAnimationMode'),
                 isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
                 isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
@@ -2401,6 +2527,7 @@
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
             if (kind) {
                 gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
+                gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
                 gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
                 let key = objects[0].modelKey || '';
                 gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') || key === 'snake_segment' ? 1 : 0);
@@ -2460,7 +2587,7 @@
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${this.getFigureMeshKey(object) || object.renderShape || 'box'}`;
+                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${this.getFigureMeshKey(object) || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
                     let group = targetGroups.get(groupKey);
                     if (!group) {
                         group = {
