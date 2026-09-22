@@ -75,6 +75,24 @@
     const SHADOW_GROUND_Y = 0.004;
     const SHADOW_FLAT_HEIGHT = 0.024;
 
+    // Shared 3D lighting and face borders, with no extra passes or textures.
+    const CEL_LIGHTING_GLSL = `
+        float celShade(float diffuse) {
+            float aa = max(fwidth(diffuse), 0.025);
+            return 0.42
+                + 0.26 * smoothstep(0.22 - aa, 0.22 + aa, diffuse)
+                + 0.32 * smoothstep(0.66 - aa, 0.66 + aa, diffuse);
+        }
+        float faceInk(vec2 uv, float width) {
+            vec2 pixelSize = max(fwidth(uv), vec2(0.00001));
+            vec2 edgePixels = min(uv, 1.0 - uv) / pixelSize;
+            float edge = min(edgePixels.x, edgePixels.y);
+            // Fade on tiny parts so distant units keep their player color.
+            float coverage = 1.0 - smoothstep(0.12, 0.40, max(pixelSize.x, pixelSize.y));
+            return (1.0 - smoothstep(width - 0.5, width + 0.5, edge)) * coverage;
+        }
+    `;
+
     function perspective(out, fovY, aspect, near, far) {
         let f = 1 / Math.tan(fovY * 0.5);
         let nf = 1 / (near - far);
@@ -437,11 +455,18 @@
     // Merged procedural parts: one mesh and one draw per material batch, never
     // one object/draw per limb. Surface IDs: type-colored cloth, neutral armor, player trim,
     // eyes and the complete 2D status render (on dedicated rectangular quads).
-    function createFigureData(kind) {
+    function createFigureData(kind, simplified = false) {
         let variant = kind;
         kind = kind.split(':')[0];
         let positions = [], normals = [], indices = [], uvs = [], details = [];
         function part(x, y, z, sx, sy, sz, surface = 0, joint = 0, pivot = 0, taper = 1) {
+            // At strategic zoom, subpixel ornaments turn into noisy gray specks.
+            // Keep broad plates (even thin ones), bodies, limbs and sprite panels.
+            if (simplified) {
+                let middleSize = sx + sy + sz - Math.min(sx, sy, sz) - Math.max(sx, sy, sz);
+                let mainLimb = Math.abs(joint) === 1 && sy >= .25 && sx >= .13;
+                if (surface === 3 || (middleSize < .18 && !mainLimb)) return;
+            }
             let cube = createCubeData(), base = positions.length / 3;
             for (let i = 0; i < cube.positions.length / 3; i++) {
                 let px = cube.positions[i * 3], py = cube.positions[i * 3 + 1], pz = cube.positions[i * 3 + 2];
@@ -528,23 +553,23 @@
                 part(0, .67, 0, .80, .19, .70, 1);
                 part(0, .73, .31, .21, .14, .66, 2);
                 part(0, .745, .645, .12, .10, .015, 3);
-                panel(0, .88, 0, .73, .73, true, 0, 0, true);
+                panel(0, .88, 0, .94, .94, true, 0, 0, true);
                 if (variant.endsWith(':twin')) for (let side of [-1,1]) part(side*.22,.73,.34,.10,.12,.66,2);
                 if (variant.endsWith(':sniper')) part(0,.74,.56,.12,.10,.65,1);
                 if (variant.endsWith(':energy')) for (let side of [-1,1]) part(side*.27,.49,.10,.12,.21,.16,3);
             } else if (kind === 'mine') {
                 part(0,.19,0,.91,.30,.91,0);
-                panel(0,.50,0,.86,.86,true);
+                panel(0,.50,0,.98,.98,true);
             } else if (kind === 'item') {
                 part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
-                panel(0, .79, 0, .74, .74, true);
+                panel(0, .85, 0, .96, .96, true, 0, 0, true);
                 for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
                 if (variant.endsWith(':relay')) for (let side of [-1,1]) part(side*.32,.82,0,.12,.18,.12,3);
             } else {
                 part(0, .19, 0, .76, .52, .76, 0);
                 for (let x of [-.4, .4]) for (let z of [-.4, .4]) part(x, .17, z, .14, .64, .14, 1);
                 part(0, .72, 0, .91, .16, .90, 1, 0, 0, .67);
-                panel(0, .89, 0, .73, .73, true);
+                panel(0, .89, 0, .94, .94, true, 0, 0, true);
                 part(0, .20, .391, .28, .40, .02, 1);
                 part(0, .61, .405, .40, .045, .02, 3);
                 if (kind === 'spawner') {
@@ -760,7 +785,7 @@
             this.mount = options && options.mount;
             this.enabled = false;
             this.supported = true;
-            this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+            this.pixelRatio = 1; // Updated with the viewport and display scale in resize().
             this.canvas = document.createElement('canvas');
             this.canvas.style.pointerEvents = 'none';
             this.canvas.style.display = 'none';
@@ -769,7 +794,7 @@
 
             this.gl = this.canvas.getContext('webgl2', {
                 alpha: false,
-                antialias: true,
+                antialias: false, // The off-screen scene has its own MSAA target.
                 depth: true,
                 premultipliedAlpha: false,
                 powerPreference: 'high-performance'
@@ -804,6 +829,7 @@
                 in float vAlpha;
                 in float vLightLevel;
                 uniform vec3 uColor;
+                ${CEL_LIGHTING_GLSL}
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
                 vec4 packDepth(float depth) {
@@ -816,7 +842,7 @@
                 void main() {
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
-                    float shade = 0.38 + diffuse * 0.62;
+                    float shade = celShade(diffuse);
                     float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
                     outColor = vec4(uColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
@@ -861,6 +887,7 @@
                 in vec3 vLocalPosition;
                 in float vShape;
                 in float vLightLevel;
+                ${CEL_LIGHTING_GLSL}
                 layout(location = 0) out vec4 outColor;
                 layout(location = 1) out vec4 outPackedDepth;
                 vec4 packDepth(float depth) {
@@ -886,7 +913,7 @@
                     }
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
-                    float shade = 0.38 + diffuse * 0.62;
+                    float shade = celShade(diffuse);
                     float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
                     outColor = vec4(vColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
@@ -952,6 +979,7 @@
                 in float vSideAngle;
                 in vec3 vLightingNormal;
                 in float vLightLevel;
+                ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
                 uniform sampler2D uSideTexture;
                 uniform float uHasSideTexture;
@@ -974,7 +1002,7 @@
                     vec3 surfaceNormal = normalize(vLightingNormal);
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
-                    float shade = 0.38 + diffuse * 0.62;
+                    float shade = celShade(diffuse);
                     vec3 playerSideColor = vColor * shade;
                     vec3 functionalSideColor = vSideColor * shade;
                     vec2 topUv = vec2(vUv.x, 1.0 - vUv.y);
@@ -993,10 +1021,12 @@
                         float edgeDistance = min(min(sideUv.x, 1.0 - sideUv.x), min(sideUv.y, 1.0 - sideUv.y));
                         float seamFactor = 1.0 - smoothstep(0.015, 0.08, edgeDistance);
                         vec3 playerHuedOverlay = mix(sideSample.rgb, playerSideColor, 0.35);
-                        vec3 seamTintedOverlay = mix(sideSample.rgb, playerHuedOverlay, seamFactor);
+                        vec3 seamTintedOverlay = mix(sideSample.rgb * shade, playerHuedOverlay, seamFactor);
                         finalColor = mix(functionalSideColor, seamTintedOverlay, overlayAlpha);
                     }
                     float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    // Pixel-sized edges within the existing material pass.
+                    if (vShape < 0.5) finalColor = mix(finalColor, vec3(.025,.035,.055), faceInk(vUv, .8) * .8);
                     finalColor *= (1.0 - fogAlpha);
                     outColor = vec4(finalColor, vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
@@ -1044,9 +1074,14 @@
                 precision highp float;
                 in vec2 vUv;
                 uniform sampler2D uTexture;
+                uniform bool uPackDepth;
                 out vec4 outColor;
                 void main() {
-                    outColor = texture(uTexture, vUv);
+                    vec4 sampleColor = texture(uTexture, vUv);
+                    if (uPackDepth) {
+                        vec4 depth = fract(min(sampleColor.r, .99999994) * vec4(16777216.0,65536.0,256.0,1.0));
+                        outColor = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
+                    } else outColor = sampleColor;
                 }
             `);
 
@@ -1073,6 +1108,7 @@
                 texture: gl.getUniformLocation(this.planeProgram, 'uTexture')
             };
             this.presentUniforms = {
+                packDepth: gl.getUniformLocation(this.presentProgram, 'uPackDepth'),
                 texture: gl.getUniformLocation(this.presentProgram, 'uTexture')
             };
 
@@ -1104,6 +1140,14 @@
             this.orbitYaw = 0;
             this.orbitPitch = 0.92;
             this.sceneFramebuffer = gl.createFramebuffer();
+            // Use a shared sample count supported by both color and depth formats.
+            let colorSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA8, gl.SAMPLES);
+            let depthSamples = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, gl.SAMPLES);
+            this.sceneSamples = Array.from(colorSamples).filter(n => n > 1 && n <= 4 && depthSamples.includes(n)).sort((a,b) => a-b)[0] || 0;
+            this.msaaFramebuffer = gl.createFramebuffer();
+            this.msaaBuffers = [gl.createRenderbuffer(), gl.createRenderbuffer(), gl.createRenderbuffer()];
+            this.depthPackFramebuffer = gl.createFramebuffer();
+            this.textureAnisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
             this.sceneColorTexture = gl.createTexture();
             this.sceneDepthColorTexture = gl.createTexture();
             this.sceneDepthTexture = gl.createTexture();
@@ -1180,15 +1224,17 @@
             bindInstanceAttributes(this.cylinderMesh);
             this.figureMeshes = new Map();
             for (let kind of ['figure', 'figure:elemental', 'heavy', 'heavy:king', 'worker', 'bird', 'bird:support', 'mole', 'serpent', 'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'mine']) {
-                let data = createFigureData(kind);
-                let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
-                bindInstanceAttributes(mesh);
-                gl.bindVertexArray(mesh.vao);
-                gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-                gl.bufferData(gl.ARRAY_BUFFER, data.details, gl.STATIC_DRAW);
-                gl.enableVertexAttribArray(13);
-                gl.vertexAttribPointer(13, 4, gl.FLOAT, false, 16, 0);
-                this.figureMeshes.set(kind, mesh);
+                for (let simplified of [false, true]) {
+                    let data = createFigureData(kind, simplified);
+                    let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
+                    bindInstanceAttributes(mesh);
+                    gl.bindVertexArray(mesh.vao);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+                    gl.bufferData(gl.ARRAY_BUFFER, data.details, gl.STATIC_DRAW);
+                    gl.enableVertexAttribArray(13);
+                    gl.vertexAttribPointer(13, 4, gl.FLOAT, false, 16, 0);
+                    this.figureMeshes.set(simplified ? `${kind}:lod` : kind, mesh);
+                }
             }
             gl.bindVertexArray(null);
             this.figureProgram = createProgram(gl, `#version 300 es
@@ -1260,6 +1306,10 @@
                 in float vAlpha;
                 in float vLight;
                 flat in int vSurface;
+                uniform float uIsUnit;
+                uniform float uIsFlying;
+                uniform float uSpriteLodBias;
+                ${CEL_LIGHTING_GLSL}
                 uniform sampler2D uTopTexture;
                 uniform sampler2D uSideTexture;
                 uniform float uHasSideTexture;
@@ -1271,29 +1321,49 @@
                     // Lift dark palettes without replacing their hue with white.
                     float peak = max(vTrim.r, max(vTrim.g, vTrim.b));
                     vec3 typeColor = vTrim * max(1.0, .62 / max(peak, .01));
-                    vec3 base = mix(mix(typeColor, vColor, .12), vec3(.72,.75,.79), .10);
-                    if (vSurface == 1) base = mix(vec3(.22,.26,.32), typeColor, .24);
-                    if (vSurface == 2) base = mix(mix(vColor, typeColor, .18), vec3(.80,.83,.87), .12);
+                    // Keep 2D's type colors on the body and owner colors on trim.
+                    vec3 base = typeColor;
+                    if (vSurface == 1) base = mix(mix(vec3(.055,.065,.08), typeColor, .12), mix(vec3(.76,.84,.92), typeColor, .20), uIsFlying);
+                    if (vSurface == 2) base = vColor;
                     if (vSurface == 3) base = vec3(.48,.94,1.0);
                     if (vSurface >= 4) {
-                        vec4 texel = texture(uTopTexture,vUv);
-                        base = mix(vec3(.72,.77,.84), texel.rgb, texel.a);
+                        // Preserve thin sprite strokes without disabling distant mipmaps.
+                        vec4 texel = texture(uTopTexture, vUv, uSpriteLodBias);
+                        // Transparent sprite padding must not turn into a pale plaque.
+                        if (texel.a < .1) discard;
+                        base = mix(vec3(.055,.065,.08), texel.rgb, texel.a);
                     }
                     float diffuse = max(dot(normalize(vNormal), normalize(vec3(-.42,.86,.31))),0.0);
-                    float shade = vSurface >= 3 ? 1.0 : .65 + diffuse * .35;
+                    float shade = vSurface >= 3 ? 1.0 : mix(.72, 1.0, celShade(diffuse));
+                    vec3 shaded = base * shade;
+                    if (vSurface < 3) {
+                        shaded *= mix(.86, 1.0, uIsUnit);
+                        shaded = mix(shaded, vec3(.025,.035,.055), faceInk(vUv, mix(.65, 1.05, uIsUnit)) * .88);
+                    }
                     float fog = 1.0 - pow(1.0-clamp(vLight,0.0,1.0),1.3)*.42;
-                    outColor = vec4(base * shade * fog,vAlpha);
+                    outColor = vec4(shaded * fog,vAlpha);
                     vec4 depth = fract(gl_FragCoord.z * vec4(16777216.0,65536.0,256.0,1.0));
                     outPackedDepth = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
                 }
             `);
             this.figureUniforms = {
+                spriteLodBias: gl.getUniformLocation(this.figureProgram, 'uSpriteLodBias'),
+                isFlying: gl.getUniformLocation(this.figureProgram, 'uIsFlying'),
+                isUnit: gl.getUniformLocation(this.figureProgram, 'uIsUnit'),
                 viewProjection: gl.getUniformLocation(this.figureProgram, 'uViewProjection'),
                 topTexture: gl.getUniformLocation(this.figureProgram, 'uTopTexture'),
                 sideTexture: gl.getUniformLocation(this.figureProgram, 'uSideTexture'),
                 hasSideTexture: gl.getUniformLocation(this.figureProgram, 'uHasSideTexture')
             };
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        getFigureMeshKey(object) {
+            let kind = proceduralKind(object);
+            if (!kind) return null;
+            // Use scale at the orbit center so rotating cannot toggle detail levels.
+            let pixels = this.lodPixelsPerWorld * Math.max(object.scaleX, object.scaleZ);
+            return pixels < 24 ? kind + ':lod' : kind;
         }
 
         getPrimitiveMesh(object) {
@@ -1309,6 +1379,10 @@
             if (!this.supported) return;
             let safeWidth = Math.max(1, Math.floor(width || 1));
             let safeHeight = Math.max(1, Math.floor(height || 1));
+            // Match 2D's native display pixels instead of asking the browser to
+            // rescale a 1.5x canvas on a 2x display. Bound large-screen GPU cost.
+            const pixelBudget = 6000000;
+            this.pixelRatio = Math.min(window.devicePixelRatio || 1, Math.max(1, Math.sqrt(pixelBudget / (safeWidth * safeHeight))));
             this.cssWidth = safeWidth;
             this.cssHeight = safeHeight;
             let deviceWidth = Math.max(1, Math.floor(safeWidth * this.pixelRatio));
@@ -1342,9 +1416,33 @@
             gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.sceneDepthColorTexture, 0);
             gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.sceneDepthTexture, 0);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPackFramebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.sceneDepthColorTexture, 0);
+            if (this.sceneSamples) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.msaaFramebuffer);
+                for (let i = 0; i < 3; i++) {
+                    gl.bindRenderbuffer(gl.RENDERBUFFER, this.msaaBuffers[i]);
+                    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, this.sceneSamples, i === 2 ? gl.DEPTH_COMPONENT24 : gl.RGBA8, width, height);
+                    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, i === 2 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0 + i, gl.RENDERBUFFER, this.msaaBuffers[i]);
+                }
+                gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) this.sceneSamples = 0;
+                gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+            }
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             this.overlayDepthCache.clear();
             this.overlayDepthFrame = null;
+        }
+
+        resolveScene() {
+            if (!this.sceneSamples) return;
+            let gl = this.gl, { width, height } = this.sceneTargetSize;
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msaaFramebuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.sceneFramebuffer);
+            gl.readBuffer(gl.COLOR_ATTACHMENT0);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+            gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
         }
 
         captureOverlayDepthFrame() {
@@ -1354,6 +1452,20 @@
             if (width <= 0 || height <= 0) {
                 this.overlayDepthFrame = null;
                 return;
+            }
+            if (this.sceneSamples) {
+                // Packed depth bytes cannot be averaged by MSAA: pack the resolved
+                // depth texture instead, keeping health-bar occlusion accurate.
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPackFramebuffer);
+                gl.disable(gl.DEPTH_TEST);
+                gl.useProgram(this.presentProgram);
+                gl.bindVertexArray(this.presentVao);
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, this.sceneDepthTexture);
+                gl.uniform1i(this.presentUniforms.texture, 0);
+                gl.uniform1i(this.presentUniforms.packDepth, 1);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                gl.enable(gl.DEPTH_TEST);
             }
             let requiredLength = width * height * 4;
             if (!this.overlayDepthFrame || this.overlayDepthFrame.width !== width || this.overlayDepthFrame.height !== height || !this.overlayDepthFrame.bytes || this.overlayDepthFrame.bytes.length !== requiredLength) {
@@ -1380,6 +1492,7 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.sceneColorTexture);
             gl.uniform1i(this.presentUniforms.texture, 0);
+            gl.uniform1i(this.presentUniforms.packDepth, 0);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             gl.bindVertexArray(null);
             gl.bindTexture(gl.TEXTURE_2D, null);
@@ -1433,6 +1546,7 @@
             ];
             let target = [centerX, 0, centerZ];
             perspective(this.tmpProjection, 0.74, aspect, 0.1, 220);
+            this.lodPixelsPerWorld = this.cssHeight * this.tmpProjection[5] / (2 * distance);
             lookAt(this.tmpView, eye, target, [0, 1, 0]);
             multiplyMatrices(this.tmpViewProjection, this.tmpProjection, this.tmpView);
             invertMatrix4(this.tmpInverseViewProjection, this.tmpViewProjection);
@@ -1554,6 +1668,7 @@
                 } else {
                     this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
                 }
+                if (cached.mipmapped) this.gl.generateMipmap(this.gl.TEXTURE_2D);
                 cached.version = version;
                 cached.width = sourceCanvas.width;
                 cached.height = sourceCanvas.height;
@@ -1561,10 +1676,24 @@
             }
             let texture = createTexture(this.gl);
             this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+            // Mipmaps stabilize distant symbols; non-sprite textures also use anisotropy.
+            let exactSprite = String(key).startsWith('2d:');
+            let mipmapped = !String(key).startsWith('shared_audio');
+            // 2D uses unsmoothed pixels. Do the same within each sprite mip,
+            // blending levels only to avoid hard transitions while zooming.
+            if (exactSprite) this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+            if (mipmapped) {
+                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, exactSprite ? this.gl.NEAREST_MIPMAP_LINEAR : this.gl.LINEAR_MIPMAP_LINEAR);
+                if (this.textureAnisotropy && !exactSprite) {
+                    let ext = this.textureAnisotropy;
+                    this.gl.texParameterf(this.gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, this.gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+                }
+            }
             this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
             this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
             this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceCanvas);
-            this.topTextureCache.set(key, { texture, version, width: sourceCanvas.width, height: sourceCanvas.height });
+            if (mipmapped) this.gl.generateMipmap(this.gl.TEXTURE_2D);
+            this.topTextureCache.set(key, { texture, version, mipmapped, width: sourceCanvas.width, height: sourceCanvas.height });
             return texture;
         }
 
@@ -2194,7 +2323,7 @@
         drawTexturedCubeInstances(objects, topTexture, sideTexture = null) {
             if (!objects || objects.length <= 0 || !topTexture) return;
             let gl = this.gl;
-            let kind = proceduralKind(objects[0]);
+            let kind = this.getFigureMeshKey(objects[0]);
             let mesh = kind ? this.figureMeshes.get(kind) : this.getPrimitiveMesh(objects[0]);
             let uniforms = kind ? this.figureUniforms : this.texturedCubeUniforms;
             this.ensureCubeInstanceCapacity(objects.length);
@@ -2232,6 +2361,12 @@
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.cubeInstanceArray.subarray(0, objects.length * 26));
             gl.useProgram(kind ? this.figureProgram : this.texturedCubeProgram);
+            if (kind) {
+                gl.uniform1f(uniforms.isFlying, kind.startsWith('bird') ? 1 : 0);
+                gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
+                let key = objects[0].modelKey || '';
+                gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') || key === 'snake_segment' ? 1 : 0);
+            }
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(uniforms.viewProjection, false, this.tmpViewProjection);
             gl.activeTexture(gl.TEXTURE0);
@@ -2252,7 +2387,7 @@
             let gl = this.gl;
             this.overlayDepthCache.clear();
             this.overlayDepthFrame = null;
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFramebuffer);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneSamples ? this.msaaFramebuffer : this.sceneFramebuffer);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -2286,7 +2421,7 @@
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${proceduralKind(object) || object.renderShape || 'box'}`;
+                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${this.getFigureMeshKey(object) || object.renderShape || 'box'}`;
                     let group = targetGroups.get(groupKey);
                     if (!group) {
                         group = {
@@ -2341,6 +2476,7 @@
             }
             let overlays = snapshot.overlays || null;
             let needsOverlayDepth = !!(overlays && ((overlays.bars && overlays.bars.length > 0) || (overlays.texts && overlays.texts.length > 0)));
+            this.resolveScene();
             if (needsOverlayDepth) this.captureOverlayDepthFrame();
             this.presentSceneToCanvas();
             gl.bindVertexArray(null);
