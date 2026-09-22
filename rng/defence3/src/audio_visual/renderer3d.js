@@ -1712,33 +1712,18 @@
 
         getGroundViewportBounds(snapshot, paddingTiles = 0) {
             if (!snapshot) return null;
-            this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
-            this.buildViewProjection(snapshot);
-
-            let width = Math.max(1, snapshot.viewportWidth || this.cssWidth || 1);
-            let height = Math.max(1, snapshot.viewportHeight || this.cssHeight || 1);
-            let rect = { left: 0, top: 0, width, height };
-            let xFracs = [0, 0.08, 0.18, 0.32, 0.5, 0.68, 0.82, 0.92, 1];
-            let yFracs = [0, 0.04, 0.1, 0.2, 0.34, 0.5, 0.68, 0.84, 1];
+            let footprint = this.getGroundFrustumPolygon(snapshot);
+            if (!footprint || footprint.length < 3) return null;
             let minX = Infinity;
             let minY = Infinity;
             let maxX = -Infinity;
             let maxY = -Infinity;
-            let hits = 0;
-
-            for (let yFrac of yFracs) {
-                for (let xFrac of xFracs) {
-                    let point = this.screenToGround(rect.left + width * xFrac, rect.top + height * yFrac, rect);
-                    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-                    minX = Math.min(minX, point.x);
-                    minY = Math.min(minY, point.y);
-                    maxX = Math.max(maxX, point.x);
-                    maxY = Math.max(maxY, point.y);
-                    hits++;
-                }
+            for (let point of footprint) {
+                minX = Math.min(minX, point.x);
+                minY = Math.min(minY, point.y);
+                maxX = Math.max(maxX, point.x);
+                maxY = Math.max(maxY, point.y);
             }
-
-            if (hits <= 0) return null;
             let pad = Math.max(0, Number(paddingTiles) || 0);
             let worldWidth = Number(snapshot.worldWidth) || 0;
             let worldHeight = Number(snapshot.worldHeight) || 0;
@@ -1748,6 +1733,51 @@
                 maxGx: worldWidth > 0 ? Math.min(worldWidth - 1, Math.ceil(maxX + pad)) : Math.ceil(maxX + pad),
                 maxGy: worldHeight > 0 ? Math.min(worldHeight - 1, Math.ceil(maxY + pad)) : Math.ceil(maxY + pad)
             };
+        }
+
+        getGroundFrustumPolygon(snapshot) {
+            if (!snapshot) return null;
+            this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
+            this.buildViewProjection(snapshot);
+
+            let corners = [];
+            for (let z of [-1, 1]) {
+                for (let y of [-1, 1]) {
+                    for (let x of [-1, 1]) {
+                        corners.push(transformClipToWorld(this.tmpInverseViewProjection, x, y, z));
+                    }
+                }
+            }
+
+            let points = [];
+            let addPoint = (x, y) => {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                if (points.some(point => Math.abs(point.x - x) < 1e-5 && Math.abs(point.y - y) < 1e-5)) return;
+                points.push({ x, y });
+            };
+            let edgeBits = [1, 2, 4];
+            for (let i = 0; i < corners.length; i++) {
+                let a = corners[i];
+                if (!a) continue;
+                for (let bit of edgeBits) {
+                    let j = i ^ bit;
+                    if (j <= i) continue;
+                    let b = corners[j];
+                    if (!b) continue;
+                    let ay = a[1], by = b[1];
+                    if (Math.abs(ay) < 1e-6) addPoint(a[0], a[2]);
+                    if (Math.abs(by) < 1e-6) addPoint(b[0], b[2]);
+                    if ((ay < 0 && by > 0) || (ay > 0 && by < 0)) {
+                        let t = -ay / (by - ay);
+                        addPoint(a[0] + (b[0] - a[0]) * t, a[2] + (b[2] - a[2]) * t);
+                    }
+                }
+            }
+            if (points.length < 3) return null;
+            let centerX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+            let centerY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+            points.sort((a, b) => Math.atan2(a.y - centerY, a.x - centerX) - Math.atan2(b.y - centerY, b.x - centerX));
+            return points;
         }
 
         projectWorldToScreen(x, y, z) {

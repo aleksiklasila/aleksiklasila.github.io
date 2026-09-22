@@ -827,11 +827,36 @@ function initInput() {
         return pickNearestHitCandidate(candidates, worldX, worldY);
     }
 
-    function isWorldPointInCurrentView(x, y, pad = 0) {
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    function createCurrentViewPointTester() {
+        if (
+            renderDimensionMode === '3d' &&
+            renderer3dInstance &&
+            typeof renderer3dInstance.buildViewProjection === 'function' &&
+            typeof renderer3dInstance.projectWorldToScreenDetailed === 'function'
+        ) {
+            renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
+            let viewportWidth = Math.max(1, Number(renderer3dInstance.cssWidth) || viewW || 1);
+            let viewportHeight = Math.max(1, Number(renderer3dInstance.cssHeight) || viewH || 1);
+            return (x, y, pad = 0, lift = 0.12) => {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+                let tileX = x / TILE;
+                let tileY = y / TILE;
+                let projected = renderer3dInstance.projectWorldToScreenDetailed(tileX, lift, tileY);
+                if (!projected || !Number.isFinite(projected.x) || !Number.isFinite(projected.y) ||
+                    !Number.isFinite(projected.ndcZ) || projected.ndcZ < -1 || projected.ndcZ > 1) return false;
+                let screenPad = 0;
+                if (pad > 0 && typeof renderer3dInstance.getScreenPixelsPerTile === 'function') {
+                    screenPad = renderer3dInstance.getScreenPixelsPerTile(tileX, lift, tileY) * pad / TILE;
+                }
+                return projected.x >= -screenPad && projected.x <= viewportWidth + screenPad &&
+                    projected.y >= -screenPad && projected.y <= viewportHeight + screenPad;
+            };
+        }
+
         let worldViewW = viewW / camera.zoom;
         let worldViewH = viewH / camera.zoom;
-        return x >= camera.x - pad && x <= camera.x + worldViewW + pad &&
+        return (x, y, pad = 0) => Number.isFinite(x) && Number.isFinite(y) &&
+            x >= camera.x - pad && x <= camera.x + worldViewW + pad &&
             y >= camera.y - pad && y <= camera.y + worldViewH + pad;
     }
 
@@ -839,12 +864,13 @@ function initInput() {
         if (!sampleUnit) return [];
         let typeKey = sampleUnit.unitType;
         let out = [];
+        let isPointInView = createCurrentViewPointTester();
         for (let u of units) {
             if (!u || u.dead || u.owner !== localPlayerId) continue;
             if (u.unitType !== typeKey) continue;
             let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
             if (!isTileVisible(ugx, ugy)) continue;
-            if (!isWorldPointInCurrentView(u.x, u.y, Math.max(4, Number(u.r) || 0))) continue;
+            if (!isPointInView(u.x, u.y, Math.max(4, Number(u.r) || 0), 0.28)) continue;
             out.push(u);
         }
         return out;
@@ -853,11 +879,12 @@ function initInput() {
     function getVisibleSameTypeEntities(sampleEntity) {
         if (!sampleEntity) return [];
         let out = [];
+        let isPointInView = createCurrentViewPointTester();
 
         if (sampleEntity._isGoldMine) {
             for (let m of goldMines) {
                 if (!m || !isTileVisible(m.gx, m.gy)) continue;
-                if (!isWorldPointInCurrentView(m.x, m.y, 12)) continue;
+                if (!isPointInView(m.x, m.y, 12, 0.08)) continue;
                 m._isGoldMine = true;
                 out.push(m);
             }
@@ -867,7 +894,7 @@ function initInput() {
         if (sampleEntity._isAstarMine) {
             for (let m of astarMines) {
                 if (!m || !isTileVisible(m.gx, m.gy)) continue;
-                if (!isWorldPointInCurrentView(m.x, m.y, 12)) continue;
+                if (!isPointInView(m.x, m.y, 12, 0.08)) continue;
                 m._isAstarMine = true;
                 out.push(m);
             }
@@ -879,7 +906,7 @@ function initInput() {
                 if (!b || b.energy <= 0) continue;
                 if (b.unitType !== sampleEntity.unitType) continue;
                 if (!isTileVisible(b.gx, b.gy)) continue;
-                if (!isWorldPointInCurrentView(b.x, b.y, 14)) continue;
+                if (!isPointInView(b.x, b.y, 14, 0.12)) continue;
                 out.push(b);
             }
             return out;
@@ -890,7 +917,7 @@ function initInput() {
                 if (!t || t.energy <= 0) continue;
                 if (t.type !== sampleEntity.type) continue;
                 if (!isTileVisible(t.gx, t.gy)) continue;
-                if (!isWorldPointInCurrentView(t.x, t.y, 15)) continue;
+                if (!isPointInView(t.x, t.y, 15, 0.18)) continue;
                 out.push(t);
             }
             return out;
@@ -901,7 +928,7 @@ function initInput() {
                 if (!s || s.energy <= 0) continue;
                 if (s.type !== sampleEntity.type) continue;
                 if (!isTileVisible(s.gx, s.gy)) continue;
-                if (!isWorldPointInCurrentView(s.x, s.y, 14)) continue;
+                if (!isPointInView(s.x, s.y, 14, 0.14)) continue;
                 out.push(s);
             }
             return out;
@@ -914,7 +941,7 @@ function initInput() {
                 let cell = grid[gy][gx];
                 if (!cell || !cell.item || cell.item.energy <= 0) continue;
                 if (cell.item.type !== sampleType) continue;
-                if (!isWorldPointInCurrentView(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 14)) continue;
+                if (!isPointInView(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 14, 0.08)) continue;
                 cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell;
                 out.push(cell.item);
             }
