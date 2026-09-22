@@ -831,7 +831,7 @@ function get3DBuildingTopTexture(kind, owner, options = {}) {
             g.strokeStyle = '#fff'; g.lineWidth = 2; g.strokeRect(size * 0.31, size * 0.38, size * 0.38, size * 0.22);
             g.fillStyle = '#111'; g.font = `700 ${Math.round(size * 0.22)}px Arial`; g.fillText('⚡', size * 0.5, size * 0.52);
         } else if (kind === 'spawner_astar') {
-            g.fillStyle = '#555'; g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
+            g.fillStyle = '#432'; g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
             g.fillStyle = '#f0f0f0'; g.font = `700 ${Math.round(size * 0.3)}px Arial`; g.fillText('★', size * 0.5, size * 0.52);
         } else if (kind === 'spawner_salvager') {
             g.fillStyle = '#543'; g.fillRect(size * 0.22, size * 0.22, size * 0.56, size * 0.56);
