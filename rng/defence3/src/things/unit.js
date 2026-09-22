@@ -954,92 +954,7 @@ class Unit {
         else if (this.wet > 0) strokeColor = '#4af';
         if (this.burning > 0 || this.poisoned > 0 || this.frozen > 0 || this.wet > 0) lw = 1.5;
 
-        if (this.isSnake && this.snakeHistory.length > 0) {
-            ctx.save();
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            // Draw team colored outline first
-            ctx.lineWidth = this.r * 2 + 3;
-            ctx.strokeStyle = strokeColor;
-            ctx.beginPath(); ctx.moveTo(this.x, this.y);
-            for (let p of this.snakeHistory) ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            // Draw body
-            ctx.lineWidth = this.r * 2;
-            ctx.strokeStyle = this.color;
-            ctx.beginPath(); ctx.moveTo(this.x, this.y);
-            for (let p of this.snakeHistory) ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            // Head
-            ctx.fillStyle = strokeColor;
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.r + 1.5, 0, 6.28); ctx.fill();
-            ctx.fillStyle = this.color;
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
-            ctx.fillStyle = "black";
-            ctx.beginPath(); ctx.arc(this.x - 2, this.y - 2, 1.5, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x + 2, this.y - 2, 1.5, 0, 6.28); ctx.fill();
-            ctx.restore();
-        } else if (this.vis === 'triangle') {
-            ctx.fillStyle = this.color; ctx.beginPath();
-            let tr = this.r * 0.5;
-            ctx.moveTo(this.x, this.y + tr); ctx.lineTo(this.x - tr, this.y - tr); ctx.lineTo(this.x + tr, this.y - tr);
-            ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
-        } else if (this.vis === 'star') {
-            if (this.unitType === 'collector' || this.unitType === 'astar_collector') {
-                ctx.save();
-                // Outline circle
-                ctx.strokeStyle = strokeColor; ctx.lineWidth = lw;
-                ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.stroke();
-                ctx.font = `${Math.round(this.r * 2.4)}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillStyle = this.unitType === 'collector' ? '#ffd34d' : (this.carryingValue > 0 ? '#f4f4f4' : '#9aa0a6');
-                ctx.fillText(this.unitType === 'collector' ? '⚡' : (this.carryingValue > 0 ? '★' : '☆'), this.x, this.y + 1);
-                ctx.restore();
-            } else {
-                drawCachedUnitStar(ctx, this.x, this.y, this.r, this.color, strokeColor, lw);
-            }
-        } else if (this.vis === 'triangle_down') {
-            ctx.fillStyle = this.color; ctx.beginPath();
-            let tr = this.r;
-            ctx.moveTo(this.x, this.y + tr); ctx.lineTo(this.x - tr, this.y - tr * 0.5); ctx.lineTo(this.x + tr, this.y - tr * 0.5);
-            ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
-        } else if (this.vis === 'mole') {
-            ctx.fillStyle = this.color; ctx.beginPath();
-            ctx.ellipse(this.x, this.y, this.r * 0.8, this.r * 1.1, 0, 0, Math.PI * 2);
-            ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
-        } else if (this.vis === 'rect') {
-            let rr = this.r;
-            ctx.fillStyle = this.color; ctx.fillRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
-            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.strokeRect(this.x - rr, this.y - rr * 0.7, rr * 2, rr * 1.4);
-            if (this.unitType === 'researcher_unit') {
-                ctx.fillStyle = '#5af';
-                ctx.fillRect(this.x - rr * 0.3, this.y - rr * 0.35, rr * 0.6, rr * 0.7);
-                ctx.strokeStyle = '#93f';
-                ctx.lineWidth = Math.max(1, lw * 0.8);
-                ctx.strokeRect(this.x - rr * 0.3, this.y - rr * 0.35, rr * 0.6, rr * 0.7);
-            }
-        } else if (this.vis === 'king') {
-            let rr = this.r;
-            // Crown shape
-            ctx.fillStyle = this.color; ctx.beginPath();
-            ctx.moveTo(this.x - rr, this.y + rr * 0.4);
-            ctx.lineTo(this.x - rr, this.y - rr * 0.2);
-            ctx.lineTo(this.x - rr * 0.5, this.y + rr * 0.1);
-            ctx.lineTo(this.x, this.y - rr * 0.7);
-            ctx.lineTo(this.x + rr * 0.5, this.y + rr * 0.1);
-            ctx.lineTo(this.x + rr, this.y - rr * 0.2);
-            ctx.lineTo(this.x + rr, this.y + rr * 0.4);
-            ctx.closePath(); ctx.fill();
-            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
-            // Jewel dots on crown tips
-            ctx.fillStyle = '#f00';
-            ctx.beginPath(); ctx.arc(this.x - rr, this.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x, this.y - rr * 0.7, 1.5, 0, 6.28); ctx.fill();
-            ctx.beginPath(); ctx.arc(this.x + rr, this.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
-        } else {
-            ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, 6.28); ctx.fill();
-            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
-        }
+        drawCachedUnitBody(ctx, this, strokeColor, lw);
 
         // Owner dot removed in favor of colored outline
 
@@ -1631,4 +1546,94 @@ function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', line
     ctx.lineWidth = lineWidth;
     ctx.stroke(path);
     ctx.restore();
+}
+// Body geometry is shared by immediate drawing and the strategic sprite cache.
+function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
+        if (unit.isSnake && unit.snakeHistory.length > 0) {
+            ctx.save();
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            // Draw team colored outline first
+            ctx.lineWidth = unit.r * 2 + 3;
+            ctx.strokeStyle = strokeColor;
+            ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
+            for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+            // Draw body
+            ctx.lineWidth = unit.r * 2;
+            ctx.strokeStyle = unit.color;
+            ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
+            for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+            // Head
+            ctx.fillStyle = strokeColor;
+            ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r + 1.5, 0, 6.28); ctx.fill();
+            ctx.fillStyle = unit.color;
+            ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r, 0, 6.28); ctx.fill();
+            ctx.fillStyle = "black";
+            ctx.beginPath(); ctx.arc(unit.x - 2, unit.y - 2, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(unit.x + 2, unit.y - 2, 1.5, 0, 6.28); ctx.fill();
+            ctx.restore();
+        } else if (unit.vis === 'triangle') {
+            ctx.fillStyle = unit.color; ctx.beginPath();
+            let tr = unit.r * 0.5;
+            ctx.moveTo(unit.x, unit.y + tr); ctx.lineTo(unit.x - tr, unit.y - tr); ctx.lineTo(unit.x + tr, unit.y - tr);
+            ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+        } else if (unit.vis === 'star') {
+            if (unit.unitType === 'collector' || unit.unitType === 'astar_collector') {
+                ctx.save();
+                // Outline circle
+                ctx.strokeStyle = strokeColor; ctx.lineWidth = lw;
+                ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r, 0, 6.28); ctx.stroke();
+                ctx.font = `${Math.round(unit.r * 2.4)}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = unit.unitType === 'collector' ? '#ffd34d' : (unit.carryingValue > 0 ? '#f4f4f4' : '#9aa0a6');
+                ctx.fillText(unit.unitType === 'collector' ? '⚡' : (unit.carryingValue > 0 ? '★' : '☆'), unit.x, unit.y + 1);
+                ctx.restore();
+            } else {
+                drawCachedUnitStar(ctx, unit.x, unit.y, unit.r, unit.color, strokeColor, lw);
+            }
+        } else if (unit.vis === 'triangle_down') {
+            ctx.fillStyle = unit.color; ctx.beginPath();
+            let tr = unit.r;
+            ctx.moveTo(unit.x, unit.y + tr); ctx.lineTo(unit.x - tr, unit.y - tr * 0.5); ctx.lineTo(unit.x + tr, unit.y - tr * 0.5);
+            ctx.closePath(); ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+        } else if (unit.vis === 'mole') {
+            ctx.fillStyle = unit.color; ctx.beginPath();
+            ctx.ellipse(unit.x, unit.y, unit.r * 0.8, unit.r * 1.1, 0, 0, Math.PI * 2);
+            ctx.fill(); ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+        } else if (unit.vis === 'rect') {
+            let rr = unit.r;
+            ctx.fillStyle = unit.color; ctx.fillRect(unit.x - rr, unit.y - rr * 0.7, rr * 2, rr * 1.4);
+            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.strokeRect(unit.x - rr, unit.y - rr * 0.7, rr * 2, rr * 1.4);
+            if (unit.unitType === 'researcher_unit') {
+                ctx.fillStyle = '#5af';
+                ctx.fillRect(unit.x - rr * 0.3, unit.y - rr * 0.35, rr * 0.6, rr * 0.7);
+                ctx.strokeStyle = '#93f';
+                ctx.lineWidth = Math.max(1, lw * 0.8);
+                ctx.strokeRect(unit.x - rr * 0.3, unit.y - rr * 0.35, rr * 0.6, rr * 0.7);
+            }
+        } else if (unit.vis === 'king') {
+            let rr = unit.r;
+            // Crown shape
+            ctx.fillStyle = unit.color; ctx.beginPath();
+            ctx.moveTo(unit.x - rr, unit.y + rr * 0.4);
+            ctx.lineTo(unit.x - rr, unit.y - rr * 0.2);
+            ctx.lineTo(unit.x - rr * 0.5, unit.y + rr * 0.1);
+            ctx.lineTo(unit.x, unit.y - rr * 0.7);
+            ctx.lineTo(unit.x + rr * 0.5, unit.y + rr * 0.1);
+            ctx.lineTo(unit.x + rr, unit.y - rr * 0.2);
+            ctx.lineTo(unit.x + rr, unit.y + rr * 0.4);
+            ctx.closePath(); ctx.fill();
+            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+            // Jewel dots on crown tips
+            ctx.fillStyle = '#f00';
+            ctx.beginPath(); ctx.arc(unit.x - rr, unit.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(unit.x, unit.y - rr * 0.7, 1.5, 0, 6.28); ctx.fill();
+            ctx.beginPath(); ctx.arc(unit.x + rr, unit.y - rr * 0.2, 1.5, 0, 6.28); ctx.fill();
+        } else {
+            ctx.fillStyle = unit.color; ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r, 0, 6.28); ctx.fill();
+            ctx.strokeStyle = strokeColor; ctx.lineWidth = lw; ctx.stroke();
+        }
+
 }

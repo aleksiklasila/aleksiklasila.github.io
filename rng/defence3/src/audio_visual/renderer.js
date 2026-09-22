@@ -8,9 +8,6 @@ const renderer3dTopTextureCache = new Map();
 const renderer3dOverlapFadeState = new Map();
 const renderer3dSharedAudioTextureCanvases = new Map();
 const renderer3dSideTextureAngleState = new Map();
-let renderer3dMaskedBackgroundCanvas = null;
-let renderer3dMaskedBackgroundCtx = null;
-let renderer3dMaskedBackgroundSignature = '';
 const RENDERER3D_OVERLAP_FADE_DURATION_MS = 500;
 const DRAW_Z_BACKGROUND = 500;
 const DRAW_Z_STRUCTURES = 400;
@@ -330,7 +327,9 @@ function get3DTopTextureCanvas(key, drawFn) {
 }
 
 const renderer3dExact2DTextureCache = new Map();
-const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 512;
+const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1024;
+let renderer3dExactTextureBuildsRemaining = 12;
+let renderer3dExactTextureTimeRemaining = 2;
 
 function cache3DExact2DTexture(signature, entry) {
     renderer3dExact2DTextureCache.set(signature, entry);
@@ -382,7 +381,16 @@ function get3DExact2DTexture(entity) {
     if (!entity || typeof entity.draw !== 'function') return null;
     let signature = get3DExact2DVisualSignature(entity);
     let entry = renderer3dExact2DTextureCache.get(signature);
+    if (entry) {
+        // Keep frequently used sprites resident when other entities enter view.
+        renderer3dExact2DTextureCache.delete(signature);
+        renderer3dExact2DTextureCache.set(signature, entry);
+    }
     if (!entry) {
+        // A camera jump must not rasterize hundreds of status panels at once.
+        // Callers already have a shared type/owner sprite as a fallback.
+        if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return null;
+        renderer3dExactTextureBuildsRemaining--;
         let canvas = document.createElement('canvas');
         canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
         canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
@@ -391,6 +399,7 @@ function get3DExact2DTexture(entity) {
         cache3DExact2DTexture(signature, entry);
     }
     if (entry.canvas._textureVersion) return entry.canvas;
+    let buildStarted = performance.now();
     let g = entry.ctx;
     if (!g) return null;
     let x = Number(entity.x);
@@ -412,6 +421,7 @@ function get3DExact2DTexture(entity) {
     g.restore();
     g.__drawImagesImmediately = false;
     entry.canvas._textureVersion = 1;
+    renderer3dExactTextureTimeRemaining -= performance.now() - buildStarted;
     return entry.canvas;
 }
 
@@ -1293,75 +1303,22 @@ function getBackgroundWorldBoundsForRenderMode() {
     return renderDimensionMode === '3d' ? get3DVisibleWorldBounds() : getVisibleWorldBounds(1);
 }
 
-function get3DBackgroundCanvasWithVisibilityMask(sourceCanvas, backgroundPixelBounds) {
-    if (!sourceCanvas) return sourceCanvas;
-    if (fullVisibility) return sourceCanvas;
-    if (typeof rebuildVisibilityMaskCacheIfNeeded !== 'function') return sourceCanvas;
-
-    rebuildVisibilityMaskCacheIfNeeded();
-    if (typeof _visibilityMaskCanvas === 'undefined' || !_visibilityMaskCanvas) return sourceCanvas;
-
-    if (!renderer3dMaskedBackgroundCanvas || renderer3dMaskedBackgroundCanvas.width !== sourceCanvas.width || renderer3dMaskedBackgroundCanvas.height !== sourceCanvas.height) {
-        renderer3dMaskedBackgroundCanvas = document.createElement('canvas');
-        renderer3dMaskedBackgroundCanvas.width = sourceCanvas.width;
-        renderer3dMaskedBackgroundCanvas.height = sourceCanvas.height;
-        renderer3dMaskedBackgroundCtx = renderer3dMaskedBackgroundCanvas.getContext('2d');
-        renderer3dMaskedBackgroundSignature = '';
-    }
-
-    if (!renderer3dMaskedBackgroundCtx) return sourceCanvas;
-
-    let minX = Math.max(0, Math.floor((backgroundPixelBounds && backgroundPixelBounds.minX) || 0));
-    let minY = Math.max(0, Math.floor((backgroundPixelBounds && backgroundPixelBounds.minY) || 0));
-    let maxX = Math.min(WORLD_W, Math.ceil((backgroundPixelBounds && backgroundPixelBounds.maxX) || WORLD_W));
-    let maxY = Math.min(WORLD_H, Math.ceil((backgroundPixelBounds && backgroundPixelBounds.maxY) || WORLD_H));
-    let sw = Math.max(1, maxX - minX);
-    let sh = Math.max(1, maxY - minY);
-
-    let signature = [
-        renderer3dBackgroundVersion,
-        Number.isFinite(visibilityVersion) ? visibilityVersion : 0,
-        minX,
-        minY,
-        sw,
-        sh,
-        sourceCanvas.width,
-        sourceCanvas.height
-    ].join('|');
-
-    if (renderer3dMaskedBackgroundSignature !== signature) {
-        renderer3dMaskedBackgroundCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-        renderer3dMaskedBackgroundCtx.drawImage(sourceCanvas, 0, 0);
-        renderer3dMaskedBackgroundCtx.drawImage(_visibilityMaskCanvas, minX, minY, sw, sh, 0, 0, sourceCanvas.width, sourceCanvas.height);
-        renderer3dMaskedBackgroundSignature = signature;
-    }
-
-    return renderer3dMaskedBackgroundCanvas;
-}
-
 function build3DFrameData() {
+    renderer3dExactTextureBuildsRemaining = 12;
+    renderer3dExactTextureTimeRemaining = 2;
     let bounds = get3DVisibleWorldBounds();
     let alpha = tickAlpha;
     let objects = [];
     let buildPreview = getCurrentBuildPreviewData();
     let centerX = camera.x + bounds.vw * 0.5;
     let centerY = camera.y + bounds.vh * 0.5;
-    let backgroundMinX = bounds.minGx * TILE;
-    let backgroundMinY = bounds.minGy * TILE;
-    let backgroundMaxX = (bounds.maxGx + 1) * TILE;
-    let backgroundMaxY = (bounds.maxGy + 1) * TILE;
-    let sourceBackgroundCanvas = bgCanvas || canvas;
-    let backgroundCanvasFor3D = get3DBackgroundCanvasWithVisibilityMask(sourceBackgroundCanvas, {
-        minX: backgroundMinX,
-        minY: backgroundMinY,
-        maxX: backgroundMaxX,
-        maxY: backgroundMaxY
-    });
-    let backgroundVersionFor3D = renderer3dBackgroundVersion;
-    if (!fullVisibility) {
-        let visVersion = Number.isFinite(visibilityVersion) ? visibilityVersion : 0;
-        backgroundVersionFor3D = renderer3dBackgroundVersion * 1000000 + (visVersion % 1000000);
-    }
+    // Stable world-space textures: camera motion changes matrices, not pixels.
+    if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
+    let backgroundMinX = 0, backgroundMinY = 0;
+    let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
+    let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
+    let backgroundVersionFor3D = _backgroundContentVersion;
+    if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
     let overlays = build3DOverlayData(bounds, alpha);
     let soundGrid = audioSpatialGrid;
     let bgSoundGrid = audioSpatialGridBackground;
@@ -1494,6 +1451,7 @@ function build3DFrameData() {
             });
         }
         let snake2DTexture = get3DExact2DTexture(unit);
+        let snakeTextureKey = `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
         push3DRenderObject(target, {
             modelKey: `unit_${unit.unitType || 'snake'}`,
             x: headX / TILE,
@@ -1506,8 +1464,8 @@ function build3DFrameData() {
             rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
             tint: ownerTint,
             renderShape: 'cylinder',
-            topTextureKey: snake2DTexture._renderer3DExactKey,
-            topTextureCanvas: snake2DTexture,
+            topTextureKey: snake2DTexture ? snake2DTexture._renderer3DExactKey : snakeTextureKey,
+            topTextureCanvas: snake2DTexture || get3DUnitTopTexture(unit, unit.owner, unitStatus),
             sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake'),
             sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake', Number(unit.owner) || 0, '#3dff64'),
             sideTint: get3DDamageFlashTint(unit, '#3dff64'),
@@ -1546,7 +1504,7 @@ function build3DFrameData() {
             heightMode: 'mine',
             tint: '#f0c83a',
             alpha: 1,
-            topTextureKey: mine2DTexture._renderer3DExactKey,
+            topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:gold',
             topTextureCanvas: mine2DTexture,
             sideTextureKey: get3DSharedAudioTextureKeyForMine('gold', 'gold_mine'),
             sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11),
@@ -1575,7 +1533,7 @@ function build3DFrameData() {
             heightMode: 'mine',
             tint: '#d8d8e8',
             alpha: 1,
-            topTextureKey: mine2DTexture._renderer3DExactKey,
+            topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:astar',
             topTextureCanvas: mine2DTexture,
             sideTextureKey: get3DSharedAudioTextureKeyForMine('astar', 'astar_mine'),
             sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23),
@@ -1612,8 +1570,8 @@ function build3DFrameData() {
                 rotationY: -(Number(cell.item.angle) || 0),
                 tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
                 alpha: get3DConstructionAlpha(cell.item),
-                topTextureKey: item2DTexture._renderer3DExactKey,
-                topTextureCanvas: item2DTexture,
+                topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
+                topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
                 sideTextureKey: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSharedAudioTextureKeyForPlayer(cell.owner, itemSideVariant) : '',
                 sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null,
                 sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
@@ -1775,13 +1733,16 @@ function build3DFrameData() {
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
-        let unitStatus = get3DUnitTextureStatus(u);
+        // Below readable panel size, share a type/owner texture so hundreds of
+        // units instance together instead of splitting on health/animation state.
+        let detailedUnit = footprint * (renderer3dInstance ? renderer3dInstance.lodPixelsPerWorld : TILE * camera.zoom) >= 24;
+        let unitStatus = detailedUnit ? get3DUnitTextureStatus(u) : { keySuffix: '' };
         let unitSideVariant = get3DUnitSideVisualizationVariant(u);
         let unitSideColor = (BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null;
         if (u.isSnake) {
             pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
         } else {
-            let unit2DTexture = get3DExact2DTexture(u);
+            let unit2DTexture = detailedUnit ? get3DExact2DTexture(u) : null;
             push3DRenderObject(objects, {
                 modelKey: `unit_${u.unitType || 'norm'}`,
                 x: ux / TILE + reactiveOffsetX * audioMove,
@@ -1887,6 +1848,8 @@ function build3DFrameData() {
         worldHeight: GRID_H,
         backgroundCanvas: backgroundCanvasFor3D,
         backgroundVersion: backgroundVersionFor3D,
+        fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
+        fogVersion: visibilityVersion,
         backgroundBounds: {
             centerX: (backgroundMinX + backgroundMaxX) * 0.5 / TILE,
             centerZ: (backgroundMinY + backgroundMaxY) * 0.5 / TILE,
@@ -2489,16 +2452,19 @@ function processRenderFrame(timestamp) {
     updateCamera();
     let dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    draw();
     let renderer3dSnapshot = null;
     if (renderDimensionMode === '3d') {
         let renderer3d = ensure3DRendererInitialized();
         if (renderer3d) {
             renderer3dSnapshot = build3DFrameData();
             renderer3d.render(renderer3dSnapshot);
+            drawMinimap();
+        } else {
+            draw();
         }
-    } else if (renderer3dInstance) {
-        renderer3dInstance.setEnabled(false);
+    } else {
+        if (renderer3dInstance) renderer3dInstance.setEnabled(false);
+        draw();
     }
     drawInteractionOverlay(renderer3dSnapshot);
     flushTickUiRequests();
@@ -2971,6 +2937,7 @@ function clearRendererTransientVisualCaches(options = null) {
         renderer3dTopTextureCache.clear();
         renderer3dExact2DTextureCache.clear();
         if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
+            for (let entry of renderer3dInstance.topTextureCache.values()) renderer3dInstance.gl.deleteTexture(entry.texture);
             renderer3dInstance.topTextureCache.clear();
         }
     }
