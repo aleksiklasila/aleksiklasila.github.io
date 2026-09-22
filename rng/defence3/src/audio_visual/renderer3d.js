@@ -739,7 +739,13 @@
             gl.vertexAttribPointer(2, 2, gl.FLOAT, false, strideBytes, 24);
         }
         gl.bindVertexArray(null);
-        return { vao, indexCount: indices.length, hasUv: !!uvs };
+        let bounds = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < positions.length; i++) {
+            let axis = i % 3;
+            bounds[axis] = Math.min(bounds[axis], positions[i]);
+            bounds[axis + 3] = Math.max(bounds[axis + 3], positions[i]);
+        }
+        return { vao, indexCount: indices.length, hasUv: !!uvs, positions, indices, bounds, uvs };
     }
 
     function createCubeData() {
@@ -1338,6 +1344,7 @@
                 for (let simplified of [false, true]) {
                     let data = createFigureData(kind, simplified);
                     let mesh = createMesh(gl, data.positions, data.normals, data.indices, data.uvs);
+                    mesh.details = data.details;
                     bindInstanceAttributes(mesh);
                     gl.bindVertexArray(mesh.vao);
                     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -1806,6 +1813,117 @@
                 clipW,
                 ndcZ,
             };
+        }
+
+
+        pickRenderedSource(screenX, screenY, candidates) {
+            if (!this.pickInverseViewProjection || !this.pickObjects) return null;
+            const nx = screenX / this.cssWidth * 2 - 1, ny = 1 - screenY / this.cssHeight * 2;
+            const near = transformClipToWorld(this.pickInverseViewProjection, nx, ny, -1);
+            const far = transformClipToWorld(this.pickInverseViewProjection, nx, ny, 1);
+            if (!near || !far) return null;
+            let bestT = 1, best = null;
+            const texturePixels = new Map();
+            for (const { object: o, mesh } of this.pickObjects) {
+                if (!candidates.has(o.pickSource) || o.pickSource.dead || o.pickSource.energy <= 0) continue;
+                const c = Math.cos(o.rotationY), s = Math.sin(o.rotationY);
+                const local = p => {
+                    const x = p[0] - o.x, z = p[2] - o.z;
+                    return [(c * x - s * z) / o.scaleX, (p[1] - o.y) / o.scaleY, (s * x + c * z) / o.scaleZ];
+                };
+                const a = local(near), b = local(far), d = b.map((v, i) => v - a[i]);
+                // Conservative animated bounds first; triangles only for objects under the pointer.
+                const margin = mesh.details ? 1.5 : 0;
+                let lo = 0, hi = bestT;
+                for (let axis = 0; axis < 3; axis++) {
+                    const min = mesh.bounds[axis] - margin, max = mesh.bounds[axis + 3] + margin;
+                    if (Math.abs(d[axis]) < 1e-10) {
+                        if (a[axis] < min || a[axis] > max) { hi = -1; break; }
+                    } else {
+                        const t0 = (min - a[axis]) / d[axis], t1 = (max - a[axis]) / d[axis];
+                        lo = Math.max(lo, Math.min(t0, t1));
+                        hi = Math.min(hi, Math.max(t0, t1));
+                    }
+                }
+                if (lo > hi) continue;
+                const vertices = new Float64Array(mesh.positions.length);
+                for (let i = 0; i < mesh.positions.length / 3; i++) {
+                    let x = mesh.positions[i * 3], y = mesh.positions[i * 3 + 1], z = mesh.positions[i * 3 + 2];
+                    if (mesh.details) {
+                        const joint = mesh.details[i * 4 + 1], pivot = mesh.details[i * 4 + 2];
+                        const phase = o.walkPhase || 0, move = o.moveAmount || 0, mode = o.animationMode || 0;
+                        let angle = Math.sin(phase) * move * joint * .65;
+                        if (mode === 1) angle = Math.abs(joint) === 1 ? Math.sin(phase) * 1.15 : (joint === 2 ? -Math.sin(phase) * .16 : 0);
+                        else if (mode === 2) angle = joint === -1 ? -.45 + Math.sin(phase) * 1.05 : (joint === 1 ? Math.sin(phase + 1.4) * .18 : 0);
+                        else if (mode === 3) angle = Math.abs(joint) === 1 ? Math.sin(phase + Math.sign(joint) * 1.2) * .72 : 0;
+                        else if (mode === 4) angle = Math.abs(joint) === 1 ? Math.sin(phase * 1.7) * (joint < 0 ? .72 : .22) : 0;
+                        else if (mode === 5) angle = Math.abs(joint) === 1 ? (.28 + Math.sin(phase * .55) * .22) * Math.sign(joint) : 0;
+                        else if (mode === 6) angle = Math.abs(joint) === 1 ? Math.sin(phase * .8 + (joint > 0 ? 0 : 1.8)) * .48 : 0;
+                        else if (joint === 2) angle = Math.sin(phase + y * 3) * move * .10;
+                        if (Math.abs(joint) === 3) {
+                            const wing = Math.sin(phase) * Math.sign(joint) * (mode === 5 ? .72 : mode === 6 ? .34 : .48);
+                            const px = x;
+                            x = Math.cos(wing) * x - Math.sin(wing) * (y - .43);
+                            y = Math.sin(wing) * px + Math.cos(wing) * (y - .43) + .43;
+                        } else {
+                            const py = y - pivot;
+                            y = Math.cos(angle) * py - Math.sin(angle) * z + pivot;
+                            z = Math.sin(angle) * py + Math.cos(angle) * z;
+                        }
+                        if (mode === 1) z += Math.sin(phase) * .16;
+                        if (mode === 2) y -= Math.max(0, Math.sin(phase)) * .035;
+                        if (mode === 5) y += (Math.sin(phase * .55) + 1) * .035;
+                        if (mode === 6) y += Math.sin(phase * .8 + mesh.positions[i * 3] * 2) * .018;
+                        y += Math.abs(Math.sin(phase)) * move * .018;
+                        if (mesh.details[i * 4 + 3] > .5) {
+                            const px = x;
+                            x = c * x - s * z;
+                            z = s * px + c * z;
+                        }
+                    }
+                    vertices[i * 3] = x;
+                    vertices[i * 3 + 1] = y;
+                    vertices[i * 3 + 2] = z;
+                }
+                const v = vertices, indices = mesh.indices;
+                for (let i = 0; i < indices.length; i += 3) {
+                    const ia = indices[i] * 3, ib = indices[i + 1] * 3, ic = indices[i + 2] * 3;
+                    const ex = v[ib] - v[ia], ey = v[ib + 1] - v[ia + 1], ez = v[ib + 2] - v[ia + 2];
+                    const fx = v[ic] - v[ia], fy = v[ic + 1] - v[ia + 1], fz = v[ic + 2] - v[ia + 2];
+                    const px = d[1] * fz - d[2] * fy, py = d[2] * fx - d[0] * fz, pz = d[0] * fy - d[1] * fx;
+                    const det = ex * px + ey * py + ez * pz;
+                    if (Math.abs(det) < 1e-10) continue;
+                    const tx = a[0] - v[ia], ty = a[1] - v[ia + 1], tz = a[2] - v[ia + 2];
+                    const u = (tx * px + ty * py + tz * pz) / det;
+                    if (u < 0 || u > 1) continue;
+                    const qx = ty * ez - tz * ey, qy = tz * ex - tx * ez, qz = tx * ey - ty * ex;
+                    const w = (d[0] * qx + d[1] * qy + d[2] * qz) / det;
+                    if (w < 0 || u + w > 1) continue;
+                    const t = (fx * qx + fy * qy + fz * qz) / det;
+                    if (t < 0 || t >= bestT) continue;
+                    if (mesh.details && mesh.details[indices[i] * 4] >= 4 && o.topTextureCanvas && mesh.uvs) {
+                        // Match the panel shader's alpha discard; transparent HUD margins aren't solid.
+                        const canvas = o.topTextureCanvas;
+                        if (!texturePixels.has(canvas)) {
+                            let pixels = null;
+                            try { pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height); } catch (_) {}
+                            texturePixels.set(canvas, pixels);
+                        }
+                        const pixels = texturePixels.get(canvas);
+                        if (pixels) {
+                            const uv = mesh.uvs;
+                            const i0 = indices[i] * 2, i1 = indices[i + 1] * 2, i2 = indices[i + 2] * 2;
+                            const tu = uv[i0] * (1 - u - w) + uv[i1] * u + uv[i2] * w;
+                            const tv = uv[i0 + 1] * (1 - u - w) + uv[i1 + 1] * u + uv[i2 + 1] * w;
+                            const px = Math.max(0, Math.min(pixels.width - 1, Math.floor(tu * pixels.width)));
+                            const py = Math.max(0, Math.min(pixels.height - 1, Math.floor((1 - tv) * pixels.height)));
+                            if (pixels.data[(py * pixels.width + px) * 4 + 3] < 26) continue;
+                        }
+                    }
+                    if (t >= 0 && t < bestT) { bestT = t; best = o.pickSource; }
+                }
+            }
+            return best;
         }
 
         getScreenPixelsPerTile(x, y, z) {
@@ -2589,6 +2707,9 @@
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             this.drawBackground(snapshot);
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
+            // Retain the transforms/LOD actually drawn, without rebuilding the scene on clicks.
+            this.pickObjects = [];
+            this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
             let opaqueCubeGroups = new Map();
             let transparentCubeGroups = new Map();
             let opaqueTexturedCubeGroups = new Map();
@@ -2600,6 +2721,11 @@
             for (let object of objects) {
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
                 let mesh = this.requestModel(object);
+                if (object.pickSource) {
+                    let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
+                    let pickMesh = mesh || (textured && this.figureMeshes.get(this.getFigureMeshKey(object))) || this.getPrimitiveMesh(object);
+                    this.pickObjects.push({ object, mesh: pickMesh });
+                }
                 if (this.getShadowInfo(object)) {
                     if (mesh) {
                         shadowMeshObjects.push(object);

@@ -665,7 +665,17 @@ function initInput() {
         return (dx * dx + dy * dy) <= (r * r);
     }
 
-    function pickNearestHitCandidate(candidates, worldX, worldY) {
+    function pick3DHitCandidate(candidates, screenX, screenY) {
+        if (!renderer3dInstance || typeof renderer3dInstance.pickRenderedSource !== 'function') return null;
+        let bySource = new Map(candidates.map(candidate => [candidate.ref, candidate]));
+        let source = renderer3dInstance.pickRenderedSource(screenX, screenY, bySource);
+        return bySource.get(source) || null;
+    }
+
+    function pickNearestHitCandidate(candidates, worldX, worldY, screenX = NaN, screenY = NaN) {
+        if (renderDimensionMode === '3d' && Number.isFinite(screenX) && Number.isFinite(screenY)) {
+            return pick3DHitCandidate(candidates, screenX, screenY);
+        }
         let bestPointHit = null;
         let bestPointZ = -Infinity;
         let bestPointD2 = Infinity;
@@ -731,27 +741,34 @@ function initInput() {
             if (!isGameplayTargetVisibleToPlayer(localPlayerId, s.gx, s.gy)) continue;
             out.push({ kind: 'spawner', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
-        let clickGx = Math.floor(worldX / TILE), clickGy = Math.floor(worldY / TILE);
-        if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H && isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy)) {
-            let cell = grid[clickGy][clickGx];
-            if (cell.item && cell.item.energy > 0 && cell.owner !== localPlayerId) {
+        let addEnemyFloorItem = (cell, gx, gy) => {
+            if (cell && cell.item && cell.item.energy > 0 && cell.owner !== localPlayerId && isGameplayTargetVisibleToPlayer(localPlayerId, gx, gy)) {
                 out.push({
                     kind: 'item',
                     ref: cell.item,
-                    x: clickGx * TILE + TILE * 0.5,
-                    y: clickGy * TILE + TILE * 0.5,
+                    x: gx * TILE + TILE * 0.5,
+                    y: gy * TILE + TILE * 0.5,
                     hitShape: { kind: 'rect', hw: 14, hh: 14 },
                     hitRadius: 20,
                     hitZ: 10,
-                    gx: clickGx,
-                    gy: clickGy,
+                    gx,
+                    gy,
                 });
             }
+        };
+        let clickGx = Math.floor(worldX / TILE), clickGy = Math.floor(worldY / TILE);
+        if (renderDimensionMode === '3d') {
+            let bounds = get3DVisibleWorldBounds();
+            for (let gy = bounds.minGy; gy <= bounds.maxGy; gy++) {
+                for (let gx = bounds.minGx; gx <= bounds.maxGx; gx++) addEnemyFloorItem(grid[gy] && grid[gy][gx], gx, gy);
+            }
+        } else if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H) {
+            addEnemyFloorItem(grid[clickGy][clickGx], clickGx, clickGy);
         }
         return out;
     }
 
-    function findNearestOwnedSelectableClickTarget(worldX, worldY) {
+    function findNearestOwnedSelectableClickTarget(worldX, worldY, screenX = NaN, screenY = NaN) {
         let candidates = [];
         for (let u of units) {
             if (u.owner !== localPlayerId || u.dead) continue;
@@ -782,9 +799,7 @@ function initInput() {
             if (!isTileVisible(s.gx, s.gy)) continue;
             candidates.push({ kind: 'entity', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
-        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && isTileVisible(gx, gy)) {
-            let cell = grid[gy][gx];
+        let addOwnedFloorItem = (cell, gx, gy) => {
             if (cell.item && cell.owner === localPlayerId) {
                 candidates.push({
                     kind: 'entity',
@@ -797,6 +812,19 @@ function initInput() {
                     post: () => { cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell; }
                 });
             }
+        };
+        let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
+        if (renderDimensionMode === '3d') {
+            let bounds = get3DVisibleWorldBounds();
+            for (let scanGy = bounds.minGy; scanGy <= bounds.maxGy; scanGy++) {
+                for (let scanGx = bounds.minGx; scanGx <= bounds.maxGx; scanGx++) {
+                    if (!isTileVisible(scanGx, scanGy)) continue;
+                    let cell = grid[scanGy] && grid[scanGy][scanGx];
+                    if (cell) addOwnedFloorItem(cell, scanGx, scanGy);
+                }
+            }
+        } else if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && isTileVisible(gx, gy)) {
+            addOwnedFloorItem(grid[gy][gx], gx, gy);
         }
         for (let m of goldMines) {
             if (!isTileVisible(m.gx, m.gy)) continue;
@@ -808,6 +836,7 @@ function initInput() {
                 hitShape: { kind: 'circle', r: 12 },
                 hitRadius: 20,
                 hitZ: 5,
+                pick3DKind: 'mine',
                 post: () => { m._isGoldMine = true; }
             });
         }
@@ -821,10 +850,11 @@ function initInput() {
                 hitShape: { kind: 'circle', r: 12 },
                 hitRadius: 20,
                 hitZ: 5,
+                pick3DKind: 'mine',
                 post: () => { m._isAstarMine = true; }
             });
         }
-        return pickNearestHitCandidate(candidates, worldX, worldY);
+        return pickNearestHitCandidate(candidates, worldX, worldY, screenX, screenY);
     }
 
     function createCurrentViewPointTester() {
@@ -982,10 +1012,10 @@ function initInput() {
         }
     }
 
-    function findEnemyUnitNear(worldX, worldY) {
+    function findEnemyUnitNear(worldX, worldY, screenX = NaN, screenY = NaN) {
         let cands = collectEnemyClickTargetCandidates(worldX, worldY, true)
             .filter(c => c.kind === 'unit');
-        let best = pickNearestHitCandidate(cands, worldX, worldY);
+        let best = pickNearestHitCandidate(cands, worldX, worldY, screenX, screenY);
         return best ? best.ref : null;
     }
 
@@ -1138,6 +1168,8 @@ function initInput() {
         }
         let rect = gameArea.getBoundingClientRect();
         let world = screenToWorld(e.clientX, e.clientY);
+        let clickScreenX = e.clientX - rect.left;
+        let clickScreenY = e.clientY - rect.top;
 
         if (e.button === 0) { // Left click
             if (selectedBuildItem) {
@@ -1186,7 +1218,7 @@ function initInput() {
             let clickGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(world.x / TILE)));
             let clickGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(world.y / TILE)));
             let clickTileVisible = isGameplayTargetVisibleToPlayer(localPlayerId, clickGx, clickGy);
-            let clickedEnemyUnit = clickTileVisible ? findEnemyUnitNear(world.x, world.y) : null;
+            let clickedEnemyUnit = clickTileVisible ? findEnemyUnitNear(world.x, world.y, clickScreenX, clickScreenY) : null;
             let issuedStructureCommand = false;
             // Set rally for active selected barracks and spawners
             let selSpawners = getActiveEntities().filter(isRallyCapableEntity);
@@ -1202,7 +1234,7 @@ function initInput() {
             if (selTowers.length > 0) {
                 // Pick nearest clicked enemy target (unit/building/item) by center distance.
                 let towerTarget = null;
-                let targetHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                let targetHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y, clickScreenX, clickScreenY);
                 if (targetHit) {
                     if (targetHit.kind === 'unit') towerTarget = { type: 'unit', id: targetHit.ref.id };
                     else if (targetHit.kind === 'tower') towerTarget = { type: 'tower', gx: targetHit.ref.gx, gy: targetHit.ref.gy };
@@ -1243,7 +1275,7 @@ function initInput() {
                     if (!isTileVisible(b.gx, b.gy)) continue;
                     ownBarrackHits.push({ ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
                 }
-                let clickedBarrack = pickNearestHitCandidate(ownBarrackHits, world.x, world.y);
+                let clickedBarrack = pickNearestHitCandidate(ownBarrackHits, world.x, world.y, clickScreenX, clickScreenY);
                 if (clickedBarrack) {
                     queueAction({ action: 'queueUnit', gx: clickedBarrack.ref.gx, gy: clickedBarrack.ref.gy, count: queuePurchaseMultiplier });
                     return;
@@ -1343,7 +1375,7 @@ function initInput() {
                 if (combatUnits.length > 0) {
                     let targetUnit = null, targetBuilding = null;
                     let targetBuildingGx = null, targetBuildingGy = null;
-                    let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y);
+                    let combatHit = pickNearestHitCandidate(collectEnemyClickTargetCandidates(world.x, world.y, true), world.x, world.y, clickScreenX, clickScreenY);
                     if (combatHit) {
                         if (combatHit.kind === 'unit') targetUnit = combatHit.ref;
                         else {
@@ -1461,7 +1493,12 @@ function initInput() {
 
                 if (screenW < 5 && screenH < 5) {
                     // Click select: choose nearest hit among units/buildings/items/mines.
-                    let clickHit = findNearestOwnedSelectableClickTarget(selectionBox.sx, selectionBox.sy);
+                    let clickHit = findNearestOwnedSelectableClickTarget(
+                        selectionBox.sx,
+                        selectionBox.sy,
+                        selectionBoxScreen ? selectionBoxScreen.sx : NaN,
+                        selectionBoxScreen ? selectionBoxScreen.sy : NaN
+                    );
                     if (clickHit && clickHit.post) clickHit.post();
                     let isCtrlLeftClick = !!(e.ctrlKey || e.metaKey || (e.getModifierState && (e.getModifierState('Control') || e.getModifierState('Meta'))));
                     if (isCtrlLeftClick && clickHit) {
