@@ -10,11 +10,58 @@ let _combinedBgDirtyFull = true;
 let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 const _unitBodySprites = new Map();
 let _unitBodySpriteBuildsRemaining = 8;
+const _snakeTrailSprites = new WeakMap();
+
+function drawCachedSnakeBody(g, unit, stroke, lineWidth) {
+    let history = unit.snakeHistory;
+    if (!history || !history.length || g.__snakeHeadOnly) return false;
+    // The history changes every third tick, while the head interpolates every
+    // frame. Cache the long trail and draw just its short connection live.
+    let scale = Math.max(1, Math.min(3, Math.ceil(camera.zoom * (window.devicePixelRatio || 1))));
+    let cached = _snakeTrailSprites.get(unit);
+    if (!cached || cached.first !== history[0] || cached.last !== history[history.length - 1]
+        || cached.length !== history.length || cached.radius !== unit.r || cached.stroke !== stroke || cached.color !== unit.color || cached.scale !== scale) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let p of history) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+        let pad = unit.r + 3;
+        minX = Math.floor(minX - pad); minY = Math.floor(minY - pad);
+        let width = Math.ceil(maxX + pad - minX), height = Math.ceil(maxY + pad - minY);
+        // Teleports or unusual modded trails keep the exact vector fallback.
+        if (width * scale > 1024 || height * scale > 1024) return false;
+        let canvas = cached ? cached.canvas : document.createElement('canvas');
+        canvas.width = width * scale; canvas.height = height * scale;
+        let c = canvas.getContext('2d');
+        c.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
+        c.lineCap = 'round'; c.lineJoin = 'round';
+        c.beginPath(); c.moveTo(history[0].x, history[0].y);
+        for (let i = 1; i < history.length; i++) c.lineTo(history[i].x, history[i].y);
+        c.lineWidth = unit.r * 2 + 3; c.strokeStyle = stroke; c.stroke();
+        c.lineWidth = unit.r * 2; c.strokeStyle = unit.color; c.stroke();
+        cached = { canvas, minX, minY, width, height, first: history[0], last: history[history.length - 1],
+            length: history.length, radius: unit.r, stroke, color: unit.color, scale };
+        _snakeTrailSprites.set(unit, cached);
+    }
+    g.save(); g.lineCap = 'round'; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(unit.x, unit.y); g.lineTo(history[0].x, history[0].y);
+    g.lineWidth = unit.r * 2 + 3; g.strokeStyle = stroke; g.stroke();
+    let immediate = g.__drawImagesImmediately;
+    g.__drawImagesImmediately = true;
+    g.drawImage(cached.canvas, cached.minX, cached.minY, cached.width, cached.height);
+    g.__drawImagesImmediately = immediate;
+    g.lineWidth = unit.r * 2; g.strokeStyle = unit.color; g.stroke();
+    g.restore();
+    let headOnly = g.__snakeHeadOnly;
+    g.__snakeHeadOnly = true;
+    drawCachedUnitBody(g, unit, stroke, lineWidth);
+    g.__snakeHeadOnly = headOnly;
+    return true;
+}
 
 function drawCachedUnitBody(g, unit, stroke, lineWidth) {
+    if (unit.isSnake && !g.__drawImagesImmediately && drawCachedSnakeBody(g, unit, stroke, lineWidth)) return;
     // Keep long snake trails and close-up geometry live. Cache only the body:
     // health, selection, combat effects and worker status remain current.
-    if (unit.isSnake || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
+    if ((unit.isSnake && !g.__snakeHeadOnly) || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
         drawUnitBodyGeometry(g, unit, stroke, lineWidth);
         return;
     }
@@ -26,6 +73,7 @@ function drawCachedUnitBody(g, unit, stroke, lineWidth) {
         let image = document.createElement('canvas');
         image.width = image.height = radius * 4;
         let c = image.getContext('2d');
+        c.__snakeHeadOnly = !!g.__snakeHeadOnly;
         c.setTransform(2, 0, 0, 2, radius * 2 - unit.x * 2, radius * 2 - unit.y * 2);
         drawUnitBodyGeometry(c, unit, stroke, lineWidth);
         sprite = { image, radius };
@@ -1686,6 +1734,10 @@ function draw() {
     for (let s of collectorSpawners) { if (s.markedForSalvage) { let px = s.gx * TILE, py = s.gy * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
     for (let y = minGy; y <= maxGy; y++) for (let x = minGx; x <= maxGx; x++) { let c = grid[y][x]; if (c.item && c.item.markedForSalvage) { let px = x * TILE, py = y * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
 
+    // Keep the presentation overlay above all queued unit/status sprites.
+    flushFrameDrawImageQueue();
+    beginFrameDrawImageQueue();
+
     // Selection box
     if (isBoxSelecting && selectionBox) {
         ctx.strokeStyle = 'rgba(0,255,0,0.8)'; ctx.lineWidth = 1;
@@ -1702,7 +1754,6 @@ function draw() {
     let overlayViewMaxX = camera.x + vw;
     let overlayViewMaxY = camera.y + vh;
     ctx.imageSmoothingEnabled = false;
-    let selectedEntityRects = [];
     let stationaryBuildingRallySegments = [];
     let stationaryBuildingRallyMarkers = [];
     let dynamicBuildingRallySegments = [];
@@ -1715,11 +1766,6 @@ function draw() {
         let ex = ent.x || (ent.gx * TILE + 16);
         let ey = ent.y || (ent.gy * TILE + 16);
         let entOwnerColor = get2DRenderOwnerColor(ent.owner);
-        let entVisible = _overlayBoundsVisible(ex, ey, ex, ey, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 64);
-
-        if (entVisible && showSelectionOutlinesForBuildings()) {
-            selectedEntityRects.push([ex - 18, ey - 18, 36, 36, get2DRenderOwnerColor(ent.owner)]);
-        }
 
         if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type) && ent.rallyX !== null) {
             let rx = ent.rallyX, ry = ent.rallyY;
@@ -1765,54 +1811,8 @@ function draw() {
         }
     }
 
-    if (selectedEntityRects.length > 0) {
-        for (let rect of selectedEntityRects) {
-            let rectSprite = _getOverlayRectOutlineSprite(36, 36, selectionOutlineType, rect[4] || '#9aa', 1);
-            ctx.drawImage(rectSprite.canvas, Math.round(rect[0] - rectSprite.offsetX), Math.round(rect[1] - rectSprite.offsetY), rectSprite.drawW, rectSprite.drawH);
-        }
-    }
-
-    if (stationaryBuildingRallyMarkers.length > 0) {
-        if (showRallyLinesForBuildings()) {
-            for (let seg of stationaryBuildingRallySegments) {
-                let color = seg[4] || '#9aa';
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, color, 1);
-                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, color, 1);
-            }
-            for (let pos of stationaryBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
-                let markerSprite = _getOverlayMarkerSprite('rally_arrow', color);
-                ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
-            }
-        } else {
-            for (let pos of stationaryBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
-                let markerSprite = _getOverlayMarkerSprite('plus', color);
-                ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
-            }
-        }
-    }
-
-    if (dynamicBuildingRallyMarkers.length > 0) {
-        if (showRallyLinesForBuildings()) {
-            for (let seg of dynamicBuildingRallySegments) {
-                let color = seg[4] || '#9aa';
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, color, 1);
-                _drawOverlayLineSprite(ctx, seg[2], seg[3], seg[2], seg[3] - 12, rallyLineType, color, 1);
-            }
-            for (let pos of dynamicBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
-                let markerSprite = _getOverlayMarkerSprite('rally_arrow', color);
-                ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round((ry - 8) - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
-            }
-        } else {
-            for (let pos of dynamicBuildingRallyMarkers) {
-                let rx = pos[0], ry = pos[1], color = pos[2] || '#9aa';
-                let markerSprite = _getOverlayMarkerSprite('plus', color);
-                ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
-            }
-        }
-    }
+    drawBuildingRallies2D(ctx, stationaryBuildingRallySegments.concat(dynamicBuildingRallySegments),
+        stationaryBuildingRallyMarkers.concat(dynamicBuildingRallyMarkers));
 
     // Range overlays: draw the included area tiles directly.
     if (renderRangeMode !== RENDER_RANGE_NONE) {
@@ -1835,33 +1835,15 @@ function draw() {
         }
     }
 
-    if (showSelectionOutlinesForUnits() && activeSelectedUnits.length > 0) {
-        let spriteByRadius = new Map();
-        for (let u of activeSelectedUnits) {
-            if (!u || u.dead) continue;
-            let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
-            let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-            let rr = (Number(u.r) || 8) + 4;
-            if (!_overlayBoundsVisible(ux - rr, uy - rr, ux + rr, uy + rr, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 6)) continue;
-            let rKey = Math.max(2, Math.round(rr));
-            let ringColor = get2DRenderOwnerColor(u.owner);
-            let spriteKey = `${rKey}|${ringColor}`;
-            let ring = spriteByRadius.get(spriteKey);
-            if (!ring) {
-                ring = _getUnitSelectionRingSprite(rKey, selectionOutlineType, ringColor);
-                spriteByRadius.set(spriteKey, ring);
-            }
-            let dx = Math.round(ux - ring.half);
-            let dy = Math.round(uy - ring.half);
-            ctx.drawImage(ring.canvas, dx, dy, ring.drawW, ring.drawH);
-        }
-    }
+    drawSelectionContours2D(ctx, getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get2DRenderOwnerColor));
 
     // Unit waypoints (move/attack-move destinations for selected units)
     let moveSegments = [];
     let attackMoveSegments = [];
     let moveMarkers = new Map();
     let attackMoveMarkers = new Map();
+    let attackTargetSegments = new Map();
+    let attackTargetMarkers = new Map();
 
     for (let u of activeSelectedUnits) {
         if (u.dead) continue;
@@ -1901,11 +1883,11 @@ function draw() {
         // Attack target indicator
         let drawAttackTarget = (tx, ty, lineColor, markerColor) => {
             if (showRallyLinesForUnits()) {
-                ctx.strokeStyle = lineColor;
-                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(tx, ty); ctx.stroke();
+                let group = attackTargetSegments.get(lineColor);
+                if (!group) attackTargetSegments.set(lineColor, group = []);
+                group.push([ux, uy, tx, ty]);
             } else {
-                let markerSprite = _getOverlayMarkerSprite('plus', markerColor);
-                ctx.drawImage(markerSprite.canvas, Math.round(tx - markerSprite.offsetX), Math.round(ty - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
+                attackTargetMarkers.set(tx + '|' + ty + '|' + markerColor, [tx, ty, markerColor]);
             }
         };
         if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
@@ -1931,24 +1913,14 @@ function draw() {
         }
     }
 
-    if (showRallyLinesForUnits() && (moveSegments.length > 0 || attackMoveSegments.length > 0)) {
-        let maxWaypointLines = 320;
-
-        if (moveSegments.length > 0) {
-            let moveStep = Math.max(1, Math.ceil(moveSegments.length / maxWaypointLines));
-            for (let i = 0; i < moveSegments.length; i += moveStep) {
-                let seg = moveSegments[i];
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, 'rgba(100,255,100,0.5)', 1);
-            }
-        }
-
-        if (attackMoveSegments.length > 0) {
-            let attackStep = Math.max(1, Math.ceil(attackMoveSegments.length / maxWaypointLines));
-            for (let i = 0; i < attackMoveSegments.length; i += attackStep) {
-                let seg = attackMoveSegments[i];
-                _drawOverlayLineSprite(ctx, seg[0], seg[1], seg[2], seg[3], rallyLineType, 'rgba(255,100,100,0.5)', 1);
-            }
-        }
+    if (showRallyLinesForUnits()) {
+        drawRallySegments2D(ctx, moveSegments, 'rgba(100,255,100,0.5)', rallyLineType === OVERLAY_LINE_DOTTED);
+        drawRallySegments2D(ctx, attackMoveSegments, 'rgba(255,100,100,0.5)', rallyLineType === OVERLAY_LINE_DOTTED);
+    }
+    for (let [color, segments] of attackTargetSegments) drawRallySegments2D(ctx, segments, color, false);
+    for (let [tx, ty, color] of attackTargetMarkers.values()) {
+        let sprite = _getOverlayMarkerSprite('plus', color);
+        ctx.drawImage(sprite.canvas, Math.round(tx - sprite.offsetX), Math.round(ty - sprite.offsetY), sprite.drawW, sprite.drawH);
     }
 
     let drawMarkers = (markers, color) => {

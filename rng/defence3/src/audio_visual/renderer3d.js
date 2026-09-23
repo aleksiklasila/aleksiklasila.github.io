@@ -48,8 +48,15 @@
         return r / (256 * 256 * 256) + g / (256 * 256) + b / 256 + a;
     }
 
+    const sanitizedModelKeys = new Map();
     function sanitizeModelKey(key) {
-        return String(key || 'cube').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'cube';
+        let source = String(key || 'cube');
+        let cached = sanitizedModelKeys.get(source);
+        if (cached) return cached;
+        let normalized = source.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'cube';
+        if (sanitizedModelKeys.size >= 256) sanitizedModelKeys.clear();
+        sanitizedModelKeys.set(source, normalized);
+        return normalized;
     }
 
     const rgbColorCache = new Map();
@@ -2009,6 +2016,124 @@
             return texture;
         }
 
+        drawGroundOverlays(overlays) {
+            if (!overlays) return;
+            let groups = overlays.selectionContours || [], lines = overlays.lines || [];
+            let count = lines.length;
+            for (let group of groups) for (let path of group.paths) count += path.length;
+            if (!count) return;
+            let gl = this.gl;
+            if (!this.groundLineProgram) {
+                // Screen-width quads rather than driver-dependent GL line widths.
+                // Depth testing against the scene hides ground outlines behind models.
+                this.groundLineProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    layout(location=0) in vec4 aEnds;
+                    layout(location=1) in vec4 aColor;
+                    layout(location=2) in vec2 aStyle;
+                    uniform mat4 uViewProjection;
+                    uniform vec2 uViewport;
+                    out vec4 vColor;
+                    out float vAlong;
+                    out float vAcross;
+                    flat out float vDashed;
+                    void main() {
+                        vec4 a = uViewProjection * vec4(aEnds.x, .05, aEnds.y, 1.);
+                        vec4 b = uViewProjection * vec4(aEnds.z, .05, aEnds.w, 1.);
+                        vec2 delta = (b.xy / b.w - a.xy / a.w) * uViewport * .5;
+                        float lengthPx = max(length(delta), .001);
+                        vec2 normal = vec2(-delta.y, delta.x) / lengthPx;
+                        float end = float(gl_VertexID / 2);
+                        float side = float(gl_VertexID % 2) * 2. - 1.;
+                        vec4 p = mix(a, b, end);
+                        p.xy += normal * side * 1.25 * 2. / uViewport * p.w;
+                        gl_Position = p;
+                        vColor = aColor; vAcross = side;
+                        vAlong = aStyle.y + end * lengthPx; vDashed = aStyle.x;
+                    }
+                `, `#version 300 es
+                    precision highp float;
+                    in vec4 vColor;
+                    in float vAlong;
+                    in float vAcross;
+                    flat in float vDashed;
+                    layout(location=0) out vec4 outColor;
+                    void main() {
+                        if (vDashed > .5 && mod(vAlong, 9.) > 5.) discard;
+                        float coverage = 1. - smoothstep(.55, 1., abs(vAcross));
+                        outColor = vec4(vColor.rgb, vColor.a * coverage);
+                    }
+                `);
+                this.groundLineVao = gl.createVertexArray();
+                this.groundLineBuffer = gl.createBuffer();
+                this.groundLineColors = new Map();
+                this.groundLineUniforms = {
+                    viewProjection: gl.getUniformLocation(this.groundLineProgram, 'uViewProjection'),
+                    viewport: gl.getUniformLocation(this.groundLineProgram, 'uViewport')
+                };
+                gl.bindVertexArray(this.groundLineVao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);
+                for (let [location, size, offset] of [[0,4,0], [1,4,16], [2,2,32]]) {
+                    gl.enableVertexAttribArray(location);
+                    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 40, offset);
+                    gl.vertexAttribDivisor(location, 1);
+                }
+            }
+            if (!this.groundLineData || this.groundLineData.length < count * 10) {
+                this.groundLineData = new Float32Array(Math.max(1024, count * 20));
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, this.groundLineData.byteLength, gl.DYNAMIC_DRAW);
+            }
+            let data = this.groundLineData, offset = 0;
+            let add = (x1, z1, x2, z2, color, dashed, phase) => {
+                let rgba = this.groundLineColors.get(color);
+                if (!rgba) {
+                    let match = /^rgba?\(([^)]+)\)$/.exec(color);
+                    if (match) {
+                        let values = match[1].split(',').map(Number);
+                        rgba = [values[0]/255, values[1]/255, values[2]/255, values.length > 3 ? values[3] : 1];
+                    } else rgba = [...hexToRgb(color), 1];
+                    this.groundLineColors.set(color, rgba);
+                }
+                data[offset++] = x1; data[offset++] = z1; data[offset++] = x2; data[offset++] = z2;
+                for (let value of rgba) data[offset++] = value;
+                data[offset++] = dashed ? 1 : 0; data[offset++] = phase;
+            };
+            let tile = overlays.worldTileSize || 32;
+            for (let group of groups) for (let path of group.paths) {
+                let phase = 0;
+                let firstProjected = overlays.selectionDashed && this.projectWorldToScreen(path[0][0]/tile, .05, path[0][1]/tile);
+                let pa = firstProjected;
+                for (let i = 0; i < path.length; i++) {
+                    let a = path[i], b = path[(i + 1) % path.length];
+                    add(a[0]/tile, a[1]/tile, b[0]/tile, b[1]/tile, group.color, overlays.selectionDashed, phase);
+                    if (overlays.selectionDashed) {
+                        let pb = i + 1 === path.length ? firstProjected : this.projectWorldToScreen(b[0]/tile, .05, b[1]/tile);
+                        if (pa && pb) phase += Math.hypot(pb.x-pa.x, pb.y-pa.y);
+                        pa = pb;
+                    }
+                }
+            }
+            for (let line of lines) add(line.x1, line.z1, line.x2, line.z2, line.color, line.dashed, 0);
+            gl.useProgram(this.groundLineProgram);
+            gl.bindVertexArray(this.groundLineVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, offset));
+            gl.uniformMatrix4fv(this.groundLineUniforms.viewProjection, false, this.tmpViewProjection);
+            gl.uniform2f(this.groundLineUniforms.viewport, this.cssWidth, this.cssHeight);
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            // Preserve the packed scene depth attachment for other overlays.
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, offset / 10);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            overlays.groundLinesRendered = true;
+        }
+
         drawOverlay(overlays, ctx) {
             if (!ctx || !overlays) return;
             ctx.save();
@@ -2130,7 +2255,7 @@
             }
 
             let lineGroups = new Map();
-            for (let line of overlays.lines || []) {
+            for (let line of (overlays.groundLinesRendered ? [] : overlays.lines || [])) {
                 let p1 = projectGround(line.x1, line.z1);
                 let p2 = projectGround(line.x2, line.z2);
                 if (!p1 || !p2) continue;
@@ -2802,6 +2927,7 @@
                 gl.disable(gl.BLEND);
             }
             let overlays = snapshot.overlays || null;
+            this.drawGroundOverlays(overlays);
             let needsOverlayDepth = !!(overlays && ((overlays.bars && overlays.bars.length > 0) || (overlays.texts && overlays.texts.length > 0)));
             this.resolveScene();
             if (needsOverlayDepth) this.captureOverlayDepthFrame();

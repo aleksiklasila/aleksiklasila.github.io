@@ -331,15 +331,33 @@ function get3DTopTextureCanvas(key, drawFn) {
 
 const renderer3dExact2DTextureCache = new Map();
 const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1024;
+let renderer3dExactTextureFrame = 0;
 let renderer3dExactTextureBuildsRemaining = 12;
 let renderer3dExactTextureTimeRemaining = 2;
 let renderer3dExactUnitTextureBuildsRemaining = 12;
 let renderer3dExactUnitTextureTimeRemaining = 2;
 
 function cache3DExact2DTexture(signature, entry) {
+    entry.lastUsedFrame = renderer3dExactTextureFrame;
     renderer3dExact2DTextureCache.set(signature, entry);
-    if (renderer3dExact2DTextureCache.size > RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) {
-        renderer3dExact2DTextureCache.delete(renderer3dExact2DTextureCache.keys().next().value);
+}
+
+function getCached3DExact2DTexture(signature) {
+    let entry = renderer3dExact2DTextureCache.get(signature);
+    if (entry) entry.lastUsedFrame = renderer3dExactTextureFrame;
+    return entry;
+}
+
+function begin3DTextureFrame() {
+    renderer3dExactTextureFrame++;
+    // Match the GPU cache: the visible working set may exceed the idle budget.
+    // Evict only unused entries, once per frame, rather than evicting panels
+    // that an earlier entity just used and rebuilding them on the next frame.
+    if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) return;
+    for (let [key, entry] of renderer3dExact2DTextureCache) {
+        if (entry.lastUsedFrame >= renderer3dExactTextureFrame - 2) continue;
+        renderer3dExact2DTextureCache.delete(key);
+        if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) break;
     }
 }
 
@@ -348,14 +366,17 @@ function quantize3DExactRatio(value, maximum) {
     return Math.round(Math.max(0, Math.min(1, (Number(value) || 0) / maximum)) * RENDERER3D_TOP_TEXTURE_SIZE);
 }
 
-function get3DExact2DVisualSignature(entity) {
+function get3DExact2DVisualSignature(entity, isUnit = false) {
     if (!entity) return '';
     let researchTask = entity.researchTask || null;
     let maxEnergy = Number(entity.maxEnergy)
         || Number(entity.preComputed && entity.preComputed.maxEnergy)
         || Number(entity.preComputedEffective && entity.preComputedEffective.maxEnergy)
         || 0;
-    let attackTarget = entity.attackTarget || null;
+    // Unit.draw only uses the target/style while the attack flash is active.
+    // A remembered target moving elsewhere must not invalidate an idle panel.
+    let activeAttack = !isUnit || Number(entity.attackFlash) > 0;
+    let attackTarget = activeAttack ? entity.attackTarget || null : null;
     return [
         entity.type || '', entity.unitType || '', Number(entity.owner) || 0,
         entity.vis || '', entity.color || '', Math.round((Number(entity.r) || 0) * 10),
@@ -372,7 +393,7 @@ function get3DExact2DVisualSignature(entity) {
         entity.carryingValue > 0 ? 1 : 0, entity.workerState || '',
         entity.burning > 0 ? 1 : 0, entity.poisoned > 0 ? 1 : 0,
         entity.frozen > 0 ? 1 : 0, entity.wet > 0 ? 1 : 0,
-        Number(entity.attackFlash) || 0, entity.attackStyle || '',
+        Number(entity.attackFlash) || 0, activeAttack ? entity.attackStyle || '' : '',
         attackTarget ? Math.round((Number(attackTarget.x) - Number(entity.x)) / 4) : 0,
         attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0,
         Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0,
@@ -415,13 +436,8 @@ function get3DExact2DCapture(entity, x, y, isUnit) {
 // includes its cached level sprite, progress bars, status colors and outlines.
 function get3DExact2DTexture(entity, useUnitBudget = false) {
     if (!entity || typeof entity.draw !== 'function') return null;
-    let signature = get3DExact2DVisualSignature(entity);
-    let entry = renderer3dExact2DTextureCache.get(signature);
-    if (entry) {
-        // Keep frequently used sprites resident when other entities enter view.
-        renderer3dExact2DTextureCache.delete(signature);
-        renderer3dExact2DTextureCache.set(signature, entry);
-    }
+    let signature = get3DExact2DVisualSignature(entity, useUnitBudget);
+    let entry = getCached3DExact2DTexture(signature);
     if (!entry) {
         // A camera jump must not rasterize hundreds of status panels at once.
         // Callers already have a shared type/owner sprite as a fallback.
@@ -460,12 +476,16 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
     g.save();
     g.__drawImagesImmediately = true;
+    // The snake's moving tail is already rendered as world-space segments.
+    // It must not be rasterized into (or stale inside) the shared head panel.
+    g.__snakeHeadOnly = !!(useUnitBudget && entity.isSnake);
     g.setTransform(
         scale, 0, 0, scale,
         entry.canvas.width * 0.5 - capture.centerX * scale,
         entry.canvas.height * 0.5 - capture.centerY * scale
     );
     entity.draw(g);
+    g.__snakeHeadOnly = false;
     g.restore();
     g.__drawImagesImmediately = false;
     entry.canvas._textureVersion = 1;
@@ -478,7 +498,7 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
 function get3DExact2DFloorTexture(item, owner) {
     if (!item) return null;
     let signature = `floor|${Number(owner) || 0}|${get3DExact2DVisualSignature(item)}|${_getFloorItemEnergyBucket(item)}`;
-    let entry = renderer3dExact2DTextureCache.get(signature);
+    let entry = getCached3DExact2DTexture(signature);
     if (entry && entry.canvas._textureVersion) return entry.canvas;
     if (!entry) {
         let canvas = document.createElement('canvas');
@@ -508,7 +528,7 @@ function get3DExact2DMineTexture(kind, amount) {
     let active = Number(amount) > 0;
     let label = showGoldMineAmountText ? formatBigNumber(Math.max(0, Number(amount) || 0), 0) : '';
     let signature = `mine|${kind}|${active ? 1 : 0}|${label}`;
-    let entry = renderer3dExact2DTextureCache.get(signature);
+    let entry = getCached3DExact2DTexture(signature);
     if (entry && entry.canvas._textureVersion) return entry.canvas;
     if (!entry) {
         let canvas = document.createElement('canvas');
@@ -879,69 +899,23 @@ function build3DOverlayData(bounds, alpha) {
     let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
     let activeSelectedEntities = getActiveEntities();
     let activeSelectedUnits = getActiveUnits();
-    let bakeHudIntoTopTexture = true;
+    overlays.selectionContours = getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
+    overlays.selectionDashed = selectionOutlineType === OVERLAY_LINE_DOTTED;
+    overlays.worldTileSize = TILE;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
-    let pushMarker = (x, y, kind, color) => overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
-    let pushRing = (x, y, radiusPx, strokeColor, fillColor = null, dashed = false) => overlays.rings.push({ x: x / TILE, z: y / TILE, radius: radiusPx / TILE, strokeColor, fillColor, dashed });
+    let markerKeys = new Set();
+    let pushMarker = (x, y, kind, color) => {
+        let key = `${x}|${y}|${kind}|${color}`;
+        if (markerKeys.has(key)) return;
+        markerKeys.add(key);
+        overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
+    };
     let pushAreaTiles = (wx, wy, rangeArea, strokeColor, fillColor = null, dashed = false) => {
         let cells = getAreaRangeCellsAtWorld(wx, wy, rangeArea);
         for (let i = 0; i < cells.length; i++) {
             let cell = cells[i];
             if (!cell) continue;
             overlays.areaTiles.push({ x: cell.x, y: cell.y, strokeColor, fillColor, dashed });
-        }
-    };
-    let pushRect = (x, y, halfWpx, halfHpx, color, dashed = false) => overlays.rects.push({ x: x / TILE, z: y / TILE, halfWidth: halfWpx / TILE, halfHeight: halfHpx / TILE, color, dashed });
-    let pushBar = (x, y, lift, offsetY, width, height, pct, bgColor, fillColor) => {
-        if (bakeHudIntoTopTexture) return;
-        overlays.bars.push({ x: x / TILE, z: y / TILE, lift, offsetY, width, height, pct, bgColor, fillColor });
-    };
-    let pushText = (x, y, lift, offsetY, text, color = '#ddd', strokeColor = 'rgba(0,0,0,0.95)', font = '700 11px Segoe UI, Arial, sans-serif') => {
-        if (bakeHudIntoTopTexture) return;
-        if (!text) return;
-        overlays.texts.push({ x: x / TILE, z: y / TILE, lift, offsetY, text, color, strokeColor, font });
-    };
-    let pushBuildingStatus = (entity, worldX, worldY, energyBarOffsetY, energyBarWidth, energyBarHeight, levelLift, levelOffsetY, extraBars = []) => {
-        let maxEnergy = Number(entity && entity.maxEnergy) || 0;
-        let energy = Math.max(0, Math.min(Number(entity && entity.energy) || 0, maxEnergy));
-        let isProgress = !!(entity && (entity.underConstruction || entity.isUpgrading));
-
-        // Don't show upgrading progress if at max level
-        if (isProgress && entity) {
-            let baseLevel = getThingBaseLevel(entity);
-            let maxLevel = getThingResearchedMaxLevel(entity);
-            if (baseLevel >= maxLevel) {
-                isProgress = false;
-            }
-        }
-
-        let manualStacks = Number(entity && entity.manualStacks);
-        let stackedStacks = Number(entity && entity.stacks);
-        let hasStackQueue = (Number.isFinite(manualStacks) && Number.isFinite(stackedStacks))
-            ? (manualStacks > stackedStacks)
-            : (!!entity && getThingManualStacks(entity) > getThingStackedStacks(entity));
-
-        // Don't show stacking progress if next stack would exceed max level
-        if (hasStackQueue && entity) {
-            let nextStackLevel = stackCountToLevel(getThingStackedStacks(entity) + 1);
-            let maxLevel = getThingResearchedMaxLevel(entity);
-            if (nextStackLevel > maxLevel) {
-                hasStackQueue = false;
-            }
-        }
-
-        if (hasStackQueue) {
-            pushBar(worldX, worldY, 0.72, energyBarOffsetY - energyBarHeight - 1, energyBarWidth, energyBarHeight, getThingStackingProgressRatio(entity), '#11291c', '#2fd27f');
-        }
-        if (maxEnergy > 0 && (isProgress || hasStackQueue || energy < maxEnergy)) {
-            pushBar(worldX, worldY, 0.72, energyBarOffsetY, energyBarWidth, energyBarHeight, maxEnergy > 0 ? energy / maxEnergy : 0, isProgress ? '#333' : '#600', isProgress ? '#fa0' : '#0f0');
-        }
-        for (let bar of extraBars) {
-            if (!bar || !Number.isFinite(bar.pct) || bar.pct <= 0) continue;
-            pushBar(worldX, worldY, 0.72, bar.offsetY, bar.width, bar.height, bar.pct, bar.bgColor, bar.fillColor);
-        }
-        if (entity && entity.textCanvas && shouldShowBuildingLevels()) {
-            pushText(worldX, worldY, levelLift, levelOffsetY, getLevelLabelText(entity));
         }
     };
     let pushSalvageCross = (worldX, worldY) => {
@@ -953,7 +927,6 @@ function build3DOverlayData(bounds, alpha) {
         if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
         let ey = ent.y || (ent.gy * TILE + TILE * 0.5);
-        if (showSelectionOutlinesForBuildings()) pushRect(ex, ey, 18, 18, get3DRenderOwnerColor(ent.owner), selectionOutlineType === OVERLAY_LINE_DOTTED);
 
         if (['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research'].includes(ent.type)) {
             let rallyTarget = getSpawnerRallyTargetWorld(ent);
@@ -974,15 +947,6 @@ function build3DOverlayData(bounds, alpha) {
         if ((renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) && ent instanceof Tower) {
             let visArea = getEntityVisibilityRangeArea(ent);
             if (Number.isFinite(visArea) && visArea > 0) pushAreaTiles(ex, ey, visArea, 'rgba(120,255,120,0.55)', 'rgba(120,255,120,0.18)');
-        }
-    }
-
-    if (showSelectionOutlinesForUnits()) {
-        for (let u of activeSelectedUnits) {
-            if (!u || u.dead) continue;
-            let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
-            let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-            pushRing(ux, uy, (Number(u.r) || 8) + 4, get3DRenderOwnerColor(u.owner), null, selectionOutlineType === OVERLAY_LINE_DOTTED);
         }
     }
 
@@ -1053,65 +1017,6 @@ function build3DOverlayData(bounds, alpha) {
             if (!cell || !cell.item) continue;
             if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
             if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
-        }
-    }
-
-    for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
-        let gridRow = grid[y];
-        let visRow = visibilityGrid[y];
-        if (!gridRow) continue;
-        for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
-            let cell = gridRow[x];
-            if (!cell || !cell.item) continue;
-            if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
-            pushBuildingStatus(cell.item, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 6, TILE - 8, 3, 0.3, -12);
-        }
-    }
-
-    for (let t of towers) {
-        if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
-        let isUpg = !!(t.underConstruction || t.isUpgrading);
-        pushBuildingStatus(t, t.x, t.y, isUpg ? 10 : 13, isUpg ? 20 : 24, 3, 0.92, -18);
-    }
-
-    for (let b of barracks) {
-        if (b.gx < bounds.minGx || b.gx > bounds.maxGx || b.gy < bounds.minGy || b.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
-        let extraBars = [];
-        if (!b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
-            extraBars.push({ offsetY: 8, width: 24, height: 3, pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
-        }
-        pushBuildingStatus(b, b.x, b.y, b.underConstruction ? 10 : 13, 24, 3, 0.92, -18, extraBars);
-    }
-
-    for (let s of collectorSpawners) {
-        if (s.gx < bounds.minGx || s.gx > bounds.maxGx || s.gy < bounds.minGy || s.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
-        let extraBars = [];
-        if (!s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
-            extraBars.push({ offsetY: 5, width: 24, height: 3, pct: s.spawnTimer / s.spawnCooldown, bgColor: '#333', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
-        }
-        if (!s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
-            let pct = Math.max(0, Math.min(1, (s.researchTask.workDone || 0) / s.researchTask.workRequired));
-            extraBars.push({ offsetY: 1, width: 24, height: 3, pct, bgColor: '#333', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
-        }
-        pushBuildingStatus(s, s.x, s.y, s.underConstruction ? 9 : 10, s.underConstruction ? 24 : 20, 3, 0.88, -18, extraBars);
-    }
-
-    for (let u of units) {
-        if (!u || u.dead) continue;
-        let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
-        let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-        let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
-        if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
-        let maxEnergy = Number(u.preComputed && u.preComputed.maxEnergy);
-        if (u.energy < maxEnergy) {
-            pushBar(ux, uy, 0.72, -2, (Number(u.r) || 8) * 2 + 4, 2, Math.max(0, u.energy / Math.max(1, maxEnergy)), '#600', '#0f0');
-        }
-        if (shouldShowUnitLevels()) {
-            pushText(ux, uy, 0.84, -16, getUnitLevelLabelText(u));
         }
     }
 
@@ -1421,6 +1326,7 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
 }
 
 function build3DFrameData() {
+    begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
     renderer3dExactTextureTimeRemaining = 2;
     renderer3dExactUnitTextureBuildsRemaining = 12;
@@ -1493,7 +1399,7 @@ function build3DFrameData() {
         let raw = (visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0;
         return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     };
-    let pushSnakeRenderObjects = (target, unit, headX, headY, footprint, unitStatus) => {
+    let pushSnakeRenderObjects = (target, unit, headX, headY, footprint) => {
         let points = getSnakePathPoints(unit, headX, headY);
         let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
         for (let i = points.length - 1; i >= 1; i--) {
@@ -1523,7 +1429,8 @@ function build3DFrameData() {
             });
         }
         let snake2DTexture = get3DExact2DTexture(unit, true);
-        let snakeTextureKey = `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
+        let unitStatus = snake2DTexture ? null : get3DUnitTextureStatus(unit);
+        let snakeTextureKey = snake2DTexture ? snake2DTexture._renderer3DExactKey : `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
         push3DRenderObject(target, {
             modelKey: `unit_${unit.unitType || 'snake'}`,
             x: headX / TILE,
@@ -1622,8 +1529,8 @@ function build3DFrameData() {
             let fxLevel = fxSoundRow ? fxSoundRow[x] || 0 : 0;
             let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
             let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-            let itemStatus = get3DBuildingTextureStatus(cell.item);
             let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
+            let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
             push3DRenderObject(objects, {
                 modelKey: `item_${cell.item.type || 'floor'}`,
                 x: x + 0.5 + reactiveOffsetX * audioMove,
@@ -1653,8 +1560,8 @@ function build3DFrameData() {
         let fxLevel = fxSoundRow ? fxSoundRow[t.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        let towerStatus = get3DBuildingTextureStatus(t);
         let tower2DTexture = get3DExact2DTexture(t);
+        let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
             x: t.x / TILE + reactiveOffsetX * audioMove,
@@ -1682,16 +1589,16 @@ function build3DFrameData() {
         let fxLevel = fxSoundRow ? fxSoundRow[s.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        let spawnerExtraBars = [];
-        if (!s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
+        let spawner2DTexture = get3DExact2DTexture(s);
+        let spawnerExtraBars = spawner2DTexture ? null : [];
+        if (!spawner2DTexture && !s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
             spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: '#333', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
-        if (!s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
+        if (!spawner2DTexture && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
             let pct = Math.max(0, Math.min(1, (s.researchTask.workDone || 0) / s.researchTask.workRequired));
             spawnerExtraBars.push({ pct, bgColor: '#333', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
         }
-        let spawnerStatus = get3DBuildingTextureStatus(s, spawnerExtraBars);
-        let spawner2DTexture = get3DExact2DTexture(s);
+        let spawnerStatus = spawner2DTexture ? null : get3DBuildingTextureStatus(s, spawnerExtraBars);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
             x: s.x / TILE + reactiveOffsetX * audioMove,
@@ -1727,12 +1634,12 @@ function build3DFrameData() {
         let fxLevel = fxSoundRow ? fxSoundRow[b.gx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
-        let barrackExtraBars = [];
-        if (!b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
+        let barrack2DTexture = get3DExact2DTexture(b);
+        let barrackExtraBars = barrack2DTexture ? null : [];
+        if (!barrack2DTexture && !b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: '#333', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
-        let barrackStatus = get3DBuildingTextureStatus(b, barrackExtraBars);
-        let barrack2DTexture = get3DExact2DTexture(b);
+        let barrackStatus = barrack2DTexture ? null : get3DBuildingTextureStatus(b, barrackExtraBars);
         push3DRenderObject(objects, {
             modelKey: `barrack_${b.unitType || 'norm'}`,
             x: b.x / TILE + reactiveOffsetX * audioMove,
@@ -1793,15 +1700,15 @@ function build3DFrameData() {
         // The mounted panel is the unit's canonical 2D rendering at every LOD.
         // The shared status texture remains only a short-lived fallback while a
         // newly visible exact texture is rasterized within the frame budget.
-        let unitStatus = get3DUnitTextureStatus(u);
         let unitSideColor = u.unitType === 'collector'
             ? '#f0a52b'
             : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
         let activity = getUnit3DActivity(u);
         if (u.isSnake) {
-            pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint, unitStatus);
+            pushSnakeRenderObjects(objects, u, ux + reactiveOffsetX * audioMove * TILE, uy + reactiveOffsetY * audioMove * TILE, footprint);
         } else {
             let unit2DTexture = get3DExact2DTexture(u, true);
+            let unitStatus = unit2DTexture ? null : get3DUnitTextureStatus(u);
             let facingX = Number(u.vx) || 0, facingY = Number(u.vy) || 0;
             if (activity.target && Number.isFinite(activity.target.x) && Number.isFinite(activity.target.y)) {
                 facingX = activity.target.x - u.x; facingY = activity.target.y - u.y;
@@ -2343,15 +2250,18 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     }
 
-    for (let entry of areaRangeBySourceArea.entries()) {
-        let areaId = entry[0];
-        let rangeArea = entry[1];
-        let cells = getGridCellsWithinAreaDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
-        for (let i = 0; i < cells.length; i++) {
-            let cell = cells[i];
-            // if (shouldLog) console.log("getGridCellsWithinAreaDistance: " + areaId + ", " + i + ", " + cell + ", " + rangeArea)
-            if (!cell) continue; // client does not go further than this
-            includedTiles[cell.y][cell.x] = 1;
+    // The range caches contain whole areas. Union area ids first so hundreds
+    // of overlapping sources do not repeatedly walk the same tile arrays.
+    let includedAreas = new Set();
+    for (let [areaId, rangeArea] of areaRangeBySourceArea) {
+        let areaIds = getAreaIdsWithinDistance(areaId, Math.floor(Math.max(0, Number(rangeArea) || 0)));
+        for (let targetAreaId of areaIds) {
+            if (includedAreas.has(targetAreaId)) continue;
+            includedAreas.add(targetAreaId);
+            let cells = gridCellsByArea[targetAreaId] || [];
+            for (let cell of cells) {
+                if (cell) includedTiles[cell.y][cell.x] = 1;
+            }
         }
     }
 

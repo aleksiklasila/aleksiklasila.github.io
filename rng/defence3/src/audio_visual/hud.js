@@ -3404,6 +3404,14 @@ function renderUnitInfo(u) {
 
 function renderUnitGroupInfo(group) {
     let html = '';
+    // Owner/type/level stats are shared across a subgroup. Cache only for this
+    // synchronous render, so research and effective levels cannot go stale.
+    let statCache = new Map();
+    let readGroupStat = (owner, type, level, stat) => {
+        let key = owner + '|' + type + '|' + level + '|' + stat;
+        if (!statCache.has(key)) statCache.set(key, getUnitStatForOwner(owner, type, level, stat));
+        return statCache.get(key);
+    };
     let u0 = group[0];
     let s = BASE_UNIT_STATS[u0.unitType] || {};
     let totalEnergy = 0, totalmaxEnergy = 0;
@@ -3462,41 +3470,41 @@ function renderUnitGroupInfo(group) {
         totalBaseVision += Math.max(0, Number(baseStats.visionRange) || 0);
         totalEffVision += Math.max(0, Number(effStats.visionRange) || 0);
         if (u.unitType === 'scout') {
-            totalBaseWatchDuration += Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'watchDuration')) || 0;
-            totalEffWatchDuration += Number(getUnitStatForOwner(u.owner, u.unitType, effLvl, 'watchDuration')) || 0;
+            totalBaseWatchDuration += Number(readGroupStat(u.owner, u.unitType, lvl, 'watchDuration')) || 0;
+            totalEffWatchDuration += Number(readGroupStat(u.owner, u.unitType, effLvl, 'watchDuration')) || 0;
         }
-        totalBaseUpKeep += Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'upKeep')) || 0;
-        totalEffUpKeep += Number(getUnitStatForOwner(u.owner, u.unitType, effLvl, 'upKeep')) || 0;
+        totalBaseUpKeep += Number(readGroupStat(u.owner, u.unitType, lvl, 'upKeep')) || 0;
+        totalEffUpKeep += Number(readGroupStat(u.owner, u.unitType, effLvl, 'upKeep')) || 0;
         totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
         totalEffNextStacks += getRequiredStacksForLevel(effLvl + 1);
         baseLevels.add(lvl);
         effLevels.add(effLvl);
 
         if (u.workerType === 'builder') {
-            totalBuildSpeed += (Number(baseStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0);
-            totalEffBuildSpeed += (Number(effStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0);
-            totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalBuildSpeed += (Number(baseStats.builderDps) || readGroupStat(u.owner, u.unitType, lvl, 'builderDps') || 0);
+            totalEffBuildSpeed += (Number(effStats.builderDps) || readGroupStat(u.owner, u.unitType, effLvl, 'builderDps') || 0);
+            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'healer') {
-            totalHealSpeed += (Number(baseStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0);
-            totalEffHealSpeed += (Number(effStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0);
-            totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalHealSpeed += (Number(baseStats.healerDps) || readGroupStat(u.owner, u.unitType, lvl, 'healerDps') || 0);
+            totalEffHealSpeed += (Number(effStats.healerDps) || readGroupStat(u.owner, u.unitType, effLvl, 'healerDps') || 0);
+            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'researcher') {
-            totalBuildSpeed += (Number(baseStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0);
-            totalEffBuildSpeed += (Number(effStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
-            totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalBuildSpeed += (Number(baseStats.researcherDps) || readGroupStat(u.owner, u.unitType, lvl, 'researcherDps') || 0);
+            totalEffBuildSpeed += (Number(effStats.researcherDps) || readGroupStat(u.owner, u.unitType, effLvl, 'researcherDps') || 0);
+            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
-            totalCollectorPerTrip += (Number(baseStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
-            totalEffCollectorPerTrip += (Number(effStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
-            totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalCollectorPerTrip += (Number(baseStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0);
+            totalEffCollectorPerTrip += (Number(effStats.gatherPerTrip) || readGroupStat(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0);
+            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         } else if (u.workerType === 'salvager') {
             totalSalvagerLevel += lvl;
             totalEffSalvagerLevel += effLvl;
-            totalTransferCd += (getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
-            totalEffTransferCd += (getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
+            totalTransferCd += (readGroupStat(u.owner, u.unitType, lvl, 'transferCooldown') || 0);
+            totalEffTransferCd += (readGroupStat(u.owner, u.unitType, effLvl, 'transferCooldown') || 0);
         }
     }
 
@@ -4925,6 +4933,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
 
     let totalSel = selectedEntities.length + selectedUnits.length;
     if (totalSel === 0) {
+        panel._selectionRenderCache = null;
         let playerStatusHtml = buildInfoPanelPlayerStatusHtml();
         if (playerStatusHtml) {
             panel.style.display = 'block';
@@ -5062,6 +5071,19 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         }
     }
 
+    // Keep existing nodes/listeners when both the displayed result and their
+    // captured selection are unchanged. Refreshes still calculate live stats.
+    let previousRender = panel._selectionRenderCache;
+    if (!panelOverride && previousRender && previousRender.html === html && previousRender.subgroups === subgroupState
+        && previousRender.units.length === selectedUnits.length && previousRender.entities.length === selectedEntities.length
+        && previousRender.units.every((u, i) => u === selectedUnits[i])
+        && previousRender.entities.every((e, i) => e === selectedEntities[i])) {
+        activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
+        return;
+    }
+    panel._selectionRenderCache = panelOverride ? null : {
+        html, subgroups: subgroupState, units: selectedUnits.slice(), entities: selectedEntities.slice()
+    };
     panel.innerHTML = html;
     bindInfoPanelPlayerStatusControls(panel);
 
