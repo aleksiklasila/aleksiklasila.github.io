@@ -294,6 +294,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     let playerFilter = Number.isFinite(opts && opts.player) ? Math.floor(opts.player) : -1;
     let enemyFilter = Number.isFinite(opts && opts.enemyOfPlayer) ? Math.floor(opts.enemyOfPlayer) : -1;
     let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
+    let areaOnly = !!(opts && opts.areaOnly);
 
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
@@ -308,7 +309,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
             let dy = (Number(u.y) || 0) - wy;
             let hitRadius = Math.max(0, Number(u.r) || 0);
             let maxHitRangePx = maxRangePx + hitRadius;
-            if ((dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
+            if (!areaOnly && (dx * dx + dy * dy) > (maxHitRangePx * maxHitRangePx)) continue;
             if (predicate && !predicate(u)) continue;
             if (visitor(u, areaId) === true) return true;
         }

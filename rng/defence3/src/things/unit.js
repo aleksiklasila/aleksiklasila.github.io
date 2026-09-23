@@ -286,7 +286,10 @@ class Unit {
         // State machine
         switch (this.commandState) {
             case CMD_IDLE: if (!this.workerState) this.doIdle(spd); break;
-            case CMD_MOVING: this.doMoving(spd); break;
+            case CMD_MOVING:
+                this.tryDriveByAttack();
+                this.doMoving(spd);
+                break;
             case CMD_ATTACK_MOVING: this.doAttackMoving(spd); break;
             case CMD_ATTACKING: this.doAttacking(spd); break;
             case CMD_HOLDING: this.doHolding(); break;
@@ -496,6 +499,25 @@ class Unit {
             this.path = null;
             this.targetPos = null;
         }
+    }
+
+    tryDriveByAttack() {
+        if (this.workerState || this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
+        let closest = null;
+        let bestD2 = Infinity;
+        // Use only simulation state. Pick by distance, then unit id, independent of
+        // spatial bucket insertion order on different lockstep peers.
+        forEachUnitInAreaRange(this.x, this.y, _getUnitAttackRangeArea(this), (enemy) => {
+            if (!_isHostileThingVisibleToUnit(this, enemy) || !_isTargetWithinUnitAttackAreaRange(this, enemy)) return;
+            let dx = enemy.x - this.x, dy = enemy.y - this.y;
+            let d2 = dx * dx + dy * dy;
+            if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {
+                closest = enemy;
+                bestD2 = d2;
+            }
+        }, { enemyOfPlayer: this.owner, areaOnly: true });
+        if (!closest) return;
+        this._performAttackOnUnit(closest);
     }
 
     doAttackMoving(spd) {

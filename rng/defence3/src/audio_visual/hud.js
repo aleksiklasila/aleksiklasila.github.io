@@ -1159,7 +1159,7 @@ function _getInfoPanelUnitStateHelpText(u) {
     }
 
     if (u.commandState === CMD_IDLE) return 'No active order right now. Give a move, attack-move, attack, or hold command.';
-    if (u.commandState === CMD_MOVING) return 'Moving toward the current destination.';
+    if (u.commandState === CMD_MOVING) return 'Moving toward the current destination. Combat units attack visible enemies in range without leaving the route.';
     if (u.commandState === CMD_ATTACK_MOVING) return 'Attack-moving: advancing while auto-engaging enemies on the way.';
     if (u.commandState === CMD_ATTACKING) return 'Attacking or chasing the current target.';
     return 'Current unit order and why it is happening.';
