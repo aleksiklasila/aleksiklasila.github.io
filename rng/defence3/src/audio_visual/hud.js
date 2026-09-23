@@ -3303,6 +3303,11 @@ function renderUnitInfo(u) {
     }
     html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u.unitType} / Range`, kind: 'unit', key: u.unitType, statKey: 'attackRange' }), formatRangeStatTiles(baseAttackRange), formatRangeStatTiles(effAttackRange));
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u.unitType} / Visibility`, kind: 'unit', key: u.unitType, statKey: 'visionRange' }), formatAreaDistanceStat(baseVisionRange), formatAreaDistanceStat(effVisionRange));
+    if (u.unitType === 'scout') {
+        let baseWatchDuration = getUnitStatForOwner(u.owner, u.unitType, lvl, 'watchDuration');
+        let effWatchDuration = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'watchDuration');
+        html += infoRow(withInfoPanelStatMatrixButton('Watch Duration', { title: `${u.unitType} / Watch Duration`, kind: 'unit', key: u.unitType, statKey: 'watchDuration' }), `${baseWatchDuration.toFixed(1)}s`, `${effWatchDuration.toFixed(1)}s`);
+    }
     if (u.workerType === 'builder') {
         let baseBuild = Number(baseStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'builderDps') || 0;
         let effBuild = Number(effStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
@@ -3384,6 +3389,7 @@ function renderUnitInfo(u) {
     if (u.frozen > 0) statuses.push(`Frz(${u.frozen})`);
     if (u.wet > 0) statuses.push(`Wet(${u.wet})`);
     if (u.sandy > 0) statuses.push(`Sand(${u.sandy})`);
+    if (u.watched > 0) statuses.push(`Watch T${Math.floor(Number(u.watchedByTeam) || 0) + 1}(${u.watched})`);
     if (statuses.length > 0) html += infoRow('Status', statuses.join(' '));
     if (u.owner === localPlayerId) {
         html += `<div style="margin-top:3px;text-align:center;display:flex;align-items:center;justify-content:center;gap:4px">`;
@@ -3413,6 +3419,7 @@ function renderUnitGroupInfo(group) {
     let totalBaseSpeed = 0, totalEffSpeed = 0;
     let totalBaseRange = 0, totalEffRange = 0;
     let totalBaseVision = 0, totalEffVision = 0;
+    let totalBaseWatchDuration = 0, totalEffWatchDuration = 0;
     let totalBaseUpKeep = 0, totalEffUpKeep = 0;
     let totalBaseNextStacks = 0, totalEffNextStacks = 0;
     let baseLevels = new Set(), effLevels = new Set();
@@ -3454,6 +3461,10 @@ function renderUnitGroupInfo(group) {
         totalEffRange += Math.max(0, (Number(effStats.attackRange) || 0) / TILE);
         totalBaseVision += Math.max(0, Number(baseStats.visionRange) || 0);
         totalEffVision += Math.max(0, Number(effStats.visionRange) || 0);
+        if (u.unitType === 'scout') {
+            totalBaseWatchDuration += Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'watchDuration')) || 0;
+            totalEffWatchDuration += Number(getUnitStatForOwner(u.owner, u.unitType, effLvl, 'watchDuration')) || 0;
+        }
         totalBaseUpKeep += Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'upKeep')) || 0;
         totalEffUpKeep += Number(getUnitStatForOwner(u.owner, u.unitType, effLvl, 'upKeep')) || 0;
         totalBaseNextStacks += getRequiredStacksForLevel(lvl + 1);
@@ -3508,6 +3519,10 @@ function renderUnitGroupInfo(group) {
     let avgEffVision = totalEffVision / Math.max(1, group.length);
     html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatRangeStatTiles(avgBaseRange)} avg`, `${formatRangeStatTiles(avgEffRange)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Visibility`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, `${formatRangeStatTiles(avgEffVision)} avg`);
+    if (u0.unitType === 'scout') {
+        let count = Math.max(1, group.length);
+        html += infoRow(withInfoPanelStatMatrixButton('Watch Duration', { title: `${u0.unitType} / Watch Duration`, kind: 'unit', key: u0.unitType, statKey: 'watchDuration' }), `${(totalBaseWatchDuration / count).toFixed(1)}s avg`, `${(totalEffWatchDuration / count).toFixed(1)}s avg`);
+    }
     if (u0.workerType === 'builder') {
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u0.unitType} / Work Speed`, kind: 'unit', key: u0.unitType, statKey: 'builderDps' }), `${formatBigNumber(totalBuildSpeed, 1)}\u26A1`, `${formatBigNumber(totalEffBuildSpeed, 1)}\u26A1`);
         html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u0.unitType} / Transfer CD`, kind: 'unit', key: u0.unitType, statKey: 'transferCooldown' }), `${(totalTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`, `${(totalEffTransferCd / Math.max(1, group.length)).toFixed(2)}s avg`);

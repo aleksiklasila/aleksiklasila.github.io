@@ -199,7 +199,7 @@ class Tower {
                 else if (this.type === 'water') affected = u.wet > 0;
                 else if (this.type === 'ice') affected = u.frozen > 0;
                 else if (this.type === 'sand_gun') affected = u.sandy > 0;
-                else if (this.type === 'watch_tower') affected = u.watched > 0;
+                else if (this.type === 'watch_tower') affected = u.watched > 0 && u.watchedByTeam === this.owner;
                 if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
                 else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
             }

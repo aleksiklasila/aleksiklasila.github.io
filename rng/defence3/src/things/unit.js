@@ -108,7 +108,7 @@ class Unit {
         this.poisoned = 0; this.poisonTickDamage = 0;
         this.burning = 0; this.burnTickDamage = 0;
         this.frozen = 0; this.iceTickDamage = 0;
-        this.wet = 0; this.sandy = 0; this.watched = 0;
+        this.wet = 0; this.sandy = 0; this.watched = 0; this.watchedByTeam = -1;
         this.vx = 0; this.vy = 0;
         this.workerTransferCooldown = 0;
 
@@ -178,7 +178,10 @@ class Unit {
         if (this.frozen > 0) this.frozen--;
         if (this.wet > 0) this.wet--;
         if (this.sandy > 0) this.sandy--;
-        if (this.watched > 0) this.watched--;
+        if (this.watched > 0) {
+            this.watched--;
+            if (this.watched <= 0) this.watchedByTeam = -1;
+        }
 
         if (this.energy <= 0) { this.dead = true; return; }
 
@@ -623,6 +626,7 @@ class Unit {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#f0f', 2);
         } else if (style === 'swoop') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#dd0', 2);
+            if (this.unitType === 'scout') applyStatusEffect(target, 'watch', getUnitEffectiveLevel(this), 0, this.owner, this.unitType);
         } else if (style === 'ram') {
             createDirectedParticles(this.x, this.y, target.x, target.y, '#0f0', 3);
             createDirectedParticles(target.x, target.y, this.x, this.y, '#f00', 2);
@@ -665,6 +669,7 @@ class Unit {
             tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'swoop') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#dd0', 2);
+            if (this.unitType === 'scout') applyStatusEffect(tb, 'watch', getUnitEffectiveLevel(this), 0, this.owner, this.unitType);
             tb.energy -= this.preComputed.attackDamage;
         } else if (style === 'ram') {
             createDirectedParticles(this.x, this.y, tb.x, tb.y, '#0f0', 3);

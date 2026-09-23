@@ -2364,34 +2364,34 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     };
 
-    let shouldRevealForPlayer = (owner, watched) => {
+    let shouldRevealForPlayer = (owner, watched, watchedByTeam) => {
         let ownerId = Math.floor(Number(owner));
         let targetId = Math.floor(Number(playerId));
-        return ownerId === targetId || (Number(watched) || 0) > 0;
+        return ownerId === targetId || ((Number(watched) || 0) > 0 && Math.floor(Number(watchedByTeam)) === targetId);
     };
 
     for (let u of units) {
         if (!u || u.dead) continue;
-        if (!shouldRevealForPlayer(u.owner, u.watched || 0)) continue;
+        if (!shouldRevealForPlayer(u.owner, u.watched || 0, u.watchedByTeam)) continue;
         unitsFound++;
         let visionArea = Number.isFinite(u.preComputed && u.preComputed.visionRangeArea) ? Number(u.preComputed.visionRangeArea) : ((Number(u.preComputed && u.preComputed.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
     for (let t of towers) {
         if (!t || !(t.energy > 0) || t.underConstruction) continue;
-        if (!shouldRevealForPlayer(t.owner, t.watched || 0)) continue;
+        if (!shouldRevealForPlayer(t.owner, t.watched || 0, t.watchedByTeam)) continue;
         towersFound++;
         addWorldVisibilitySource(t.x, t.y, Number(t.currentStats && t.currentStats.visionRange));
     }
     for (let b of barracks) {
         if (!b || !(b.energy > 0) || b.underConstruction) continue;
-        if (!shouldRevealForPlayer(b.owner, b.watched || 0)) continue;
+        if (!shouldRevealForPlayer(b.owner, b.watched || 0, b.watchedByTeam)) continue;
         barracksFound++;
         addWorldVisibilitySource(b.x, b.y, getEntityVisibilityRangeArea(b));
     }
     for (let s of collectorSpawners) {
         if (!s || !(s.energy > 0) || s.underConstruction) continue;
-        if (!shouldRevealForPlayer(s.owner, s.watched || 0)) continue;
+        if (!shouldRevealForPlayer(s.owner, s.watched || 0, s.watchedByTeam)) continue;
         spawnersFound++;
         addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
     }
@@ -2400,7 +2400,7 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         for (let x = 0; x < GRID_W; x++) {
             let cell = row[x];
             if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
-            if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0)) continue;
+            if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) continue;
             buildingsFound++;
             addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
         }
@@ -2947,6 +2947,7 @@ function ensureStatusState(target) {
     if (target.wet === undefined) target.wet = 0;
     if (target.sandy === undefined) target.sandy = 0;
     if (target.watched === undefined) target.watched = 0;
+    if (target.watchedByTeam === undefined) target.watchedByTeam = -1;
 }
 
 function isEffectImmune(target, effect) {
@@ -2978,11 +2979,14 @@ function _getEffectStatKey(effect, statKind) {
     return '';
 }
 
-function _getBuildingEffectStat(owner, sourceType, level, effect, statKind) {
+function _getEffectStat(owner, sourceType, level, effect, statKind) {
     let statKey = _getEffectStatKey(effect, statKind);
     if (!statKey || !sourceType) return NaN;
     let ownerId = Number.isFinite(owner) ? owner : localPlayerId;
     let lvl = Math.max(1, clampThingLevel(level || 1));
+    if (effect === 'watch' && BASE_UNIT_STATS[sourceType]) {
+        return getUnitStatForOwner(ownerId, sourceType, lvl, statKey);
+    }
     return getBuildingStatForOwner(ownerId, sourceType, lvl, statKey);
 }
 
@@ -2992,8 +2996,8 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
     if (isEffectImmune(target, effect)) return false;
 
     let lvl = Math.max(1, level || 1);
-    let mappedDuration = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');
-    let mappedDps = _getBuildingEffectStat(sourceOwner, sourceType, lvl, effect, 'dps');
+    let mappedDuration = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'duration');
+    let mappedDps = _getEffectStat(sourceOwner, sourceType, lvl, effect, 'dps');
     if (effect === 'fire') {
         let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (3 + lvl * 0.5);
         let dur = secondsToTicks(durSec);
@@ -3023,7 +3027,10 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
     } else if (effect === 'watch') {
         let durSec = Number.isFinite(mappedDuration) ? mappedDuration : (4 + lvl);
         let dur = secondsToTicks(durSec);
-        target.watched = Math.max(target.watched, dur);
+        let teamId = Number.isFinite(sourceOwner) ? Math.floor(sourceOwner) : -1;
+        if (target.watched > 0 && target.watchedByTeam === teamId) target.watched = Math.max(target.watched, dur);
+        else target.watched = dur;
+        target.watchedByTeam = teamId;
     }
     return true;
 }
@@ -3053,7 +3060,10 @@ function tickStatusEffects(target) {
     if (target.frozen > 0) target.frozen--;
     if (target.wet > 0) target.wet--;
     if (target.sandy > 0) target.sandy--;
-    if (target.watched > 0) target.watched--;
+    if (target.watched > 0) {
+        target.watched--;
+        if (target.watched <= 0) target.watchedByTeam = -1;
+    }
 
     if (target.energy !== undefined && target.energy <= 0) {
         target.energy = 0;

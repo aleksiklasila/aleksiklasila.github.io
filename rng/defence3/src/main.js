@@ -3622,7 +3622,9 @@ function computeLockstepStateDigest(tick) {
                 cmd: Math.floor(Number(u.commandState) || 0),
                 workerState: String(u.workerState || ''),
                 workerType: String(u.workerType || ''),
-                stack: Math.floor(Number(u.stackCount || 1))
+                stack: Math.floor(Number(u.stackCount || 1)),
+                watched: Math.max(0, Math.floor(Number(u.watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(u.watchedByTeam)) ? Math.floor(Number(u.watchedByTeam)) : -1
             }))
             .sort((a, b) => a.id - b.id),
         towers: towers
@@ -3635,7 +3637,9 @@ function computeLockstepStateDigest(tick) {
                 level: Math.floor(Number(tw.level) || 1),
                 energy: quantizeLockstepNumber(tw.energy),
                 underConstruction: !!tw.underConstruction,
-                isUpgrading: !!tw.isUpgrading
+                isUpgrading: !!tw.isUpgrading,
+                watched: Math.max(0, Math.floor(Number(tw.watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(tw.watchedByTeam)) ? Math.floor(Number(tw.watchedByTeam)) : -1
             }))
             .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
         barracks: barracks
@@ -3649,7 +3653,9 @@ function computeLockstepStateDigest(tick) {
                 energy: quantizeLockstepNumber(b.energy),
                 queueLen: Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0,
                 underConstruction: !!b.underConstruction,
-                isUpgrading: !!b.isUpgrading
+                isUpgrading: !!b.isUpgrading,
+                watched: Math.max(0, Math.floor(Number(b.watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(b.watchedByTeam)) ? Math.floor(Number(b.watchedByTeam)) : -1
             }))
             .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
         spawners: collectorSpawners
@@ -3663,7 +3669,9 @@ function computeLockstepStateDigest(tick) {
                 energy: quantizeLockstepNumber(s.energy),
                 queueLen: Array.isArray(s.spawnQueue) ? s.spawnQueue.length : 0,
                 underConstruction: !!s.underConstruction,
-                isUpgrading: !!s.isUpgrading
+                isUpgrading: !!s.isUpgrading,
+                watched: Math.max(0, Math.floor(Number(s.watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(s.watchedByTeam)) ? Math.floor(Number(s.watchedByTeam)) : -1
             }))
             .sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx) || (a.owner - b.owner)),
         floorItems: [],
@@ -3696,7 +3704,9 @@ function computeLockstepStateDigest(tick) {
                 level: Math.floor(Number(cell.item.level) || 1),
                 energy: quantizeLockstepNumber(cell.item.energy),
                 underConstruction: !!cell.item.underConstruction,
-                isUpgrading: !!cell.item.isUpgrading
+                isUpgrading: !!cell.item.isUpgrading,
+                watched: Math.max(0, Math.floor(Number(cell.item.watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(cell.item.watchedByTeam)) ? Math.floor(Number(cell.item.watchedByTeam)) : -1
             });
         }
     }
