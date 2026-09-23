@@ -1753,9 +1753,9 @@ function initInput() {
     const selectionOutlineTypeSelect = document.getElementById('setting-selection-outline-type');
     const selectionOutlineSeeThroughToggle = document.getElementById('setting-selection-outline-see-through');
     if (selectionOutlineSeeThroughToggle) {
-        selectionOutlineSeeThroughToggle.checked = selectionOutlineSeeThrough;
+        selectionOutlineSeeThroughToggle.value = String(selectionOutlineSeeThrough);
         selectionOutlineSeeThroughToggle.addEventListener('change', () => {
-            selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.checked;
+            selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.value === 'true';
             saveUiSettingsToStorage();
         });
     }
@@ -1844,16 +1844,28 @@ function initInput() {
     const btnLevelVisibility = document.getElementById('btn-level-visibility');
     if (btnLevelVisibility) {
         updateLevelVisibilityButton();
-        btnLevelVisibility.addEventListener('click', () => {
-            cycleLevelVisibilityMode();
+        btnLevelVisibility.addEventListener('change', () => {
+            levelVisibilityMode = Number(btnLevelVisibility.value);
+            saveUiSettingsToStorage();
         });
     }
 
+    const rangeTeam = document.getElementById('setting-range-team');
+    if (rangeTeam) {
+        rangeTeam.value = renderRangeAllTeam ? 'team' : 'selected';
+        rangeTeam.addEventListener('change', () => { renderRangeAllTeam = rangeTeam.value === 'team'; saveUiSettingsToStorage(); });
+    }
+    const rangeThrough = document.getElementById('setting-range-through');
+    if (rangeThrough) {
+        rangeThrough.value = String(renderRangeSeeThrough);
+        rangeThrough.addEventListener('change', () => { renderRangeSeeThrough = rangeThrough.value === 'true'; saveUiSettingsToStorage(); });
+    }
     const btnRenderRange = document.getElementById('btn-render-range');
     if (btnRenderRange) {
         updateRenderRangeButton();
-        btnRenderRange.addEventListener('click', () => {
-            cycleRenderRangeMode();
+        btnRenderRange.addEventListener('change', () => {
+            renderRangeMode = Number(btnRenderRange.value);
+            saveUiSettingsToStorage();
         });
     }
 

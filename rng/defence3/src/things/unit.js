@@ -65,6 +65,19 @@ function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null
     return true;
 }
 
+function _findNearbyCombatEnemy(unit, range) {
+    let closest = null, best = range * range;
+    // This refresh is already staggered by the caller. Do not use the older
+    // once-per-second chunk query, whose stagger can miss this cadence forever.
+    forEachUnitInRange(unit.x, unit.y, range, (enemy, d2) => {
+        if (enemy.dead || enemy.owner === unit.owner || !_isHostileThingVisibleToUnit(unit, enemy)) return;
+        if (d2 < best || (d2 === best && (!closest || enemy.id < closest.id))) {
+            closest = enemy; best = d2;
+        }
+    }, { enemyOfPlayer: unit.owner });
+    return closest;
+}
+
 function _quantizeUnitWorldCoord(value) {
     let n = Number(value);
     if (!Number.isFinite(n)) return 0;
@@ -325,14 +338,16 @@ class Unit {
             case CMD_ATTACKING: this.doAttacking(spd); break;
             case CMD_HOLDING: this.doHolding(); break;
         }
-        // Separation from nearby units (staggered to reduce per-tick cost spikes).
-        let collisionInterval = getUnitCollisionRecalcTicks();
+        // Movement must not accumulate five ticks of penetration before being
+        // corrected. Resting units retain the configured staggered refresh.
+        let movedThisTick = this.x !== this.prevX || this.y !== this.prevY;
+        let collisionInterval = movedThisTick ? 1 : getUnitCollisionRecalcTicks();
         let hadUnitCollision = false;
         if (collisionInterval <= 1 || ((gameTime + this.id) % collisionInterval) === 0) {
             let selfCollisionR = this.getCollisionRadius();
             let crossTeamCollisionPadding = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0);
             let sepRange = selfCollisionR * 2 + crossTeamCollisionPadding;
-            let pushX = 0, pushY = 0;
+            let pushX = 0, pushY = 0, maxOverlap = 0;
             let myLayer = this.getCollisionLayer();
             let collisionCandidates = [];
             forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
@@ -360,6 +375,7 @@ class Unit {
                 let minDist = entry.minDist;
                 if (d < minDist) {
                     hadUnitCollision = true;
+                    maxOverlap = Math.max(maxOverlap, minDist - d);
                     let nx = 0, ny = 0;
                     if (d > 0.001) {
                         nx = dx / d;
@@ -382,19 +398,13 @@ class Unit {
                             ny = 0;
                         }
                     }
-                    let force = (minDist - Math.max(d, 0.001)) * 0.3;
+                    let force = (minDist - Math.max(d, 0.001)) * 0.6;
                     pushX += nx * force;
                     pushY += ny * force;
                 }
             }
             if (pushX !== 0 || pushY !== 0) {
-                this.x += pushX; this.y += pushY;
-                // Clamp to walkable area
-                let ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-                if (!this.isFlying && !canUnitOccupyTile(this, ngx, ngy)) {
-                    this.x -= pushX; this.y -= pushY;
-                    hadUnitCollision = true;
-                }
+                applyUnitSeparation(this, pushX, pushY, maxOverlap);
             }
         }
         if (hadUnitCollision && this.pathIsFallbackAstar && this._pendingPathTarget) {
@@ -710,6 +720,20 @@ class Unit {
     }
 
     doAttacking(spd) {
+        // Automatic structure attacks yield to nearby units. Explicit player
+        // targets remain locked, and the scan is staggered by simulation tick.
+        if (this.targetBuilding && !this.forcedAttackTarget && (gameTime + this.id) % 8 === 0) {
+            let enemy = _findNearbyCombatEnemy(this,
+                Math.max(TILE, this.preComputed.visionRange * TILE));
+            if (enemy) {
+                this.targetBuilding = null;
+                this.targetUnit = enemy;
+                this.attackTarget = null;
+                this.path = null;
+                this.pathIndex = 0;
+                this._pendingPathTarget = null;
+            }
+        }
         // Attack unit target
         if (this.targetUnit) {
             if (this.targetUnit.dead) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; return; }
@@ -977,6 +1001,7 @@ class Unit {
     }
 
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.dead || this.teleportHideTicks > 0) return;
         // Unit body
         let strokeColor = (this.owner >= 0) ? get2DRenderOwnerColor(this.owner) : '#000';
@@ -1475,6 +1500,33 @@ function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
         x: Math.max(0, Math.min(GRID_W - 1, gx)),
         y: Math.max(0, Math.min(GRID_H - 1, gy))
     };
+}
+
+function applyUnitSeparation(unit, dx, dy, maxOverlap = unit.getCollisionRadius() * 2) {
+    // Resolve crowded overlaps promptly, but never sum a hundred contacts into
+    // a hundred-contact teleport. One correction is bounded by penetration.
+    let total = Math.sqrt(dx * dx + dy * dy);
+    let limit = Math.max(0, maxOverlap);
+    if (total > limit) { dx *= limit / total; dy *= limit / total; }
+    // Sweep large corrections, including enlarged units and enemy padding.
+    // Axis sliding releases wall-side crowds without crossing a corner cap.
+    let steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / (TILE / 4)));
+    let startX = unit.x, startY = unit.y;
+    for (let i = 1; i <= steps; i++) {
+        let x = _quantizeUnitWorldCoord(startX + dx * i / steps);
+        let y = _quantizeUnitWorldCoord(startY + dy * i / steps);
+        if (!unit.isFlying) {
+            let gx = Math.floor(unit.x / TILE), gy = Math.floor(unit.y / TILE);
+            let nx = Math.floor(x / TILE), ny = Math.floor(y / TILE);
+            let sideX = canUnitOccupyTile(unit, nx, gy), sideY = canUnitOccupyTile(unit, gx, ny);
+            if (!canUnitOccupyTile(unit, nx, ny) || (gx !== nx && gy !== ny && (!sideX || !sideY))) {
+                if (sideX && nx !== gx) unit.x = x;
+                else if (sideY && ny !== gy) unit.y = y;
+                break;
+            }
+        }
+        unit.x = x; unit.y = y;
+    }
 }
 
 function pushUnitOutOfBlockedTile(unit) {

@@ -956,7 +956,9 @@
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(normalize(vNormal), lightDir), 0.0);
                     float shade = celShade(diffuse);
-                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    float light = vLightLevel < 0.0 ? -vLightLevel - 1.0 : vLightLevel;
+                    float memoryShade = vLightLevel < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
+                    float fogAlpha = 1.0 - (1.0 - pow(1.0 - clamp(light, 0.0, 1.0), 1.3) * 0.42) * memoryShade;
                     outColor = vec4(uColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
@@ -1027,7 +1029,9 @@
                     vec3 lightDir = normalize(vec3(-0.42, 0.86, 0.31));
                     float diffuse = max(dot(surfaceNormal, lightDir), 0.0);
                     float shade = celShade(diffuse);
-                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    float light = vLightLevel < 0.0 ? -vLightLevel - 1.0 : vLightLevel;
+                    float memoryShade = vLightLevel < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
+                    float fogAlpha = 1.0 - (1.0 - pow(1.0 - clamp(light, 0.0, 1.0), 1.3) * 0.42) * memoryShade;
                     outColor = vec4(vColor * shade * (1.0 - fogAlpha), vAlpha);
                     outPackedDepth = packDepth(gl_FragCoord.z);
                 }
@@ -1137,7 +1141,9 @@
                         vec3 seamTintedOverlay = mix(sideSample.rgb * shade, playerHuedOverlay, seamFactor);
                         finalColor = mix(functionalSideColor, seamTintedOverlay, overlayAlpha);
                     }
-                    float fogAlpha = pow(1.0 - clamp(vLightLevel, 0.0, 1.0), 1.3) * 0.42;
+                    float light = vLightLevel < 0.0 ? -vLightLevel - 1.0 : vLightLevel;
+                    float memoryShade = vLightLevel < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
+                    float fogAlpha = 1.0 - (1.0 - pow(1.0 - clamp(light, 0.0, 1.0), 1.3) * 0.42) * memoryShade;
                     // Pixel-sized edges within the existing material pass.
                     if (vShape < 0.5) finalColor = mix(finalColor, vec3(.025,.035,.055), faceInk(vUv, .8) * .8);
                     finalColor *= (1.0 - fogAlpha);
@@ -1498,7 +1504,9 @@
                         shaded *= mix(.86, 1.0, uIsUnit);
                         shaded = mix(shaded, vec3(.025,.035,.055), faceInk(vUv, mix(.65, 1.05, uIsUnit)) * .88);
                     }
-                    float fog = 1.0 - pow(1.0-clamp(vLight,0.0,1.0),1.3)*.42;
+                    float light = vLight < 0.0 ? -vLight - 1.0 : vLight;
+                    float memoryShade = vLight < 0.0 ? mix(.55, 1.0, smoothstep(.14, .74, light)) : 1.0;
+                    float fog = (1.0 - pow(1.0-clamp(light,0.0,1.0),1.3)*.42) * memoryShade;
                     outColor = vec4(shaded * fog,vAlpha);
                     vec4 depth = fract(gl_FragCoord.z * vec4(16777216.0,65536.0,256.0,1.0));
                     outPackedDepth = depth - depth.xxyz * vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);
@@ -2019,7 +2027,8 @@
         drawGroundOverlays(overlays) {
             if (!overlays) return;
             let groups = overlays.selectionContours || [], lines = overlays.lines || [];
-            let count = lines.length;
+            let ranges = overlays.rangeLines || [];
+            let count = lines.length + ranges.length;
             for (let group of groups) for (let path of group.paths) count += path.length;
             if (!count) return;
             let gl = this.gl;
@@ -2034,6 +2043,8 @@
                     uniform mat4 uViewProjection;
                     uniform vec2 uViewport;
                     uniform int uSeeThroughCount;
+                    uniform int uRangeStart;
+                    uniform int uRangeEnd;
                     out vec4 vColor;
                     out float vAlong;
                     out float vAcross;
@@ -2041,6 +2052,17 @@
                     void main() {
                         vec4 a = uViewProjection * vec4(aEnds.x, .05, aEnds.y, 1.);
                         vec4 b = uViewProjection * vec4(aEnds.z, .05, aEnds.w, 1.);
+                        // Clip before dividing by w. Long range boundaries can
+                        // cross the camera plane; expanding those un-clipped
+                        // endpoints produces enormous screen-covering quads.
+                        float da = a.z + a.w, db = b.z + b.w;
+                        if (da <= 0.0 && db <= 0.0) {
+                            gl_Position = vec4(2.,2.,2.,1.);
+                            vColor = vec4(0.); vAcross = 0.; vAlong = 0.; vDashed = 0.;
+                            return;
+                        }
+                        if (da < 0.0) a = mix(a, b, -da / (db - da));
+                        else if (db < 0.0) b = mix(b, a, -db / (da - db));
                         vec2 delta = (b.xy / b.w - a.xy / a.w) * uViewport * .5;
                         float lengthPx = max(length(delta), .001);
                         vec2 normal = vec2(-delta.y, delta.x) / lengthPx;
@@ -2051,7 +2073,7 @@
                         // Selection instances precede rally lines in this batch.
                         // Bring only opted-in outlines to the near plane; depth
                         // writes stay disabled, preserving the scene and rallies.
-                        if (gl_InstanceID < uSeeThroughCount) p.z = -p.w;
+                        if (gl_InstanceID < uSeeThroughCount || (gl_InstanceID >= uRangeStart && gl_InstanceID < uRangeEnd)) p.z = -p.w;
                         gl_Position = p;
                         vColor = aColor; vAcross = side;
                         vAlong = aStyle.y + end * lengthPx; vDashed = aStyle.x;
@@ -2075,7 +2097,9 @@
                 this.groundLineUniforms = {
                     viewProjection: gl.getUniformLocation(this.groundLineProgram, 'uViewProjection'),
                     viewport: gl.getUniformLocation(this.groundLineProgram, 'uViewport'),
-                    seeThroughCount: gl.getUniformLocation(this.groundLineProgram, 'uSeeThroughCount')
+                    seeThroughCount: gl.getUniformLocation(this.groundLineProgram, 'uSeeThroughCount'),
+                    rangeStart: gl.getUniformLocation(this.groundLineProgram, 'uRangeStart'),
+                    rangeEnd: gl.getUniformLocation(this.groundLineProgram, 'uRangeEnd')
                 };
                 gl.bindVertexArray(this.groundLineVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);
@@ -2120,6 +2144,7 @@
                     }
                 }
             }
+            for (let line of ranges) add(line.x1, line.z1, line.x2, line.z2, line.color, false, 0);
             for (let line of lines) add(line.x1, line.z1, line.x2, line.z2, line.color, line.dashed, 0);
             gl.useProgram(this.groundLineProgram);
             gl.bindVertexArray(this.groundLineVao);
@@ -2127,7 +2152,9 @@
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, offset));
             gl.uniformMatrix4fv(this.groundLineUniforms.viewProjection, false, this.tmpViewProjection);
             gl.uniform2f(this.groundLineUniforms.viewport, this.cssWidth, this.cssHeight);
-            gl.uniform1i(this.groundLineUniforms.seeThroughCount, overlays.selectionSeeThrough ? count - lines.length : 0);
+            gl.uniform1i(this.groundLineUniforms.seeThroughCount, overlays.selectionSeeThrough ? count - lines.length - ranges.length : 0);
+            gl.uniform1i(this.groundLineUniforms.rangeStart, count - lines.length - ranges.length);
+            gl.uniform1i(this.groundLineUniforms.rangeEnd, overlays.rangeSeeThrough ? count - lines.length : 0);
             gl.enable(gl.DEPTH_TEST);
             gl.depthMask(false);
             gl.enable(gl.BLEND);
@@ -2622,7 +2649,7 @@
             gl.uniformMatrix3fv(this.meshUniforms.normalMatrix, false, this.tmpNormal);
             gl.uniform3f(this.meshUniforms.color, 0, 0, 0);
             gl.uniform1f(this.meshUniforms.alpha, shadow.alpha);
-            // gl.uniform1f(this.meshUniforms.lightLevel, 1);
+            gl.uniform1f(this.meshUniforms.lightLevel, 1);
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
@@ -2688,6 +2715,13 @@
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
         }
 
+        getPackedObjectLight(object) {
+            let light = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
+            // Negative values encode remembered lighting in the existing
+            // instance channel, preserving batching and the shadow inputs.
+            return object.historyGhost ? -1 - light : light;
+        }
+
         drawObject(object) {
             let gl = this.gl;
             let mesh = this.requestModel(object);
@@ -2711,7 +2745,7 @@
             let color = hexToRgb(object.tint);
             gl.uniform3f(this.meshUniforms.color, color[0], color[1], color[2]);
             gl.uniform1f(this.meshUniforms.alpha, Math.max(0.05, Math.min(1, Number(object.alpha) || 1)));
-            gl.uniform1f(this.meshUniforms.lightLevel, Math.max(0, Math.min(1, Number(object.lightLevel) || 0)));
+            gl.uniform1f(this.meshUniforms.lightLevel, this.getPackedObjectLight(object));
             gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
         }
 
@@ -2756,7 +2790,7 @@
                 this.cubeInstanceArray[base + 22] = color[0];
                 this.cubeInstanceArray[base + 23] = color[1];
                 this.cubeInstanceArray[base + 24] = color[2];
-                this.cubeInstanceArray[base + 25] = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
+                this.cubeInstanceArray[base + 25] = this.getPackedObjectLight(object);
             }
 
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeInstanceBuffer);
@@ -2799,7 +2833,7 @@
                 this.cubeInstanceArray[base + 22] = sideColor[0];
                 this.cubeInstanceArray[base + 23] = sideColor[1];
                 this.cubeInstanceArray[base + 24] = sideColor[2];
-                this.cubeInstanceArray[base + 25] = Math.max(0, Math.min(1, Number(object.lightLevel) || 0));
+                this.cubeInstanceArray[base + 25] = this.getPackedObjectLight(object);
                 if (kind) {
                     this.cubeInstanceArray[base + 20] = object.moveAmount || 0;
                     this.cubeInstanceArray[base + 21] = object.walkPhase || 0;

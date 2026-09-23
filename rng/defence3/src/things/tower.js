@@ -203,7 +203,7 @@ class Tower {
                 if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
                 else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
             }
-        }, { enemyOfPlayer: this.owner });
+        }, { enemyOfPlayer: this.owner, areaOnly: true });
 
         let target = bestPrimary || bestSecondary || bestImmune;
 
@@ -245,6 +245,7 @@ class Tower {
     }
 
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);

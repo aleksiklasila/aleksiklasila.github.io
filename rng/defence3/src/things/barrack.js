@@ -265,6 +265,7 @@ class Barrack {
     }
 
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -338,6 +339,7 @@ class CollectorSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -406,6 +408,7 @@ class AstarSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -471,6 +474,7 @@ class SalvagerSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -542,6 +546,7 @@ class BuilderSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -613,6 +618,7 @@ class HealerSpawner {
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
@@ -705,6 +711,7 @@ class ResearchSpawner {
     }
 
     draw(ctx) {
+        const gameTime = this._historyGhost ? this._historyTick : getRenderGameTime();
         if (this.owner >= 0) {
             ctx.strokeStyle = get2DRenderOwnerColor(this.owner); ctx.lineWidth = 1;
             ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);

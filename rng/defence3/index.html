@@ -91,8 +91,8 @@
                         <input id="cfg-max-thing-level" type="number" min="1" max="100" step="1" value="20" style="width:72px">
                     </div>
                     <div class="lobby-setting-row">
-                        <label for="cfg-full-vis">Full Map Visibility</label>
-                        <input id="cfg-full-vis" type="checkbox" title="Disable Fog of War">
+                        <label for="cfg-full-vis">Map visibility</label>
+                        <select id="cfg-full-vis"><option value="full">Full visibility</option><option value="team" selected>Team</option><option value="history">Team + history</option></select>
                     </div>
                     <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
                         <button id="btn-open-optimization" type="button" style="font-size:11px;padding:4px 8px">Optimization</button>
@@ -424,13 +424,19 @@
                 <div class="settings-list">
                     <div class="settings-row">
                         <label for="btn-level-visibility">Levels visibility</label>
-                        <button id="btn-level-visibility"
-                            style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Levels: Buildings</button>
+                        <select id="btn-level-visibility"><option value="0">Everything</option><option value="1" selected>Buildings</option><option value="2">Off</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="btn-render-range">Render range overlay</label>
-                        <button id="btn-render-range"
-                            style="background:transparent; border:1px solid #444; color:#ddd; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Render range: Turrets</button>
+                        <select id="btn-render-range"><option value="2">None</option><option value="0" selected>Turrets</option><option value="4">Units</option><option value="1">Turrets + units</option><option value="5">Buildings</option><option value="3">All things</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-range-team">Show ranges for</label>
+                        <select id="setting-range-team"><option value="selected">Selected things</option><option value="team">All team things</option></select>
+                    </div>
+                    <div class="settings-row">
+                        <label for="setting-range-through">Ranges visible through objects (3D)</label>
+                        <select id="setting-range-through"><option value="false">Behind objects</option><option value="true">Through objects</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-gold-mine-text">Energy mine amount text</label>
@@ -471,7 +477,7 @@
                     </div>
                     <div class="settings-row">
                         <label for="setting-selection-outline-see-through">See-through selection outlines (3D)</label>
-                        <input id="setting-selection-outline-see-through" type="checkbox">
+                        <select id="setting-selection-outline-see-through"><option value="false">Behind objects</option><option value="true">Through objects</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="btn-show-statsmap">Precomputed Stats Map</label>
@@ -641,6 +647,8 @@
     <script src="./src/data/data_dynamic.js?v=20260922-team-watch"></script>
     <script src="./src/data/data_state.js?v=20260923-outline-option"></script>
 
+    <script src="./src/audio_visual/visibility_history.js?v=20260923-history"></script>
+    <script src="./src/audio_visual/range_overlay.js?v=20260923-range"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20260923-selection"></script>
     <script src="./src/audio_visual/renderer3d.js?v=20260923-outline-option"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20260923-snake-live"></script>

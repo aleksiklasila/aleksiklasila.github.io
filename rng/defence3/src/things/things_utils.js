@@ -1515,7 +1515,7 @@ function getLevelVisibilityButtonText() {
 function updateLevelVisibilityButton() {
     let btn = document.getElementById('btn-level-visibility');
     if (!btn) return;
-    btn.textContent = getLevelVisibilityButtonText();
+    btn.value = String(levelVisibilityMode);
 }
 
 function cycleLevelVisibilityMode() {
@@ -1527,17 +1527,20 @@ function cycleLevelVisibilityMode() {
 function getRenderRangeButtonText() {
     if (renderRangeMode === RENDER_RANGE_TURRETS) return 'Render range: Turrets';
     if (renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) return 'Render range: Turrets + Units';
+    if (renderRangeMode === RENDER_RANGE_ALL) return 'Render range: All things';
+    if (renderRangeMode === RENDER_RANGE_UNITS) return 'Render range: Units';
+    if (renderRangeMode === RENDER_RANGE_BUILDINGS) return 'Render range: Buildings';
     return 'Render range: None';
 }
 
 function updateRenderRangeButton() {
     let btn = document.getElementById('btn-render-range');
     if (!btn) return;
-    btn.textContent = getRenderRangeButtonText();
+    btn.value = String(renderRangeMode);
 }
 
 function cycleRenderRangeMode() {
-    renderRangeMode = (renderRangeMode + 1) % 3;
+    renderRangeMode = (renderRangeMode + 1) % 6;
     updateRenderRangeButton();
     saveUiSettingsToStorage();
 }

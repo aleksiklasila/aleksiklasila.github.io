@@ -1864,6 +1864,7 @@ function applyIncomingMatchSyncPayload(data, role = 'playing') {
         GOLD_MINE_MAX = data.cfg.goldMax;
         GOLD_MINE_AREA = data.cfg.goldArea;
         fullVisibility = role === 'spectating' ? true : !!data.cfg.fullVis;
+        teamVisibilityHistory = !!data.cfg.teamHistory;
         gameMode = data.cfg.gameMode || 'destroy';
         CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
         STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
@@ -2917,6 +2918,7 @@ function setLobbyMode(mode) {
 }
 
 function resetWorldState() {
+    visibilityHistoryState = null;
     // Clear all world/runtime objects so no match state carries over.
     towers = [];
     units = [];
@@ -3178,6 +3180,7 @@ function startHostedGame() {
                 goldMax: GOLD_MINE_MAX,
                 goldArea: GOLD_MINE_AREA,
                 fullVis: fullVisibility,
+                teamHistory: teamVisibilityHistory,
                 gameMode: gameMode,
                 maxPop: CONFIG_MAX_POP,
                 startingMoney: STARTING_MONEY,
@@ -3325,7 +3328,8 @@ function readConfigFromMenu() {
     ASTAR_MINE_COUNT = Math.max(0, Math.floor(parseInt((document.getElementById('cfg-astar-mine-count') || {}).value) || ASTAR_MINE_COUNT));
     ASTAR_MINE_MIN = Math.max(0, Math.floor(parseInt((document.getElementById('cfg-astar-mine-min') || {}).value) || ASTAR_MINE_MIN));
     ASTAR_MINE_MAX = Math.max(ASTAR_MINE_MIN, Math.floor(parseInt((document.getElementById('cfg-astar-mine-max') || {}).value) || ASTAR_MINE_MAX));
-    fullVisibility = document.getElementById('cfg-full-vis').checked;
+    fullVisibility = document.getElementById('cfg-full-vis').value === 'full';
+    teamVisibilityHistory = document.getElementById('cfg-full-vis').value === 'history';
     gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
     CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
     STARTING_MONEY = Math.max(0, Math.floor(parseInt(document.getElementById('cfg-starting-energy').value) || 2000));

@@ -4,6 +4,21 @@
 let selectionContourCache = { input: [], groups: [] };
 const selectionCircleDirections = Array.from({ length: 16 }, (_, i) => [Math.cos(i * Math.PI / 8), Math.sin(i * Math.PI / 8)]);
 const selectionCanvasPaths = new WeakMap();
+const selectionPresentationPositions = new WeakMap();
+
+function stabilizeSelectionPosition(entity, x, y, now) {
+    let p = selectionPresentationPositions.get(entity);
+    if (!p || Math.abs(x - p.x) + Math.abs(y - p.y) > 128 || now - p.time > 250) {
+        p = { x, y, time: now };
+        selectionPresentationPositions.set(entity, p);
+    } else {
+        // Small motion near a cluster threshold should not split/rejoin the
+        // outline every frame. Presentation smoothing never moves the unit.
+        let blend = 1 - Math.exp(-Math.max(0, now - p.time) / 90);
+        p.x += (x - p.x) * blend; p.y += (y - p.y) * blend; p.time = now;
+    }
+    return p;
+}
 
 function buildSelectionContours(footprints) {
     let input = [];
@@ -141,6 +156,7 @@ function buildSelectionContours(footprints) {
 
 function getSelectionContours(entities, selected, alpha, ownerColor) {
     let footprints = [];
+    let now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (showSelectionOutlinesForBuildings()) for (let e of entities) {
         if (!e || (e.energy !== undefined && e.energy <= 0)) continue;
         footprints.push({ x: Number.isFinite(e.x) ? e.x : e.gx * TILE + TILE / 2,
@@ -149,8 +165,10 @@ function getSelectionContours(entities, selected, alpha, ownerColor) {
     }
     if (showSelectionOutlinesForUnits()) for (let u of selected) {
         if (!u || u.dead) continue;
-        footprints.push({ x: Number.isFinite(u.prevX) ? u.prevX + (u.x - u.prevX) * alpha : u.x,
-            y: Number.isFinite(u.prevY) ? u.prevY + (u.y - u.prevY) * alpha : u.y,
+        let p = stabilizeSelectionPosition(u,
+            Number.isFinite(u.prevX) ? u.prevX + (u.x - u.prevX) * alpha : u.x,
+            Number.isFinite(u.prevY) ? u.prevY + (u.y - u.prevY) * alpha : u.y, now);
+        footprints.push({ x: p.x, y: p.y,
             radius: (Number(u.r) || 8) + 6, color: ownerColor(u.owner) });
     }
     return buildSelectionContours(footprints);
