@@ -1581,6 +1581,26 @@ function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', line
     ctx.stroke(path);
     ctx.restore();
 }
+// Stream one live path. Removing duplicate and exactly collinear forward points
+// preserves the polyline while avoiding redundant round joins on straight tails.
+function buildSnakeTrailPath(ctx, unit) {
+    ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
+    let ax = unit.x, ay = unit.y, bx = ax, by = ay;
+    let hasLength = false;
+    for (let p of unit.snakeHistory) {
+        if (p.x === bx && p.y === by) continue;
+        hasLength = true;
+        let dx = bx - ax, dy = by - ay, nx = p.x - bx, ny = p.y - by;
+        if (dx * ny !== dy * nx || dx * nx + dy * ny < 0) {
+            ctx.lineTo(bx, by);
+            ax = bx; ay = by;
+        }
+        bx = p.x; by = p.y;
+    }
+    ctx.lineTo(bx, by);
+    return hasLength;
+}
+
 // Body geometry is shared by immediate drawing and the strategic sprite cache.
 function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
         if (unit.isSnake && (unit.snakeHistory.length > 0 || ctx.__snakeHeadOnly)) {
@@ -1590,12 +1610,12 @@ function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
                 // Reuse the same path for the outline and body.
                 ctx.lineWidth = unit.r * 2 + 3;
                 ctx.strokeStyle = strokeColor;
-                ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
-                for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
-                ctx.stroke();
-                ctx.lineWidth = unit.r * 2;
-                ctx.strokeStyle = unit.color;
-                ctx.stroke();
+                if (buildSnakeTrailPath(ctx, unit)) {
+                    ctx.stroke();
+                    ctx.lineWidth = unit.r * 2;
+                    ctx.strokeStyle = unit.color;
+                    ctx.stroke();
+                }
             }
             // Head
             ctx.fillStyle = strokeColor;

@@ -10,58 +10,10 @@ let _combinedBgDirtyFull = true;
 let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 const _unitBodySprites = new Map();
 let _unitBodySpriteBuildsRemaining = 8;
-const _snakeTrailSprites = new WeakMap();
-
-function drawCachedSnakeBody(g, unit, stroke, lineWidth) {
-    let history = unit.snakeHistory;
-    if (!history || !history.length || g.__snakeHeadOnly) return false;
-    // The history changes every third tick, while the head interpolates every
-    // frame. Cache the long trail and draw just its short connection live.
-    let scale = Math.max(1, Math.min(3, Math.ceil(camera.zoom * (window.devicePixelRatio || 1))));
-    let cached = _snakeTrailSprites.get(unit);
-    if (!cached || cached.first !== history[0] || cached.last !== history[history.length - 1]
-        || cached.length !== history.length || cached.radius !== unit.r || cached.stroke !== stroke || cached.color !== unit.color || cached.scale !== scale) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (let p of history) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-        let pad = unit.r + 3;
-        minX = Math.floor(minX - pad); minY = Math.floor(minY - pad);
-        let width = Math.ceil(maxX + pad - minX), height = Math.ceil(maxY + pad - minY);
-        // Teleports or unusual modded trails keep the exact vector fallback.
-        if (width * scale > 1024 || height * scale > 1024) return false;
-        let canvas = cached ? cached.canvas : document.createElement('canvas');
-        canvas.width = width * scale; canvas.height = height * scale;
-        let c = canvas.getContext('2d');
-        c.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
-        c.lineCap = 'round'; c.lineJoin = 'round';
-        c.beginPath(); c.moveTo(history[0].x, history[0].y);
-        for (let i = 1; i < history.length; i++) c.lineTo(history[i].x, history[i].y);
-        c.lineWidth = unit.r * 2 + 3; c.strokeStyle = stroke; c.stroke();
-        c.lineWidth = unit.r * 2; c.strokeStyle = unit.color; c.stroke();
-        cached = { canvas, minX, minY, width, height, first: history[0], last: history[history.length - 1],
-            length: history.length, radius: unit.r, stroke, color: unit.color, scale };
-        _snakeTrailSprites.set(unit, cached);
-    }
-    g.save(); g.lineCap = 'round'; g.lineJoin = 'round';
-    g.beginPath(); g.moveTo(unit.x, unit.y); g.lineTo(history[0].x, history[0].y);
-    g.lineWidth = unit.r * 2 + 3; g.strokeStyle = stroke; g.stroke();
-    let immediate = g.__drawImagesImmediately;
-    g.__drawImagesImmediately = true;
-    g.drawImage(cached.canvas, cached.minX, cached.minY, cached.width, cached.height);
-    g.__drawImagesImmediately = immediate;
-    g.lineWidth = unit.r * 2; g.strokeStyle = unit.color; g.stroke();
-    g.restore();
-    let headOnly = g.__snakeHeadOnly;
-    g.__snakeHeadOnly = true;
-    drawCachedUnitBody(g, unit, stroke, lineWidth);
-    g.__snakeHeadOnly = headOnly;
-    return true;
-}
-
 function drawCachedUnitBody(g, unit, stroke, lineWidth) {
-    if (unit.isSnake && !g.__drawImagesImmediately && drawCachedSnakeBody(g, unit, stroke, lineWidth)) return;
     // Keep long snake trails and close-up geometry live. Cache only the body:
     // health, selection, combat effects and worker status remain current.
-    if ((unit.isSnake && !g.__snakeHeadOnly) || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
+    if (unit.isSnake || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
         drawUnitBodyGeometry(g, unit, stroke, lineWidth);
         return;
     }
@@ -73,7 +25,6 @@ function drawCachedUnitBody(g, unit, stroke, lineWidth) {
         let image = document.createElement('canvas');
         image.width = image.height = radius * 4;
         let c = image.getContext('2d');
-        c.__snakeHeadOnly = !!g.__snakeHeadOnly;
         c.setTransform(2, 0, 0, 2, radius * 2 - unit.x * 2, radius * 2 - unit.y * 2);
         drawUnitBodyGeometry(c, unit, stroke, lineWidth);
         sprite = { image, radius };
