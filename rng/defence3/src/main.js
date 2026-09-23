@@ -1751,6 +1751,14 @@ function initInput() {
     const rallyLineScopeSelect = document.getElementById('setting-show-rally-lines');
     const selectionOutlineScopeSelect = document.getElementById('setting-show-selection-outlines');
     const selectionOutlineTypeSelect = document.getElementById('setting-selection-outline-type');
+    const selectionOutlineSeeThroughToggle = document.getElementById('setting-selection-outline-see-through');
+    if (selectionOutlineSeeThroughToggle) {
+        selectionOutlineSeeThroughToggle.checked = selectionOutlineSeeThrough;
+        selectionOutlineSeeThroughToggle.addEventListener('change', () => {
+            selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.checked;
+            saveUiSettingsToStorage();
+        });
+    }
     if (goldMineTextToggle) {
         goldMineTextToggle.checked = !!showGoldMineAmountText;
         goldMineTextToggle.addEventListener('change', () => {

@@ -15,6 +15,7 @@ function saveUiSettingsToStorage() {
         if (typeof rallyLineType !== 'undefined') ui.rallyLineType = rallyLineType;
         if (typeof rallyLineScope !== 'undefined') ui.rallyLineScope = rallyLineScope;
         if (typeof selectionOutlineType !== 'undefined') ui.selectionOutlineType = selectionOutlineType;
+        if (typeof selectionOutlineSeeThrough === 'boolean') ui.selectionOutlineSeeThrough = selectionOutlineSeeThrough;
         if (typeof selectionOutlineScope !== 'undefined') ui.selectionOutlineScope = selectionOutlineScope;
         if (Number.isFinite(buildPlacementMode)) ui.buildPlacementMode = Math.floor(buildPlacementMode);
         localStorage.setItem(LS_UI_SETTINGS_KEY, JSON.stringify(ui));
@@ -62,6 +63,7 @@ function loadUiSettingsFromStorage() {
                 if (s.selectionOutlineType === OVERLAY_LINE_SOLID || s.selectionOutlineType === OVERLAY_LINE_DOTTED) {
                     selectionOutlineType = s.selectionOutlineType;
                 }
+                if (typeof s.selectionOutlineSeeThrough === 'boolean') selectionOutlineSeeThrough = s.selectionOutlineSeeThrough;
                 if (s.selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS || s.selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS || s.selectionOutlineScope === OVERLAY_SCOPE_NONE) {
                     selectionOutlineScope = s.selectionOutlineScope;
                 }

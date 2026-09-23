@@ -470,6 +470,10 @@
                         </select>
                     </div>
                     <div class="settings-row">
+                        <label for="setting-selection-outline-see-through">See-through selection outlines (3D)</label>
+                        <input id="setting-selection-outline-see-through" type="checkbox">
+                    </div>
+                    <div class="settings-row">
                         <label for="btn-show-statsmap">Precomputed Stats Map</label>
                         <button id="btn-show-statsmap"
                             style="background:transparent; border:1px solid #4a5a6a; color:#b7d8ff; cursor:pointer; font-size:11px; padding:2px 6px; border-radius:3px;">Open JSON</button>
@@ -631,17 +635,17 @@
     
     <script src="./src/utils/utils_common.js?v=20260516d"></script>
     <script src="./src/utils/utils_networking.js?v=20260516d"></script>
-    <script src="./src/utils/utils_storage.js?v=20260516d"></script>
+    <script src="./src/utils/utils_storage.js?v=20260923-outline-option"></script>
 
     <script src="./src/data/data_static.js?v=20260922-team-watch"></script>
     <script src="./src/data/data_dynamic.js?v=20260922-team-watch"></script>
-    <script src="./src/data/data_state.js?v=20260516d"></script>
+    <script src="./src/data/data_state.js?v=20260923-outline-option"></script>
 
     <script src="./src/audio_visual/selection_overlay.js?v=20260923-selection"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20260923-selection"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20260923-outline-option"></script>
     <script src="./src/audio_visual/renderer2d.js?v=20260923-snake-live"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260516d"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260923-selection"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260923-outline-option"></script>
     <script src="./src/audio_visual/audio.js?v=20260923-selection"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260923-selection"></script>
@@ -659,7 +663,7 @@
     <script src="./src/things/things_utils.js?v=20260516d"></script>
     <script src="./src/things/tower.js?v=20260922-team-watch"></script>
 
-    <script src="./src/main.js?v=20260922-team-watch"></script>
+    <script src="./src/main.js?v=20260923-outline-option"></script>
 
     <script src="./src/bootstrap.js?v=20260516d"></script>
 </body>

@@ -2033,6 +2033,7 @@
                     layout(location=2) in vec2 aStyle;
                     uniform mat4 uViewProjection;
                     uniform vec2 uViewport;
+                    uniform int uSeeThroughCount;
                     out vec4 vColor;
                     out float vAlong;
                     out float vAcross;
@@ -2047,6 +2048,10 @@
                         float side = float(gl_VertexID % 2) * 2. - 1.;
                         vec4 p = mix(a, b, end);
                         p.xy += normal * side * 1.25 * 2. / uViewport * p.w;
+                        // Selection instances precede rally lines in this batch.
+                        // Bring only opted-in outlines to the near plane; depth
+                        // writes stay disabled, preserving the scene and rallies.
+                        if (gl_InstanceID < uSeeThroughCount) p.z = -p.w;
                         gl_Position = p;
                         vColor = aColor; vAcross = side;
                         vAlong = aStyle.y + end * lengthPx; vDashed = aStyle.x;
@@ -2069,7 +2074,8 @@
                 this.groundLineColors = new Map();
                 this.groundLineUniforms = {
                     viewProjection: gl.getUniformLocation(this.groundLineProgram, 'uViewProjection'),
-                    viewport: gl.getUniformLocation(this.groundLineProgram, 'uViewport')
+                    viewport: gl.getUniformLocation(this.groundLineProgram, 'uViewport'),
+                    seeThroughCount: gl.getUniformLocation(this.groundLineProgram, 'uSeeThroughCount')
                 };
                 gl.bindVertexArray(this.groundLineVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);
@@ -2121,6 +2127,7 @@
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, offset));
             gl.uniformMatrix4fv(this.groundLineUniforms.viewProjection, false, this.tmpViewProjection);
             gl.uniform2f(this.groundLineUniforms.viewport, this.cssWidth, this.cssHeight);
+            gl.uniform1i(this.groundLineUniforms.seeThroughCount, overlays.selectionSeeThrough ? count - lines.length : 0);
             gl.enable(gl.DEPTH_TEST);
             gl.depthMask(false);
             gl.enable(gl.BLEND);
