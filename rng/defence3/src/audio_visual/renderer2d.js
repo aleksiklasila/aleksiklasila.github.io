@@ -41,46 +41,10 @@ function drawCachedUnitBody(g, unit, stroke, lineWidth) {
 
 function _drawAreaCoverageOverlay2D(ctx, cells, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY) {
     if (!ctx || !Array.isArray(cells) || cells.length <= 0) return;
-    let cellSet = new Set();
-    for (let i = 0; i < cells.length; i++) {
-        let cell = cells[i];
-        if (!cell) continue;
-        cellSet.add(`${cell.x},${cell.y}`);
-    }
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = 2.5;
-    for (let i = 0; i < cells.length; i++) {
-        let cell = cells[i];
-        if (!cell) continue;
-        let x = cell.x * TILE;
-        let y = cell.y * TILE;
-        if (!_overlayBoundsVisible(x, y, x + TILE, y + TILE, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY, 4)) continue;
-        if (!cellSet.has(`${cell.x},${cell.y - 1}`)) {
-            ctx.beginPath();
-            ctx.moveTo(x, y + 0.5);
-            ctx.lineTo(x + TILE, y + 0.5);
-            ctx.stroke();
-        }
-        if (!cellSet.has(`${cell.x + 1},${cell.y}`)) {
-            ctx.beginPath();
-            ctx.moveTo(x + TILE - 0.5, y);
-            ctx.lineTo(x + TILE - 0.5, y + TILE);
-            ctx.stroke();
-        }
-        if (!cellSet.has(`${cell.x},${cell.y + 1}`)) {
-            ctx.beginPath();
-            ctx.moveTo(x, y + TILE - 0.5);
-            ctx.lineTo(x + TILE, y + TILE - 0.5);
-            ctx.stroke();
-        }
-        if (!cellSet.has(`${cell.x - 1},${cell.y}`)) {
-            ctx.beginPath();
-            ctx.moveTo(x + 0.5, y);
-            ctx.lineTo(x + 0.5, y + TILE);
-            ctx.stroke();
-        }
-    }
+    ctx.stroke(getAreaCoveragePath(cells));
     ctx.restore();
 }
 
@@ -998,6 +962,7 @@ function ensureVisibilityMaskCanvas() {
 }
 
 function rebuildVisibilityMaskCacheIfNeeded() {
+    const visibilityGrid = getRenderVisibilityGrid();
     ensureVisibilityMaskCanvas();
     if (!_visibilityMaskCtx || !_visibilityMaskGridCtx) return;
 
@@ -1192,12 +1157,13 @@ function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
     let sx = minGx * TILE, sy = minGy * TILE;
     let sw = (maxGx - minGx + 1) * TILE;
     let sh = (maxGy - minGy + 1) * TILE;
-    let source = getBackgroundMip(camera.zoom * (window.devicePixelRatio || 1));
+    let source = getHistoryBackground(getBackgroundMip(camera.zoom * (window.devicePixelRatio || 1)));
     queueDrawImage(ctx, source, sx * source.width / WORLD_W, sy * source.height / WORLD_H,
         sw * source.width / WORLD_W, sh * source.height / WORLD_H, sx, sy, sw, sh);
 }
 
 function drawVisibilityMask(ctx, minGx, minGy, maxGx, maxGy) {
+    const visibilityGrid = getRenderVisibilityGrid();
     if (fullVisibility || visibilityGrid.length === 0) return;
     let invNorm = 1 / Math.max(0.0001, Number(VISIBILITY_LIGHT_NORMALIZATION_RANGE) || 6);
     let tileSize = TILE;
@@ -1236,6 +1202,7 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
     let c = _staticLayerCache;
     let needsRedraw =
         !c.valid ||
+        (teamVisibilityHistory && !fullVisibility && c.historyVersion !== visibilityVersion) ||
         c.cameraX !== camera.x ||
         c.cameraY !== camera.y ||
         c.zoom !== camera.zoom ||
@@ -1267,6 +1234,7 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
     renderer3dBackgroundVersion++;
 
     c.valid = true;
+    c.historyVersion = visibilityVersion;
     c.cameraX = camera.x;
     c.cameraY = camera.y;
     c.zoom = camera.zoom;
@@ -1373,6 +1341,9 @@ function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
 }
 
 function draw() {
+    const historyView = getHistoryRenderView();
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = historyView || getLiveRenderView();
+
     _unitBodySpriteBuildsRemaining = 8;
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
     let minGx = Math.max(0, Math.floor(camera.x / TILE) - 1);
@@ -1380,8 +1351,8 @@ function draw() {
     let maxGx = Math.min(GRID_W - 1, Math.ceil((camera.x + vw) / TILE) + 1);
     let maxGy = Math.min(GRID_H - 1, Math.ceil((camera.y + vh) / TILE) + 1);
     let staticBounds = getBackgroundWorldBoundsForRenderMode();
-    let bgSoundGrid = audioSpatialGridBackground;
-    let fxSoundGrid = audioSpatialGridEffects;
+    let bgSoundGrid = getHistoryAudioGrid(audioSpatialGridBackground, 'background');
+    let fxSoundGrid = getHistoryAudioGrid(audioSpatialGridEffects, 'effects');
     let getTileReactiveScale = (bgLevel, fxLevel) => 1 + bgLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_SFX;
 
     renderStaticLayer(staticBounds.minGx, staticBounds.minGy, staticBounds.maxGx, staticBounds.maxGy);
@@ -1709,7 +1680,6 @@ function draw() {
     let stationaryBuildingRallyMarkers = [];
     let dynamicBuildingRallySegments = [];
     let dynamicBuildingRallyMarkers = [];
-    let towerRangeEntries = [];
 
     // Selected entities highlight + rally + tower target/range metadata.
     for (let ent of activeSelectedEntities) {
@@ -1751,40 +1721,13 @@ function draw() {
             }
         }
 
-        if (renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
-            if (ent instanceof Tower) {
-                let visArea = getEntityVisibilityRangeArea(ent);
-                if (Number.isFinite(visArea) && visArea > 0) {
-                    let color = (ent.owner === localPlayerId || !isMultiplayer) ? 'rgba(0,255,0,0.20)' : 'rgba(255,0,0,0.20)';
-                    towerRangeEntries.push([getAreaRangeCellsAtWorld(ex, ey, visArea), color]);
-                }
-            }
-        }
+
     }
 
     drawBuildingRallies2D(ctx, stationaryBuildingRallySegments.concat(dynamicBuildingRallySegments),
         stationaryBuildingRallyMarkers.concat(dynamicBuildingRallyMarkers));
 
-    // Range overlays: draw the included area tiles directly.
-    if (renderRangeMode !== RENDER_RANGE_NONE) {
-        if (towerRangeEntries.length > 0) {
-            for (let e of towerRangeEntries) {
-                _drawAreaCoverageOverlay2D(ctx, e[0], e[1], overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
-            }
-        }
-
-        if (renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
-            for (let u of activeSelectedUnits) {
-                if (!u || u.dead) continue;
-                let rangeArea = getUnitRenderActionRangeArea(u);
-                if (rangeArea <= 0) continue;
-                let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
-                let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-                let color = (u.owner === localPlayerId || !isMultiplayer) ? 'rgba(120,220,255,0.52)' : 'rgba(255,150,150,0.52)';
-                _drawAreaRangeOverlay2D(ctx, ux, uy, rangeArea, color, overlayViewMinX, overlayViewMinY, overlayViewMaxX, overlayViewMaxY);
-            }
-        }
-    }
+    drawRangeBoundary2D(ctx, getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits));
 
     drawSelectionContours2D(ctx, getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get2DRenderOwnerColor));
 

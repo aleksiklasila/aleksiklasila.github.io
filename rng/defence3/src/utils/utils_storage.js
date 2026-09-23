@@ -8,6 +8,8 @@ function saveUiSettingsToStorage() {
         let ui = {};
         if (Number.isFinite(levelVisibilityMode)) ui.levelVisibilityMode = Math.floor(levelVisibilityMode);
         if (Number.isFinite(renderRangeMode)) ui.renderRangeMode = Math.floor(renderRangeMode);
+        ui.renderRangeAllTeam = renderRangeAllTeam;
+        ui.renderRangeSeeThrough = renderRangeSeeThrough;
         if (typeof audioEnabled === 'boolean') ui.audioEnabled = !!audioEnabled;
         if (Number.isFinite(audioVolume)) ui.audioVolume = Math.max(0, Math.min(1, Number(audioVolume)));
         if (Number.isFinite(audioBackgroundVolume)) ui.audioBackgroundVolume = Math.max(0, Math.min(1, Number(audioBackgroundVolume)));
@@ -40,8 +42,10 @@ function loadUiSettingsFromStorage() {
                     levelVisibilityMode = Math.max(0, Math.min(2, Math.floor(s.levelVisibilityMode)));
                 }
                 if (Number.isFinite(s.renderRangeMode)) {
-                    renderRangeMode = Math.max(0, Math.min(2, Math.floor(s.renderRangeMode)));
+                    renderRangeMode = Math.max(0, Math.min(5, Math.floor(s.renderRangeMode)));
                 }
+                renderRangeAllTeam = s.renderRangeAllTeam === true;
+                renderRangeSeeThrough = s.renderRangeSeeThrough === true;
                 if (typeof s.audioEnabled === 'boolean') {
                     audioEnabled = s.audioEnabled;
                 }

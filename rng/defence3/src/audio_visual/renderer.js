@@ -911,14 +911,6 @@ function build3DOverlayData(bounds, alpha) {
         markerKeys.add(key);
         overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
     };
-    let pushAreaTiles = (wx, wy, rangeArea, strokeColor, fillColor = null, dashed = false) => {
-        let cells = getAreaRangeCellsAtWorld(wx, wy, rangeArea);
-        for (let i = 0; i < cells.length; i++) {
-            let cell = cells[i];
-            if (!cell) continue;
-            overlays.areaTiles.push({ x: cell.x, y: cell.y, strokeColor, fillColor, dashed });
-        }
-    };
     let pushSalvageCross = (worldX, worldY) => {
         let span = TILE * 0.34;
         pushLine(worldX - span, worldY - span, worldX + span, worldY + span, '#f44');
@@ -945,22 +937,12 @@ function build3DOverlayData(bounds, alpha) {
             }
         }
 
-        if ((renderRangeMode === RENDER_RANGE_TURRETS || renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) && ent instanceof Tower) {
-            let visArea = getEntityVisibilityRangeArea(ent);
-            if (Number.isFinite(visArea) && visArea > 0) pushAreaTiles(ex, ey, visArea, 'rgba(120,255,120,0.55)', 'rgba(120,255,120,0.18)');
-        }
+
     }
 
-    if (renderRangeMode === RENDER_RANGE_TURRETS_AND_UNITS) {
-        for (let u of activeSelectedUnits) {
-            if (!u || u.dead) continue;
-            let rangeArea = getUnitRenderActionRangeArea(u);
-            if (rangeArea <= 0) continue;
-            let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
-            let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;
-            pushAreaTiles(ux, uy, rangeArea, 'rgba(120,220,255,0.5)', 'rgba(120,220,255,0.18)');
-        }
-    }
+    overlays.rangeLines = clipRangeBoundaryToBounds(getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits),
+        bounds.minGx - 1, bounds.minGy - 1, bounds.maxGx + 2, bounds.maxGy + 2);
+    overlays.rangeSeeThrough = renderRangeSeeThrough;
 
     for (let u of activeSelectedUnits) {
         if (!u || u.dead) continue;
@@ -1030,7 +1012,9 @@ function push3DRenderObject(target, object) {
     let oz = Number(object.z) || 0;
     let gx = Math.floor(ox);
     let gy = Math.floor(oz);
-    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0);
+    let remembered = !!(getHistoryRenderView() && visibilityHistoryState.explored[gy * GRID_W + gx] && !(visibilityHistoryState.raw[gy] && visibilityHistoryState.raw[gy][gx] > 0));
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
     let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     // Bilinear interpolation of gradient across 4 surrounding tile corners to avoid boundary jumps
     let shadowDirX = DEFAULT_SHADOW_DIR_X;
@@ -1111,7 +1095,7 @@ function push3DRenderObject(target, object) {
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
-        pickSource: object.pickSource || object.visibilitySource || null,
+        pickSource: (object.pickSource || object.visibilitySource || {})._historyGhost ? null : object.pickSource || object.visibilitySource || null,
         modelKey: object.modelKey || 'cube',
         modelCandidates: Array.isArray(object.modelCandidates) ? object.modelCandidates.slice() : [],
         x: Number(object.x) || 0,
@@ -1137,6 +1121,9 @@ function push3DRenderObject(target, object) {
         sideTextureKey: object.sideTextureKey || '',
         sideTextureCanvas: object.sideTextureCanvas || null,
         sideTextureAngle: Number.isFinite(object.sideTextureAngle) ? Number(object.sideTextureAngle) : 0,
+        // Keep the physical lighting for shadows; shaders additionally dim
+        // remembered models, including their otherwise full-bright panels.
+        historyGhost: remembered,
         lightLevel: finalLightLevel,
         shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
         shadowDirZ: Number.isFinite(object.shadowDirZ) ? Number(object.shadowDirZ) : shadowDirZ,
@@ -1308,7 +1295,7 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
         2: ['#ffb52e', '#fff1a8'], 3: [u.workerType === 'astar_collector' ? '#e8e8ff' : '#ffd84d', '#ffffff'],
         4: ['#ff7043', '#d7e0e8'], 5: ['#62ffb0', '#eafff4'], 6: ['#55bfff', '#c76cff']
     }[activity.mode];
-    let phase = (gameTime + tickAlpha) / Math.max(1, TICK_RATE) * (activity.mode === 4 ? 12 : 7) + (Number(u.id) || 0) * 1.37;
+    let phase = (u._historyGhost ? u._historyTick : gameTime + tickAlpha) / Math.max(1, TICK_RATE) * (activity.mode === 4 ? 12 : 7) + (Number(u.id) || 0) * 1.37;
     let count = 2;
     for (let i = 0; i < count; i++) {
         let p = phase + i * Math.PI * 2 / count;
@@ -1327,6 +1314,9 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
 }
 
 function build3DFrameData() {
+    const historyView = getHistoryRenderView();
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = historyView || getLiveRenderView();
+
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
     renderer3dExactTextureTimeRemaining = 2;
@@ -1344,13 +1334,13 @@ function build3DFrameData() {
     if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
     let backgroundMinX = 0, backgroundMinY = 0;
     let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
-    let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
-    let backgroundVersionFor3D = _backgroundContentVersion;
+    let backgroundCanvasFor3D = getHistoryBackground(getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H))));
+    let backgroundVersionFor3D = teamVisibilityHistory && !fullVisibility ? visibilityVersion : _backgroundContentVersion;
     if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
     let overlays = build3DOverlayData(bounds, alpha);
     let soundGrid = audioSpatialGrid;
-    let bgSoundGrid = audioSpatialGridBackground;
-    let fxSoundGrid = audioSpatialGridEffects;
+    let bgSoundGrid = getHistoryAudioGrid(audioSpatialGridBackground, 'background');
+    let fxSoundGrid = getHistoryAudioGrid(audioSpatialGridEffects, 'effects');
     let reactiveOffsetX = Number(audioReactiveGlobalOffsetX) || 0;
     let reactiveOffsetY = Number(audioReactiveGlobalOffsetY) || 0;
     let unitOccupiedTileKeys = new Set();
@@ -1397,7 +1387,8 @@ function build3DFrameData() {
     };
     let getTileLightLevel = (gx, gy) => {
         if (fullVisibility) return 1;
-        let raw = (visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0;
+        let lighting = historyView && visibilityHistoryState.raw[gy] && visibilityHistoryState.raw[gy][gx] > 0 ? getTeamLightingGrid() : visibilityGrid;
+        let raw = (lighting[gy] && lighting[gy][gx]) || 0;
         return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     };
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint) => {
@@ -1726,8 +1717,8 @@ function build3DFrameData() {
                 rotationY: Math.atan2(facingX, facingY || 0.0001),
                 moveAmount: activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
                 walkPhase: activity.mode === 1
-                    ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + tickAlpha) / 8)) * Math.PI
-                    : (gameTime + tickAlpha) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399,
+                    ? Math.max(0, Math.min(1, (8 - Number(u.attackFlash || 0) + (u._historyGhost ? 0 : tickAlpha)) / 8)) * Math.PI
+                    : ((u._historyGhost ? u._historyTick : gameTime + tickAlpha)) / TICK_RATE * (activity.mode === 2 ? 8 : activity.mode === 4 ? 14 : 10) + (Number(u.id) || 0) * 2.399,
                 animationMode: activity.mode,
                 weaponType: getUnit3DWeaponType(u),
                 isFlying: !!u.isFlying,
@@ -1992,6 +1983,8 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
 }
 
 function drawMinimap() {
+    const historyView = getHistoryRenderView();
+    const units = historyView ? historyView.units : getLiveRenderView().units;
     let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
     let tilePx = Math.max(1, scale);
     let vis = visibilityGrid;
@@ -2038,20 +2031,19 @@ function drawMinimap() {
     };
 
     // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
-    minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
+    minimapCtx.drawImage(getHistoryBackground(_minimapStaticCanvas, true), 0, 0);
 
     // Unknown areas
     if (!fullVisibility && vis.length > 0) {
         for (let y = 0; y < GRID_H; y++) {
             let row = vis[y];
-            let runStart = -1;
+            let runStart = 0, runState = -1;
             for (let x = 0; x <= GRID_W; x++) {
-                let hidden = x < GRID_W && (!row || row[x] === 0);
-                if (hidden) {
-                    if (runStart < 0) runStart = x;
-                } else if (runStart >= 0) {
-                    drawMinimapRun(runStart, x, y, '#000');
-                    runStart = -1;
+                let state = x === GRID_W ? -1 : row && row[x] > 0 ? 0
+                    : historyView && visibilityHistoryState.explored[y * GRID_W + x] ? 1 : 2;
+                if (state !== runState) {
+                    if (runState > 0) drawMinimapRun(runStart, x, y, runState === 1 ? 'rgba(0,0,0,0.77)' : '#000');
+                    runStart = x; runState = state;
                 }
             }
         }
@@ -2061,12 +2053,14 @@ function drawMinimap() {
     for (let u of units) {
         if (u.dead) continue;
         let cgy = Math.floor(u.y / TILE), cgx = Math.floor(u.x / TILE);
-        if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0)) continue;
+        if (!fullVisibility && (!vis[cgy] || vis[cgy][cgx] === 0) && !u._historyGhost) continue;
+        minimapCtx.globalAlpha = u._historyGhost ? .23 : 1;
         setMinimapFill(get3DRenderOwnerColor(u.owner));
         let ux = (u.x / TILE) * scale, uy = (u.y / TILE) * scale;
         minimapCtx.fillRect(ux, uy, 2, 2);
     }
 
+    minimapCtx.globalAlpha = 1;
     // Damage alerts (minimap only)
     drawMinimapAlerts(minimapCtx, scale);
 
@@ -2450,6 +2444,7 @@ function processRenderFrame(timestamp) {
         return;
     }
 
+    updateVisibilityHistory();
     tickAlpha = Math.min(_tickAccumulator / TICK_MS, 1);
     updateCamera();
     let dpr = window.devicePixelRatio || 1;

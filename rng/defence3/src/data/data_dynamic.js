@@ -750,7 +750,7 @@ function applyMainMenuControlsToRuntimeState() {
     let gameModeEl = document.getElementById('cfg-gamemode');
     if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
     let fullVisEl = document.getElementById('cfg-full-vis');
-    if (fullVisEl) fullVisibility = !!fullVisEl.checked;
+    if (fullVisEl) { fullVisibility = fullVisEl.value === 'full'; teamVisibilityHistory = fullVisEl.value === 'history'; }
 }
 
 function createMainMenuSettingsSnapshot() {
@@ -759,8 +759,8 @@ function createMainMenuSettingsSnapshot() {
         'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
         'cfg-max-research-level', 'cfg-thing-stats-seconds', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
     ];
-    let selectIds = ['cfg-gamemode', 'cfg-map-type'];
-    let checkboxIds = ['cfg-full-vis'];
+    let selectIds = ['cfg-gamemode', 'cfg-map-type', 'cfg-full-vis'];
+    let checkboxIds = [];
 
     let out = {
         version: 2,
@@ -834,7 +834,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
         let gameModeEl = document.getElementById('cfg-gamemode');
         if (gameModeEl) gameModeEl.value = gameMode;
         let fullVisEl = document.getElementById('cfg-full-vis');
-        if (fullVisEl) fullVisEl.checked = fullVisibility;
+        if (fullVisEl) fullVisEl.value = fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team';
     }
 
     let popup = document.getElementById('starting-resources-popup');
@@ -2400,7 +2400,7 @@ function applyMainMenuControlsToRuntimeState() {
     let gameModeEl = document.getElementById('cfg-gamemode');
     if (gameModeEl) gameMode = String(gameModeEl.value || gameMode || 'destroy');
     let fullVisEl = document.getElementById('cfg-full-vis');
-    if (fullVisEl) fullVisibility = !!fullVisEl.checked;
+    if (fullVisEl) { fullVisibility = fullVisEl.value === 'full'; teamVisibilityHistory = fullVisEl.value === 'history'; }
 }
 
 function createMainMenuSettingsSnapshot() {
@@ -2409,8 +2409,8 @@ function createMainMenuSettingsSnapshot() {
         'cfg-max-thing-level', 'cfg-gold-count', 'cfg-gold-min', 'cfg-gold-max', 'cfg-astar-mine-count', 'cfg-astar-mine-min', 'cfg-astar-mine-max',
         'cfg-max-research-level', 'cfg-unit-eff-stats-ticks', 'cfg-unit-collision-ticks', 'cfg-astar-iter-budget-per-player', 'cfg-worker-ai-tick-delay'
     ];
-    let selectIds = ['cfg-gamemode', 'cfg-map-type'];
-    let checkboxIds = ['cfg-full-vis', 'cfg-exact-lockstep'];
+    let selectIds = ['cfg-gamemode', 'cfg-map-type', 'cfg-full-vis'];
+    let checkboxIds = ['cfg-exact-lockstep'];
 
     let out = {
         version: 2,
@@ -2484,7 +2484,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
         let gameModeEl = document.getElementById('cfg-gamemode');
         if (gameModeEl) gameModeEl.value = gameMode;
         let fullVisEl = document.getElementById('cfg-full-vis');
-        if (fullVisEl) fullVisEl.checked = fullVisibility;
+        if (fullVisEl) fullVisEl.value = fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team';
     }
 
     let popup = document.getElementById('starting-resources-popup');
