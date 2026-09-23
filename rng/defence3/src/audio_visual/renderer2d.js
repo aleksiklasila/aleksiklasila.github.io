@@ -1736,10 +1736,15 @@ function draw() {
                 let rx = marker.x, ry = marker.y;
                 ctx.save();
                 ctx.globalAlpha = marker.locked ? 1 : 0.55;
-                ctx.strokeStyle = entOwnerColor; ctx.lineWidth = 1.5;
-                ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(rx, ry); ctx.stroke();
-                ctx.fillStyle = entOwnerColor;
-                ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 6.28); ctx.fill();
+                if (showRallyLinesForBuildings()) {
+                    ctx.strokeStyle = entOwnerColor; ctx.lineWidth = 1.5;
+                    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(rx, ry); ctx.stroke();
+                    ctx.fillStyle = entOwnerColor;
+                    ctx.beginPath(); ctx.arc(rx, ry, 4, 0, 6.28); ctx.fill();
+                } else {
+                    let markerSprite = _getOverlayMarkerSprite('plus', entOwnerColor);
+                    ctx.drawImage(markerSprite.canvas, Math.round(rx - markerSprite.offsetX), Math.round(ry - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
+                }
                 ctx.restore();
             }
         }
@@ -1889,6 +1894,15 @@ function draw() {
             }
         }
         // Attack target indicator
+        let drawAttackTarget = (tx, ty, lineColor, markerColor) => {
+            if (showRallyLinesForUnits()) {
+                ctx.strokeStyle = lineColor;
+                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(tx, ty); ctx.stroke();
+            } else {
+                let markerSprite = _getOverlayMarkerSprite('plus', markerColor);
+                ctx.drawImage(markerSprite.canvas, Math.round(tx - markerSprite.offsetX), Math.round(ty - markerSprite.offsetY), markerSprite.drawW, markerSprite.drawH);
+            }
+        };
         if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
             let tgx = Math.floor(u.targetUnit.x / TILE), tgy = Math.floor(u.targetUnit.y / TILE);
             let targetVisible = isTileVisible(tgx, tgy);
@@ -1896,22 +1910,18 @@ function draw() {
             if (targetVisible) {
                 let tx = u.targetUnit.prevX + (u.targetUnit.x - u.targetUnit.prevX) * alpha;
                 let ty = u.targetUnit.prevY + (u.targetUnit.y - u.targetUnit.prevY) * alpha;
-                ctx.strokeStyle = 'rgba(255,0,0,0.6)';
-                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(tx, ty); ctx.stroke();
+                drawAttackTarget(tx, ty, 'rgba(255,0,0,0.6)', '#f66');
             } else if (neutralEndpoint) {
-                ctx.strokeStyle = 'rgba(100,255,100,0.6)';
-                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(neutralEndpoint.x, neutralEndpoint.y); ctx.stroke();
+                drawAttackTarget(neutralEndpoint.x, neutralEndpoint.y, 'rgba(100,255,100,0.6)', '#4f4');
             }
         }
         if (u.targetBuilding && u.targetBuilding.energy > 0 && u.commandState === CMD_ATTACKING) {
             let targetVisible = isTileVisible(u.targetBuilding.gx, u.targetBuilding.gy);
             ctx.lineWidth = 1;
             if (targetVisible) {
-                ctx.strokeStyle = 'rgba(255,0,0,0.6)';
-                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(u.targetBuilding.x, u.targetBuilding.y); ctx.stroke();
+                drawAttackTarget(u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)', '#f66');
             } else if (neutralEndpoint) {
-                ctx.strokeStyle = 'rgba(100,255,100,0.6)';
-                ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(neutralEndpoint.x, neutralEndpoint.y); ctx.stroke();
+                drawAttackTarget(neutralEndpoint.x, neutralEndpoint.y, 'rgba(100,255,100,0.6)', '#4f4');
             }
         }
     }

@@ -963,8 +963,8 @@ function build3DOverlayData(bounds, alpha) {
         if (ent instanceof Tower && ent.owner === localPlayerId) {
             let marker = resolveTowerPreferredTargetVisual(ent);
             if (marker && Number.isFinite(marker.x) && Number.isFinite(marker.y)) {
-                pushLine(ex, ey, marker.x, marker.y, marker.locked ? '#9cf' : 'rgba(153,204,255,0.55)', false);
-                pushMarker(marker.x, marker.y, 'dot', '#9cf');
+                if (showRallyLinesForBuildings()) pushLine(ex, ey, marker.x, marker.y, marker.locked ? '#9cf' : 'rgba(153,204,255,0.55)', false);
+                pushMarker(marker.x, marker.y, showRallyLinesForBuildings() ? 'dot' : 'plus', '#9cf');
             }
         }
 
@@ -1015,9 +1015,11 @@ function build3DOverlayData(bounds, alpha) {
             }
         }
         if (u.targetUnit && !u.targetUnit.dead && u.commandState === CMD_ATTACKING) {
-            pushLine(ux, uy, u.targetUnit.x, u.targetUnit.y, 'rgba(255,0,0,0.6)');
+            if (showRallyLinesForUnits()) pushLine(ux, uy, u.targetUnit.x, u.targetUnit.y, 'rgba(255,0,0,0.6)');
+            else pushMarker(u.targetUnit.x, u.targetUnit.y, 'plus', '#f66');
         } else if (u.targetBuilding && u.targetBuilding.energy > 0 && u.commandState === CMD_ATTACKING) {
-            pushLine(ux, uy, u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)');
+            if (showRallyLinesForUnits()) pushLine(ux, uy, u.targetBuilding.x, u.targetBuilding.y, 'rgba(255,0,0,0.6)');
+            else pushMarker(u.targetBuilding.x, u.targetBuilding.y, 'plus', '#f66');
         }
     }
 
