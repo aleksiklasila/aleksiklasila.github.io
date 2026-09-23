@@ -1616,6 +1616,7 @@ function draw() {
     }
 
     for (let t of towers) {
+        if (!t || !(Number(t._damageFlashUntil) > gameTime + tickAlpha) || !(Number(t._damageFlashStrength) > 0)) continue;
         if (t.gx < minGx - 2 || t.gx > maxGx + 2 || t.gy < minGy - 2 || t.gy > maxGy + 2) continue;
         if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
         let bgSoundRow = bgSoundGrid[t.gy];
@@ -1626,6 +1627,7 @@ function draw() {
         draw2DDamageFlashOverlay(ctx, t, t.x, t.y, 16 * scaleAmount, true);
     }
     for (let s of collectorSpawners) {
+        if (!s || !(Number(s._damageFlashUntil) > gameTime + tickAlpha) || !(Number(s._damageFlashStrength) > 0)) continue;
         if (s.gx < minGx || s.gx > maxGx || s.gy < minGy || s.gy > maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[s.gy] || visibilityGrid[s.gy][s.gx] === 0)) continue;
         let bgSoundRow = bgSoundGrid[s.gy];
@@ -1636,6 +1638,7 @@ function draw() {
         draw2DDamageFlashOverlay(ctx, s, s.x, s.y, 15 * scaleAmount, true);
     }
     for (let b of barracks) {
+        if (!b || !(Number(b._damageFlashUntil) > gameTime + tickAlpha) || !(Number(b._damageFlashStrength) > 0)) continue;
         if (b.gx < minGx || b.gx > maxGx || b.gy < minGy || b.gy > maxGy) continue;
         if (!fullVisibility && (!visibilityGrid[b.gy] || visibilityGrid[b.gy][b.gx] === 0)) continue;
         let bgSoundRow = bgSoundGrid[b.gy];
@@ -1651,6 +1654,7 @@ function draw() {
             if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
             let cell = grid[y][x];
             if (!cell || !cell.item) continue;
+            if (!(Number(cell.item._damageFlashUntil) > gameTime + tickAlpha) || !(Number(cell.item._damageFlashStrength) > 0)) continue;
             let bgSoundRow = bgSoundGrid[y];
             let fxSoundRow = fxSoundGrid[y];
             let bgLevel = bgSoundRow ? bgSoundRow[x] || 0 : 0;
@@ -1660,6 +1664,7 @@ function draw() {
         }
     }
     for (let u of units) {
+        if (!u || !(Number(u._damageFlashUntil) > gameTime + tickAlpha) || !(Number(u._damageFlashStrength) > 0)) continue;
         if (!u || u.dead) continue;
         let ux = Number.isFinite(u.prevX) ? (u.prevX + (u.x - u.prevX) * alpha) : u.x;
         let uy = Number.isFinite(u.prevY) ? (u.prevY + (u.y - u.prevY) * alpha) : u.y;

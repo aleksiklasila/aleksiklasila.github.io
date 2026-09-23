@@ -7,7 +7,6 @@ let renderer3dRotateDrag = null;
 const renderer3dTopTextureCache = new Map();
 const renderer3dOverlapFadeState = new Map();
 const renderer3dSharedAudioTextureCanvases = new Map();
-const renderer3dSideTextureAngleState = new Map();
 const RENDERER3D_OVERLAP_FADE_DURATION_MS = 500;
 const DRAW_Z_BACKGROUND = 500;
 const DRAW_Z_STRUCTURES = 400;
@@ -29,7 +28,6 @@ let visibilityGridRawByPlayerCache = new Map();
 let visibilityGridSmoothedByPlayerCache = new Map();
 let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
-let renderer3dSideTextureAngleStateLastPruneVersion = -1;
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
 const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
@@ -56,17 +54,22 @@ function get3DRenderOwnerColor(owner) {
 
 const DAMAGE_FLASH_TICKS = 10;
 
+const _parsedHexColors = new Map();
 function _parseHexColor(color) {
+    if (_parsedHexColors.has(color)) return _parsedHexColors.get(color);
     let normalized = String(color || '').trim();
     let match = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
     if (!match) return null;
     let hex = match[1];
     if (hex.length === 3) hex = hex.split('').map(ch => ch + ch).join('');
-    return {
+    let rgb = {
         r: parseInt(hex.slice(0, 2), 16),
         g: parseInt(hex.slice(2, 4), 16),
         b: parseInt(hex.slice(4, 6), 16)
     };
+    if (_parsedHexColors.size >= 2048) _parsedHexColors.clear();
+    _parsedHexColors.set(color, rgb);
+    return rgb;
 }
 
 function _rgbToHex(rgb) {
@@ -1424,6 +1427,8 @@ function build3DFrameData() {
     renderer3dExactUnitTextureTimeRemaining = 2;
     let bounds = get3DVisibleWorldBounds();
     let alpha = tickAlpha;
+    // All entity models below are procedural: their shader uses the top/status
+    // panel and side tint, never the legacy animated side texture.
     let objects = [];
     let buildPreview = getCurrentBuildPreviewData();
     let centerX = camera.x + bounds.vw * 0.5;
@@ -1488,59 +1493,12 @@ function build3DFrameData() {
         let raw = (visibilityGrid[gy] && visibilityGrid[gy][gx]) || 0;
         return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     };
-    let getAudioReactiveSideTextureAngle = (gx, gy, seed = 0) => {
-        const LEVEL_SMOOTHING = 0.14;
-        const BASE_ANGLE_DELTA = 0.004;
-        const AUDIO_ANGLE_DELTA_SCALE = 0.026;
-        const MAX_SPEED_DELTA_PER_STEP = 0.004;
-        let sampleLevel = (gridRef, sx, sy) => {
-            let row = gridRef && gridRef[sy];
-            return row ? (Number(row[sx]) || 0) : 0;
-        };
-        let version = Number(audioReactiveTextureVersion) || 0;
-        let key = String(seed);
-        let state = renderer3dSideTextureAngleState.get(key);
-        if (!state) {
-            state = {
-                angle: (((Number(seed) || 0) * 0.61803398875) % 1) * Math.PI * 2,
-                smoothedLevel: sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5,
-                lastLevel: sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5,
-                speed: BASE_ANGLE_DELTA,
-                version,
-                lastTouchedVersion: version
-            };
-            renderer3dSideTextureAngleState.set(key, state);
-        }
-        let currentLevel = sampleLevel(bgSoundGrid, gx, gy) * 0.7 + sampleLevel(fxSoundGrid, gx, gy) * 0.5;
-        if (state.version !== version) {
-            state.smoothedLevel += (currentLevel - state.smoothedLevel) * LEVEL_SMOOTHING;
-            state.smoothedLevel = Math.max(0, Math.min(1, state.smoothedLevel));
-            let targetSpeed = BASE_ANGLE_DELTA + state.smoothedLevel * AUDIO_ANGLE_DELTA_SCALE;
-            let speedDelta = targetSpeed - state.speed;
-            if (speedDelta > MAX_SPEED_DELTA_PER_STEP) speedDelta = MAX_SPEED_DELTA_PER_STEP;
-            if (speedDelta < -MAX_SPEED_DELTA_PER_STEP) speedDelta = -MAX_SPEED_DELTA_PER_STEP;
-            state.speed = Math.max(BASE_ANGLE_DELTA, state.speed + speedDelta);
-            state.angle += state.speed;
-            state.lastLevel = currentLevel;
-            state.version = version;
-        }
-        state.lastTouchedVersion = version;
-        if (renderer3dSideTextureAngleState.size > 512 && renderer3dSideTextureAngleStateLastPruneVersion !== version) {
-            renderer3dSideTextureAngleStateLastPruneVersion = version;
-            for (let [stateKey, entry] of renderer3dSideTextureAngleState.entries()) {
-                if (version - (Number(entry.lastTouchedVersion) || 0) > 64) renderer3dSideTextureAngleState.delete(stateKey);
-            }
-        }
-        return state.angle;
-    };
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint, unitStatus) => {
         let points = getSnakePathPoints(unit, headX, headY);
         let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
         for (let i = points.length - 1; i >= 1; i--) {
             let point = points[i];
             let prev = points[i - 1];
-            let pointGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(point.x / TILE)));
-            let pointGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(point.y / TILE)));
             let age = i / Math.max(1, points.length - 1);
             let dx = prev.x - point.x;
             let dy = prev.y - point.y;
@@ -1561,10 +1519,7 @@ function build3DFrameData() {
                 renderShape: 'cylinder',
                 topTextureKey: `snake_body:${unit.owner}:${i}`,
                 topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i),
-                sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake_segment'),
-                sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake_segment', (Number(unit.owner) || 0) + i, '#3dff64'),
                 sideTint: get3DDamageFlashTint(unit, '#3dff64'),
-                sideTextureAngle: getAudioReactiveSideTextureAngle(pointGx, pointGy, (Number(unit.id) || 0) * 131 + i)
             });
         }
         let snake2DTexture = get3DExact2DTexture(unit, true);
@@ -1583,10 +1538,7 @@ function build3DFrameData() {
             renderShape: 'cylinder',
             topTextureKey: snake2DTexture ? snake2DTexture._renderer3DExactKey : snakeTextureKey,
             topTextureCanvas: snake2DTexture || get3DUnitTopTexture(unit, unit.owner, unitStatus),
-            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(unit.owner, 'snake'),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(unit.owner, 'snake', Number(unit.owner) || 0, '#3dff64'),
             sideTint: get3DDamageFlashTint(unit, '#3dff64'),
-            sideTextureAngle: getAudioReactiveSideTextureAngle(Math.floor(headX / TILE), Math.floor(headY / TILE), (Number(unit.id) || 0) * 131 + 97)
         });
     };
 
@@ -1624,8 +1576,6 @@ function build3DFrameData() {
             alpha: 1,
             topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:gold',
             topTextureCanvas: mine2DTexture,
-            sideTextureKey: get3DSharedAudioTextureKeyForMine('gold', 'gold_mine'),
-            sideTextureCanvas: get3DSideAudioTextureForMine('gold', 'gold_mine', '#f0c83a', '#fff2a8', 11),
             sideTint: '#f0c83a'
         });
     }
@@ -1654,8 +1604,6 @@ function build3DFrameData() {
             alpha: 1,
             topTextureKey: mine2DTexture ? mine2DTexture._renderer3DExactKey : 'mine:astar',
             topTextureCanvas: mine2DTexture,
-            sideTextureKey: get3DSharedAudioTextureKeyForMine('astar', 'astar_mine'),
-            sideTextureCanvas: get3DSideAudioTextureForMine('astar', 'astar_mine', '#d8d8e8', '#ffffff', 23),
             sideTint: '#d8d8e8'
         });
     }
@@ -1675,7 +1623,6 @@ function build3DFrameData() {
             let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
             let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
             let itemStatus = get3DBuildingTextureStatus(cell.item);
-            let itemSideVariant = get3DFloorItemSideVisualizationVariant(cell.item);
             let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
             push3DRenderObject(objects, {
                 modelKey: `item_${cell.item.type || 'floor'}`,
@@ -1692,8 +1639,6 @@ function build3DFrameData() {
                 alpha: get3DConstructionAlpha(cell.item),
                 topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
                 topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
-                sideTextureKey: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSharedAudioTextureKeyForPlayer(cell.owner, itemSideVariant) : '',
-                sideTextureCanvas: Number.isFinite(cell.owner) && cell.owner >= 0 ? get3DSideAudioTextureForPlayer(cell.owner, itemSideVariant, Number(cell.owner) || 0, (BASE_CARD_TYPES[cell.item.type] || {}).color || null) : null,
                 sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
             });
         }
@@ -1709,7 +1654,6 @@ function build3DFrameData() {
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let towerStatus = get3DBuildingTextureStatus(t);
-        let towerSideVariant = get3DTowerSideVisualizationVariant(t);
         let tower2DTexture = get3DExact2DTexture(t);
         push3DRenderObject(objects, {
             modelKey: `tower_${t.type || 'base'}`,
@@ -1725,8 +1669,6 @@ function build3DFrameData() {
             alpha: get3DConstructionAlpha(t),
             topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
             topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
-            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(t.owner, towerSideVariant),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(t.owner, towerSideVariant, Number(t.owner) || 0, (t.baseStats && t.baseStats.color) || null),
             sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
         });
     }
@@ -1749,7 +1691,6 @@ function build3DFrameData() {
             spawnerExtraBars.push({ pct, bgColor: '#333', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
         }
         let spawnerStatus = get3DBuildingTextureStatus(s, spawnerExtraBars);
-        let spawnerSideVariant = get3DSpawnerSideVisualizationVariant(s);
         let spawner2DTexture = get3DExact2DTexture(s);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
@@ -1773,8 +1714,6 @@ function build3DFrameData() {
                 s.owner,
                 { subtype: s.type, status: spawnerStatus, statusKey: spawnerStatus.keySuffix }
             ),
-            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(s.owner, spawnerSideVariant),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(s.owner, spawnerSideVariant, Number(s.owner) || 0, (BASE_CARD_TYPES[s.type] || {}).color || null),
             sideTint: get3DDamageFlashTint(s, (BASE_CARD_TYPES[s.type] || {}).color || get3DRenderOwnerColor(s.owner))
         });
     }
@@ -1807,8 +1746,6 @@ function build3DFrameData() {
             alpha: get3DConstructionAlpha(b),
             topTextureKey: barrack2DTexture ? barrack2DTexture._renderer3DExactKey : `barrack:${b.unitType}:${b.owner}:${barrackStatus.keySuffix}`,
             topTextureCanvas: barrack2DTexture || get3DBuildingTopTexture('barrack', b.owner, { subtype: b.unitType, color: (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color, status: barrackStatus, statusKey: barrackStatus.keySuffix }),
-            sideTextureKey: get3DSharedAudioTextureKeyForPlayer(b.owner, 'barrack'),
-            sideTextureCanvas: get3DSideAudioTextureForPlayer(b.owner, 'barrack', Number(b.owner) || 0, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color),
             sideTint: get3DDamageFlashTint(b, (BASE_UNIT_STATS[b.unitType] || BASE_UNIT_STATS.norm).color)
         });
     }
@@ -1857,7 +1794,6 @@ function build3DFrameData() {
         // The shared status texture remains only a short-lived fallback while a
         // newly visible exact texture is rasterized within the frame budget.
         let unitStatus = get3DUnitTextureStatus(u);
-        let unitSideVariant = get3DUnitSideVisualizationVariant(u);
         let unitSideColor = u.unitType === 'collector'
             ? '#f0a52b'
             : ((BASE_UNIT_STATS[u.unitType] || BASE_UNIT_STATS.norm).color || null);
@@ -1892,10 +1828,7 @@ function build3DFrameData() {
                 renderShape: 'cylinder',
                 topTextureKey: unit2DTexture ? unit2DTexture._renderer3DExactKey : `unit:${u.unitType}:${u.owner}:${unitStatus.keySuffix}`,
                 topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
-                sideTextureKey: get3DSharedAudioTextureKeyForPlayer(u.owner, unitSideVariant),
-                sideTextureCanvas: get3DSideAudioTextureForPlayer(u.owner, unitSideVariant, Number(u.owner) || 0, unitSideColor),
                 sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
-                sideTextureAngle: getAudioReactiveSideTextureAngle(ugx, ugy, (Number(u.id) || 0) + (Number(u.owner) || 0) * 17)
             });
             pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
         }
@@ -2310,15 +2243,22 @@ function smoothVisibilityGridForPlayer(playerId, targetVis) {
     return previous;
 }
 
+let visibilityIncludedTilesScratch = [];
+
 function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
 
-    let unitsFound = 0, towersFound = 0, barracksFound = 0, spawnersFound = 0, buildingsFound = 0;
     let areaRangeBySourceArea = new Map();
     // let shouldLog = isMultiplayer && !isHost && (gameTime % 60 === 0);
     // let shouldLog = isMultiplayer && (gameTime % 60 === 0);
-    let includedTiles = new Array(GRID_H);
-    for (let y = 0; y < GRID_H; y++) includedTiles[y] = new Uint8Array(GRID_W);
+    // Scratch only: never retained by a player grid or used outside this call.
+    let includedTiles = visibilityIncludedTilesScratch;
+    if (includedTiles.length !== GRID_H || (GRID_H > 0 && includedTiles[0].length !== GRID_W)) {
+        includedTiles = Array.from({ length: GRID_H }, () => new Uint8Array(GRID_W));
+        visibilityIncludedTilesScratch = includedTiles;
+    } else {
+        for (let y = 0; y < GRID_H; y++) includedTiles[y].fill(0);
+    }
     let stampSource = (gx, gy, rangeTiles) => {
         let x = Math.floor(Number(gx));
         let y = Math.floor(Number(gy));
@@ -2375,26 +2315,22 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     for (let u of units) {
         if (!u || u.dead) continue;
         if (!shouldRevealForPlayer(u.owner, u.watched || 0, u.watchedByTeam)) continue;
-        unitsFound++;
         let visionArea = Number.isFinite(u.preComputed && u.preComputed.visionRangeArea) ? Number(u.preComputed.visionRangeArea) : ((Number(u.preComputed && u.preComputed.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
     for (let t of towers) {
         if (!t || !(t.energy > 0) || t.underConstruction) continue;
         if (!shouldRevealForPlayer(t.owner, t.watched || 0, t.watchedByTeam)) continue;
-        towersFound++;
         addWorldVisibilitySource(t.x, t.y, Number(t.currentStats && t.currentStats.visionRange));
     }
     for (let b of barracks) {
         if (!b || !(b.energy > 0) || b.underConstruction) continue;
         if (!shouldRevealForPlayer(b.owner, b.watched || 0, b.watchedByTeam)) continue;
-        barracksFound++;
         addWorldVisibilitySource(b.x, b.y, getEntityVisibilityRangeArea(b));
     }
     for (let s of collectorSpawners) {
         if (!s || !(s.energy > 0) || s.underConstruction) continue;
         if (!shouldRevealForPlayer(s.owner, s.watched || 0, s.watchedByTeam)) continue;
-        spawnersFound++;
         addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
     }
     for (let y = 0; y < GRID_H; y++) {
@@ -2403,7 +2339,6 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             let cell = row[x];
             if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
             if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) continue;
-            buildingsFound++;
             addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
         }
     }
@@ -2421,31 +2356,35 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     }
 
     for (let y = 0; y < GRID_H; y++) {
+        let row = vis[y], includedRow = includedTiles[y];
+        let prevRow = vis[y - 1], prevIncluded = includedTiles[y - 1];
         for (let x = 0; x < GRID_W; x++) {
-            if (!includedTiles[y][x]) {
-                vis[y][x] = 0;
+            if (!includedRow[x]) {
+                row[x] = 0;
                 continue;
             }
-            let v = vis[y][x];
-            if (x > 0 && includedTiles[y][x - 1]) v = Math.max(v, vis[y][x - 1] - 1);
-            if (y > 0 && includedTiles[y - 1][x]) v = Math.max(v, vis[y - 1][x] - 1);
-            if (x > 0 && y > 0 && includedTiles[y - 1][x - 1]) v = Math.max(v, vis[y - 1][x - 1] - 1);
-            if (x < GRID_W - 1 && y > 0 && includedTiles[y - 1][x + 1]) v = Math.max(v, vis[y - 1][x + 1] - 1);
-            vis[y][x] = v;
+            let v = row[x];
+            if (x > 0 && includedRow[x - 1]) v = Math.max(v, row[x - 1] - 1);
+            if (y > 0 && prevIncluded[x]) v = Math.max(v, prevRow[x] - 1);
+            if (x > 0 && y > 0 && prevIncluded[x - 1]) v = Math.max(v, prevRow[x - 1] - 1);
+            if (x < GRID_W - 1 && y > 0 && prevIncluded[x + 1]) v = Math.max(v, prevRow[x + 1] - 1);
+            row[x] = v;
         }
     }
     for (let y = GRID_H - 1; y >= 0; y--) {
+        let row = vis[y], includedRow = includedTiles[y];
+        let nextRow = vis[y + 1], nextIncluded = includedTiles[y + 1];
         for (let x = GRID_W - 1; x >= 0; x--) {
-            if (!includedTiles[y][x]) {
-                vis[y][x] = 0;
+            if (!includedRow[x]) {
+                row[x] = 0;
                 continue;
             }
-            let v = vis[y][x];
-            if (x < GRID_W - 1 && includedTiles[y][x + 1]) v = Math.max(v, vis[y][x + 1] - 1);
-            if (y < GRID_H - 1 && includedTiles[y + 1][x]) v = Math.max(v, vis[y + 1][x] - 1);
-            if (x < GRID_W - 1 && y < GRID_H - 1 && includedTiles[y + 1][x + 1]) v = Math.max(v, vis[y + 1][x + 1] - 1);
-            if (x > 0 && y < GRID_H - 1 && includedTiles[y + 1][x - 1]) v = Math.max(v, vis[y + 1][x - 1] - 1);
-            vis[y][x] = v;
+            let v = row[x];
+            if (x < GRID_W - 1 && includedRow[x + 1]) v = Math.max(v, row[x + 1] - 1);
+            if (y < GRID_H - 1 && nextIncluded[x]) v = Math.max(v, nextRow[x] - 1);
+            if (x < GRID_W - 1 && y < GRID_H - 1 && nextIncluded[x + 1]) v = Math.max(v, nextRow[x + 1] - 1);
+            if (x > 0 && y < GRID_H - 1 && nextIncluded[x - 1]) v = Math.max(v, nextRow[x - 1] - 1);
+            row[x] = v;
         }
     }
 
@@ -3104,7 +3043,6 @@ function clearRendererTransientVisualCaches(options = null) {
         }
     }
     renderer3dOverlapFadeState.clear();
-    renderer3dSideTextureAngleState.clear();
     renderer3dSharedAudioTextureCanvases.clear();
     _litTintCache.clear();
 }
@@ -3293,7 +3231,8 @@ function _getUnitLevelTextSprite(label) {
 
 // Frame-local drawImage queue: batches by source image to improve sprite cache locality.
 let _frameDrawImageQueueActive = false;
-let _frameDrawImageQueue = [];
+// Insertion-ordered buckets preserve the existing depth/image replay order.
+const _frameDrawImageBuckets = new Map();
 let _frameDrawImageContexts = new Set();
 let _frameDrawImageCurrentZ = 0;
 let _frameDrawImageFrameId = 0;
@@ -3336,7 +3275,7 @@ function _captureDrawImageCtxState(ctx) {
 function beginFrameDrawImageQueue() {
     _frameDrawImageQueueActive = true;
     _frameDrawImageFrameId++;
-    _frameDrawImageQueue.length = 0;
+    _frameDrawImageBuckets.clear();
     _frameDrawImageContexts.clear();
     _frameDrawImageCurrentZ = 0;
 }
@@ -3366,7 +3305,17 @@ function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
     }
 
     let st = _captureDrawImageCtxState(ctx);
-    _frameDrawImageQueue.push({
+    let depthBucket = _frameDrawImageBuckets.get(_frameDrawImageCurrentZ);
+    if (!depthBucket) {
+        depthBucket = new Map();
+        _frameDrawImageBuckets.set(_frameDrawImageCurrentZ, depthBucket);
+    }
+    let imageBucket = depthBucket.get(imageId);
+    if (!imageBucket) {
+        imageBucket = [];
+        depthBucket.set(imageId, imageBucket);
+    }
+    imageBucket.push({
         ctx,
         image,
         argc,
@@ -3378,8 +3327,6 @@ function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
         a5,
         a6,
         a7,
-        z: _frameDrawImageCurrentZ,
-        imageId,
         ta: st.ta,
         tb: st.tb,
         tc: st.tc,
@@ -3393,23 +3340,50 @@ function queueDrawImage(ctx, image, a0, a1, a2, a3, a4, a5, a6, a7) {
     });
 }
 
+function replayDrawImageCommand(cmd, targetCtx, stateMap) {
+    if (!targetCtx) return;
+    let s = stateMap.get(targetCtx);
+    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
+        targetCtx.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
+        if (!s) s = {};
+        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
+    }
+    if (!s || s.alpha !== cmd.alpha) {
+        targetCtx.globalAlpha = cmd.alpha;
+        if (!s) s = {};
+        s.alpha = cmd.alpha;
+    }
+    if (!s || s.comp !== cmd.comp) {
+        targetCtx.globalCompositeOperation = cmd.comp;
+        if (!s) s = {};
+        s.comp = cmd.comp;
+    }
+    if (!s || s.smooth !== cmd.smooth) {
+        targetCtx.imageSmoothingEnabled = cmd.smooth;
+        if (!s) s = {};
+        s.smooth = cmd.smooth;
+    }
+    if (!s || s.filter !== cmd.filter) {
+        targetCtx.filter = cmd.filter;
+        if (!s) s = {};
+        s.filter = cmd.filter;
+    }
+    stateMap.set(targetCtx, s);
+
+    if (cmd.argc === 2) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+    else if (cmd.argc === 4) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3);
+    else if (cmd.argc === 8) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3, cmd.a4, cmd.a5, cmd.a6, cmd.a7);
+    else targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
+}
+
 function flushFrameDrawImageQueue() {
     if (!_frameDrawImageQueueActive) return;
-    if (_frameDrawImageQueue.length <= 0) {
+    if (_frameDrawImageBuckets.size === 0) {
         _frameDrawImageQueueActive = false;
         return;
     }
 
-    let bucketsByZ = new Map();
-    let zOrder = [];
-    for (let cmd of _frameDrawImageQueue) {
-        let zKey = cmd.z;
-        if (!bucketsByZ.has(zKey)) {
-            bucketsByZ.set(zKey, []);
-            zOrder.push(zKey);
-        }
-        bucketsByZ.get(zKey).push(cmd);
-    }
+    let zOrder = Array.from(_frameDrawImageBuckets.keys());
     zOrder.sort((a, b) => b - a); // Furthest/highest z first, closest last.
 
     let liveStateByCtx = new Map();
@@ -3422,60 +3396,11 @@ function flushFrameDrawImageQueue() {
             layerCtx.save();
             layerContextsToRestore.push(layerCtx);
         }
-        let imageBuckets = new Map();
-        let imageOrder = [];
-        let zCmds = bucketsByZ.get(z);
-        for (let cmd of zCmds) {
-            let id = cmd.imageId;
-            if (!imageBuckets.has(id)) {
-                imageBuckets.set(id, []);
-                imageOrder.push(id);
-            }
-            imageBuckets.get(id).push(cmd);
-        }
-
-        for (let id of imageOrder) {
-            let cmds = imageBuckets.get(id);
+        for (let cmds of _frameDrawImageBuckets.get(z).values()) {
             for (let cmd of cmds) {
-                let replayToContext = (targetCtx, stateMap) => {
-                    if (!targetCtx) return;
-                    let s = stateMap.get(targetCtx);
-                    if (!s || s.ta !== cmd.ta || s.tb !== cmd.tb || s.tc !== cmd.tc || s.td !== cmd.td || s.te !== cmd.te || s.tf !== cmd.tf) {
-                        targetCtx.setTransform(cmd.ta, cmd.tb, cmd.tc, cmd.td, cmd.te, cmd.tf);
-                        if (!s) s = {};
-                        s.ta = cmd.ta; s.tb = cmd.tb; s.tc = cmd.tc; s.td = cmd.td; s.te = cmd.te; s.tf = cmd.tf;
-                    }
-                    if (!s || s.alpha !== cmd.alpha) {
-                        targetCtx.globalAlpha = cmd.alpha;
-                        if (!s) s = {};
-                        s.alpha = cmd.alpha;
-                    }
-                    if (!s || s.comp !== cmd.comp) {
-                        targetCtx.globalCompositeOperation = cmd.comp;
-                        if (!s) s = {};
-                        s.comp = cmd.comp;
-                    }
-                    if (!s || s.smooth !== cmd.smooth) {
-                        targetCtx.imageSmoothingEnabled = cmd.smooth;
-                        if (!s) s = {};
-                        s.smooth = cmd.smooth;
-                    }
-                    if (!s || s.filter !== cmd.filter) {
-                        targetCtx.filter = cmd.filter;
-                        if (!s) s = {};
-                        s.filter = cmd.filter;
-                    }
-                    stateMap.set(targetCtx, s);
-
-                    if (cmd.argc === 2) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
-                    else if (cmd.argc === 4) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3);
-                    else if (cmd.argc === 8) targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1, cmd.a2, cmd.a3, cmd.a4, cmd.a5, cmd.a6, cmd.a7);
-                    else targetCtx.drawImage(cmd.image, cmd.a0, cmd.a1);
-                };
-
-                replayToContext(cmd.ctx, liveStateByCtx);
+                replayDrawImageCommand(cmd, cmd.ctx, liveStateByCtx);
                 if (layerCtx) {
-                    replayToContext(layerCtx, layerStateByCtx);
+                    replayDrawImageCommand(cmd, layerCtx, layerStateByCtx);
                     let stats = renderer3dLayerStats.get(z);
                     if (stats) stats.commandCount++;
                 }
@@ -3486,7 +3411,7 @@ function flushFrameDrawImageQueue() {
     for (let c of _frameDrawImageContexts) c.restore();
     for (let c of layerContextsToRestore) c.restore();
 
-    _frameDrawImageQueue.length = 0;
+    _frameDrawImageBuckets.clear();
     _frameDrawImageContexts.clear();
     _frameDrawImageQueueActive = false;
 }
