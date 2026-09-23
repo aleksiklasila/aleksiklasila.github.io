@@ -2636,6 +2636,7 @@ function getUnitStatFallbackValue(unitType, statKey) {
     if (statKey === 'speed') return Math.max(0.1, Number(s.speed) || Math.max(0.1, Number(unitCfg.baseSpeedFallback) || 1));
     if (statKey === 'visionRange') return Math.max(0.05, Number(s.visionRange) || Math.max(0.05, Number(unitCfg.baseVisionFallback) || 0.8));
     if (statKey === 'attackRange') return Math.max(0, Number(s.attackRange) || 0);
+    if (statKey === 'watchDuration') return unitType === 'scout' ? Math.max(0, Number(s.watchDuration) || 0) : 0;
     if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     if (statKey === 'gatherPerTrip') return Math.max(0, Number(s.gatherPerTrip) || 0);
     if (statKey === 'builderDps') return Math.max(0, Number(s.builderDps) || 0);
@@ -2656,6 +2657,7 @@ function normalizePrecomputedUnitStatValue(unitType, statKey, value) {
     if (statKey === 'speed') return Math.max(0.1, Number(v) || 0.1);
     if (statKey === 'visionRange') return Math.max(0.05, Number(v) || 0.05);
     if (statKey === 'attackRange') return Math.max(0, Number(v) || 0);
+    if (statKey === 'watchDuration') return unitType === 'scout' ? Math.max(0, Number(v) || 0) : 0;
     if (statKey === 'workerSearchDistance') return s.isWorker ? Math.max(0.2, Number(v) || 0.2) : 0;
     if (statKey === 'gatherPerTrip') {
         if (unitType === 'collector' || unitType === 'astar_collector') return Math.max(1, Number(v) || 1);
@@ -2711,6 +2713,9 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
     let baseAttackRange = Math.max(0, Number(s.attackRange) || 0);
     let attackRangeCap = baseAttackRange + (cfg.rangeCapBonus !== undefined ? cfg.rangeCapBonus : (cfg.visionCapBonus || 1.2));
     let attackRange = baseAttackRange > 0 ? Math.min(attackRangeCap, baseAttackRange * rangeMult) : 0;
+    let watchDuration = unitType === 'scout'
+        ? Math.max(0, (Number(s.watchDuration) || 0) + (lvl - 1) * (Number(BUILDING_FORMULA_CONFIG.watchDurationLevelAdd) || 0))
+        : 0;
     let workerSearchDistance = s.isWorker ? Math.max(0.2, Number(s.workerSearchDistance) || 2.0) : 0;
     let gatherBase = Math.max(0, Number(s.gatherPerTrip) || 0);
     let gatherLvlExp = Math.max(0, Number(unitCfg.collectorGatherLevelExp));
@@ -2736,7 +2741,7 @@ function computeBaseUnitStatsAtLevel(unitType, level) {
         transferCooldown = Math.max(0.01, baseTransferCooldown * Math.pow(workerTransferCdExp, lvl - 1));
     }
 
-    return { energy, atk, atkCd, speed, visionRange, attackRange, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
+    return { energy, atk, atkCd, speed, visionRange, attackRange, watchDuration, workerSearchDistance, gatherPerTrip, builderDps, healerDps, researcherDps, transferCooldown, astarCost, upKeep };
 }
 
 function computeBaseBuildingStatsAtLevel(type, level) {
@@ -3038,6 +3043,7 @@ function _getUnitPlayerPrecomputedEntry(playerId, unitType, level) {
         visionRange: visionRangeArea * AREA_UNIT_TILE_EQUIVALENT,
         attackRangeArea,
         attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
+        watchDuration: Math.max(0, Number(values.watchDuration) || 0),
         workerSearchDistance: Math.max(0, Number(values.workerSearchDistance) || 0),
         gatherPerTrip: Math.max(0, Number(values.gatherPerTrip) || 0),
         builderDps: Math.max(0, Number(values.builderDps) || 0),
@@ -3155,6 +3161,7 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
         entry.attackRangeArea = Math.max(0, Number(value) || 0);
         entry.attackRange = entry.attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
     }
+    else if (statKey === 'watchDuration') entry.watchDuration = Math.max(0, Number(value) || 0);
     else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.max(0, Number(value) || 0);
     else if (statKey === 'gatherPerTrip') entry.gatherPerTrip = Math.max(0, Number(value) || 0);
     else if (statKey === 'builderDps') entry.builderDps = Math.max(0, Number(value) || 0);
@@ -3265,6 +3272,7 @@ function getUnitStatForOwner(playerId, unitType, level, statKey) {
         if (statKey === 'speed') return entry.speed;
         if (statKey === 'visionRange') return entry.visionRangeArea;
         if (statKey === 'attackRange') return entry.attackRangeArea;
+        if (statKey === 'watchDuration') return entry.watchDuration;
         if (statKey === 'workerSearchDistance') return entry.workerSearchDistance;
         if (statKey === 'gatherPerTrip') return entry.gatherPerTrip;
         if (statKey === 'builderDps') return entry.builderDps;
