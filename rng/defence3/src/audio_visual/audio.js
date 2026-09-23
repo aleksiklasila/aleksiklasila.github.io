@@ -373,14 +373,16 @@ function normalizePopupControlGroup(key) {
     }
 }
 
-function doesCurrentSelectionMatchSnapshot(grp) {
+function doesCurrentSelectionMatchSnapshot(grp, membership = null) {
     if (!grp) return false;
     let aliveUnits = (grp.units || []).filter(u => u && !u.dead);
     let aliveEntities = (grp.entities || []).filter(e => e && !(e.energy !== undefined && e.energy <= 0));
     if (aliveUnits.length === 0 && aliveEntities.length === 0) return false;
     if (selectedUnits.length !== aliveUnits.length || selectedEntities.length !== aliveEntities.length) return false;
-    if (!aliveUnits.every(u => selectedUnits.includes(u))) return false;
-    if (!aliveEntities.every(e => selectedEntities.includes(e))) return false;
+    let unitSet = membership ? membership.units : new Set(selectedUnits);
+    let entitySet = membership ? membership.entities : new Set(selectedEntities);
+    if (!aliveUnits.every(u => unitSet.has(u))) return false;
+    if (!aliveEntities.every(e => entitySet.has(e))) return false;
 
     let saved = grp.activeSubGroups || {};
     for (let k in saved) {
@@ -531,6 +533,7 @@ function updateControlGroupBar() {
         });
     }
 
+    let membership = { units: new Set(selectedUnits), entities: new Set(selectedEntities) };
     for (let n = 1; n <= 9; n++) {
         let key = String(n);
         normalizeControlGroup(key);
@@ -545,7 +548,7 @@ function updateControlGroupBar() {
 
         btn.classList.toggle('empty', !hasAssigned);
         btn.classList.toggle('assigned', hasAssigned);
-        btn.classList.toggle('active', isControlGroupSelected(key));
+        btn.classList.toggle('active', doesCurrentSelectionMatchSnapshot(grp, membership));
         btn.classList.toggle('damaged', hasDamage);
         btn.classList.toggle('king-damaged', hasKingDamage);
         btn.title = hasKingDamage ? `Group ${key}: king under attack` : hasDamage ? `Group ${key}: taking damage` : hasAssigned ? `Group ${key}: ${count} item(s)` : `Group ${key}: empty`;
@@ -560,7 +563,7 @@ function updateControlGroupBar() {
         let hasAssigned = count > 0;
         btn.classList.toggle('empty', !hasAssigned);
         btn.classList.toggle('assigned', hasAssigned);
-        btn.classList.toggle('active', isPopupControlGroupSelected(key));
+        btn.classList.toggle('active', doesCurrentSelectionMatchSnapshot(grp, membership));
         btn.title = hasAssigned
             ? `Popup group ${key.toUpperCase()}: ${count} item(s)`
             : `Popup group ${key.toUpperCase()}: empty`;

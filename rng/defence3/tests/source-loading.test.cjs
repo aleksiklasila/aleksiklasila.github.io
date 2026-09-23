@@ -1,0 +1,14 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.join(__dirname, '..');
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const files = Array.from(html.matchAll(/<script src="\.\/(src\/[^"?]+)(?:\?[^" ]*)?"/g), m => m[1]);
+assert.ok(files.length >= 25);
+for (const file of files) new vm.Script(fs.readFileSync(path.join(root, file), 'utf8'), {filename:file});
+assert.ok(files.indexOf('src/audio_visual/selection_overlay.js') < files.indexOf('src/audio_visual/renderer2d.js'));
+const context = vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(root, 'src/audio_visual/renderer2d.js'), 'utf8'), context);
+for (const name of ['draw','_requestStaticCacheCommit','getVisibleWorldBounds']) assert.equal(typeof context[name], 'function', name);
+console.log(`PASS: ${files.length} local scripts parse; 2D renderer exports its startup and drawing functions.`);

@@ -1951,11 +1951,29 @@ function _workerTargetTypeNeedsExclusive(workerType, targetType = null) {
     return true;
 }
 
-function _canAssignWorkerTargetExclusive(u, target, targetType = null) {
+function _canAssignWorkerTargetExclusive(u, target, targetType = null, conflictCache = null) {
     if (!u || !target || !u.workerType) return false;
     if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
     let reservedUnit = _getReservedWorkerForTarget(target, u.workerType);
     if (!reservedUnit) {
+        // A candidate search is synchronous and does not assign targets. Build
+        // its fallback occupancy lookup once, never reuse it across searches:
+        // earlier workers may change reservations/targets in the same tick.
+        if (conflictCache) {
+            let tileIndex = _getWorkerTargetTileIndex(target);
+            if (tileIndex < 0) return true;
+            if (!conflictCache.tiles) {
+                let tiles = new Set();
+                for (let other of units) {
+                    if (!other || other === u || other.dead || !other.workerTarget) continue;
+                    if (other.owner !== u.owner || other.workerType !== u.workerType) continue;
+                    let otherTile = _getWorkerTargetTileIndex(other.workerTarget);
+                    if (otherTile >= 0) tiles.add(otherTile);
+                }
+                conflictCache.tiles = tiles;
+            }
+            return !conflictCache.tiles.has(tileIndex);
+        }
         return !_findConflictingWorkerOnTargetTile(u, target);
     }
     if (reservedUnit === u) return true;
@@ -1998,6 +2016,7 @@ function _scoreWorkerTaskCandidate(u, candidate) {
 
 function _pickDistributedWorkerCandidate(u, candidates) {
     if (!u || !Array.isArray(candidates) || candidates.length <= 0) return null;
+    let conflictCache = { tiles: null };
 
     let getTargetSortKey = (candidate) => {
         let t = candidate && candidate.target ? candidate.target : null;
@@ -2013,7 +2032,7 @@ function _pickDistributedWorkerCandidate(u, candidates) {
     for (let c of candidates) {
         if (!c || !c.target) continue;
         let targetType = (c.targetType !== undefined) ? c.targetType : null;
-        if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && !_canAssignWorkerTargetExclusive(u, c.target, targetType)) continue;
+        if (_workerTargetTypeNeedsExclusive(u.workerType, targetType) && !_canAssignWorkerTargetExclusive(u, c.target, targetType, conflictCache)) continue;
         let score = _scoreWorkerTaskCandidate(u, c);
         if (score < bestScore) {
             bestScore = score;
@@ -2542,14 +2561,10 @@ function _findNearestQueuedSpawnerNeedingWork(u, originX = u.x, originY = u.y) {
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, s, maxSearchArea)) return;
         let d = Math.hypot(s.x - originX, s.y - originY);
         if (d > maxSearch) return;
-        let worldDist = Math.hypot(s.x - u.x, s.y - u.y);
         candidates.push({
             target: s,
             targetType: 'queue',
             dist: d,
-            worldDist: worldDist,
-            level: _getTargetPriorityLevel(s),
-            isUpgrading: !!s.isUpgrading
         });
     };
     for (let b of barracks) consider(b);
@@ -2589,9 +2604,6 @@ function _findNearestResearchBuildingNeedingWork(u) {
             target: s,
             targetType: 'research',
             dist: d,
-            worldDist: d,
-            level: _getTargetPriorityLevel(s),
-            isUpgrading: !!s.isUpgrading
         });
     }
     return _pickDistributedWorkerTarget(u, candidates);
@@ -2824,14 +2836,9 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
         let d = Math.hypot(b.x - originX, b.y - originY);
         if (d > maxSearch) continue;
-        let worldDist = Math.hypot(b.x - u.x, b.y - u.y);
         candidates.push({
             target: b,
             dist: d,
-            worldDist: worldDist,
-            level: _getTargetPriorityLevel(b),
-            isUpgrading: !!b.isUpgrading,
-            isStacking: !!b.isStacking
         });
     }
     return _pickDistributedWorkerTarget(u, candidates);

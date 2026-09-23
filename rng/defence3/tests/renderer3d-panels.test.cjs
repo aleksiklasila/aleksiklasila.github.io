@@ -5,7 +5,8 @@ const path = require('node:path');
 const renderer = fs.readFileSync(path.join(__dirname, '../src/audio_visual/renderer.js'), 'utf8');
 const renderer3d = fs.readFileSync(path.join(__dirname, '../src/audio_visual/renderer3d.js'), 'utf8');
 
-assert.match(renderer, /let unitStatus = get3DUnitTextureStatus\(u\);/);
+assert.match(renderer, /let unitStatus = unit2DTexture \? null : get3DUnitTextureStatus\(u\);/);
+assert.match(renderer, /let unitStatus = snake2DTexture \? null : get3DUnitTextureStatus\(unit\);/);
 assert.match(renderer, /let unit2DTexture = get3DExact2DTexture\(u, true\);/);
 assert.match(renderer, /let snake2DTexture = get3DExact2DTexture\(unit, true\);/);
 assert.match(renderer, /top -= labelSprite\.height;/);

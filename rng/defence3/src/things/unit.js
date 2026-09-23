@@ -1583,21 +1583,20 @@ function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', line
 }
 // Body geometry is shared by immediate drawing and the strategic sprite cache.
 function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
-        if (unit.isSnake && unit.snakeHistory.length > 0) {
+        if (unit.isSnake && (unit.snakeHistory.length > 0 || ctx.__snakeHeadOnly)) {
             ctx.save();
             ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            // Draw team colored outline first
-            ctx.lineWidth = unit.r * 2 + 3;
-            ctx.strokeStyle = strokeColor;
-            ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
-            for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            // Draw body
-            ctx.lineWidth = unit.r * 2;
-            ctx.strokeStyle = unit.color;
-            ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
-            for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
-            ctx.stroke();
+            if (!ctx.__snakeHeadOnly) {
+                // Reuse the same path for the outline and body.
+                ctx.lineWidth = unit.r * 2 + 3;
+                ctx.strokeStyle = strokeColor;
+                ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
+                for (let p of unit.snakeHistory) ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+                ctx.lineWidth = unit.r * 2;
+                ctx.strokeStyle = unit.color;
+                ctx.stroke();
+            }
             // Head
             ctx.fillStyle = strokeColor;
             ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r + 1.5, 0, 6.28); ctx.fill();
