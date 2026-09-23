@@ -52,17 +52,23 @@
         return String(key || 'cube').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'cube';
     }
 
+    const rgbColorCache = new Map();
     function hexToRgb(color) {
+        let cached = rgbColorCache.get(color);
+        if (cached) return cached;
         let normalized = String(color || '#c8ced8').trim();
         let match = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
         if (!match) return [0.78, 0.81, 0.85];
         let hex = match[1];
         if (hex.length === 3) hex = hex.split('').map(ch => ch + ch).join('');
-        return [
+        let rgb = [
             parseInt(hex.slice(0, 2), 16) / 255,
             parseInt(hex.slice(2, 4), 16) / 255,
             parseInt(hex.slice(4, 6), 16) / 255
         ];
+        if (rgbColorCache.size >= 2048) rgbColorCache.clear();
+        rgbColorCache.set(color, rgb);
+        return rgb;
     }
 
     const SHADOW_LIGHT_DIRECTION = (() => {
@@ -1614,13 +1620,12 @@
                 gl.enable(gl.DEPTH_TEST);
             }
             let requiredLength = width * height * 4;
-            if (!this.overlayDepthFrame || this.overlayDepthFrame.width !== width || this.overlayDepthFrame.height !== height || !this.overlayDepthFrame.bytes || this.overlayDepthFrame.bytes.length !== requiredLength) {
-                this.overlayDepthFrame = {
-                    width,
-                    height,
-                    bytes: new Uint8Array(requiredLength)
-                };
+            // Frame validity is cleared by render/resize; keep the large backing
+            // buffer separately so overlays do not allocate a screenful every frame.
+            if (!this.overlayDepthBytes || this.overlayDepthBytes.length !== requiredLength) {
+                this.overlayDepthBytes = new Uint8Array(requiredLength);
             }
+            this.overlayDepthFrame = { width, height, bytes: this.overlayDepthBytes };
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.sceneFramebuffer);
             gl.readBuffer(gl.COLOR_ATTACHMENT1);
             gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, this.overlayDepthFrame.bytes);
@@ -2460,8 +2465,7 @@
             };
         }
 
-        drawShadowObject(object) {
-            let shadow = this.getShadowInfo(object);
+        drawShadowObject(object, shadow = this.getShadowInfo(object)) {
             if (!shadow) return;
 
             let gl = this.gl;
@@ -2498,8 +2502,7 @@
 
             let written = 0;
             for (let index = 0; index < objects.length; index++) {
-                let shadow = this.getShadowInfo(objects[index]);
-                if (!shadow) continue;
+                let shadow = objects[index];
                 let base = written * 26;
                 composeModelMatrix(
                     this.tmpModel,
@@ -2544,7 +2547,7 @@
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.depthMask(false);
-            for (let object of meshObjects || []) this.drawShadowObject(object);
+            for (let entry of meshObjects || []) this.drawShadowObject(entry.object, entry.shadow);
             if (primitiveGroups) {
                 for (let group of primitiveGroups.values()) this.drawShadowInstances(group);
             }
@@ -2720,15 +2723,17 @@
             let shadowMeshObjects = [];
             for (let object of objects) {
                 let isTransparent = (Number(object.alpha) || 1) < 0.999;
-                let mesh = this.requestModel(object);
+                let figureMeshKey = this.getFigureMeshKey(object);
+                let mesh = figureMeshKey ? null : this.requestModel(object);
                 if (object.pickSource) {
                     let textured = (object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas);
-                    let pickMesh = mesh || (textured && this.figureMeshes.get(this.getFigureMeshKey(object))) || this.getPrimitiveMesh(object);
+                    let pickMesh = mesh || (textured && this.figureMeshes.get(figureMeshKey)) || this.getPrimitiveMesh(object);
                     this.pickObjects.push({ object, mesh: pickMesh });
                 }
-                if (this.getShadowInfo(object)) {
+                let shadow = this.getShadowInfo(object);
+                if (shadow) {
                     if (mesh) {
-                        shadowMeshObjects.push(object);
+                        shadowMeshObjects.push({ object, shadow });
                     } else {
                         let shadowGroupKey = object.renderShape || 'box';
                         let shadowGroup = shadowPrimitiveGroups.get(shadowGroupKey);
@@ -2736,21 +2741,21 @@
                             shadowGroup = [];
                             shadowPrimitiveGroups.set(shadowGroupKey, shadowGroup);
                         }
-                        shadowGroup.push(object);
+                        shadowGroup.push(shadow);
                     }
                 }
                 if (mesh) {
                     (isTransparent ? transparentMeshObjects : opaqueMeshObjects).push(object);
                 } else if ((object.topTextureKey && object.topTextureCanvas) || (object.sideTextureKey && object.sideTextureCanvas)) {
                     let targetGroups = isTransparent ? transparentTexturedCubeGroups : opaqueTexturedCubeGroups;
-                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${this.getFigureMeshKey(object) || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
+                    let groupKey = `${object.topTextureKey || ''}|${object.sideTextureKey || ''}|${figureMeshKey || object.renderShape || 'box'}|anim:${Number(object.animationMode) || 0}`;
                     let group = targetGroups.get(groupKey);
                     if (!group) {
                         group = {
                             topTexture: this.getTopTexture(object.topTextureKey, object.topTextureCanvas),
                             // Procedural panels use the full 2D status canvas; avoid
                             // uploading the obsolete audio texture for these models.
-                            sideTexture: !proceduralKind(object) && object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
+                            sideTexture: !figureMeshKey && object.sideTextureKey && object.sideTextureCanvas ? this.getTopTexture(object.sideTextureKey, object.sideTextureCanvas) : null,
                             objects: []
                         };
                         targetGroups.set(groupKey, group);

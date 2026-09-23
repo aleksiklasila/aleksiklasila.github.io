@@ -13,6 +13,37 @@ function _isHostileThingVisibleToUnit(unit, target) {
     return isGameplayTargetVisibleToPlayer(unit.owner, gx, gy);
 }
 
+// Preserve list order, strict distance ties and lazy visibility snapshot timing.
+// The raw grid is immutable for this tick; resolve it once per scan rather than
+// repeating player normalization and cache lookups for every building.
+function _findClosestHostileStructure(unit, firstList, range, secondList = null) {
+    let closest = null;
+    let bestDistance = range;
+    let vis = null;
+    for (let pass = 0; pass < (secondList ? 2 : 1); pass++) {
+        let list = pass === 0 ? firstList : secondList;
+        for (let target of list) {
+            if (target.owner === unit.owner || target.energy <= 0) continue;
+            let dx = target.x - unit.x, dy = target.y - unit.y;
+            // Only prune after resolving the first valid tile's lazy snapshot.
+            if (vis && (Math.abs(dx) >= bestDistance || Math.abs(dy) >= bestDistance)) continue;
+            let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
+            let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
+            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
+            if (!vis) {
+                let owner = Math.floor(Number(unit.owner));
+                if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
+                vis = getRawVisibilityGridForPlayer(owner);
+            }
+            if (!vis || vis.length !== GRID_H) continue;
+            if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
+            let distance = Math.hypot(dx, dy);
+            if (distance < bestDistance) { bestDistance = distance; closest = target; }
+        }
+    }
+    return closest;
+}
+
 function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null) {
     if (!u) return false;
     if (!fromNode || !toNode || !Number.isFinite(fromNode.x) || !Number.isFinite(fromNode.y) || !Number.isFinite(toNode.x) || !Number.isFinite(toNode.y)) {
@@ -390,13 +421,7 @@ class Unit {
             return;
         }
         // Priority for structures: towers -> barracks/spawners -> floor items.
-        let closestTower = null, closestTowerD = aggroRange;
-        for (let t of towers) {
-            if (t.owner === this.owner || t.energy <= 0) continue;
-            if (!_isHostileThingVisibleToUnit(this, t)) continue;
-            let d = Math.hypot(t.x - this.x, t.y - this.y);
-            if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
-        }
+        let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
         if (closestTower) {
             this.targetBuilding = closestTower;
             this.forcedAttackTarget = false;
@@ -404,17 +429,7 @@ class Unit {
             return;
         }
 
-        let closestStruct = null, closestStructD = aggroRange;
-        let scanStructList = (list) => {
-            for (let b of list) {
-                if (b.owner === this.owner || b.energy <= 0) continue;
-                if (!_isHostileThingVisibleToUnit(this, b)) continue;
-                let d = Math.hypot(b.x - this.x, b.y - this.y);
-                if (d < closestStructD) { closestStructD = d; closestStruct = b; }
-            }
-        };
-        scanStructList(barracks);
-        scanStructList(collectorSpawners);
+        let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
         if (closestStruct) {
             this.targetBuilding = closestStruct;
             this.forcedAttackTarget = false;
@@ -535,13 +550,7 @@ class Unit {
             this.commandState = CMD_ATTACKING;
             return;
         }
-        let closestTower = null, closestTowerD = aggroRange;
-        for (let t of towers) {
-            if (t.owner === this.owner || t.energy <= 0) continue;
-            if (!_isHostileThingVisibleToUnit(this, t)) continue;
-            let d = Math.hypot(t.x - this.x, t.y - this.y);
-            if (d < closestTowerD) { closestTowerD = d; closestTower = t; }
-        }
+        let closestTower = _findClosestHostileStructure(this, towers, aggroRange);
         if (closestTower) {
             this.targetBuilding = closestTower;
             this.forcedAttackTarget = false;
@@ -549,17 +558,7 @@ class Unit {
             return;
         }
 
-        let closestStruct = null, closestStructD = aggroRange;
-        let scanStructList = (list) => {
-            for (let b of list) {
-                if (b.owner === this.owner || b.energy <= 0) continue;
-                if (!_isHostileThingVisibleToUnit(this, b)) continue;
-                let d = Math.hypot(b.x - this.x, b.y - this.y);
-                if (d < closestStructD) { closestStructD = d; closestStruct = b; }
-            }
-        };
-        scanStructList(barracks);
-        scanStructList(collectorSpawners);
+        let closestStruct = _findClosestHostileStructure(this, barracks, aggroRange, collectorSpawners);
         if (closestStruct) {
             this.targetBuilding = closestStruct;
             this.forcedAttackTarget = false;
