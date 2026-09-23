@@ -901,6 +901,7 @@ function build3DOverlayData(bounds, alpha) {
     let activeSelectedUnits = getActiveUnits();
     overlays.selectionContours = getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get3DRenderOwnerColor);
     overlays.selectionDashed = selectionOutlineType === OVERLAY_LINE_DOTTED;
+    overlays.selectionSeeThrough = selectionOutlineSeeThrough;
     overlays.worldTileSize = TILE;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
     let markerKeys = new Set();

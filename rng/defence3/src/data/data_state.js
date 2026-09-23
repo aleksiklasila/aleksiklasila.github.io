@@ -676,6 +676,7 @@ const OVERLAY_SCOPE_NONE = 'none';
 let rallyLineType = OVERLAY_LINE_DOTTED;
 let rallyLineScope = OVERLAY_SCOPE_BUILDINGS;
 let selectionOutlineType = OVERLAY_LINE_DOTTED;
+let selectionOutlineSeeThrough = false;
 let selectionOutlineScope = OVERLAY_SCOPE_BUILDINGS_UNITS;
 
 function applyOverlayLineType(ctx, lineType) {
