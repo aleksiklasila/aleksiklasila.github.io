@@ -122,15 +122,24 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
             } else for (let row of grid) for (let c of row) if (c.item) add(c.item, false);
         }
     }
-    let signature = Array.from(sources).sort((a,b) => a[0]-b[0]).map(p => p.join(':')).join('|');
-    if (rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById && rangeBoundaryCache.signature === signature) return rangeBoundaryCache.lines;
+    let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById;
+    // Compare numeric maps directly: source order is irrelevant. Avoid sorting
+    // and allocating string signatures every render frame for large armies.
+    if (sameWorld && rangeBoundaryCache.sources && sources.size === rangeBoundaryCache.sources.size) {
+        let unchanged = true;
+        for (let [area, radius] of sources) if (rangeBoundaryCache.sources.get(area) !== radius) { unchanged = false; break; }
+        if (unchanged) return rangeBoundaryCache.lines;
+    }
     // Union area ids before visiting tiles; identical unit ranges cost once.
     let ids = new Set();
     for (let [area, radius] of sources) for (let id of getAreaIdsWithinDistance(area, radius)) ids.add(id);
-    let coverage = Array.from(ids).sort((a,b) => a-b).join(',');
-    if (rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById && rangeBoundaryCache.coverage === coverage) {
-        rangeBoundaryCache.signature = signature;
-        return rangeBoundaryCache.lines;
+    if (sameWorld && rangeBoundaryCache.coverage && ids.size === rangeBoundaryCache.coverage.size) {
+        let unchanged = true;
+        for (let id of ids) if (!rangeBoundaryCache.coverage.has(id)) { unchanged = false; break; }
+        if (unchanged) {
+            rangeBoundaryCache.sources = sources;
+            return rangeBoundaryCache.lines;
+        }
     }
     let boundaries = [];
     for (let id of ids) {
@@ -141,7 +150,7 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
         boundaries.push(edges);
     }
     let lines = unionRangePerimeters(boundaries);
-    rangeBoundaryCache = { grid, areas: _areaById, signature, coverage, lines, path: null };
+    rangeBoundaryCache = { grid, areas: _areaById, sources, coverage: ids, lines, path: null };
     return lines;
 }
 

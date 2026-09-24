@@ -25,6 +25,13 @@ function buildSelectionContours(footprints) {
     for (let p of footprints) input.push(p.x, p.y, p.radius, p.box || 0, p.color);
     let previous = selectionContourCache;
     if (input.length === previous.input.length && input.every((v, i) => v === previous.input[i])) return previous.groups;
+    // Large moving selections otherwise remarch the whole union at render FPS.
+    // Reuse only for subpixel motion relative to the last built geometry (not
+    // the last frame), so accumulated movement always triggers a fresh outline.
+    let tolerance = footprints.length >= 100 && typeof camera !== 'undefined'
+        ? Math.min(2, 0.75 / Math.max(0.25, camera.zoom)) : 0;
+    if (tolerance && input.length === previous.input.length && input.every((v, i) =>
+        i % 5 < 2 ? Math.abs(v - previous.input[i]) <= tolerance : v === previous.input[i])) return previous.groups;
     const step = 8, stride = 1048576, origin = 524288, iso = 4;
     const keyAt = (x, y) => (y + origin) * stride + x + origin;
     // Isolated objects need no union at all. This also bounds the cost of a
@@ -75,11 +82,17 @@ function buildSelectionContours(footprints) {
             for (let cx = Math.floor((minX - 1) / chunkSize); cx <= Math.floor(maxX / chunkSize); cx++) {
                 let key = keyAt(cx, cy), chunk = chunks.get(key);
                 if (!chunk) {
-                    chunk = { x: cx * chunkSize, y: cy * chunkSize, values: new Float32Array(rowSize * rowSize) };
+                    chunk = { x: cx * chunkSize, y: cy * chunkSize, values: new Float32Array(rowSize * rowSize), minX: chunkSize, minY: chunkSize, maxX: 0, maxY: 0 };
                     chunks.set(key, chunk);
                 }
                 let x0 = Math.max(minX, chunk.x), x1 = Math.min(maxX, chunk.x + chunkSize);
                 let y0 = Math.max(minY, chunk.y), y1 = Math.min(maxY, chunk.y + chunkSize);
+                // Only cells touching stamped samples can cross the isoline.
+                // Include the preceding cell so chunk seams remain identical.
+                chunk.minX = Math.min(chunk.minX, Math.max(0, x0 - chunk.x - 1));
+                chunk.minY = Math.min(chunk.minY, Math.max(0, y0 - chunk.y - 1));
+                chunk.maxX = Math.max(chunk.maxX, Math.min(chunkSize - 1, x1 - chunk.x));
+                chunk.maxY = Math.max(chunk.maxY, Math.min(chunkSize - 1, y1 - chunk.y));
                 for (let y = y0; y <= y1; y++) {
                     let dy = Math.abs(y * step - p.y), row = (y - chunk.y) * rowSize;
                     for (let x = x0; x <= x1; x++) {
@@ -101,7 +114,7 @@ function buildSelectionContours(footprints) {
     let groups = Array.from(isolated, ([color, paths]) => ({ color, paths, shapes: isolatedShapes.get(color) }));
     for (let [color, chunks] of fields) {
         let nodes = new Map(), links = new Map();
-        for (let chunk of chunks.values()) for (let cy = 0; cy < chunkSize; cy++) for (let cx = 0; cx < chunkSize; cx++) {
+        for (let chunk of chunks.values()) for (let cy = chunk.minY; cy <= chunk.maxY; cy++) for (let cx = chunk.minX; cx <= chunk.maxX; cx++) {
             let index = cy * rowSize + cx, samples = chunk.values;
             let v0 = samples[index], v1 = samples[index + 1], v2 = samples[index + rowSize + 1], v3 = samples[index + rowSize];
             if (Math.max(v0, v1, v2, v3) < iso || Math.min(v0, v1, v2, v3) >= iso) continue;
