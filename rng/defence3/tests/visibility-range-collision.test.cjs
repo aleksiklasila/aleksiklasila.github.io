@@ -11,11 +11,14 @@ const rc = vm.createContext({ TILE:32, GRID_W:4, GRID_H:2, grid:[[]], localPlaye
     renderRangeMode:0, renderRangeAllTeam:false, Tower:class Tower {},
     units:[], towers:[], barracks:[], collectorSpawners:[],
     getAreaIdAtWorld:x => x < 64 ? 0 : 1,
-    getEntityVisibilityRangeArea:e => e.range, getUnitRenderActionRangeArea:e => e.range,
+    getEntityEffectiveVisibilityRangeArea:e => e.range,
     getAreaIdsWithinDistance:(id, radius) => radius === 0 ? [id] : [0,1],
     _areaById:[{cells:[{x:0,y:0},{x:1,y:0},{x:0,y:1},{x:1,y:1}]},
         {cells:[{x:2,y:0},{x:3,y:0},{x:2,y:1},{x:3,y:1}]}] });
 vm.runInContext(read('src/audio_visual/range_overlay.js'), rc);
+rc.getAreaIdAtTile = (x,y) => x < 0 || x >= 4 || y < 0 || y >= 2 ? -1 : x < 2 ? 0 : 1;
+const stateSource = read('src/data/data_state.js');
+vm.runInContext(stateSource.slice(stateSource.indexOf('function addVisibilitySourceAreas('), stateSource.indexOf('function getAreaDistance(')), rc);
 const a=Object.assign(new rc.Tower(),{x:16,y:16,range:.6,owner:0,energy:10});
 const b=Object.assign(new rc.Tower(),{x:80,y:16,range:.6,owner:0,energy:10});
 let first=rc.getRenderRangeBoundary([a],[]);

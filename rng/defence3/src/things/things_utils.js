@@ -1331,7 +1331,11 @@ function getEntityBaseVisibilityRangeTiles(e) {
 
 function getEntityEffectiveVisibilityRangeArea(e) {
     if (!e) return null;
-    if (e.preComputed && Number.isFinite(e.preComputed.visionRangeArea)) return e.preComputed.visionRangeArea;
+    if (e.preComputedEffective && Number.isFinite(e.preComputedEffective.visionRangeArea)) return e.preComputedEffective.visionRangeArea;
+    if (e.preComputedEffective && Number.isFinite(e.preComputedEffective.visionRange)) {
+        return e.preComputedEffective.visionRange / (e.unitType && !e.type ? AREA_UNIT_TILE_EQUIVALENT : 1);
+    }
+    if (!e.type && e.preComputed && Number.isFinite(e.preComputed.visionRangeArea)) return e.preComputed.visionRangeArea;
     let statsType = getEntityStatsCalcType(e);
     let baseLevel = getThingBaseLevel(e, stackCountToLevel((e.stacks || 1)));
     let effLevel = getThingEffectiveLevel(e, baseLevel);

@@ -75,10 +75,13 @@ const visCtx = {
     units: [], towers: [], barracks: [], collectorSpawners: [],
     grid: Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => ({}))),
     getAreaIdAtWorld: () => -1,
-    getEntityVisibilityRangeArea: b => b.range,
+    getEntityEffectiveVisibilityRangeArea: b => b.preComputed?.visionRangeArea ?? b.range,
+    getAreaIdAtTile: () => -1,
     getGridCellsWithinAreaDistance: () => []
 };
 vm.createContext(visCtx);
+const stateSource = read('src/data/data_state.js');
+vm.runInContext(stateSource.slice(stateSource.indexOf('function addVisibilitySourceAreas('), stateSource.indexOf('function getAreaDistance(')), visCtx);
 vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + renderer.slice(renderer.indexOf('function computeVisibilityGridForPlayer('), renderer.indexOf('function getVisibilityGridForPlayer(')), visCtx);
 const makeGrid = () => Array.from({ length: visCtx.GRID_H }, () => new Float32Array(visCtx.GRID_W));
 const unit = { x: 3 * 32, y: 3 * 32, owner: 0, preComputed: { visionRangeArea: 2 } };

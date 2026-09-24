@@ -1019,6 +1019,13 @@ function build3DOverlayData(bounds, alpha) {
     return overlays;
 }
 
+function getVisualUnitSourceLight(unit) {
+    if (!unit || !unit.unitType || unit.dead || unit._historyGhost) return 0;
+    if (unit.owner !== localPlayerId && !(unit.watched > 0 && unit.watchedByTeam === localPlayerId)) return 0;
+    let range = getEntityEffectiveVisibilityRangeTiles(unit);
+    return Number.isFinite(range) ? Math.max(0, range) : 0;
+}
+
 function push3DRenderObject(target, object) {
     if (!target || !object) return;
     let ox = Number(object.x) || 0;
@@ -1028,6 +1035,9 @@ function push3DRenderObject(target, object) {
     let remembered = !!(getHistoryRenderView() && visibilityHistoryState.explored[gy * GRID_W + gx] && !(visibilityHistoryState.raw[gy] && visibilityHistoryState.raw[gy][gx] > 0));
     let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
     let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
+    if (!fullVisibility && object.visibilitySource && object.visibilitySource.unitType) {
+        lightRawCenter = Math.max(lightRawCenter, getVisualUnitSourceLight(object.visibilitySource));
+    }
     let lightLevel = fullVisibility ? 1 : Math.max(0, Math.min(1, lightRawCenter / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     // Bilinear interpolation of gradient across 4 surrounding tile corners to avoid boundary jumps
     let shadowDirX = DEFAULT_SHADOW_DIR_X;
@@ -1052,8 +1062,8 @@ function push3DRenderObject(target, object) {
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
     let _resolveVisionRangeFromSource = (source) => {
         if (!source) return NaN;
-        if (typeof getEntityVisibilityRangeTiles === 'function') {
-            let sharedTiles = Number(getEntityVisibilityRangeTiles(source));
+        if (typeof getEntityEffectiveVisibilityRangeTiles === 'function') {
+            let sharedTiles = Number(getEntityEffectiveVisibilityRangeTiles(source));
             if (Number.isFinite(sharedTiles)) return sharedTiles;
         }
         if (source.preComputed && Number.isFinite(source.preComputed.visionRangeArea)) return Number(source.preComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
@@ -2204,20 +2214,13 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             }
         }
     };
-    let addAreaVisibilitySource = (areaId, rangeArea) => {
-        let aId = Math.floor(Number(areaId));
-        let range = Math.max(0, Number(rangeArea) || 0);
-        if (aId < 0 || !(range > 0)) return;
-        let current = areaRangeBySourceArea.get(aId) || 0;
-        if (range > current) areaRangeBySourceArea.set(aId, range);
-    };
     let addWorldVisibilitySource = (wx, wy, rangeArea) => {
         let x = Number(wx);
         let y = Number(wy);
         let range = Math.max(0, Number(rangeArea) || 0);
         let areaId = getAreaIdAtWorld(x, y);
         let rangeTiles = range * AREA_UNIT_TILE_EQUIVALENT;
-        addAreaVisibilitySource(areaId, range);
+        addVisibilitySourceAreas(areaRangeBySourceArea, x, y, range, vis);
         if (!(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
         stampSource(x / TILE, y / TILE, rangeTiles);
         if (areaId < 0) {
@@ -2234,28 +2237,28 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     for (let u of units) {
         if (!u || u.dead) continue;
         if (!shouldRevealForPlayer(u.owner, u.watched || 0, u.watchedByTeam)) continue;
-        let visionArea = Number.isFinite(u.preComputed && u.preComputed.visionRangeArea) ? Number(u.preComputed.visionRangeArea) : ((Number(u.preComputed && u.preComputed.visionRange) || 4) / AREA_UNIT_TILE_EQUIVALENT);
+        let visionArea = getEntityEffectiveVisibilityRangeArea(u);
         addWorldVisibilitySource(u.x, u.y, visionArea);
     }
     for (let t of towers) {
         if (!t || !(t.energy > 0) || t.underConstruction) continue;
         if (!shouldRevealForPlayer(t.owner, t.watched || 0, t.watchedByTeam)) continue;
-        addWorldVisibilitySource(t.x, t.y, Number(t.currentStats && t.currentStats.visionRange));
+        addWorldVisibilitySource(t.x, t.y, getEntityEffectiveVisibilityRangeArea(t));
     }
     for (let b of barracks) {
         if (!b || !(b.energy > 0) || b.underConstruction) continue;
         if (!shouldRevealForPlayer(b.owner, b.watched || 0, b.watchedByTeam)) continue;
-        addWorldVisibilitySource(b.x, b.y, getEntityVisibilityRangeArea(b));
+        addWorldVisibilitySource(b.x, b.y, getEntityEffectiveVisibilityRangeArea(b));
     }
     for (let s of collectorSpawners) {
         if (!s || !(s.energy > 0) || s.underConstruction) continue;
         if (!shouldRevealForPlayer(s.owner, s.watched || 0, s.watchedByTeam)) continue;
-        addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
+        addWorldVisibilitySource(s.x, s.y, getEntityEffectiveVisibilityRangeArea(s));
     }
     const revealFloorItem = (cell, x, y) => {
         if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) return;
         if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) return;
-        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
+        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(cell.item));
     };
     if (typeof _activeTileEntities !== 'undefined') {
         // The live tile index includes floor items; avoid a world scan for

@@ -4,6 +4,7 @@ let _visibilityMaskCanvas = null;
 let _visibilityMaskCtx = null;
 let _visibilityMaskGridCanvas = null;
 let _visibilityMaskGridCtx = null;
+let _visibilityMaskUnitFloor = new Float32Array(0);
 let _visibilityMaskVersion = -1;
 let _visibilityMaskFullVisibility = false;
 let _combinedBgDirtyFull = true;
@@ -950,10 +951,10 @@ function _drawCombinedBackgroundRegion(c, minGx, minGy, maxGx, maxGy, redrawArea
 }
 
 function ensureVisibilityMaskCanvas() {
-    if (!_visibilityMaskCanvas || _visibilityMaskCanvas.width !== GRID_W || _visibilityMaskCanvas.height !== GRID_H) {
+    if (!_visibilityMaskCanvas || _visibilityMaskCanvas.width !== GRID_W * 2 || _visibilityMaskCanvas.height !== GRID_H * 2) {
         _visibilityMaskCanvas = document.createElement('canvas');
-        _visibilityMaskCanvas.width = GRID_W;
-        _visibilityMaskCanvas.height = GRID_H;
+        _visibilityMaskCanvas.width = GRID_W * 2;
+        _visibilityMaskCanvas.height = GRID_H * 2;
         _visibilityMaskCtx = _visibilityMaskCanvas.getContext('2d');
         _visibilityMaskVersion = -1;
         _visibilityMaskFullVisibility = false;
@@ -976,19 +977,31 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     if (fullVisibility) {
         _visibilityMaskVersion = visibilityVersion;
         _visibilityMaskFullVisibility = true;
-        _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
+        _visibilityMaskCtx.clearRect(0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
         return;
     }
     if (_visibilityMaskVersion === visibilityVersion && !_visibilityMaskFullVisibility) return;
 
     let invNorm = 1 / Math.max(0.0001, Number(VISIBILITY_LIGHT_NORMALIZATION_RANGE) || 6);
+    if (_visibilityMaskUnitFloor.length !== GRID_W * GRID_H) _visibilityMaskUnitFloor = new Float32Array(GRID_W * GRID_H);
+    else _visibilityMaskUnitFloor.fill(0);
+    // Keep a moving vision source lit in the presentation mask while the
+    // smoothed world grid catches up with its new tile.
+    for (let u of units) {
+        let sourceLight = getVisualUnitSourceLight(u);
+        if (!(sourceLight > 0)) continue;
+        let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
+        let index = gy * GRID_W + gx;
+        _visibilityMaskUnitFloor[index] = Math.max(_visibilityMaskUnitFloor[index], sourceLight);
+    }
     let imageData = _visibilityMaskGridCtx.createImageData(GRID_W, GRID_H);
     let data = imageData.data;
     let i = 0;
     for (let y = 0; y < GRID_H; y++) {
         let row = visibilityGrid[y];
         for (let x = 0; x < GRID_W; x++) {
-            let raw = row ? (row[x] || 0) : 0;
+            let raw = Math.max(row ? (row[x] || 0) : 0, _visibilityMaskUnitFloor[y * GRID_W + x]);
             let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
             let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
             let alpha = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
@@ -1000,10 +1013,11 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     }
     _visibilityMaskGridCtx.putImageData(imageData, 0, 0);
 
-    _visibilityMaskCtx.clearRect(0, 0, WORLD_W, WORLD_H);
+    _visibilityMaskCtx.clearRect(0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
     _visibilityMaskCtx.save();
-    _visibilityMaskCtx.imageSmoothingEnabled = true;
-    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0);
+    _visibilityMaskCtx.imageSmoothingEnabled = false;
+    _visibilityMaskCtx.filter = 'blur(1px)';
+    _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
     _visibilityMaskCtx.restore();
     _visibilityMaskVersion = visibilityVersion;
     _visibilityMaskFullVisibility = false;
@@ -1198,7 +1212,7 @@ function drawLightingOverlayWorld(ctx, minGx, minGy, maxGx, maxGy) {
     setFrameDrawImageDepth(DRAW_Z_OVERLAY + 1);
     ctx.save();
     ctx.imageSmoothingEnabled = true;
-    queueDrawImage(ctx, _visibilityMaskCanvas, sx / TILE, sy / TILE, sw / TILE, sh / TILE, sx, sy, sw, sh);
+    queueDrawImage(ctx, _visibilityMaskCanvas, sx / TILE * 2, sy / TILE * 2, sw / TILE * 2, sh / TILE * 2, sx, sy, sw, sh);
     ctx.restore();
 }
 

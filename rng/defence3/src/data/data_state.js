@@ -275,6 +275,26 @@ function getAreaIdAtWorld(wx, wy) {
     return getAreaIdAtTile(gx, gy);
 }
 
+// Share border coverage between visibility and its range outline. No per-unit
+// state: at most four nearby tiles, merged into the existing area-source map.
+function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
+    if (!(range > 0) || !Number.isFinite(wx) || !Number.isFinite(wy)) return;
+    const x = wx / TILE, y = wy / TILE;
+    const minX = Math.floor(x - .3), maxX = Math.floor(x + .3);
+    const minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
+    const centerArea = light ? getAreaIdAtTile(Math.floor(x), Math.floor(y)) : -1;
+    for (let gy = minY; gy <= maxY; gy++) for (let gx = minX; gx <= maxX; gx++) {
+        const area = getAreaIdAtTile(gx, gy);
+        if (area < 0) continue;
+        sources.set(area, Math.max(sources.get(area) || 0, range));
+        // Start the neighboring area's fade before the center crosses into it.
+        // Stamping only across area borders preserves normal within-area light.
+        if (light && area !== centerArea) {
+            light[gy][gx] = Math.max(light[gy][gx], range * AREA_UNIT_TILE_EQUIVALENT);
+        }
+    }
+}
+
 function getAreaDistance(areaA, areaB) {
     let aId = Math.floor(Number(areaA));
     let bId = Math.floor(Number(areaB));
