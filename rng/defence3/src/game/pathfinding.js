@@ -575,6 +575,69 @@ function _makePathCacheKey(sx, sy, ex, ey, movementProfile, pathOwner, usePortal
     return movementProfile + '|' + (pathOwner === null ? 'n' : String(pathOwner)) + '|' + (usePortalEdges ? 'p1' : 'p0') + '|' + sx + ',' + sy + '>' + ex + ',' + ey;
 }
 
+function _hasUsablePathPortal(owner) {
+    if (_cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    for (let list of _cloudPairIndexCache.values()) {
+        let active = 0;
+        for (let t of list) {
+            if (t.owner === owner && t.energy > 0 && !t.underConstruction && ++active === 2) return true;
+        }
+    }
+    return false;
+}
+
+let _pathClearanceGrid = null;
+let _pathClearanceVersion = -1;
+let _pathClearanceWidth = 0;
+let _pathClearanceHeight = 0;
+let _pathClearanceTiles = null;
+
+function _ensurePathClearanceCache() {
+    if (_pathClearanceGrid === grid && _pathClearanceVersion === pathTopologyVersion &&
+        _pathClearanceWidth === GRID_W && _pathClearanceHeight === GRID_H) return;
+    _pathClearanceGrid = grid;
+    _pathClearanceVersion = pathTopologyVersion;
+    _pathClearanceWidth = GRID_W;
+    _pathClearanceHeight = GRID_H;
+    if (!_pathClearanceTiles || _pathClearanceTiles.length !== GRID_W * GRID_H) {
+        _pathClearanceTiles = new Uint8Array(GRID_W * GRID_H);
+    } else _pathClearanceTiles.fill(0);
+}
+
+// Cache terrain clearance lazily across searches. Only two rings (24 cells)
+// are inspected; three means enough room, where diagonal preference takes over.
+// Special passability is checked live and never stored in the terrain cache.
+function _getPathClearance(x, y, canWalk, owner, usePortalEdges) {
+    let width = GRID_W, height = GRID_H, terrainGrid = grid;
+    let key = y * width + x;
+    let clearance = _pathClearanceTiles[key];
+    if (!clearance) {
+        clearance = 3;
+        terrain: for (let r = 1; r <= 2; r++) {
+            for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+                if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+                let nx = x + dx, ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height || terrainGrid[ny][nx].type === TYPE_WALL) {
+                    clearance = r;
+                    break terrain;
+                }
+            }
+        }
+        _pathClearanceTiles[key] = clearance;
+    }
+    if (clearance === 3 || (!canWalk && !(usePortalEdges && _cloudTileCache.size))) return clearance;
+    for (let r = clearance; r <= 2; r++) {
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+            if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+            let nx = x + dx, ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) return r;
+            if (terrainGrid[ny][nx].type === TYPE_WALL &&
+                !(usePortalEdges && _getCloudTowerFast(nx, ny, owner)) && !(canWalk && canWalk(nx, ny))) return r;
+        }
+    }
+    return 3;
+}
+
 function _trimPathCacheIfNeeded(cacheMap, maxEntries) {
     if (cacheMap.size <= maxEntries) return;
     if (cacheMap.size <= (maxEntries + PATH_CACHE_TRIM_CHUNK)) return;
@@ -650,7 +713,7 @@ let _astarVisitedGen = null;  // Int32Array: [key] === epoch G�� visited thi
 let _astarGScoreGen = null;  // Int32Array: [key] === epoch G�� gScore valid this call
 let _astarGScoreVal = null;  // Int32Array: best g-score per tile
 let _astarFrom = null;  // Int32Array: parent key (for path reconstruction)
-let _astarHeapF = null;  // Int32Array: heap f-values (packed int heap)
+let _astarHeapF = null;  // Float64Array: integer cost plus bounded tie preference
 let _astarHeapK = null;  // Int32Array: heap node keys
 
 function _ensureAstarBuffers(size) {
@@ -660,7 +723,7 @@ function _ensureAstarBuffers(size) {
         _astarGScoreGen = new Int32Array(_astarCap);
         _astarGScoreVal = new Int32Array(_astarCap);
         _astarFrom = new Int32Array(_astarCap);
-        _astarHeapF = new Int32Array(_astarCap * 4);
+        _astarHeapF = new Float64Array(_astarCap * 4);
         _astarHeapK = new Int32Array(_astarCap * 4);
     }
 }
@@ -933,6 +996,9 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
 
     // Resolve cloud tile cache once per call (O(1) per lookup in hot path)
     if (usePortalEdges && _cloudTileCacheVer !== pathTopologyVersion) _rebuildCloudTileCache();
+    // Only inspect live pairs on cache misses. Unpaired cloud tiles stay
+    // walkable, but do not require disabling the Manhattan heuristic.
+    let usePortalHeuristic = usePortalEdges && _hasUsablePathPortal(pathOwner);
 
     if (!ignoreWalls && sx >= 0 && sx < gridW && sy >= 0 && sy < gridH) {
         if (gridData[ey] && gridData[ey][ex] && !(ignoreWalls || gridData[ey][ex].type !== TYPE_WALL || (usePortalEdges && _getCloudTowerFast(ex, ey, pathOwner)) || (canWalk && canWalk(ex, ey)))) {
@@ -954,6 +1020,14 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     }
 
     let bufSize = gridW * gridH;
+    _ensurePathClearanceCache();
+    let routeDx = ex - sx, routeDy = ey - sy;
+    // The fractional part is always < 1: it only orders equal-cost paths.
+    // Prefer clearance first, then progress and proximity to the direct line.
+    // This interleaves cardinal steps without adding diagonal tile edges,
+    // per-unit variants or allocations in the neighbor loop.
+    let tieStride = 2 * bufSize + 4 * (gridW + gridH) + 1;
+    let tieScale = 0.125 / ((gridW + gridH + 1) * tieStride);
     _ensureAstarBuffers(bufSize);
     let configuredAstarLimit = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(ASTAR_MAX_ITERS_HARD, Math.floor(Number(ASTAR_MAX_ITERS_LIMIT) || ASTAR_MAX_ITERS_HARD)));
     let maxAstarIterations = Math.max(ASTAR_MAX_ITERS_BASE, Math.min(configuredAstarLimit, (bufSize >> 1) + ASTAR_MAX_ITERS_BASE));
@@ -986,7 +1060,7 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
     astarFrom[startKey] = startKey; // sentinel for path reconstruction
 
     _astarHeapSz = 0;
-    let startH = usePortalEdges ? 0 : (Math.abs(ex - sx) + Math.abs(ey - sy));
+    let startH = usePortalHeuristic ? 0 : (Math.abs(ex - sx) + Math.abs(ey - sy));
     _heapPush(startH, startKey);
 
     while (_astarHeapSz > 0) {
@@ -1073,8 +1147,11 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                 gScoreGen[nKey] = epoch;
                 gScoreVal[nKey] = ng;
                 astarFrom[nKey] = curKey;
-                let h = usePortalEdges ? 0 : (Math.abs(ex - nx) + Math.abs(ey - ny));
-                _heapPush(ng + h, nKey);
+                let distance = Math.abs(ex - nx) + Math.abs(ey - ny);
+                let h = usePortalHeuristic ? 0 : distance;
+                let cross = Math.abs((nx - sx) * routeDy - (ny - sy) * routeDx);
+                let clearancePenalty = (3 - _getPathClearance(nx, ny, canWalk, pathOwner, usePortalEdges)) * 0.125;
+                _heapPush(ng + h + clearancePenalty + (distance * tieStride + cross) * tieScale, nKey);
             }
         }
 
@@ -1091,7 +1168,10 @@ function findPathAStar(sx, sy, ex, ey, ignoreWalls = false, canWalk = null, path
                             gScoreGen[nKey] = epoch;
                             gScoreVal[nKey] = ng;
                             astarFrom[nKey] = curKey;
-                            _heapPush(ng, nKey); // h=0 in portal/Dijkstra mode
+                            let distance = Math.abs(ex - partner.gx) + Math.abs(ey - partner.gy);
+                            let cross = Math.abs((partner.gx - sx) * routeDy - (partner.gy - sy) * routeDx);
+                            let clearancePenalty = (3 - _getPathClearance(partner.gx, partner.gy, canWalk, pathOwner, usePortalEdges)) * 0.125;
+                            _heapPush(ng + clearancePenalty + (distance * tieStride + cross) * tieScale, nKey); // h=0 with live portals
                         }
                     }
                 }

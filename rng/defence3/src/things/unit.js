@@ -117,6 +117,21 @@ function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null
     return true;
 }
 
+// A route node is roomy when its whole 3x3 block is open terrain. Structures,
+// portals and map edges count as blocked, so corridors, gates and portals keep
+// exact waypoints. The final node and portal entrances are never roomy.
+function _isPathNodeRoomy(path, i) {
+    let node = path[i], next = path[i + 1];
+    if (!next || Math.abs(next.x - node.x) + Math.abs(next.y - node.y) !== 1) return false;
+    let x = node.x, y = node.y;
+    if (x < 1 || y < 1 || x >= GRID_W - 1 || y >= GRID_H - 1) return false;
+    for (let gy = y - 1; gy <= y + 1; gy++) {
+        let row = grid[gy];
+        if (row[x - 1].type === TYPE_WALL || row[x].type === TYPE_WALL || row[x + 1].type === TYPE_WALL) return false;
+    }
+    return true;
+}
+
 function _findNearbyCombatEnemy(unit, range) {
     let closest = null, best = range * range;
     // This refresh is already staggered by the caller. Do not use the older
@@ -951,6 +966,32 @@ class Unit {
     followPath(spd) {
         if (!this.path || this.pathIndex >= this.path.length) return true;
 
+        // Treat the shared route as a corridor. A roomy node is reached from
+        // anywhere in its open 3x3 block, so crowds may flow beside the exact
+        // tiles; tight nodes still need their own tile. The window is short
+        // and also rejoins units that separation pushed past a waypoint.
+        let tileX = Math.floor(this.x / TILE), tileY = Math.floor(this.y / TILE);
+        let first = Math.max(0, this.pathIndex - 1);
+        let limit = Math.min(this.path.length - 1, this.pathIndex + 6);
+        let reached = -1;
+        for (let i = first; i <= limit; i++) {
+            let node = this.path[i], next = this.path[i + 1];
+            let dx = node.x - tileX, dy = node.y - tileY;
+            // Portal entrances are consumed on their exact tile below.
+            if (next && Math.abs(next.x - node.x) + Math.abs(next.y - node.y) !== 1) {
+                if (dx === 0 && dy === 0) reached = i - 1;
+                break;
+            }
+            if ((dx === 0 && dy === 0) ||
+                (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && _isPathNodeRoomy(this.path, i))) reached = i;
+        }
+        while (this.pathIndex <= reached) {
+            if (this.pathIndex > 0 && !_tryConsumeAstarMoveCostForTransition(
+                this, this.path[this.pathIndex - 1], this.path[this.pathIndex])) return false;
+            this.pathIndex++;
+        }
+        if (this.pathIndex >= this.path.length) return true;
+
         // Consume stale nodes first so we never steer back toward an already-reached tile center.
         while (this.path && this.pathIndex < this.path.length) {
             let curNode = this.path[this.pathIndex];
@@ -1030,10 +1071,29 @@ class Unit {
             }
         }
 
-        // Directional lane rule:
-        // horizontal: left -> below center, right -> above center
-        // vertical: up -> left of center, down -> right of center
-        if (Math.abs(segDx) >= Math.abs(segDy)) {
+        let prevNode = this.pathIndex > 0 ? this.path[this.pathIndex - 1] : null;
+        if (prevNode && Math.abs(prevNode.x - Math.floor(this.x / TILE)) <= 1 &&
+            Math.abs(prevNode.y - Math.floor(this.y / TILE)) <= 1 &&
+            _isPathNodeRoomy(this.path, this.pathIndex - 1) && _isPathNodeRoomy(this.path, this.pathIndex)) {
+            // Inside the corridor: keep the unit's current side offset from
+            // the route instead of converging every unit onto one point. Both
+            // adjacent 3x3 blocks are open, and the clamped target stays in
+            // them, so this straight segment cannot cut through a wall.
+            let ahead = this.path[this.pathIndex + 1], far = this.path[this.pathIndex + 2];
+            if (far && Math.abs(far.x - ahead.x) + Math.abs(far.y - ahead.y) === 1) ahead = far;
+            let routeDx = ahead.x - prevNode.x, routeDy = ahead.y - prevNode.y;
+            let routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
+            let sideX = -routeDy / routeLen, sideY = routeDx / routeLen;
+            // Drift gently back towards the exact route while there is no push.
+            let side = ((this.x - baseTx) * sideX + (this.y - baseTy) * sideY) * 0.875;
+            let maxSide = TILE * 0.8;
+            side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
+            tx += sideX * side;
+            ty += sideY * side;
+        } else if (Math.abs(segDx) >= Math.abs(segDy)) {
+            // Directional lane rule:
+            // horizontal: left -> below center, right -> above center
+            // vertical: up -> left of center, down -> right of center
             ty += (segDx < 0 ? laneOffset : -laneOffset);
         } else {
             tx += (segDy < 0 ? -laneOffset : laneOffset);
