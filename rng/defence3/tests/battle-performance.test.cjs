@@ -71,7 +71,8 @@ const world = {
     TILE: 32, GRID_W: 64, GRID_H: 64, AREA_UNIT_TILE_EQUIVALENT: 4,
     units: [], towers: [], barracks: [], collectorSpawners: [], gridCellsByArea: areas,
     grid: Array.from({ length: 64 }, () => Array.from({ length: 64 }, () => ({}))),
-    getEntityVisibilityRangeArea: b => b.range,
+    getEntityEffectiveVisibilityRangeArea: b => b.range ?? b.currentStats?.visionRange ?? b.preComputed?.visionRangeArea ?? .6,
+    getAreaIdAtTile(x, y) { return x < 0 || y < 0 || x >= 64 || y >= 64 ? -1 : Math.floor(y / 8) * 8 + Math.floor(x / 8); },
     getAreaIdAtWorld(x, y) { return x < 0 || y < 0 || x >= 2048 || y >= 2048 ? -1 : Math.floor(y / 256) * 8 + Math.floor(x / 256); },
     getAreaIdsWithinDistance(area, range) {
         return areas.map((_, i) => i).filter(i => Math.abs(i % 8 - area % 8) + Math.abs(Math.floor(i / 8) - Math.floor(area / 8)) <= range);
@@ -89,6 +90,9 @@ world.barracks = world.units.slice(200, 400).map(u => ({ ...u, energy: 10, range
 world.collectorSpawners = world.units.slice(400, 600).map(u => ({ ...u, energy: 10, range: 2 }));
 for (let i = 0; i < 64; i++) world.grid[i][i] = { owner: i % 3, item: { gx:i, gy:i, energy: 10, watched: i % 2, watchedByTeam: (i + 1) % 3 } };
 const vc = vm.createContext({ ...world }), refVc = vm.createContext({ ...world });
+const sourceAreas = functionSource(read('src/data/data_state.js'), 'addVisibilitySourceAreas');
+vm.runInContext(sourceAreas, vc);
+vm.runInContext(sourceAreas, refVc);
 // Reverse index order, include stale entries and non-floor entities. The
 // exhaustive reference must still agree bit-for-bit for every player.
 vc._activeTileEntities = new Set(world.grid.map((row,i) => row[i].item).reverse());

@@ -1,5 +1,6 @@
 // Presentation-only range union shared by the Canvas and instanced WebGL paths.
 let rangeBoundaryCache = { grid: null, areas: null, signature: '', lines: [], path: null };
+const RANGE_AREA_HOLD_MS = 1000;
 let rangeAreaEdges = new WeakMap();
 let rangeClippedCache = { lines: null, key: '', result: [] };
 const rangeCanvasPaths = new WeakMap();
@@ -95,19 +96,20 @@ function buildRangeBoundary(cells, width, height) {
 }
 
 function getRenderRangeBoundary(selectedBuildings, selected) {
-    if (renderRangeMode === RENDER_RANGE_NONE) return [];
+    if (renderRangeMode === RENDER_RANGE_NONE) {
+        rangeBoundaryCache.context = null;
+        return [];
+    }
     let sources = new Map();
     const add = (e, unit) => {
         if (!e || e.dead || e.energy <= 0 || (!unit && e.underConstruction)
             || (renderRangeAllTeam && e.owner !== localPlayerId)) return;
         let x = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
         let y = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
-        let area = getAreaIdAtWorld(x, y);
-        let range = unit ? getUnitRenderActionRangeArea(e) : getEntityVisibilityRangeArea(e);
+        let range = getEntityEffectiveVisibilityRangeArea(e);
         // A fractional range includes the source area (distance zero).
         // Floor only after the positive-range check, as gameplay does.
-        let radius = Math.floor(Math.max(0, Number(range) || 0));
-        if (area >= 0 && range > 0) sources.set(area, Math.max(sources.get(area) || 0, radius));
+        addVisibilitySourceAreas(sources, x, y, range);
     };
     let includeUnits = [RENDER_RANGE_ALL, RENDER_RANGE_UNITS, RENDER_RANGE_TURRETS_AND_UNITS].includes(renderRangeMode);
     let includeBuildings = renderRangeMode !== RENDER_RANGE_UNITS;
@@ -123,22 +125,43 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
             } else for (let row of grid) for (let c of row) if (c.item) add(c.item, false);
         }
     }
-    let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById;
+    let context = `${renderRangeMode}:${renderRangeAllTeam}:${localPlayerId}`;
+    let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById
+        && rangeBoundaryCache.context === context;
+    let now = Date.now();
     // Compare numeric maps directly: source order is irrelevant. Avoid sorting
     // and allocating string signatures every render frame for large armies.
     if (sameWorld && rangeBoundaryCache.sources && sources.size === rangeBoundaryCache.sources.size) {
         let unchanged = true;
         for (let [area, radius] of sources) if (rangeBoundaryCache.sources.get(area) !== radius) { unchanged = false; break; }
-        if (unchanged) return rangeBoundaryCache.lines;
+        if (unchanged && now < rangeBoundaryCache.nextExpiry) return rangeBoundaryCache.lines;
     }
     // Union area ids before visiting tiles; identical unit ranges cost once.
-    let ids = new Set();
-    for (let [area, radius] of sources) for (let id of getAreaIdsWithinDistance(area, radius)) ids.add(id);
+    let activeIds = new Set();
+    for (let [area, range] of sources) for (let id of getAreaIdsWithinDistance(area, Math.floor(range))) activeIds.add(id);
+    let lastSeen = sameWorld ? rangeBoundaryCache.lastSeen : new Map();
+    // A source that just left an area keeps its outline for one second.
+    // Refresh the previously active areas only when sources change, so the
+    // steady frame path still returns from the cache above.
+    if (sameWorld && rangeBoundaryCache.activeCoverage) {
+        for (let id of rangeBoundaryCache.activeCoverage) lastSeen.set(id, now);
+    }
+    for (let id of activeIds) lastSeen.set(id, now);
+    let ids = new Set(activeIds), nextExpiry = Infinity;
+    for (let [id, seenAt] of lastSeen) {
+        if (activeIds.has(id)) continue;
+        let expiry = seenAt + RANGE_AREA_HOLD_MS;
+        if (expiry > now) { ids.add(id); nextExpiry = Math.min(nextExpiry, expiry); }
+        else lastSeen.delete(id);
+    }
     if (sameWorld && rangeBoundaryCache.coverage && ids.size === rangeBoundaryCache.coverage.size) {
         let unchanged = true;
         for (let id of ids) if (!rangeBoundaryCache.coverage.has(id)) { unchanged = false; break; }
         if (unchanged) {
             rangeBoundaryCache.sources = sources;
+            rangeBoundaryCache.activeCoverage = activeIds;
+            rangeBoundaryCache.lastSeen = lastSeen;
+            rangeBoundaryCache.nextExpiry = nextExpiry;
             return rangeBoundaryCache.lines;
         }
     }
@@ -151,7 +174,8 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
         boundaries.push(edges);
     }
     let lines = unionRangePerimeters(boundaries);
-    rangeBoundaryCache = { grid, areas: _areaById, sources, coverage: ids, lines, path: null };
+    rangeBoundaryCache = { grid, areas: _areaById, context, sources, activeCoverage: activeIds,
+        lastSeen, nextExpiry, coverage: ids, lines, path: null };
     return lines;
 }
 
