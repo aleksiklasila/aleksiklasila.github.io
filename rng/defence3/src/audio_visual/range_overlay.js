@@ -98,7 +98,8 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     if (renderRangeMode === RENDER_RANGE_NONE) return [];
     let sources = new Map();
     const add = (e, unit) => {
-        if (!e || e.dead || e.energy <= 0 || (renderRangeAllTeam && e.owner !== localPlayerId)) return;
+        if (!e || e.dead || e.energy <= 0 || (!unit && e.underConstruction)
+            || (renderRangeAllTeam && e.owner !== localPlayerId)) return;
         let x = Number.isFinite(e.x) ? e.x : (e.gx + .5) * TILE;
         let y = Number.isFinite(e.y) ? e.y : (e.gy + .5) * TILE;
         let area = getAreaIdAtWorld(x, y);
