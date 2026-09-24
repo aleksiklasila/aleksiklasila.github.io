@@ -92,7 +92,7 @@
                     </div>
                     <div class="lobby-setting-row">
                         <label for="cfg-full-vis">Map visibility</label>
-                        <select id="cfg-full-vis"><option value="full">Full visibility</option><option value="team" selected>Team</option><option value="history">Team + history</option></select>
+                        <select id="cfg-full-vis"><option value="full">Full visibility</option><option value="team">Team</option><option value="history" selected>Team + history</option></select>
                     </div>
                     <div class="lobby-setting-row compact" style="gap:6px;justify-content:flex-start;">
                         <button id="btn-open-optimization" type="button" style="font-size:11px;padding:4px 8px">Optimization</button>
@@ -194,8 +194,8 @@
         <div id="jukebox-player"></div>
         <p id="jukebox-status" role="status">Ready</p>
         <div class="jukebox-volumes">
-            <label for="jukebox-music">Music <output id="jukebox-music-value">100%</output></label>
-            <input id="jukebox-music" type="range" min="0" max="100" step="1" value="100">
+            <label for="jukebox-music">Music <output id="jukebox-music-value">10%</output></label>
+            <input id="jukebox-music" type="range" min="0" max="100" step="1" value="10">
             <label for="jukebox-effects">Sound effects <output id="jukebox-effects-value">100%</output></label>
             <input id="jukebox-effects" type="range" min="0" max="100" step="1" value="100">
             <small>Volumes apply only to you. Set to 0 to mute.</small>
@@ -428,11 +428,11 @@
                     </div>
                     <div class="settings-row">
                         <label for="btn-render-range">Render range overlay</label>
-                        <select id="btn-render-range"><option value="2">None</option><option value="0" selected>Turrets</option><option value="4">Units</option><option value="1">Turrets + units</option><option value="5">Buildings</option><option value="3">All things</option></select>
+                        <select id="btn-render-range"><option value="2">None</option><option value="0">Turrets</option><option value="4">Units</option><option value="1">Turrets + units</option><option value="5">Buildings</option><option value="3" selected>All things</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-range-team">Show ranges for</label>
-                        <select id="setting-range-team"><option value="selected">Selected things</option><option value="team">All team things</option></select>
+                        <select id="setting-range-team"><option value="selected">Selected things</option><option value="team" selected>All team things</option></select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-range-through">Ranges visible through objects (3D)</label>
@@ -455,29 +455,29 @@
                     <div class="settings-row">
                         <label for="setting-show-rally-lines">Show rally lines</label>
                         <select id="setting-show-rally-lines" style="width:150px">
-                            <option value="buildings" selected>Buildings</option>
+                            <option value="buildings">Buildings</option>
                             <option value="buildings_units">Buildings + Units</option>
-                            <option value="none">None</option>
+                            <option value="none" selected>None</option>
                         </select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-show-selection-outlines">Selection outlines</label>
                         <select id="setting-show-selection-outlines" style="width:150px">
-                            <option value="buildings_units" selected>Buildings + Units</option>
-                            <option value="buildings">Buildings</option>
+                            <option value="buildings_units" selected>All</option>
+                            <option value="units">Units</option>
                             <option value="none">None</option>
                         </select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-selection-outline-type">Selection outline type</label>
                         <select id="setting-selection-outline-type" style="width:120px">
-                            <option value="dotted" selected>Dotted</option>
-                            <option value="solid">Solid</option>
+                            <option value="dotted">Dotted</option>
+                            <option value="solid" selected>Solid</option>
                         </select>
                     </div>
                     <div class="settings-row">
                         <label for="setting-selection-outline-see-through">See-through selection outlines (3D)</label>
-                        <select id="setting-selection-outline-see-through"><option value="false">Behind objects</option><option value="true">Through objects</option></select>
+                        <label class="settings-toggle" for="setting-selection-outline-see-through"><input type="checkbox" id="setting-selection-outline-see-through"> Through objects</label>
                     </div>
                     <div class="settings-row">
                         <label for="btn-show-statsmap">Precomputed Stats Map</label>
@@ -640,20 +640,20 @@
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     
     <script src="./src/utils/utils_common.js?v=20260516d"></script>
-    <script src="./src/utils/utils_networking.js?v=20260516d"></script>
-    <script src="./src/utils/utils_storage.js?v=20260923-outline-option"></script>
+    <script src="./src/utils/utils_networking.js?v=20260924-local-history-perf2"></script>
+    <script src="./src/utils/utils_storage.js?v=20260924-settings"></script>
 
     <script src="./src/data/data_static.js?v=20260922-team-watch"></script>
-    <script src="./src/data/data_dynamic.js?v=20260922-team-watch"></script>
-    <script src="./src/data/data_state.js?v=20260923-outline-option"></script>
+    <script src="./src/data/data_dynamic.js?v=20260924-settings"></script>
+    <script src="./src/data/data_state.js?v=20260924-settings"></script>
 
-    <script src="./src/audio_visual/visibility_history.js?v=20260923-history"></script>
-    <script src="./src/audio_visual/range_overlay.js?v=20260923-range"></script>
+    <script src="./src/audio_visual/visibility_history.js?v=20260924-local-history-perf2"></script>
+    <script src="./src/audio_visual/range_overlay.js?v=20260924-local-history-perf2"></script>
     <script src="./src/audio_visual/selection_overlay.js?v=20260923-selection"></script>
-    <script src="./src/audio_visual/renderer3d.js?v=20260924-flat-gpu"></script>
-    <script src="./src/audio_visual/renderer2d.js?v=20260923-snake-live"></script>
+    <script src="./src/audio_visual/renderer3d.js?v=20260924-local-history-perf2"></script>
+    <script src="./src/audio_visual/renderer2d.js?v=20260924-visibility-perf"></script>
     <script src="./src/audio_visual/side_visualizations.js?v=20260516d"></script>
-    <script src="./src/audio_visual/renderer.js?v=20260924-flat-gpu"></script>
+    <script src="./src/audio_visual/renderer.js?v=20260924-local-history-perf2"></script>
     <script src="./src/audio_visual/audio.js?v=20260923-selection"></script>
     <script src="./src/audio_visual/jukebox.js?v=20260921"></script>
     <script src="./src/audio_visual/hud.js?v=20260923-selection"></script>
@@ -664,16 +664,16 @@
     <script src="./src/game/player.js?v=20260516d"></script>
 
     <script src="./src/things/barrack.js?v=20260516d"></script>
-    <script src="./src/things/unit.js?v=20260923-snake-live"></script>
-    <script src="./src/things/worker.js?v=20260923-performance"></script>
-    <script src="./src/things/particle.js?v=20260516d"></script>
+    <script src="./src/things/unit.js?v=20260924-local-history-perf2"></script>
+    <script src="./src/things/worker.js?v=20260924-local-history-perf2"></script>
+    <script src="./src/things/particle.js?v=20260924-local-history-perf2"></script>
     <script src="./src/things/projectile.js?v=20260516d"></script>
     <script src="./src/things/things_utils.js?v=20260516d"></script>
     <script src="./src/things/tower.js?v=20260922-team-watch"></script>
 
-    <script src="./src/main.js?v=20260923-outline-option"></script>
+    <script src="./src/main.js?v=20260924-settings"></script>
 
-    <script src="./src/bootstrap.js?v=20260516d"></script>
+    <script src="./src/bootstrap.js?v=20260924-settings"></script>
 </body>
 
 </html>

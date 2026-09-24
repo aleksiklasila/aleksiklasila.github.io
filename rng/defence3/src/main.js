@@ -1753,9 +1753,9 @@ function initInput() {
     const selectionOutlineTypeSelect = document.getElementById('setting-selection-outline-type');
     const selectionOutlineSeeThroughToggle = document.getElementById('setting-selection-outline-see-through');
     if (selectionOutlineSeeThroughToggle) {
-        selectionOutlineSeeThroughToggle.value = String(selectionOutlineSeeThrough);
+        selectionOutlineSeeThroughToggle.checked = selectionOutlineSeeThrough;
         selectionOutlineSeeThroughToggle.addEventListener('change', () => {
-            selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.value === 'true';
+            selectionOutlineSeeThrough = selectionOutlineSeeThroughToggle.checked;
             saveUiSettingsToStorage();
         });
     }
@@ -1786,7 +1786,7 @@ function initInput() {
         selectionOutlineScopeSelect.value = selectionOutlineScope;
         selectionOutlineScopeSelect.addEventListener('change', () => {
             let v = String(selectionOutlineScopeSelect.value || OVERLAY_SCOPE_BUILDINGS_UNITS);
-            if (v !== OVERLAY_SCOPE_BUILDINGS && v !== OVERLAY_SCOPE_BUILDINGS_UNITS && v !== OVERLAY_SCOPE_NONE) v = OVERLAY_SCOPE_BUILDINGS_UNITS;
+            if (v !== OVERLAY_SCOPE_UNITS && v !== OVERLAY_SCOPE_BUILDINGS_UNITS && v !== OVERLAY_SCOPE_NONE) v = OVERLAY_SCOPE_BUILDINGS_UNITS;
             selectionOutlineScope = v;
             saveUiSettingsToStorage();
         });
@@ -2852,9 +2852,6 @@ function startGame() {
     document.getElementById('lobby').style.display = 'none';
     let go = document.getElementById('game-over');
     if (go) go.style.display = 'none';
-
-    loadUiSettingsFromStorage();
-    updateBuildPlacementModeButton();
 
     resetWorldState();
 

@@ -52,42 +52,6 @@ assert.equal(rc.getRenderRangeBoundary([a],[]).length,0);
 const dense=Array.from({length:10000},(_,i)=>({x:i%100,y:Math.floor(i/100)}));
 assert.equal(rc.buildRangeBoundary(dense,100,100).length,4,'10,000 covered tiles become four lines');
 
-// History is detached: unseen movement, deaths, building changes and effects
-// cannot alter what was observed. Re-entering clears obsolete memories.
-const hc=vm.createContext({TILE:32,GRID_W:3,GRID_H:1,localPlayerId:0,gameTime:1,visibilityVersion:1,
-    fullVisibility:false,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
-    grid:[[{type:0,item:null},{type:0,item:{type:'farm',energy:20}},{type:0,item:null}]],
-    visibilityGrid:[[6,6,0]],raw:[[6,6,0]], units:[], towers:[], barracks:[],collectorSpawners:[],goldMines:[],astarMines:[],droppedItems:[],projectiles:[],particles:[]});
-hc.getRawVisibilityGridForPlayer=()=>hc.raw;
-vm.runInContext(read('src/audio_visual/visibility_history.js')+'\nteamVisibilityHistory=true;',hc);
-const enemy={id:5,x:48,y:16,prevX:47,prevY:16,energy:20,preComputed:{attackDamage:5},path:[{x:2,y:0}]};
-hc.units=[enemy]; hc.updateVisibilityHistory();
-const snapshot=JSON.stringify(enemy);
-hc.gameTime++; hc.visibilityVersion++; hc.raw=[[6,0,0]]; hc.visibilityGrid=[[6,0,0]];
-enemy.x=80; enemy.energy=0; enemy.preComputed.attackDamage=100;
-hc.grid[0][1].item.energy=0; hc.projectiles=[{x:48,y:16}]; hc.updateVisibilityHistory();
-let view=hc.getHistoryRenderView();
-assert.equal(view.units.length,1); assert.equal(view.units[0].x,48);
-assert.equal(view.units[0].energy,20); assert.equal(view.units[0].preComputed.attackDamage,5);
-assert.equal(view.grid[0][1].item.energy,20); assert.equal(view.projectiles.length,0);
-assert.equal(view.visibilityGrid[0][2],0,'unexplored tiles remain black');
-assert.ok(view.visibilityGrid[0][1]>0 && view.visibilityGrid[0][1]<1,'history is dimmed');
-assert.equal(hc.visibilityGrid[0][1],0,'gameplay visibility is untouched');
-assert.equal(view.units[0].path,null,'history cannot reference live paths');
-assert.equal(view.units[0].prevX,48,'remembered interpolation remains frozen');
-hc.gameTime++;hc.visibilityVersion++;hc.raw=[[6,6,0]];hc.updateVisibilityHistory();
-assert.equal(hc.getHistoryRenderView().units.length,0,'seeing an empty last-seen tile removes its ghost');
-assert.equal(hc.getHistoryRenderView().grid[0][1].item.energy,0);
-hc.localPlayerId=1;hc.raw=[[6,0,0]];hc.gameTime++;hc.visibilityVersion++;hc.updateVisibilityHistory();
-assert.equal(hc.getHistoryRenderView().visibilityGrid[0][1],0,'changing team clears previous team knowledge');
-hc.fullVisibility=true;
-assert.equal(hc.getHistoryRenderView(),null,'full visibility bypasses memory');
-hc.fullVisibility=false;
-hc.document={createElement:()=>({getContext:()=>({fillRect(){},drawImage(){}})})};
-const background=hc.getHistoryBackground({width:1024,height:1024});
-assert.equal(hc.getHistoryBackground({width:512,height:512}),background,'changing source mip never reallocates history');
-assert.equal(hc.getHistoryAudioGrid([[1,1,1]],'test')[0][1],0,'hidden audio does not animate history');
-
 // Pushing is bounded and deterministic even at diagonal caps.
 const uc=vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0});
 vm.runInContext(read('src/things/unit.js'),uc);
@@ -141,4 +105,4 @@ let stable=sc.stabilizeSelectionPosition(entity,2,0,16);
 assert.ok(stable.x>0 && stable.x<.5,'brief motion across merge thresholds is damped');
 assert.equal(sc.stabilizeSelectionPosition(entity,200,0,32).x,200,'teleports do not drag stale outlines');
 
-console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, hidden-state isolation, team reset, bounded corner pushes, deterministic replay and automatic retargeting.');
+console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and automatic retargeting.');

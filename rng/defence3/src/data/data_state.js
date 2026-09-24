@@ -685,22 +685,23 @@ const RENDER_RANGE_NONE = 2;
 const RENDER_RANGE_ALL = 3;
 const RENDER_RANGE_UNITS = 4;
 const RENDER_RANGE_BUILDINGS = 5;
-let renderRangeAllTeam = false;
+let renderRangeAllTeam = true;
 let renderRangeSeeThrough = false;
-let renderRangeMode = RENDER_RANGE_TURRETS;
+let renderRangeMode = RENDER_RANGE_ALL;
 let showGoldMineAmountText = false;
 let audioVolume = 1;
-let audioBackgroundVolume = 1;
+let audioBackgroundVolume = 0.1;
 
 const OVERLAY_LINE_DOTTED = 'dotted';
 const OVERLAY_LINE_SOLID = 'solid';
 const OVERLAY_SCOPE_BUILDINGS = 'buildings';
 const OVERLAY_SCOPE_BUILDINGS_UNITS = 'buildings_units';
+const OVERLAY_SCOPE_UNITS = 'units';
 const OVERLAY_SCOPE_NONE = 'none';
 
 let rallyLineType = OVERLAY_LINE_DOTTED;
-let rallyLineScope = OVERLAY_SCOPE_BUILDINGS;
-let selectionOutlineType = OVERLAY_LINE_DOTTED;
+let rallyLineScope = OVERLAY_SCOPE_NONE;
+let selectionOutlineType = OVERLAY_LINE_SOLID;
 let selectionOutlineSeeThrough = false;
 let selectionOutlineScope = OVERLAY_SCOPE_BUILDINGS_UNITS;
 
@@ -719,11 +720,11 @@ function showRallyLinesForUnits() {
 }
 
 function showSelectionOutlinesForBuildings() {
-    return selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS || selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
+    return selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
 }
 
 function showSelectionOutlinesForUnits() {
-    return selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
+    return selectionOutlineScope === OVERLAY_SCOPE_UNITS || selectionOutlineScope === OVERLAY_SCOPE_BUILDINGS_UNITS;
 }
 
 const OVERLAY_SPRITE_CACHE_MAX_SIDE = 2048;

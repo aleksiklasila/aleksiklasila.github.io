@@ -1681,7 +1681,7 @@
 
         uploadBackgroundTexture(sourceCanvas, version) {
             let gl = this.gl;
-            let needsUpload = this.backgroundTextureVersion !== version || this.backgroundTextureSize.width !== sourceCanvas.width || this.backgroundTextureSize.height !== sourceCanvas.height;
+            let needsUpload = this.backgroundTextureSource !== sourceCanvas || this.backgroundTextureVersion !== version || this.backgroundTextureSize.width !== sourceCanvas.width || this.backgroundTextureSize.height !== sourceCanvas.height;
             if (!needsUpload) return;
             gl.bindTexture(gl.TEXTURE_2D, this.backgroundTexture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -1694,6 +1694,7 @@
                 gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
             }
             this.backgroundTextureVersion = version;
+            this.backgroundTextureSource = sourceCanvas;
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
             gl.generateMipmap(gl.TEXTURE_2D);
         }
@@ -1702,7 +1703,7 @@
             if (!source) return;
             let gl = this.gl;
             let resized = this.fogTextureSize.width !== source.width || this.fogTextureSize.height !== source.height;
-            if (!resized && this.fogTextureVersion === version) return;
+            if (!resized && this.fogTextureSource === source && this.fogTextureVersion === version) return;
             gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
@@ -1713,6 +1714,7 @@
                 gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
             }
             this.fogTextureVersion = version;
+            this.fogTextureSource = source;
         }
 
         buildViewProjection(snapshot) {
@@ -2883,12 +2885,13 @@
                     layout(location=0) in vec4 rect;
                     layout(location=1) in vec4 tint;
                     layout(location=2) in float angle;
+                    layout(location=3) in vec4 uvRect;
                     uniform mat4 viewProjection;
                     out vec2 uv;
                     out vec4 color;
                     void main() {
                         vec2 p = vec2(float(gl_VertexID % 2), float(gl_VertexID / 2));
-                        uv = vec2(p.x, 1. - p.y);
+                        uv = uvRect.xy + vec2(p.x, 1. - p.y) * uvRect.zw;
                         vec2 d = (p - .5) * rect.zw;
                         float c = cos(angle), s = sin(angle);
                         vec2 world = rect.xy + vec2(c*d.x-s*d.y,s*d.x+c*d.y);
@@ -2913,17 +2916,17 @@
                 };
                 gl.bindVertexArray(this.flatVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
-                for (const [location, size, offset] of [[0,4,0], [1,4,16], [2,1,32]]) {
+                for (const [location, size, offset] of [[0,4,0], [1,4,16], [2,1,32], [3,4,36]]) {
                     gl.enableVertexAttribArray(location);
-                    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 36, offset);
+                    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 52, offset);
                     gl.vertexAttribDivisor(location, 1);
                 }
             }
             gl.useProgram(this.flatProgram);
             gl.bindVertexArray(this.flatVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
-            if (!this.flatData || this.flatData.length < objects.length * 9) {
-                this.flatData = new Float32Array(Math.max(1024, objects.length * 18));
+            if (!this.flatData || this.flatData.length < objects.length * 13) {
+                this.flatData = new Float32Array(Math.max(1024, objects.length * 26));
                 gl.bufferData(gl.ARRAY_BUFFER, this.flatData.byteLength, gl.DYNAMIC_DRAW);
             }
             gl.uniformMatrix4fv(this.flatUniforms.matrix, false, this.tmpViewProjection);
@@ -2951,16 +2954,21 @@
                         !o.modelKey.startsWith('projectile_') && !o.modelKey.startsWith('particle') && !o.modelKey.startsWith('dropped_');
                     const size = exact || (tile ? 1 : 0);
                     const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
-                    const color = texture ? [light,light,light] : hexToRgb(o.tint);
+                    const color = texture ? null : hexToRgb(o.tint);
                     this.flatData[offset++] = o.x;
                     this.flatData[offset++] = o.z + (exact ? source._flatOffsetZ || 0 : 0);
                     this.flatData[offset++] = size || o.scaleX;
                     this.flatData[offset++] = size || o.scaleZ;
-                    this.flatData[offset++] = color[0];
-                    this.flatData[offset++] = color[1];
-                    this.flatData[offset++] = color[2];
+                    this.flatData[offset++] = texture ? light : color[0];
+                    this.flatData[offset++] = texture ? light : color[1];
+                    this.flatData[offset++] = texture ? light : color[2];
                     this.flatData[offset++] = o.alpha;
                     this.flatData[offset++] = exact || tile ? 0 : -(o.rotationY || 0);
+                    const uv = o.topTextureUv;
+                    this.flatData[offset++] = uv ? uv[0] : 0;
+                    this.flatData[offset++] = uv ? uv[1] : 0;
+                    this.flatData[offset++] = uv ? uv[2] : 1;
+                    this.flatData[offset++] = uv ? uv[3] : 1;
                 }
                 gl.uniform1i(this.flatUniforms.textured, texture ? 1 : 0);
                 gl.bindTexture(gl.TEXTURE_2D, texture ? this.getTopTexture(first.topTextureKey, texture) : null);

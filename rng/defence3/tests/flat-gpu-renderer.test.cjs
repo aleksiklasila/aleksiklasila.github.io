@@ -47,6 +47,16 @@ r.drawFlatSprites([object,alternate,object]);
 assert.equal(calls.filter(c=>c[0]==='drawArraysInstanced').length,3,'overlapping transparency retains painter order');
 assert.equal(calls.filter(c=>c[0]==='readPixels'||c[0]==='drawImage').length,0);
 
+const atlas={width:768,height:128};
+calls.length=0;
+r.drawFlatSprites(Array.from({length:6},(_,i)=>({...object, modelKey:'snake_segment',
+    topTextureCanvas:atlas,topTextureKey:'flat_snake_body:0',topTextureUv:[i/6,0,1/6,1]})));
+assert.equal(calls.filter(c=>c[0]==='drawArraysInstanced').length,1,'six distinct tail panels batch without sorting');
+for(let i=0;i<6;i++) {
+    assert.ok(Math.abs(r.flatData[i*13+9]-i/6)<1e-7);
+    assert.ok(Math.abs(r.flatData[i*13+11]-1/6)<1e-7);
+}
+
 r.enabled=r.supported=true;r.overlayDepthCache=new Map();
 for(const method of ['resize','drawBackground','drawGroundOverlays','resolveScene','presentSceneToCanvas'])r[method]=()=>calls.push([method]);
 for(const method of ['requestModel','drawShadows','drawTexturedCubeInstances'])r[method]=()=>{throw Error('2D must never draw models/shadows');};
@@ -57,6 +67,17 @@ assert.ok(calls.some(c=>c[0]==='presentSceneToCanvas'));
 assert.equal(calls.filter(c=>c[0]==='readPixels'||c[0]==='drawImage').length,0,'frame stays on GPU');
 
 const source=read('src/audio_visual/renderer.js');
+let clears=0;
+const overlay=vm.createContext({overlayCanvas:{},overlayCtx:{setTransform(){},clearRect(){clears++;}},
+    renderer3dInstance:{drawOverlay(){}},window:{devicePixelRatio:1},viewW:800,viewH:600,isBoxSelecting:false,selectionBoxScreen:null});
+const overlayStart=source.indexOf('function drawInteractionOverlay(');
+vm.runInContext(source.slice(overlayStart,source.indexOf('\nfunction ',overlayStart+1)),overlay);
+for(let i=0;i<100;i++) overlay.drawInteractionOverlay({overlays:{groundLinesRendered:true,lines:[{}]}});
+assert.equal(clears,1,'empty canvas overlays do not clear every frame for GPU lines');
+overlay.drawInteractionOverlay({overlays:{markers:[{}]}});
+overlay.drawInteractionOverlay({overlays:{}});
+overlay.drawInteractionOverlay({overlays:{}});
+assert.equal(clears,3,'disappearing content clears exactly once');
 const begin=source.indexOf('function processRenderFrame('),end=source.indexOf('\nfunction ',begin+1);
 let worldDraws=0,mode='2d',received;
 const pipeline=vm.createContext({ctx:{setTransform(){}},canvas:{},bgCtx:{},minimapCtx:{},window:{devicePixelRatio:1},

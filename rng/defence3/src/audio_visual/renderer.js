@@ -23,10 +23,7 @@ const renderer3dLayerConfigs = [
 let renderer3dLayerCanvases = new Map();
 let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
-let visibilityGridByPlayerCache = new Map();
 let visibilityGridRawByPlayerCache = new Map();
-let visibilityGridSmoothedByPlayerCache = new Map();
-let visibilityGridSmoothingTickByPlayer = new Map();
 let visibilityCacheTick = -1;
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
@@ -835,6 +832,21 @@ function get3DSnakeBodyTopTexture(owner, segmentIndex = 0) {
     });
 }
 
+function getFlatSnakeBodyAtlas(owner) {
+    const key = `flat_snake_body:${owner}:${get3DRenderOwnerColor(owner)}`;
+    let canvas = renderer3dTopTextureCache.get(key);
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE * 6;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        const ctx = canvas.getContext('2d');
+        for (let i = 1; i <= 6; i++) ctx.drawImage(get3DSnakeBodyTopTexture(owner, i), (i - 1) * RENDERER3D_TOP_TEXTURE_SIZE, 0);
+        canvas._renderer3DExactKey = key;
+        renderer3dTopTextureCache.set(key, canvas);
+    }
+    return canvas;
+}
+
 function get3DBuildingTopTexture(kind, owner, options = {}) {
     let key = `${kind}:${owner}:${options.subtype || ''}:${options.active ? 1 : 0}:${options.angleKey || ''}:${options.statusKey || ''}`;
     return get3DTopTextureCanvas(key, (g) => {
@@ -1004,15 +1016,25 @@ function build3DOverlayData(bounds, alpha) {
         if (s.markedForSalvage) pushSalvageCross(s.x, s.y);
     }
 
-    for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
-        let gridRow = grid[y];
-        let visRow = visibilityGrid[y];
-        if (!gridRow) continue;
-        for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
-            let cell = gridRow[x];
-            if (!cell || !cell.item) continue;
-            if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
-            if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+    // The tile index already tracks floor entities; empty terrain has no markers.
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (const item of _activeTileEntities) {
+            const x = item.gx, y = item.gy;
+            if (!item.markedForSalvage || x < bounds.minGx || x > bounds.maxGx || y < bounds.minGy || y > bounds.maxGy) continue;
+            if (grid[y] && grid[y][x] && grid[y][x].item === item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0)))
+                pushSalvageCross(x * TILE + TILE * .5, y * TILE + TILE * .5);
+        }
+    } else {
+        for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
+            let gridRow = grid[y];
+            let visRow = visibilityGrid[y];
+            if (!gridRow) continue;
+            for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
+                let cell = gridRow[x];
+                if (!cell || !cell.item) continue;
+                if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
+                if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+            }
         }
     }
 
@@ -1026,13 +1048,86 @@ function getVisualUnitSourceLight(unit) {
     return Number.isFinite(range) ? Math.max(0, range) : 0;
 }
 
+function getRenderLightGradient(gx, gy) {
+    const version = typeof visibilityVersion === 'number' ? visibilityVersion : 0;
+    let cache = getRenderLightGradient.cache;
+    if (!cache || cache.grid !== visibilityGrid || cache.version !== version) {
+        cache = getRenderLightGradient.cache = { grid: visibilityGrid, version, cells: new Map() };
+    }
+    const key = (gy + 2) * (GRID_W + 4) + gx + 2;
+    let gradient = cache.cells.get(key);
+    if (!gradient) {
+        const _vis = visibilityGrid;
+
+        let g00x = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
+        let g00z = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
+        let g10x = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+        let g10z = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
+        let g01x = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
+        let g01z = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
+        let g11x = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
+        let g11z = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
+        gradient = [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z];
+        cache.cells.set(key, gradient);
+    }
+    return gradient;
+}
+
+function resolveRenderVisionRange(source) {
+    if (!source) return NaN;
+    if (typeof getEntityEffectiveVisibilityRangeTiles === 'function') {
+        let sharedTiles = Number(getEntityEffectiveVisibilityRangeTiles(source));
+        if (Number.isFinite(sharedTiles)) return sharedTiles;
+    }
+    if (source.preComputed && Number.isFinite(source.preComputed.visionRangeArea)) return Number(source.preComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.currentStats && Number.isFinite(source.currentStats.visionRangeArea)) return Number(source.currentStats.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRangeArea)) return Number(source.basePreComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
+    if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
+    if (source.preComputed && Number.isFinite(source.preComputed.visionRange)) return Number(source.preComputed.visionRange);
+    if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRange)) return Number(source.basePreComputed.visionRange);
+
+    let ownerId = Number(source.owner);
+    if (!Number.isFinite(ownerId)) ownerId = 0;
+
+    if (source.unitType) {
+        let unitType = String(source.unitType || 'norm');
+        let unitLevel = 1;
+        if (typeof getDisplayLevel === 'function') {
+            unitLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+        }
+        if (typeof getUnitStatForOwner === 'function') {
+            let unitVision = Number(getUnitStatForOwner(ownerId, unitType, unitLevel, 'visionRange'));
+            if (Number.isFinite(unitVision)) return unitVision;
+        }
+        return Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).visionRange);
+    }
+
+    if (source.type) {
+        let buildingType = String(source.type || '');
+        if (buildingType === 'barrack') {
+            buildingType = `barrack_${String(source.unitType || 'norm')}`;
+        }
+        let buildingLevel = 1;
+        if (typeof getDisplayLevel === 'function') {
+            buildingLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
+        }
+        if (typeof getBuildingStatForOwner === 'function') {
+            let buildingVision = Number(getBuildingStatForOwner(ownerId, buildingType, buildingLevel, 'visionRange'));
+            if (Number.isFinite(buildingVision)) return buildingVision;
+        }
+        return Number((BASE_CARD_TYPES[buildingType] || {}).visionRange);
+    }
+
+    return NaN;
+}
+
 function push3DRenderObject(target, object) {
     if (!target || !object) return;
     let ox = Number(object.x) || 0;
     let oz = Number(object.z) || 0;
     let gx = Math.floor(ox);
     let gy = Math.floor(oz);
-    let remembered = !!(getHistoryRenderView() && visibilityHistoryState.explored[gy * GRID_W + gx] && !(visibilityHistoryState.raw[gy] && visibilityHistoryState.raw[gy][gx] > 0));
+    const remembered = !!((object.visibilitySource || object.pickSource || {})._historyGhost);
     let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
     let lightRawCenter = fullVisibility ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : ((lightGrid[gy] && lightGrid[gy][gx]) || 0);
     if (!fullVisibility && object.visibilitySource && object.visibilitySource.unitType) {
@@ -1042,74 +1137,19 @@ function push3DRenderObject(target, object) {
     // Bilinear interpolation of gradient across 4 surrounding tile corners to avoid boundary jumps
     let shadowDirX = DEFAULT_SHADOW_DIR_X;
     let shadowDirZ = DEFAULT_SHADOW_DIR_Y;
-    if (!fullVisibility) {
+    if (!fullVisibility && !target.flat2d) {
         let fx = ox - gx, fz = oz - gy;
         let ifx = 1 - fx, ifz = 1 - fz;
-        let _vis = visibilityGrid;
-        let g00x = ((_vis[gy] && _vis[gy][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx - 1]) || 0);
-        let g00z = ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx]) || 0);
-        let g10x = ((_vis[gy] && _vis[gy][gx + 2]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
-        let g10z = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy - 1] && _vis[gy - 1][gx + 1]) || 0);
-        let g01x = ((_vis[gy + 1] && _vis[gy + 1][gx + 1]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx - 1]) || 0);
-        let g01z = ((_vis[gy + 2] && _vis[gy + 2][gx]) || 0) - ((_vis[gy] && _vis[gy][gx]) || 0);
-        let g11x = ((_vis[gy + 1] && _vis[gy + 1][gx + 2]) || 0) - ((_vis[gy + 1] && _vis[gy + 1][gx]) || 0);
-        let g11z = ((_vis[gy + 2] && _vis[gy + 2][gx + 1]) || 0) - ((_vis[gy] && _vis[gy][gx + 1]) || 0);
+        const [g00x, g00z, g10x, g10z, g01x, g01z, g11x, g11z] = getRenderLightGradient(gx, gy);
         let gradX = g00x * ifx * ifz + g10x * fx * ifz + g01x * ifx * fz + g11x * fx * fz;
         let gradZ = g00z * ifx * ifz + g10z * fx * ifz + g01z * ifx * fz + g11z * fx * fz;
         let gradLen = Math.hypot(gradX, gradZ);
         if (gradLen > 0.001) { shadowDirX = gradX / gradLen; shadowDirZ = gradZ / gradLen; }
     }
     let finalLightLevel = Math.max(0, Math.min(1, Number(object.lightLevel) || lightLevel));
-    let _resolveVisionRangeFromSource = (source) => {
-        if (!source) return NaN;
-        if (typeof getEntityEffectiveVisibilityRangeTiles === 'function') {
-            let sharedTiles = Number(getEntityEffectiveVisibilityRangeTiles(source));
-            if (Number.isFinite(sharedTiles)) return sharedTiles;
-        }
-        if (source.preComputed && Number.isFinite(source.preComputed.visionRangeArea)) return Number(source.preComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (source.currentStats && Number.isFinite(source.currentStats.visionRangeArea)) return Number(source.currentStats.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRangeArea)) return Number(source.basePreComputed.visionRangeArea) * AREA_UNIT_TILE_EQUIVALENT;
-        if (source.currentStats && Number.isFinite(source.currentStats.visionRange)) return Number(source.currentStats.visionRange);
-        if (source.preComputed && Number.isFinite(source.preComputed.visionRange)) return Number(source.preComputed.visionRange);
-        if (source.basePreComputed && Number.isFinite(source.basePreComputed.visionRange)) return Number(source.basePreComputed.visionRange);
-
-        let ownerId = Number(source.owner);
-        if (!Number.isFinite(ownerId)) ownerId = 0;
-
-        if (source.unitType) {
-            let unitType = String(source.unitType || 'norm');
-            let unitLevel = 1;
-            if (typeof getDisplayLevel === 'function') {
-                unitLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
-            }
-            if (typeof getUnitStatForOwner === 'function') {
-                let unitVision = Number(getUnitStatForOwner(ownerId, unitType, unitLevel, 'visionRange'));
-                if (Number.isFinite(unitVision)) return unitVision;
-            }
-            return Number((BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {}).visionRange);
-        }
-
-        if (source.type) {
-            let buildingType = String(source.type || '');
-            if (buildingType === 'barrack') {
-                buildingType = `barrack_${String(source.unitType || 'norm')}`;
-            }
-            let buildingLevel = 1;
-            if (typeof getDisplayLevel === 'function') {
-                buildingLevel = Math.max(1, Math.floor(Number(getDisplayLevel(source)) || 1));
-            }
-            if (typeof getBuildingStatForOwner === 'function') {
-                let buildingVision = Number(getBuildingStatForOwner(ownerId, buildingType, buildingLevel, 'visionRange'));
-                if (Number.isFinite(buildingVision)) return buildingVision;
-            }
-            return Number((BASE_CARD_TYPES[buildingType] || {}).visionRange);
-        }
-
-        return NaN;
-    };
     let visionRange = Number(object.visibilityRangeTiles);
     if (!Number.isFinite(visionRange)) visionRange = Number(object.visionRange);
-    if (!Number.isFinite(visionRange)) visionRange = _resolveVisionRangeFromSource(object.visibilitySource);
+    if (!target.flat2d && !Number.isFinite(visionRange)) visionRange = resolveRenderVisionRange(object.visibilitySource);
     let resolvedScaleY = Math.max(0.05, Number(object.scaleY) || 0.05);
     if (!object.preserveModelHeight && Number.isFinite(visionRange) && visionRange > 0) {
         let visibilityHeight = Math.max(0.18, visionRange / 5);
@@ -1141,13 +1181,12 @@ function push3DRenderObject(target, object) {
         renderShape: object.renderShape === 'cylinder' ? 'cylinder' : 'box',
         topTextureKey: object.topTextureKey || '',
         topTextureCanvas: object.topTextureCanvas || null,
+        topTextureUv: object.topTextureUv || null,
         sideTextureKey: object.sideTextureKey || '',
         sideTextureCanvas: object.sideTextureCanvas || null,
         sideTextureAngle: Number.isFinite(object.sideTextureAngle) ? Number(object.sideTextureAngle) : 0,
-        // Keep the physical lighting for shadows; shaders additionally dim
-        // remembered models, including their otherwise full-bright panels.
-        historyGhost: remembered,
         lightLevel: finalLightLevel,
+        historyGhost: remembered,
         shadowDirX: Number.isFinite(object.shadowDirX) ? Number(object.shadowDirX) : shadowDirX,
         shadowDirZ: Number.isFinite(object.shadowDirZ) ? Number(object.shadowDirZ) : shadowDirZ,
         shadowLength: Math.max(0.6, Math.min(2.4, Number(object.shadowLength) || (1 + (1 - lightLevel) * 0.9)))
@@ -1337,8 +1376,7 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
 }
 
 function build3DFrameData(flat2d = false) {
-    const historyView = getHistoryRenderView();
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = historyView || getLiveRenderView();
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
 
     begin3DTextureFrame();
     renderer3dExactTextureBuildsRemaining = 12;
@@ -1350,6 +1388,7 @@ function build3DFrameData(flat2d = false) {
     // All entity models below are procedural: their shader uses the top/status
     // panel and side tint, never the legacy animated side texture.
     let objects = [];
+    objects.flat2d = flat2d;
     let buildPreview = getCurrentBuildPreviewData();
     let centerX = camera.x + bounds.vw * 0.5;
     let centerY = camera.y + bounds.vh * 0.5;
@@ -1357,13 +1396,13 @@ function build3DFrameData(flat2d = false) {
     if (_staticCacheCommitVersion < 0 || !_combinedBgCanvas) commitStaticCaches(true, 'background');
     let backgroundMinX = 0, backgroundMinY = 0;
     let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
-    let backgroundCanvasFor3D = getHistoryBackground(getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H))));
-    let backgroundVersionFor3D = teamVisibilityHistory && !fullVisibility ? visibilityVersion : _backgroundContentVersion;
+    let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
+    let backgroundVersionFor3D = _backgroundContentVersion;
     if (!fullVisibility) rebuildVisibilityMaskCacheIfNeeded();
     let overlays = build3DOverlayData(bounds, alpha);
     let soundGrid = audioSpatialGrid;
-    let bgSoundGrid = getHistoryAudioGrid(audioSpatialGridBackground, 'background');
-    let fxSoundGrid = getHistoryAudioGrid(audioSpatialGridEffects, 'effects');
+    let bgSoundGrid = audioSpatialGridBackground;
+    let fxSoundGrid = audioSpatialGridEffects;
     let reactiveOffsetX = Number(audioReactiveGlobalOffsetX) || 0;
     let reactiveOffsetY = Number(audioReactiveGlobalOffsetY) || 0;
     let unitOccupiedTileKeys = new Set();
@@ -1371,7 +1410,7 @@ function build3DFrameData(flat2d = false) {
     let activeOverlapFadeKeys = new Set();
     let getOverlapFlattenScaleForTile = (gx, gy) => {
         let key = `${gx},${gy}`;
-        let targetScale = unitOccupiedTileKeys.has(key) ? 0.2 : 1;
+        let targetScale = unitOccupiedTileKeys.has(gy * GRID_W + gx) ? 0.2 : 1;
         let state = renderer3dOverlapFadeState.get(key);
         if (!state) {
             state = { value: targetScale, lastUpdateMs: overlapNowMs, lastSeenMs: overlapNowMs };
@@ -1400,8 +1439,9 @@ function build3DFrameData(flat2d = false) {
         let minSpacing = Math.max(6, (Number(unit.r) || 7) * 1.1);
         for (let point of unit.snakeHistory) {
             if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-            if (Math.hypot(point.x - lastX, point.y - lastY) < minSpacing) continue;
-            points.push({ x: point.x, y: point.y });
+            const dx = point.x - lastX, dy = point.y - lastY;
+            if (dx * dx + dy * dy < minSpacing * minSpacing) continue;
+            points.push(point);
             lastX = point.x;
             lastY = point.y;
             if (points.length >= 7) break;
@@ -1410,13 +1450,16 @@ function build3DFrameData(flat2d = false) {
     };
     let getTileLightLevel = (gx, gy) => {
         if (fullVisibility) return 1;
-        let lighting = historyView && visibilityHistoryState.raw[gy] && visibilityHistoryState.raw[gy][gx] > 0 ? getTeamLightingGrid() : visibilityGrid;
+        let lighting = visibilityGrid;
         let raw = (lighting[gy] && lighting[gy][gx]) || 0;
         return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     };
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint) => {
         let points = getSnakePathPoints(unit, headX, headY);
         let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
+        const sideTint = get3DDamageFlashTint(unit, '#3dff64');
+        const heightOffset = getUnitHeightOffset(unit);
+        const tailAtlas = flat2d ? getFlatSnakeBodyAtlas(unit.owner) : null;
         for (let i = points.length - 1; i >= 1; i--) {
             let point = points[i];
             let prev = points[i - 1];
@@ -1429,7 +1472,7 @@ function build3DFrameData(flat2d = false) {
                 modelKey: 'snake_segment',
                 pickSource: unit,
                 x: point.x / TILE,
-                y: getUnitHeightOffset(unit) * (0.6 - age * 0.12),
+                y: heightOffset * (0.6 - age * 0.12),
                 z: point.y / TILE,
                 scaleX: width,
                 scaleY: Math.max(0.12, width * 0.42),
@@ -1438,9 +1481,10 @@ function build3DFrameData(flat2d = false) {
                 tint: ownerTint,
                 alpha: Math.max(0.35, 0.78 - age * 0.18),
                 renderShape: 'cylinder',
-                topTextureKey: `snake_body:${unit.owner}:${i}`,
-                topTextureCanvas: get3DSnakeBodyTopTexture(unit.owner, i),
-                sideTint: get3DDamageFlashTint(unit, '#3dff64'),
+                topTextureKey: tailAtlas ? tailAtlas._renderer3DExactKey : `snake_body:${unit.owner}:${i}`,
+                topTextureCanvas: tailAtlas || get3DSnakeBodyTopTexture(unit.owner, i),
+                topTextureUv: tailAtlas ? [(i - 1) / 6, 0, 1 / 6, 1] : null,
+                sideTint,
             });
         }
         let snake2DTexture = get3DExact2DTexture(unit, true);
@@ -1449,7 +1493,7 @@ function build3DFrameData(flat2d = false) {
         push3DRenderObject(target, {
             modelKey: `unit_${unit.unitType || 'snake'}`,
             x: headX / TILE,
-            y: getUnitHeightOffset(unit),
+            y: heightOffset,
             z: headY / TILE,
             scaleX: footprint,
             scaleY: Math.max(0.24, footprint * 0.52),
@@ -1460,7 +1504,7 @@ function build3DFrameData(flat2d = false) {
             renderShape: 'cylinder',
             topTextureKey: snake2DTexture ? snake2DTexture._renderer3DExactKey : snakeTextureKey,
             topTextureCanvas: snake2DTexture || get3DUnitTopTexture(unit, unit.owner, unitStatus),
-            sideTint: get3DDamageFlashTint(unit, '#3dff64'),
+            sideTint,
         });
     };
 
@@ -1471,7 +1515,7 @@ function build3DFrameData(flat2d = false) {
         let ugx = Math.floor(ux / TILE), ugy = Math.floor(uy / TILE);
         if (ugx < bounds.minGx - 1 || ugx > bounds.maxGx + 1 || ugy < bounds.minGy - 1 || ugy > bounds.maxGy + 1) continue;
         if (!fullVisibility && (!visibilityGrid[ugy] || visibilityGrid[ugy][ugx] === 0)) continue;
-        unitOccupiedTileKeys.add(`${ugx},${ugy}`);
+        unitOccupiedTileKeys.add(ugy * GRID_W + ugx);
     }
 
     for (let m of goldMines) {
@@ -1838,7 +1882,7 @@ function build3DFrameData(flat2d = false) {
         backgroundCanvas: backgroundCanvasFor3D,
         backgroundVersion: backgroundVersionFor3D,
         fogCanvas: fullVisibility ? null : _visibilityMaskCanvas,
-        fogVersion: visibilityVersion,
+        fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
         backgroundBounds: {
             centerX: (backgroundMinX + backgroundMaxX) * 0.5 / TILE,
             centerZ: (backgroundMinY + backgroundMaxY) * 0.5 / TILE,
@@ -1860,9 +1904,17 @@ function build3DFrameData(flat2d = false) {
 
 function drawInteractionOverlay(renderer3dSnapshot = null) {
     if (!overlayCtx || !overlayCanvas) return;
+    const o = renderer3dSnapshot && renderer3dSnapshot.overlays;
+    const hasContent = !!((isBoxSelecting && selectionBoxScreen)
+        || (renderer3dSnapshot && renderer3dSnapshot.buildPreview)
+        || (o && !o.groundLinesRendered && o.lines && o.lines.length)
+        || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts'].some(key => o[key] && o[key].length)));
+    if (!hasContent && overlayCanvas._interactionEmpty) return;
     let dpr = window.devicePixelRatio || 1;
     overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     overlayCtx.clearRect(0, 0, viewW, viewH);
+    overlayCanvas._interactionEmpty = !hasContent;
+    if (!hasContent) return;
 
     if (renderer3dInstance && renderer3dSnapshot && renderer3dSnapshot.overlays && typeof renderer3dInstance.drawOverlay === 'function') {
         renderer3dInstance.drawOverlay(renderer3dSnapshot.overlays, overlayCtx);
@@ -2010,8 +2062,7 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
 }
 
 function drawMinimap() {
-    const historyView = getHistoryRenderView();
-    const units = historyView ? historyView.units : getLiveRenderView().units;
+    const units = getLiveRenderView().units;
     let scale = MINIMAP_SIZE / GRID_W; // 2 px per tile
     let tilePx = Math.max(1, scale);
     let vis = visibilityGrid;
@@ -2058,7 +2109,7 @@ function drawMinimap() {
     };
 
     // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
-    minimapCtx.drawImage(getHistoryBackground(_minimapStaticCanvas, true), 0, 0);
+    minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
 
     // Unknown areas
     if (!fullVisibility && vis.length > 0) {
@@ -2067,7 +2118,7 @@ function drawMinimap() {
             let runStart = 0, runState = -1;
             for (let x = 0; x <= GRID_W; x++) {
                 let state = x === GRID_W ? -1 : row && row[x] > 0 ? 0
-                    : historyView && visibilityHistoryState.explored[y * GRID_W + x] ? 1 : 2;
+                    : teamVisibilityHistory && visibilityHistoryState && visibilityHistoryState.explored[y * GRID_W + x] ? 1 : 2;
                 if (state !== runState) {
                     if (runState > 0) drawMinimapRun(runStart, x, y, runState === 1 ? 'rgba(0,0,0,0.77)' : '#000');
                     runStart = x; runState = state;
@@ -2125,51 +2176,6 @@ function createEmptyVisibilityGrid() {
     let vis = new Array(GRID_H);
     for (let y = 0; y < GRID_H; y++) vis[y] = new Float32Array(GRID_W);
     return vis;
-}
-
-function cloneVisibilityGrid(source) {
-    let copy = new Array(GRID_H);
-    for (let y = 0; y < GRID_H; y++) {
-        let src = source[y] || new Float32Array(GRID_W);
-        copy[y] = new Float32Array(src);
-    }
-    return copy;
-}
-
-function smoothVisibilityGridForPlayer(playerId, targetVis) {
-    if (!targetVis) return targetVis;
-    let nowTick = Number.isFinite(gameTime) ? gameTime : 0;
-    let previous = visibilityGridSmoothedByPlayerCache.get(playerId);
-    if (!previous || previous.length !== GRID_H) {
-        let seeded = cloneVisibilityGrid(targetVis);
-        visibilityGridSmoothedByPlayerCache.set(playerId, seeded);
-        visibilityGridSmoothingTickByPlayer.set(playerId, nowTick);
-        return seeded;
-    }
-
-    let lastTick = visibilityGridSmoothingTickByPlayer.get(playerId);
-    let tickDelta = Number.isFinite(lastTick) ? Math.max(1, nowTick - lastTick) : 1;
-    tickDelta = Math.min(tickDelta, 2);
-    let tickMs = Math.max(1, Number(TICK_MS) || 16.6667);
-    let dtSeconds = (tickDelta * tickMs) / 1000;
-    let maxDelta = Math.max(0.0001, VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND * dtSeconds);
-    let maxDropDelta = Math.max(0.0001, VISIBILITY_FADE_MAX_CHANGE_PER_SECOND * dtSeconds);
-
-    for (let y = 0; y < GRID_H; y++) {
-        let targetRow = targetVis[y];
-        let smoothedRow = previous[y];
-        for (let x = 0; x < GRID_W; x++) {
-            let targetValue = targetRow[x];
-            let currentValue = smoothedRow[x];
-            let diff = targetValue - currentValue;
-            if (diff > maxDelta) diff = maxDelta;
-            else if (diff < -maxDropDelta) diff = -maxDropDelta;
-            smoothedRow[x] = currentValue + diff;
-        }
-    }
-
-    visibilityGridSmoothingTickByPlayer.set(playerId, nowTick);
-    return previous;
 }
 
 let visibilityIncludedTilesScratch = [];
@@ -2319,38 +2325,11 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         }
     }
 
+
 }
 
 function getVisibilityGridForPlayer(playerId) {
-    let pid = Math.floor(Number(playerId));
-    if (!Number.isFinite(pid) || pid < 0) return getActualVisibilityGridForPlayer(localPlayerId);
-
-    // Always check the player-specific grid cache first.
-    if (Array.isArray(visibilityGridByPlayer) && visibilityGridByPlayer[pid] && visibilityGridByPlayer[pid].length === GRID_H) {
-        return visibilityGridByPlayer[pid];
-    }
-
-    // Fallback: If it's the local player, we can use the global visibilityGrid reference if it matches our pid.
-    // However, in multiplayer, we prefer the explicit grid from the player-specific cache.
-    if (pid === localPlayerId && Array.isArray(visibilityGrid) && visibilityGrid.length === GRID_H) {
-        return visibilityGrid;
-    }
-
-    return getActualVisibilityGridForPlayer(pid);
-}
-
-function getActualVisibilityGridForPlayer(playerId) {
-    if (visibilityCacheTick !== gameTime) {
-        visibilityGridRawByPlayerCache.clear();
-        visibilityGridByPlayerCache.clear();
-        visibilityCacheTick = gameTime;
-    }
-    let cachedSmoothed = visibilityGridByPlayerCache.get(playerId);
-    if (cachedSmoothed) return cachedSmoothed;
-    let rawVis = getRawVisibilityGridForPlayer(playerId);
-    let smoothedVis = smoothVisibilityGridForPlayer(playerId, rawVis);
-    visibilityGridByPlayerCache.set(playerId, smoothedVis);
-    return smoothedVis;
+    return getRawVisibilityGridForPlayer(playerId);
 }
 
 function getRawVisibilityGridForPlayer(playerId) {
@@ -2359,14 +2338,13 @@ function getRawVisibilityGridForPlayer(playerId) {
 
     if (visibilityCacheTick !== gameTime) {
         visibilityGridRawByPlayerCache.clear();
-        visibilityGridByPlayerCache.clear();
         visibilityCacheTick = gameTime;
     }
-    let cachedRaw = visibilityGridRawByPlayerCache.get(playerId);
+    let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
     if (cachedRaw) return cachedRaw;
     let rawVis = createEmptyVisibilityGrid();
-    computeVisibilityGridForPlayer(playerId, rawVis);
-    visibilityGridRawByPlayerCache.set(playerId, rawVis);
+    computeVisibilityGridForPlayer(pid, rawVis);
+    visibilityGridRawByPlayerCache.set(pid, rawVis);
     return rawVis;
 }
 
@@ -2398,8 +2376,7 @@ function updateVisibility(playerId) {
     let targetPlayerId = Math.floor(Number(playerId));
     if (!Number.isFinite(targetPlayerId) || targetPlayerId < 0) targetPlayerId = localPlayerId;
     updateAllPlayerVisibility();
-    visibilityGrid = getVisibilityGridForPlayer(targetPlayerId) || [];
-    visibilityVersion++;
+    visibilityGrid = updateVisualVisibility(targetPlayerId, getRawVisibilityGridForPlayer(targetPlayerId));
 }
 
 function updateAllPlayerVisibility() {
@@ -2426,7 +2403,7 @@ function updateAllPlayerVisibility() {
         visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
     }
     for (let id of ids) {
-        let vis = getActualVisibilityGridForPlayer(id);
+        let vis = getRawVisibilityGridForPlayer(id);
         visibilityGridByPlayer[id] = vis || [];
     }
 }
@@ -2470,7 +2447,6 @@ function processRenderFrame(timestamp) {
         return;
     }
 
-    updateVisibilityHistory();
     tickAlpha = Math.min(_tickAccumulator / TICK_MS, 1);
     updateCamera();
     let dpr = window.devicePixelRatio || 1;

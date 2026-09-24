@@ -1,6 +1,7 @@
 // INIT
 // ============================================================
 window.addEventListener('load', () => {
+    loadUiSettingsFromStorage();
     Jukebox.init();
     if (!ensureRenderContextsInitialized()) return;
     invalidateStaticLayerCache();

@@ -20,7 +20,7 @@ function _getHostileStructureIndex(list) {
     const revision = typeof pathTopologyVersion === 'number' ? pathTopologyVersion : 0;
     let index = hostileStructureIndexes.get(list);
     if (index && index.tick === tick && index.revision === revision && index.length === list.length) return index;
-    const size = TILE * 8;
+    const size = TILE * 4;
     index = { tick, revision, length: list.length, size, buckets: new Map(), witnesses: new Map(), owners: new Map() };
     for (let order = 0; order < list.length; order++) {
         const target = list[order];
@@ -31,7 +31,7 @@ function _getHostileStructureIndex(list) {
         let owned = index.owners.get(target.owner);
         if (!owned) index.owners.set(target.owner, owned = []);
         owned.push(target);
-        const key = Math.floor(target.y / size) * (Math.ceil(GRID_W / 8) + 1) + Math.floor(target.x / size);
+        const key = Math.floor(target.y / size) * (Math.ceil(GRID_W / 4) + 1) + Math.floor(target.x / size);
         let bucket = index.buckets.get(key);
         if (!bucket) index.buckets.set(key, bucket = []);
         bucket.push(entry);
@@ -71,11 +71,11 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null)
         }
         if (!vis || vis.length !== GRID_H || !(bestDistance > 0)) continue;
         let bestOrder = Infinity;
-        const stride = Math.ceil(GRID_W / 8) + 1;
+        const stride = Math.ceil(GRID_W / 4) + 1;
         const minX = Math.max(0, Math.floor((unit.x - bestDistance) / index.size));
-        const maxX = Math.min(Math.ceil(GRID_W / 8), Math.floor((unit.x + bestDistance) / index.size));
+        const maxX = Math.min(Math.ceil(GRID_W / 4), Math.floor((unit.x + bestDistance) / index.size));
         const minY = Math.max(0, Math.floor((unit.y - bestDistance) / index.size));
-        const maxY = Math.min(Math.ceil(GRID_H / 8), Math.floor((unit.y + bestDistance) / index.size));
+        const maxY = Math.min(Math.ceil(GRID_H / 4), Math.floor((unit.y + bestDistance) / index.size));
         for (let by = minY; by <= maxY; by++) for (let bx = minX; bx <= maxX; bx++) {
           let bucket = index.buckets.get(by * stride + bx);
           if (!bucket) continue;
