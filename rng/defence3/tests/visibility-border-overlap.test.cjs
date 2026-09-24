@@ -95,4 +95,13 @@ assert.ok(c.getRenderRangeBoundary([],c.units).some(line=>line.x2===8),
 now = 1401;
 const ungroupedOutline=c.getRenderRangeBoundary([],c.units);
 assert.ok(ungroupedOutline.every(line=>line.x1<=4&&line.x2<=4),'outline follows grouping range changes');
-console.log('PASS: 0.3-tile border/corner overlap, pre-lit neighbor, bounded 1500-source cost, effective cached ranges and actual visibility propagation.');
+
+// Gameplay now releases immediately; the outline's hold remains visual only.
+c.units=[{unitType:'norm',owner:0,energy:10,x:3.9*32,y:2.5*32,
+    preComputedEffective:{visionRangeArea:.6}}];
+c.computeVisibilityGridForPlayer(0,light);
+assert.ok(light[2][2]>0);
+c.units[0].x=4.31*32;
+c.computeVisibilityGridForPlayer(0,light);
+assert.equal(light[2][2],0,'gameplay drops coverage immediately after leaving the overlap');
+console.log('PASS: border/corner overlap, effective ranges, immediate gameplay visibility and visual outline hold.');

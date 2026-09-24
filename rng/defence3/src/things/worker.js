@@ -1513,7 +1513,12 @@ function _rebuildActiveBuilderWorkCache() {
     for (let t of towers) consider(t);
     for (let b of barracks) consider(b);
     for (let s of collectorSpawners) consider(s);
-    for (let y = 0; y < GRID_H; y++) {
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (const item of _activeTileEntities) {
+            const cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (cell && cell.item === item) consider(item);
+        }
+    } else for (let y = 0; y < GRID_H; y++) {
         let row = grid[y];
         for (let x = 0; x < GRID_W; x++) {
             let cell = row[x];
@@ -2833,6 +2838,9 @@ function _findNearestUnderConstruction(u, originX = u.x, originY = u.y) {
     let maxSearchArea = _getWorkerAutoSearchDistanceArea(u);
     for (let b of ownedTargets) {
         if (!_isBuilderWorkTarget(b, owner)) continue;
+        // Reject distant work before area lookup; keep the exact distance and
+        // canonical candidate order for reservation and tie-breaking behavior.
+        if (Math.abs(b.x - originX) > maxSearch || Math.abs(b.y - originY) > maxSearch) continue;
         if (!_isTargetWithinWorkerSearchLimits(u, originX, originY, b, maxSearchArea)) continue;
         let d = Math.hypot(b.x - originX, b.y - originY);
         if (d > maxSearch) continue;

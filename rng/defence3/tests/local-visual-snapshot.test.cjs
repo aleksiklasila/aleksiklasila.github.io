@@ -1,0 +1,45 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+const source = read('src/utils/utils_networking.js');
+const c = vm.createContext({makeSnapshotEntityRef:()=>null, projectiles:[], snapshot:{}});
+vm.runInContext(source.slice(source.indexOf('function cloneSnapshotValue('), source.indexOf('function makeSnapshotEntityRef(')),c);
+vm.runInContext(read('src/things/projectile.js')+'\nthis.Projectile=Projectile;',c);
+const original = new c.Projectile(0,16,{x:100,y:16},'arrow',7,1,{owner:0,gx:0,gy:0},300);
+c.projectiles=[original];
+const field = source.match(/projectiles: (projectiles\.map\([^\n]+)\),/)[1]+')';
+c.snapshot.projectiles=JSON.parse(JSON.stringify(vm.runInContext(field,c)));
+assert.equal(c.snapshot.projectiles[0].dmg,7);
+assert.equal('prevX' in c.snapshot.projectiles[0],false);
+const apply=source.slice(source.indexOf('    projectiles = (Array.isArray(snapshot.projectiles)'), source.indexOf('    // Particles are local visual effects'));
+vm.runInContext(apply,c);
+const restored=c.projectiles[0];
+assert.equal(Object.getPrototypeOf(restored),c.Projectile.prototype);
+assert.equal(restored.prevX,restored.x);
+c.towers=[];c.barracks=[];c.collectorSpawners=[];
+c.forEachUnitInRange=()=>false;
+// Exact movement and expiry survive JSON and prototype restoration.
+for(let tick=0;tick<45;tick++) {
+    assert.equal(restored.update(),original.update());
+    for(const key of ['x','y','life','vx','vy','dmg','sourceOwner']) assert.equal(restored[key],original[key]);
+}
+const omit=vm.runInContext(source.match(/snapshotEntity\(u, (\[[\s\S]*?\])/)[1],c);
+const tail=[{x:4,y:8}];
+const unit={id:1,energy:20,snakeHistory:tail,snakeRecordTimer:2};
+const saved=c.snapshotEntity(unit,omit);
+assert.equal(saved.energy,20);
+assert.equal('snakeHistory' in saved,false);
+assert.equal('snakeRecordTimer' in saved,false);
+const restoreUnit=source.slice(source.indexOf('        if (u.isSnake) {',source.indexOf('function applyAuthoritativeStateSnapshot')),source.indexOf('        u.targetUnit = null;',source.indexOf('function applyAuthoritativeStateSnapshot')));
+c.u={id:1,isSnake:true};c.localSnakeVisuals=new Map([[1,{snakeHistory:tail,snakeRecordTimer:2}]]);
+vm.runInContext(restoreUnit,c);
+assert.equal(c.u.snakeHistory,tail,'resync reuses this client\'s tail samples');
+const applyWhole=source.slice(source.indexOf('function applyAuthoritativeStateSnapshot('),source.indexOf('\nfunction ',source.indexOf('function applyAuthoritativeStateSnapshot(')+1));
+assert.ok(!applyWhole.includes('visibilityHistoryState = null'));
+assert.ok(!applyWhole.includes('particles = []'));
+assert.ok(!source.includes('visualRngState'));
+const particle=vm.createContext({visualRng:null,rng:()=>{throw Error('visuals consumed gameplay RNG');}});
+vm.runInContext(read('src/things/particle.js')+'\nnew Particle(0,0,"red");',particle);
+console.log('PASS: gameplay projectiles survive snapshots; local history, snake trails, particles and visual RNG stay client-side.');

@@ -862,6 +862,7 @@ function importMainMenuSettingsFromFile(file) {
         try {
             let parsed = JSON.parse(String(reader.result || '{}'));
             applyMainMenuSettingsSnapshot(parsed);
+            saveUiSettingsToStorage();
             showUiBanner('Settings imported.', 'success');
         } catch {
             showUiBanner('Invalid settings JSON.', 'error', 3600);
@@ -2512,6 +2513,7 @@ function importMainMenuSettingsFromFile(file) {
         try {
             let parsed = JSON.parse(String(reader.result || '{}'));
             applyMainMenuSettingsSnapshot(parsed);
+            saveUiSettingsToStorage();
             showUiBanner('Settings imported.', 'success');
         } catch {
             showUiBanner('Invalid settings JSON.', 'error', 3600);

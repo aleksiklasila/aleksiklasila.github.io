@@ -1,164 +1,174 @@
-// Local presentation memory. Never serialized into, or read by, lockstep.
+// Local fog presentation only. Gameplay always reads the immediate raw grid.
+// Last-seen records are frozen only when something leaves the displayed area.
 let teamVisibilityHistory = false;
 let visibilityHistoryState = null;
-const historyListNames = ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems'];
-// At gamma 1.8, .14 retains ~24% ground brightness (was ~47% at .30).
 const HISTORY_LIGHT_FLOOR = .14;
 
 function getRenderGameTime() { return gameTime; }
 function getTeamLightingGrid() { return visibilityGrid; }
 function getLiveRenderView() {
+    if (teamVisibilityHistory && !fullVisibility && visibilityHistoryState && visibilityHistoryState.view) return visibilityHistoryState.view;
     return { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid };
 }
 
-function cloneHistoryThing(source, seen = new Map(), depth = 0, reuse = null) {
-    if (!source || typeof source !== 'object') return source;
-    // Canvas/Path2D sprites are immutable cache assets, not gameplay state.
-    let proto = Object.getPrototypeOf(source);
-    if (proto && proto.constructor && proto.constructor.name !== 'Object' && !Array.isArray(source) && depth > 0) return source;
-    if (seen.has(source)) return seen.get(source);
-    let copy = reuse && Object.getPrototypeOf(reuse) === proto ? reuse : Array.isArray(source) ? [] : Object.create(proto);
-    seen.set(source, copy);
-    for (let key of Object.keys(source)) {
-        let value = source[key];
-        // Entity links must not lead from memory back into the live world.
-        if (['targetUnit', 'targetBuilding', 'attackTarget', 'workerTarget', 'preferredTarget', 'rallyTargetUnit', '_spatialChunk', 'path'].includes(key)) { copy[key] = null; continue; }
-        if (key === 'connectedLasers') { copy[key] = []; continue; }
-        copy[key] = value && typeof value === 'object' && depth < 3 ? cloneHistoryThing(value, seen, depth + 1, copy[key]) : value;
+function updateVisualVisibility(playerId, raw) {
+    if (fullVisibility) {
+        if (visibilityHistoryState) visibilityVersion++;
+        visibilityHistoryState = null;
+        return raw;
     }
-    if (Array.isArray(source)) copy.length = source.length;
+    const now = gameTime, holdTicks = Math.max(1, TICK_RATE);
+    let h = visibilityHistoryState;
+    const reset = !h || h.sourceGrid !== grid || h.player !== playerId
+        || h.width !== GRID_W || h.height !== GRID_H;
+    if (reset) {
+        const rows = () => Array.from({ length: GRID_H }, () => new Float32Array(GRID_W));
+        h = visibilityHistoryState = { sourceGrid: grid, player: playerId, width: GRID_W, height: GRID_H,
+            tick: now, light: rows(), fog: rows(), explored: new Uint8Array(GRID_W * GRID_H),
+            holdUntil: new Int32Array(GRID_W * GRID_H).fill(-1) };
+    }
+    // A resync may rewind simulation ticks. Rebase local expiry times without
+    // throwing away the player's explored terrain or last-seen objects.
+    if (now < h.tick) {
+        const rewind = h.tick - now;
+        for (let i = 0; i < h.holdUntil.length; i++) h.holdUntil[i] -= rewind;
+        h.tick = now;
+    }
+    const dt = Math.min(2, Math.max(0, now - h.tick)) / holdTicks;
+    const rise = VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND * dt;
+    const fall = VISIBILITY_FADE_MAX_CHANGE_PER_SECOND * dt;
+    let changed = reset;
+    for (let y = 0; y < GRID_H; y++) {
+        const source = raw[y], light = h.light[y], fog = h.fog[y];
+        for (let x = 0; x < GRID_W; x++) {
+            const i = y * GRID_W + x, target = source[x], current = light[x];
+            if (target > 0) {
+                h.holdUntil[i] = now + holdTicks;
+                h.explored[i] = 1;
+            }
+            let next = target;
+            if (!reset) {
+                if (target === 0 && now <= h.holdUntil[i]) next = current;
+                else next = current + Math.max(-fall, Math.min(rise, target - current));
+            }
+            light[x] = next;
+            next = light[x]; // Use the stored Float32 value for stable comparisons.
+            let fogLight = next;
+            if (teamVisibilityHistory && h.explored[i]) {
+                const dark = 1 - Math.min(1, next / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
+                fogLight += VISIBILITY_LIGHT_NORMALIZATION_RANGE * HISTORY_LIGHT_FLOOR * dark * dark * dark;
+            }
+            const oldFog = fog[x];
+            fog[x] = fogLight;
+            if (fog[x] !== oldFog || next !== current) changed = true;
+        }
+    }
+    h.tick = now;
+    if (teamVisibilityHistory) updateLocalVisibilityHistory(h);
+    if (changed) visibilityVersion++;
+    return h.light;
+}
+
+const HISTORY_RENDER_FIELDS = ('id owner type unitType gx gy x y vx vy energy maxEnergy gold astar amount value '
+    + 'r color vis dead teleportHideTicks isSnake isFlying isWorker unitLevel baseLevel level effectiveLevel '
+    + 'potentialEffectiveLevel stackCount stacks manualStacks stackingWorkDone stackingWorkRequired '
+    + 'workerType workerState workerTransferCooldown carryingValue researcherHasMaterial attackFlash attackStyle '
+    + 'burning poisoned frozen wet watched watchedByTeam underConstruction isUpgrading markedForSalvage '
+    + 'angle laserState spawnTimer spawnCooldown _levelTextLabel _energyBlockedUntil').split(' ');
+const HISTORY_LISTS = ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems'];
+
+function freezeHistoryRecord(record) {
+    const source = record.source;
+    const copy = Object.create(Object.getPrototypeOf(source));
+    for (const key of HISTORY_RENDER_FIELDS) copy[key] = source[key];
+    // Only small rendering data is copied, once on disappearance. No paths,
+    // targets, spatial buckets, canvases or recursively reachable world state.
+    for (const key of ['preComputed', 'preComputedEffective', 'baseStats', 'currentStats', 'researchTask']) {
+        const stats = source[key];
+        if (!stats) continue;
+        const saved = copy[key] = {};
+        for (const field of Object.keys(stats)) {
+            const value = stats[field];
+            if (value === null || (typeof value !== 'object' && typeof value !== 'function')) saved[field] = value;
+        }
+    }
+    copy.spawnQueue = source.spawnQueue ? source.spawnQueue.slice() : [];
+    // Cached labels are shared sprites; retaining a reference needs no raster copy.
+    copy.textCanvas = source.textCanvas;
+    copy._textCanvasScale = source._textCanvasScale;
+    copy.snakeHistory = source.snakeHistory ? source.snakeHistory.map(p => ({ x: p.x, y: p.y })) : [];
+    copy.connectedLasers = [];
+    copy.path = copy.targetUnit = copy.targetBuilding = copy.attackTarget = copy.workerTarget = null;
+    copy.x = copy.prevX = record.x; copy.y = copy.prevY = record.y;
+    copy.gx = record.gx; copy.gy = record.gy;
+    copy.energy = record.energy; copy.gold = record.gold; copy.astar = record.astar;
+    copy.dead = false; copy._historyGhost = true; copy._historyTick = record.tick;
+    record.snapshot = copy;
+    record.source = null;
     return copy;
 }
 
-function getHistoryTile(e) {
-    let x = Number.isFinite(e.x) ? Math.floor(e.x / TILE) : e.gx;
-    let y = Number.isFinite(e.y) ? Math.floor(e.y / TILE) : e.gy;
-    return { x, y, key: y * GRID_W + x };
-}
-
-function updateVisibilityHistory() {
-    if (!teamVisibilityHistory || fullVisibility || !grid.length) return;
-    let h = visibilityHistoryState;
-    if (!h || h.sourceGrid !== grid || h.player !== localPlayerId || gameTime < h.tick) {
-        h = visibilityHistoryState = { sourceGrid: grid, player: localPlayerId, tick: -1, version: -1,
-            explored: new Uint8Array(GRID_W * GRID_H), cells: grid.map(row => row.map(() => null)),
-            light: grid.map(() => new Float32Array(GRID_W)), lists: {}, view: { grid: grid.map(row => row.slice()) }, background: null, minimap: null };
-        for (let name of historyListNames) h.lists[name] = new Map();
+function updateLocalVisibilityHistory(h) {
+    if (!h.memories) {
+        h.memories = Object.fromEntries(HISTORY_LISTS.concat('floorItems').map(name => [name, new Map()]));
+        h.view = { grid: grid.map(row => row.map(cell => ({ type: cell.type, owner: cell.owner, item: null }))) };
+        for (const name of HISTORY_LISTS) h.view[name] = [];
     }
-    if (h.version === visibilityVersion) return;
-    let raw = getRawVisibilityGridForPlayer(localPlayerId);
-    h.raw = raw; h.tick = gameTime; h.version = visibilityVersion;
-    const visible = (x, y) => !!(raw[y] && raw[y][x] > 0);
-    for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
-        if (visible(x, y)) {
-            h.explored[y * GRID_W + x] = 1;
-            let cell = grid[y][x];
-            let saved = h.cells[y][x] || (h.cells[y][x] = {});
-            let item = cell.item ? cloneHistoryThing(cell.item, new Map(), 0, saved.item) : null;
-            Object.assign(saved, cell, { item });
-            if (item) { item._historyTick = gameTime; item._historyGhost = true; }
+    const generation = h.generation = (h.generation || 0) + 1;
+    const visible = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
+    const observe = (memory, source, gx, gy, key) => {
+        let record = memory.get(key);
+        if (!record) { record = {}; memory.set(key, record); }
+        record.source = source; record.snapshot = null; record.generation = generation;
+        record.x = source.x; record.y = source.y; record.gx = gx; record.gy = gy;
+        record.energy = source.energy; record.gold = source.gold; record.astar = source.astar;
+        record.tick = gameTime;
+        return record;
+    };
+    const live = { units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };
+    for (const name of HISTORY_LISTS) {
+        const memory = h.memories[name], shown = h.view[name];
+        shown.length = 0;
+        for (const e of live[name]) {
+            if (!e || e.dead || e.energy <= 0) continue;
+            const gx = Number.isFinite(e.x) ? Math.floor(e.x / TILE) : e.gx;
+            const gy = Number.isFinite(e.y) ? Math.floor(e.y / TILE) : e.gy;
+            if (!visible(gx, gy)) continue;
+            observe(memory, e, gx, gy, e.id != null ? e.id : gy * GRID_W + gx);
+            shown.push(e);
         }
-        let current = (visibilityGrid[y] && visibilityGrid[y][x]) || 0;
-        let normalized = Math.max(0, Math.min(1, current / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
-        // Lift only the dark tail, without the flat plateau/hard slope change
-        // of max(light, floor). Physical shadow gradients use the team field.
-        h.light[y][x] = h.explored[y * GRID_W + x]
-            ? current + VISIBILITY_LIGHT_NORMALIZATION_RANGE * HISTORY_LIGHT_FLOOR * Math.pow(1 - normalized, 3)
-            : current;
-        h.view.grid[y][x] = visible(x, y) ? grid[y][x] : h.cells[y][x] || grid[y][x];
+        for (const [key, record] of memory) {
+            if (record.generation === generation) continue;
+            if (visible(record.gx, record.gy)) { memory.delete(key); continue; }
+            shown.push(record.snapshot || freezeHistoryRecord(record));
+        }
     }
-    let live = { units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };
-    let view = h.view;
-    view.visibilityGrid = h.light;
-    for (let name of historyListNames) {
-        let memory = h.lists[name];
-        // Clear by last-seen position, not live position: an unseen death or
-        // movement must not reveal itself. Seeing the old tile clears ghosts.
-        let refreshed = new Set();
-        let shown = [];
-        for (let e of live[name]) {
-            let p = getHistoryTile(e);
-            if (!visible(p.x, p.y) || e.dead || e.energy <= 0) continue;
-            let key = e.id != null ? 'id:' + e.id : 'tile:' + p.key;
-            let copy = cloneHistoryThing(e, new Map(), 0, memory.get(key));
-            copy.prevX = copy.x; copy.prevY = copy.y;
-            copy._historyTick = gameTime; copy._historyGhost = true;
-            // Scalar identities avoid retaining dead simulation objects and
-            // their target/path graphs, while preventing trails of copies.
-            memory.set(key, copy); refreshed.add(key); shown.push(e);
+    const memory = h.memories.floorItems;
+    const observeFloor = (e, gx, gy) => {
+        if (!e || e.energy <= 0 || !visible(gx, gy)) return;
+        observe(memory, e, gx, gy, gy * GRID_W + gx);
+        const cell = h.view.grid[gy][gx], liveCell = grid[gy][gx];
+        cell.type = liveCell.type; cell.owner = liveCell.owner; cell.item = e;
+    };
+    if (typeof _activeTileEntities !== 'undefined') {
+        for (const e of _activeTileEntities) {
+            const cell = grid[e.gy] && grid[e.gy][e.gx];
+            if (cell && cell.item === e) observeFloor(e, e.gx, e.gy);
         }
-        for (let [key, e] of memory) {
-            if (refreshed.has(key)) continue;
-            let p = getHistoryTile(e);
-            if (visible(p.x, p.y)) memory.delete(key);
-            else shown.push(e);
-        }
-        view[name] = shown;
+    } else {
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) observeFloor(grid[y][x].item, x, y);
     }
-    // Effects are ephemeral: hidden live projectiles/particles cannot leak
-    // through explored terrain just because its presentation light is nonzero.
-    view.projectiles = projectiles.filter(e => { let p = getHistoryTile(e); return visible(p.x, p.y); });
-    view.particles = particles.filter(e => { let p = getHistoryTile(e); return visible(p.x, p.y); });
-    h.view = view;
-}
-
-function getHistoryRenderView() {
-    return teamVisibilityHistory && !fullVisibility && visibilityHistoryState ? visibilityHistoryState.view : null;
+    for (const [key, record] of memory) {
+        if (record.generation === generation) continue;
+        const cell = h.view.grid[record.gy][record.gx];
+        if (visible(record.gx, record.gy)) { memory.delete(key); cell.item = null; }
+        else cell.item = record.snapshot || freezeHistoryRecord(record);
+    }
+    h.view.visibilityGrid = h.fog;
+    h.view.projectiles = projectiles.filter(e => visible(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
+    h.view.particles = particles.filter(e => visible(Math.floor(e.x / TILE), Math.floor(e.y / TILE)));
 }
 
 function getRenderVisibilityGrid() {
-    let view = getHistoryRenderView();
-    return view ? view.visibilityGrid : visibilityGrid;
-}
-
-function getHistoryAudioGrid(source, key) {
-    let h = teamVisibilityHistory && !fullVisibility && visibilityHistoryState;
-    if (!h || !source) return source;
-    if (!h.audio) h.audio = new Map();
-    let cached = h.audio.get(key);
-    if (!cached) { cached = { version: -1, rows: grid.map(() => new Float32Array(GRID_W)) }; h.audio.set(key, cached); }
-    if (cached.version !== h.version) {
-        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
-            cached.rows[y][x] = h.raw[y] && h.raw[y][x] > 0 && source[y] ? source[y][x] || 0 : 0;
-        }
-        cached.version = h.version;
-    }
-    return cached.rows;
-}
-
-function getHistoryBackground(source, minimap = false) {
-    let h = teamVisibilityHistory && !fullVisibility && visibilityHistoryState;
-    if (!h || !source) return source;
-    let key = minimap ? 'minimap' : 'background';
-    let cache = h[key];
-    // Stable dimensions across zoom/mipmap and 2D/3D switches. Reallocating
-    // when the source mip changes would erase off-screen explored terrain.
-    let pixelsPerTile = Math.max(1, Math.min(TILE, Math.floor(2048 / Math.max(GRID_W, GRID_H))));
-    let width = minimap ? source.width : GRID_W * pixelsPerTile;
-    let height = minimap ? source.height : GRID_H * pixelsPerTile;
-    if (!cache || cache.canvas.width !== width || cache.canvas.height !== height) {
-        let canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-        cache = h[key] = { canvas, ctx: canvas.getContext('2d'), version: -1 };
-        cache.ctx.fillStyle = '#000'; cache.ctx.fillRect(0, 0, width, height);
-    }
-    if (cache.version === h.version) return cache.canvas;
-    // Copy visible horizontal runs only. Cost is bounded by map rows/edges,
-    // independent of zoom, unit count, and the size of a newly hidden area.
-    for (let y = 0; y < GRID_H; y++) {
-        let start = -1;
-        for (let x = 0; x <= GRID_W; x++) {
-            let visible = x < GRID_W && h.raw[y] && h.raw[y][x] > 0;
-            if (visible && start < 0) start = x;
-            if (!visible && start >= 0) {
-                let left = Math.round(start * width / GRID_W), right = Math.round(x * width / GRID_W);
-                let top = Math.round(y * height / GRID_H), bottom = Math.round((y + 1) * height / GRID_H);
-                cache.ctx.drawImage(source, start * source.width / GRID_W, y * source.height / GRID_H,
-                    (x - start) * source.width / GRID_W, source.height / GRID_H,
-                    left, top, right - left, bottom - top);
-                start = -1;
-            }
-        }
-    }
-    cache.version = h.version;
-    return cache.canvas;
+    return !fullVisibility && visibilityHistoryState ? visibilityHistoryState.fog : visibilityGrid;
 }

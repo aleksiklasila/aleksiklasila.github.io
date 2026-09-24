@@ -6,7 +6,7 @@
 class Particle {
     constructor(x, y, color) {
         this.x = x; this.y = y; this.prevX = x; this.prevY = y; this.color = color;
-        let r = visualRng || rng;
+        let r = visualRng || Math.random;
         let a = r() * 6.28, s = r() * 3;
         this.vx = Math.cos(a) * s; this.vy = Math.sin(a) * s;
         this.life = 20 + r() * 15;
@@ -23,7 +23,7 @@ function createDirectedParticles(fromX, fromY, toX, toY, c, n) {
     let dx = toX - fromX, dy = toY - fromY;
     let d = Math.hypot(dx, dy) || 1;
     let nx = dx / d, ny = dy / d;
-    let r = visualRng || rng;
+    let r = visualRng || Math.random;
     for (let i = 0; i < n; i++) {
         let p = new Particle(fromX, fromY, c);
         let spd = 1.5 + r() * 2.5;

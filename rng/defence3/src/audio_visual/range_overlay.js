@@ -95,7 +95,25 @@ function buildRangeBoundary(cells, width, height) {
     return lines;
 }
 
+let rangeFrameSourcesCache = null;
 function getRenderRangeBoundary(selectedBuildings, selected) {
+    // Positions and source stats change on simulation ticks. Reuse the team
+    // union between ticks; selection mode remains immediately responsive.
+    if (renderRangeAllTeam && typeof gameTime === 'number') {
+        const c = rangeFrameSourcesCache;
+        if (c && c.tick === gameTime && c.grid === grid && c.areas === _areaById
+            && c.units === units && c.towers === towers && c.barracks === barracks
+            && c.spawners === collectorSpawners && c.mode === renderRangeMode && c.player === localPlayerId) return c.lines;
+        const lines = computeRenderRangeBoundary(selectedBuildings, selected);
+        rangeFrameSourcesCache = { tick: gameTime, grid, areas: _areaById, units, towers, barracks,
+            spawners: collectorSpawners, mode: renderRangeMode, player: localPlayerId, lines };
+        return lines;
+    }
+    rangeFrameSourcesCache = null;
+    return computeRenderRangeBoundary(selectedBuildings, selected);
+}
+
+function computeRenderRangeBoundary(selectedBuildings, selected) {
     if (renderRangeMode === RENDER_RANGE_NONE) {
         rangeBoundaryCache.context = null;
         return [];
@@ -128,7 +146,10 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     let context = `${renderRangeMode}:${renderRangeAllTeam}:${localPlayerId}`;
     let sameWorld = rangeBoundaryCache.grid === grid && rangeBoundaryCache.areas === _areaById
         && rangeBoundaryCache.context === context;
-    let now = Date.now();
+    // Integer simulation ticks avoid floating-point drift at the expiry tick.
+    let tickClock = typeof gameTime === 'number' && typeof TICK_RATE === 'number';
+    let now = tickClock ? gameTime : Date.now();
+    let holdDuration = tickClock ? Math.max(1, Math.floor(TICK_RATE)) : RANGE_AREA_HOLD_MS;
     // Compare numeric maps directly: source order is irrelevant. Avoid sorting
     // and allocating string signatures every render frame for large armies.
     if (sameWorld && rangeBoundaryCache.sources && sources.size === rangeBoundaryCache.sources.size) {
@@ -150,7 +171,7 @@ function getRenderRangeBoundary(selectedBuildings, selected) {
     let ids = new Set(activeIds), nextExpiry = Infinity;
     for (let [id, seenAt] of lastSeen) {
         if (activeIds.has(id)) continue;
-        let expiry = seenAt + RANGE_AREA_HOLD_MS;
+        let expiry = seenAt + holdDuration;
         if (expiry > now) { ids.add(id); nextExpiry = Math.min(nextExpiry, expiry); }
         else lastSeen.delete(id);
     }

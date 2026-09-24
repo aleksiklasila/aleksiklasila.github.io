@@ -51,7 +51,7 @@ assert.equal(r.clipRangeBoundaryToBounds(boundary,0,0,1,1),clipped,'camera-stabl
 // Exercise object/shadow preparation in both visibility modes with the same
 // live light field and a different (lifted) presentation field.
 const render=read('src/audio_visual/renderer.js');
-let p=render.indexOf('function push3DRenderObject('),q=render.indexOf('\nfunction ',p+1);
+let p=render.indexOf('function getRenderLightGradient('),q=render.indexOf('\nfunction drawWithTrackedContextTransform',p+1);
 const light=vm.createContext({fullVisibility:false,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
     DEFAULT_SHADOW_DIR_X:1,DEFAULT_SHADOW_DIR_Y:0,AREA_UNIT_TILE_EQUIVALENT:5,GRID_W:4,
     visibilityGrid:[[0,0,0,0],[0,.1,3,6],[0,.2,2,4],[0,0,0,0]],

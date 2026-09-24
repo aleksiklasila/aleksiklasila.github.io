@@ -997,7 +997,7 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 '_collectorPinnedTarget', '_collectorNextSpawner', '_collectorLastDropoffSpawner', '_lastMineTarget',
                 '_astarPinnedTarget', '_astarNextSpawner', '_astarLastMineTarget',
                 '_healerPinnedQueueTarget', '_healerQueueCommitTarget', '_builderSpawnerTarget', '_healerSpawnerTarget', '_researchSpawnerTarget',
-                '_spatialKey'
+                '_spatialKey', 'snakeHistory', 'snakeRecordTimer'
             ]);
             if (!snap) return null;
             snap.snapshotRefs = {
@@ -1089,13 +1089,14 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
             };
             return snap;
         }).filter(Boolean),
+        // These projectiles apply damage; unlike particles, they are gameplay.
+        projectiles: projectiles.map(p => snapshotEntity(p, ['prevX', 'prevY'])),
         goldMines: cloneSnapshotValue(goldMines),
         astarMines: cloneSnapshotValue(astarMines),
         droppedItems: cloneSnapshotValue(droppedItems),
         floorItems,
         resignedTeams: Array.from(resignedTeams || []).map(v => Math.floor(Number(v) || 0)).sort((a, b) => a - b),
         rngState: (rng && typeof rng.getState === 'function') ? rng.getState() : null,
-        visualRngState: (visualRng && typeof visualRng.getState === 'function') ? visualRng.getState() : null,
         pathfindBudgetByPlayer: pathfindBudgetByPlayer && pathfindBudgetByPlayer.length > 0 ? Array.from(pathfindBudgetByPlayer).map(v => Math.max(0, Math.floor(Number(v) || 0))) : [],
         astarNodeBudgetRemainingByPlayer: astarNodeBudgetRemainingByPlayer && astarNodeBudgetRemainingByPlayer.length > 0 ? Array.from(astarNodeBudgetRemainingByPlayer).map(v => Math.max(0, Math.floor(Number(v) || 0))) : [],
         lockstepWindowPackets: Object.keys(lockstepHostPacketsByTick || {})
@@ -1135,6 +1136,9 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
     let now = performance.now();
     let uiStateBeforeApply = _captureSnapshotApplyUiState();
+    // Tail samples are local presentation, never part of authoritative state.
+    const localSnakeVisuals = new Map(units.filter(u => u.isSnake).map(u => [u.id,
+        { snakeHistory: u.snakeHistory, snakeRecordTimer: u.snakeRecordTimer }]));
 
     let incomingConfigHash = String((snapshot && snapshot.configHash) || '');
     let localConfigHash = buildRuntimeConfigHashForSnapshot();
@@ -1171,8 +1175,12 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     barracks = [];
     collectorSpawners = [];
     units = [];
-    projectiles = [];
-    particles = [];
+    projectiles = (Array.isArray(snapshot.projectiles) ? snapshot.projectiles : []).map(state => {
+        const p = Object.assign(Object.create(Projectile.prototype), cloneSnapshotValue(state));
+        p.prevX = p.x; p.prevY = p.y;
+        return p;
+    });
+    // Particles are local visual effects and can finish naturally after resync.
     droppedItems = [];
     droppedItemGrid = [];
 
@@ -1315,6 +1323,11 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         if (!us || !Number.isFinite(us.x) || !Number.isFinite(us.y)) continue;
         let u = new Unit(String(us.unitType || 'norm'), Math.floor(Number(us.owner) || 0), Number(us.x), Number(us.y));
         Object.assign(u, cloneSnapshotValue(us));
+        if (u.isSnake) {
+            const visual = localSnakeVisuals.get(u.id);
+            u.snakeHistory = visual ? visual.snakeHistory : [];
+            u.snakeRecordTimer = visual ? visual.snakeRecordTimer : 0;
+        }
         u.targetUnit = null;
         u.targetBuilding = null;
         u.attackTarget = null;
@@ -1653,9 +1666,6 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     if (rng && typeof rng.setState === 'function' && snapshot.rngState !== null && snapshot.rngState !== undefined) {
         rng.setState(snapshot.rngState);
     }
-    if (visualRng && typeof visualRng.setState === 'function' && snapshot.visualRngState !== null && snapshot.visualRngState !== undefined) {
-        visualRng.setState(snapshot.visualRngState);
-    }
 
     // Restore pathfinding per-tick budgets to ensure deterministic path request allocation
     if (Array.isArray(snapshot.pathfindBudgetByPlayer) && snapshot.pathfindBudgetByPlayer.length > 0) {
@@ -1702,6 +1712,10 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     initSpatialHash();
     for (let u of units) updateUnitSpatial(u);
     recalculateLaserConnections();
+    // Recompute gameplay visibility, retaining this client's visual history.
+    visibilityGridRawByPlayerCache.clear();
+    visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
+    visibilityCacheTick = -1;
     updateVisibility(localPlayerId);
     dirtyGrid = true;
     dirtyAreas = true;
@@ -2938,15 +2952,8 @@ function resetWorldState() {
     visibilityGrid = [];
     visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
     visibilityVersion = 0;
-    visibilityGridByPlayerCache.clear();
     if (typeof visibilityGridRawByPlayerCache !== 'undefined' && visibilityGridRawByPlayerCache && typeof visibilityGridRawByPlayerCache.clear === 'function') {
         visibilityGridRawByPlayerCache.clear();
-    }
-    if (typeof visibilityGridSmoothedByPlayerCache !== 'undefined' && visibilityGridSmoothedByPlayerCache && typeof visibilityGridSmoothedByPlayerCache.clear === 'function') {
-        visibilityGridSmoothedByPlayerCache.clear();
-    }
-    if (typeof visibilityGridSmoothingTickByPlayer !== 'undefined' && visibilityGridSmoothingTickByPlayer && typeof visibilityGridSmoothingTickByPlayer.clear === 'function') {
-        visibilityGridSmoothingTickByPlayer.clear();
     }
     visibilityCacheTick = -1;
 
@@ -3352,6 +3359,11 @@ function readConfigFromMenu() {
 }
 
 function initLobbySettingsCarousel() {
+    let mapVisibility = document.getElementById('cfg-full-vis');
+    if (mapVisibility && !mapVisibility.dataset.persistenceInit) {
+        mapVisibility.dataset.persistenceInit = '1';
+        mapVisibility.addEventListener('change', saveUiSettingsToStorage);
+    }
     let wrap = document.getElementById('lobby-settings');
     if (!wrap || wrap.dataset.carouselInit === '1') return;
     wrap.dataset.carouselInit = '1';

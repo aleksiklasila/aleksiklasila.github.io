@@ -976,6 +976,7 @@ function rebuildVisibilityMaskCacheIfNeeded() {
 
     if (fullVisibility) {
         _visibilityMaskVersion = visibilityVersion;
+        if (_visibilityMaskFullVisibility) return;
         _visibilityMaskFullVisibility = true;
         _visibilityMaskCtx.clearRect(0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
         return;
@@ -995,7 +996,14 @@ function rebuildVisibilityMaskCacheIfNeeded() {
         let index = gy * GRID_W + gx;
         _visibilityMaskUnitFloor[index] = Math.max(_visibilityMaskUnitFloor[index], sourceLight);
     }
-    let imageData = _visibilityMaskGridCtx.createImageData(GRID_W, GRID_H);
+    let imageData = _visibilityMaskGridCanvas._visibilityImageData;
+    let changed = !imageData || _visibilityMaskFullVisibility;
+    if (!imageData) {
+        imageData = _visibilityMaskGridCanvas._visibilityImageData = _visibilityMaskGridCtx.createImageData(GRID_W, GRID_H);
+        for (let i = 0; i < imageData.data.length; i += 4) {
+            imageData.data[i] = imageData.data[i + 1] = imageData.data[i + 2] = 10;
+        }
+    }
     let data = imageData.data;
     let i = 0;
     for (let y = 0; y < GRID_H; y++) {
@@ -1005,12 +1013,14 @@ function rebuildVisibilityMaskCacheIfNeeded() {
             let lightLevel = Math.max(0, Math.min(1, raw * invNorm));
             let fogAlpha = Math.pow(1 - lightLevel, _visibilityFogGamma);
             let alpha = fogAlpha <= _visibilityFogMinAlpha ? 0 : Math.round(Math.max(0, Math.min(1, fogAlpha)) * 255);
-            data[i++] = 10;
-            data[i++] = 10;
-            data[i++] = 10;
+            i += 3;
+            if (data[i] !== alpha) changed = true;
             data[i++] = alpha;
         }
     }
+    _visibilityMaskVersion = visibilityVersion;
+    _visibilityMaskFullVisibility = false;
+    if (!changed) return;
     _visibilityMaskGridCtx.putImageData(imageData, 0, 0);
 
     _visibilityMaskCtx.clearRect(0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
@@ -1019,8 +1029,7 @@ function rebuildVisibilityMaskCacheIfNeeded() {
     _visibilityMaskCtx.filter = 'blur(1px)';
     _visibilityMaskCtx.drawImage(_visibilityMaskGridCanvas, 0, 0, _visibilityMaskCanvas.width, _visibilityMaskCanvas.height);
     _visibilityMaskCtx.restore();
-    _visibilityMaskVersion = visibilityVersion;
-    _visibilityMaskFullVisibility = false;
+    _visibilityMaskCanvas._visibilityContentVersion = (_visibilityMaskCanvas._visibilityContentVersion || 0) + 1;
 }
 
 function ensureCombinedBgCanvas() {
@@ -1178,7 +1187,7 @@ function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
     let sx = minGx * TILE, sy = minGy * TILE;
     let sw = (maxGx - minGx + 1) * TILE;
     let sh = (maxGy - minGy + 1) * TILE;
-    let source = getHistoryBackground(getBackgroundMip(camera.zoom * (window.devicePixelRatio || 1)));
+    let source = getBackgroundMip(camera.zoom * (window.devicePixelRatio || 1));
     queueDrawImage(ctx, source, sx * source.width / WORLD_W, sy * source.height / WORLD_H,
         sw * source.width / WORLD_W, sh * source.height / WORLD_H, sx, sy, sw, sh);
 }
@@ -1223,7 +1232,6 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
     let c = _staticLayerCache;
     let needsRedraw =
         !c.valid ||
-        (teamVisibilityHistory && !fullVisibility && c.historyVersion !== visibilityVersion) ||
         c.cameraX !== camera.x ||
         c.cameraY !== camera.y ||
         c.zoom !== camera.zoom ||
@@ -1255,7 +1263,6 @@ function renderStaticLayer(minGx, minGy, maxGx, maxGy) {
     renderer3dBackgroundVersion++;
 
     c.valid = true;
-    c.historyVersion = visibilityVersion;
     c.cameraX = camera.x;
     c.cameraY = camera.y;
     c.zoom = camera.zoom;
@@ -1362,8 +1369,7 @@ function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
 }
 
 function draw() {
-    const historyView = getHistoryRenderView();
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = historyView || getLiveRenderView();
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView();
 
     _unitBodySpriteBuildsRemaining = 8;
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
@@ -1372,8 +1378,8 @@ function draw() {
     let maxGx = Math.min(GRID_W - 1, Math.ceil((camera.x + vw) / TILE) + 1);
     let maxGy = Math.min(GRID_H - 1, Math.ceil((camera.y + vh) / TILE) + 1);
     let staticBounds = getBackgroundWorldBoundsForRenderMode();
-    let bgSoundGrid = getHistoryAudioGrid(audioSpatialGridBackground, 'background');
-    let fxSoundGrid = getHistoryAudioGrid(audioSpatialGridEffects, 'effects');
+    let bgSoundGrid = audioSpatialGridBackground;
+    let fxSoundGrid = audioSpatialGridEffects;
     let getTileReactiveScale = (bgLevel, fxLevel) => 1 + bgLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_2D_SCALE_FROM_SFX;
 
     renderStaticLayer(staticBounds.minGx, staticBounds.minGy, staticBounds.maxGx, staticBounds.maxGy);

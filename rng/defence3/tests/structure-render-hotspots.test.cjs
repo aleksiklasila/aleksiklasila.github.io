@@ -20,6 +20,19 @@ reads = 0;
 for (let i=0;i<1000;i++) assert.equal(c._findClosestHostileStructure(unit, buildings, 64), buildings[0]);
 assert.ok(reads <= 64000, `nearby queries must not scan 10 million buildings: ${reads}`);
 const queryReads = reads;
+// Moving origins and changing owners/visibility must select exactly the same
+// target as the ordered exhaustive scan, including strict range boundaries.
+for (let i=0;i<1000;i++) {
+    const moving={x:(i*173)%3200,y:(i*311)%3200,owner:i%3};
+    const radius=32+(i%9)*29;
+    let expected=null,best=radius;
+    for(const b of buildings) {
+        if(b.owner===moving.owner || b.energy<=0) continue;
+        const d=Math.hypot(b.x-moving.x,b.y-moving.y);
+        if(d<best){best=d;expected=b;}
+    }
+    assert.equal(c._findClosestHostileStructure(moving,buildings,radius),expected);
+}
 buildings[0].energy = 0;
 assert.equal(c._findClosestHostileStructure(unit, buildings, 64), buildings[1], 'death and list-order ties are immediate');
 const replacement = {x:16,y:16,owner:1,energy:10};
