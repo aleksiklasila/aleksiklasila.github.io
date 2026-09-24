@@ -34,6 +34,16 @@ rc.renderRangeMode=4;
 assert.equal(rc.getRenderRangeBoundary([], [{...a,range:.1}]).length,4,'fractional unit ranges work');
 rc.renderRangeMode=3; rc.renderRangeAllTeam=true; rc.towers=[a,b,{...a,owner:1}];
 assert.equal(rc.getRenderRangeBoundary([],[]).length,4,'all-team ranges do not depend on selection');
+rc.renderRangeAllTeam=false; rc.renderRangeMode=0; b.underConstruction=true;
+assert.equal(rc.getRenderRangeBoundary([b],[]).length,0,'selected unfinished turrets have no range');
+assert.equal(rc.getRenderRangeBoundary([a,b],[]).length,4,'unfinished turrets do not extend a built turret range');
+assert.ok(rc.getRenderRangeBoundary([a,b],[]).every(l=>l.x1<=2 && l.x2<=2));
+rc.renderRangeAllTeam=true;
+assert.ok(rc.getRenderRangeBoundary([],[]).every(l=>l.x1<=2 && l.x2<=2),
+    'team turret range excludes unfinished turrets');
+b.underConstruction=false;
+assert.ok(rc.getRenderRangeBoundary([],[]).some(l=>l.x2===4),
+    'finished turrets contribute range immediately');
 rc.renderRangeMode=2;
 assert.equal(rc.getRenderRangeBoundary([a],[]).length,0);
 const dense=Array.from({length:10000},(_,i)=>({x:i%100,y:Math.floor(i/100)}));
