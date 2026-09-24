@@ -366,6 +366,8 @@ function quantize3DExactRatio(value, maximum) {
     return Math.round(Math.max(0, Math.min(1, (Number(value) || 0) / maximum)) * RENDERER3D_TOP_TEXTURE_SIZE);
 }
 
+const renderer3dVisualSignatures = new WeakMap();
+
 function get3DExact2DVisualSignature(entity, isUnit = false) {
     if (!entity) return '';
     let researchTask = entity.researchTask || null;
@@ -377,7 +379,7 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     // A remembered target moving elsewhere must not invalidate an idle panel.
     let activeAttack = !isUnit || Number(entity.attackFlash) > 0;
     let attackTarget = activeAttack ? entity.attackTarget || null : null;
-    return [
+    let values = [
         entity.type || '', entity.unitType || '', Number(entity.owner) || 0,
         entity.vis || '', entity.color || '', Math.round((Number(entity.r) || 0) * 10),
         entity.textCanvas && shouldShowBuildingLevels() ? getLevelLabelText(entity) : '',
@@ -398,7 +400,14 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
         attackTarget ? Math.round((Number(attackTarget.y) - Number(entity.y)) / 4) : 0,
         Number.isFinite(entity._energyBlockedUntil) && gameTime < entity._energyBlockedUntil ? 1 : 0,
         entity.researcherHasMaterial ? 1 : 0
-    ].join('|');
+    ];
+    // Keep the interned key when visual inputs are unchanged. Joining and
+    // hashing a long key for every visible unit dominated zoomed-out frames.
+    let previous = renderer3dVisualSignatures.get(entity);
+    if (previous && previous.isUnit === isUnit && values.every((value, i) => value === previous.values[i])) return previous.signature;
+    let signature = values.join('|');
+    renderer3dVisualSignatures.set(entity, { isUnit, values, signature });
+    return signature;
 }
 
 function get3DExact2DCapture(entity, x, y, isUnit) {
@@ -470,6 +479,10 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
     // old tile-centered crop cut level labels off the mounted panel.
     let capture = get3DExact2DCapture(entity, x, y, useUnitBudget);
     let scale = (entry.canvas.width - 8) / Math.max(1, capture.extent);
+    // Flat sprites include the capture padding and the label's offset above
+    // the entity. Model footprints are deliberately unrelated to these sizes.
+    entry.canvas._flatWorldSize = entry.canvas.width / scale / TILE;
+    entry.canvas._flatOffsetZ = (capture.centerY - y) / TILE;
     g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
@@ -1313,7 +1326,7 @@ function pushUnit3DActivityEffects(target, u, activity, x, z, footprint) {
     }
 }
 
-function build3DFrameData() {
+function build3DFrameData(flat2d = false) {
     const historyView = getHistoryRenderView();
     const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = historyView || getLiveRenderView();
 
@@ -1322,7 +1335,7 @@ function build3DFrameData() {
     renderer3dExactTextureTimeRemaining = 2;
     renderer3dExactUnitTextureBuildsRemaining = 12;
     renderer3dExactUnitTextureTimeRemaining = 2;
-    let bounds = get3DVisibleWorldBounds();
+    let bounds = flat2d ? getVisibleWorldBounds(2) : get3DVisibleWorldBounds();
     let alpha = tickAlpha;
     // All entity models below are procedural: their shader uses the top/status
     // panel and side tint, never the legacy animated side texture.
@@ -1689,6 +1702,7 @@ function build3DFrameData() {
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+        let modelScale = u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
         // The mounted panel is the unit's canonical 2D rendering at every LOD.
         // The shared status texture remains only a short-lived fallback while a
         // newly visible exact texture is rasterized within the frame budget.
@@ -1710,9 +1724,9 @@ function build3DFrameData() {
                 x: ux / TILE + reactiveOffsetX * audioMove,
                 y: getUnitHeightOffset(u),
                 z: uy / TILE + reactiveOffsetY * audioMove,
-                scaleX: footprint,
-                scaleY: Math.max(0.48, footprint * 1.45) * (1 + audioHeight),
-                scaleZ: footprint,
+                scaleX: footprint * modelScale,
+                scaleY: Math.max(0.48, footprint * 1.45) * (1 + audioHeight) * modelScale,
+                scaleZ: footprint * modelScale,
                 visibilitySource: u,
                 rotationY: Math.atan2(facingX, facingY || 0.0001),
                 moveAmount: activity.amount || Math.min(1, Math.hypot(u.x - u.prevX, u.y - u.prevY) / Math.max(.01, TILE * .025)),
@@ -1729,7 +1743,7 @@ function build3DFrameData() {
                 topTextureCanvas: unit2DTexture || get3DUnitTopTexture(u, u.owner, unitStatus),
                 sideTint: get3DDamageFlashTint(u, unitSideColor || get3DRenderOwnerColor(u.owner)),
             });
-            pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
+            if (!flat2d) pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
         }
     }
 
@@ -1806,6 +1820,7 @@ function build3DFrameData() {
     }
 
     return {
+        flat2d,
         viewportWidth: viewW,
         viewportHeight: viewH,
         worldWidth: GRID_W,
@@ -1839,7 +1854,7 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
     overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     overlayCtx.clearRect(0, 0, viewW, viewH);
 
-    if (renderDimensionMode === '3d' && renderer3dInstance && renderer3dSnapshot && renderer3dSnapshot.overlays && typeof renderer3dInstance.drawOverlay === 'function') {
+    if (renderer3dInstance && renderer3dSnapshot && renderer3dSnapshot.overlays && typeof renderer3dInstance.drawOverlay === 'function') {
         renderer3dInstance.drawOverlay(renderer3dSnapshot.overlays, overlayCtx);
         if (renderer3dSnapshot.buildPreview && typeof renderer3dInstance.drawBuildPreview === 'function') {
             renderer3dInstance.drawBuildPreview(renderer3dSnapshot.buildPreview, overlayCtx);
@@ -1861,26 +1876,28 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
 
 function syncRenderModeUi() {
     let gameArea = document.getElementById('game-area');
-    if (gameArea) gameArea.classList.toggle('render-mode-3d', renderDimensionMode === '3d');
+    let gpuEnabled = !!(renderer3dInstance && renderer3dInstance.supported);
+    if (gameArea) gameArea.classList.toggle('render-mode-3d', gpuEnabled);
     renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
-    if (renderer3dHost) renderer3dHost.style.opacity = renderDimensionMode === '3d' ? '1' : '0';
+    if (renderer3dHost) renderer3dHost.style.opacity = gpuEnabled ? '1' : '0';
     let btn2d = document.getElementById('btn-view-2d');
     let btn3d = document.getElementById('btn-view-3d');
     if (btn2d) btn2d.classList.toggle('active', renderDimensionMode === '2d');
     if (btn3d) btn3d.classList.toggle('active', renderDimensionMode === '3d');
-    if (renderer3dInstance) renderer3dInstance.setEnabled(renderDimensionMode === '3d');
+    if (renderer3dInstance) renderer3dInstance.setEnabled(gpuEnabled);
 }
 
 function ensure3DRendererInitialized() {
-    if (renderer3dInstance) return renderer3dInstance;
+    if (renderer3dInstance) return renderer3dInstance.supported ? renderer3dInstance : null;
     renderer3dHost = renderer3dHost || document.getElementById('renderer3d-host');
     if (!renderer3dHost || !window.Defence3Renderer3D) return null;
     renderer3dInstance = new window.Defence3Renderer3D({
         mount: renderer3dHost
     });
     renderer3dInstance.resize(viewW, viewH);
-    renderer3dInstance.setEnabled(renderDimensionMode === '3d');
-    return renderer3dInstance;
+    renderer3dInstance.setEnabled(true);
+    syncRenderModeUi();
+    return renderer3dInstance.supported ? renderer3dInstance : null;
 }
 
 function setRenderDimensionMode(nextMode) {
@@ -2235,14 +2252,20 @@ function computeVisibilityGridForPlayer(playerId, vis) {
         if (!shouldRevealForPlayer(s.owner, s.watched || 0, s.watchedByTeam)) continue;
         addWorldVisibilitySource(s.x, s.y, getEntityVisibilityRangeArea(s));
     }
-    for (let y = 0; y < GRID_H; y++) {
-        let row = grid[y];
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = row[x];
-            if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) continue;
-            if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) continue;
-            addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
+    const revealFloorItem = (cell, x, y) => {
+        if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) return;
+        if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) return;
+        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0.6);
+    };
+    if (typeof _activeTileEntities !== 'undefined') {
+        // The live tile index includes floor items; avoid a world scan for
+        // every player's visibility. Source stamping is an order-independent max.
+        for (let item of _activeTileEntities) {
+            let cell = grid[item.gy] && grid[item.gy][item.gx];
+            if (cell && cell.item === item) revealFloorItem(cell, item.gx, item.gy);
         }
+    } else {
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) revealFloorItem(grid[y][x], x, y);
     }
 
     // The range caches contain whole areas. Union area ids first so hundreds
@@ -2450,17 +2473,12 @@ function processRenderFrame(timestamp) {
     let dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     let renderer3dSnapshot = null;
-    if (renderDimensionMode === '3d') {
-        let renderer3d = ensure3DRendererInitialized();
-        if (renderer3d) {
-            renderer3dSnapshot = build3DFrameData();
-            renderer3d.render(renderer3dSnapshot);
-            drawMinimap();
-        } else {
-            draw();
-        }
+    let renderer3d = ensure3DRendererInitialized();
+    if (renderer3d) {
+        renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
+        renderer3d.render(renderer3dSnapshot);
+        drawMinimap();
     } else {
-        if (renderer3dInstance) renderer3dInstance.setEnabled(false);
         draw();
     }
     drawInteractionOverlay(renderer3dSnapshot);
@@ -3291,6 +3309,7 @@ function flushFrameDrawImageQueue() {
 
     let zOrder = Array.from(_frameDrawImageBuckets.keys());
     zOrder.sort((a, b) => b - a); // Furthest/highest z first, closest last.
+
 
     let liveStateByCtx = new Map();
     let layerStateByCtx = new Map();

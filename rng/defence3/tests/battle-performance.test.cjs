@@ -87,8 +87,13 @@ for (let i = 0; i < 1200; i++) world.units.push({
 world.towers = world.units.slice(0, 200).map(u => ({ ...u, energy: 10, currentStats: { visionRange: 2 } }));
 world.barracks = world.units.slice(200, 400).map(u => ({ ...u, energy: 10, range: 1.5 }));
 world.collectorSpawners = world.units.slice(400, 600).map(u => ({ ...u, energy: 10, range: 2 }));
-for (let i = 0; i < 64; i++) world.grid[i][i] = { owner: i % 3, item: { energy: 10, watched: i % 2, watchedByTeam: (i + 1) % 3 } };
+for (let i = 0; i < 64; i++) world.grid[i][i] = { owner: i % 3, item: { gx:i, gy:i, energy: 10, watched: i % 2, watchedByTeam: (i + 1) % 3 } };
 const vc = vm.createContext({ ...world }), refVc = vm.createContext({ ...world });
+// Reverse index order, include stale entries and non-floor entities. The
+// exhaustive reference must still agree bit-for-bit for every player.
+vc._activeTileEntities = new Set(world.grid.map((row,i) => row[i].item).reverse());
+vc._activeTileEntities.add({gx:0,gy:0,energy:100});
+vc._activeTileEntities.add({gx:12,gy:13,energy:100});
 vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + visibility, vc);
 vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + referenceVisibility, refVc);
 const grid = () => Array.from({ length: 64 }, () => new Float32Array(64));
@@ -101,6 +106,8 @@ for (let step = 0; step < 18; step++) {
     world.units[step + 20].x += 64;
     world.units[step + 40].watched = 0;
     world.towers[step].underConstruction = true;
+    world.grid[step][step].item.underConstruction = true;
+    world.grid[step + 20][step + 20].owner = step % 3;
 }
 
 // A visible set above 1024 must settle, rather than continuously rasterize.

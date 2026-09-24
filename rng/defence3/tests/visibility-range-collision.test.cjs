@@ -24,6 +24,12 @@ assert.equal(rc.getRenderRangeBoundary([a],[]),first,'static boundary is reused'
 let union=rc.getRenderRangeBoundary([a,b],[]);
 assert.equal(union.length,4,'adjacent ranges merge into a single outer rectangle');
 assert.ok(!union.some(l=>l.x1===2 && l.x2===2),'internal border is removed');
+assert.equal(rc.getRenderRangeBoundary([b,a],[]),union,'source ordering never invalidates the boundary');
+a.range=1;
+assert.equal(rc.getRenderRangeBoundary([a],[]),union,'changed sources with identical coverage reuse geometry');
+a.range=.6;
+for (const area of rc._areaById) Object.defineProperty(area,'cells',{get(){throw new Error('warm range must not revisit tiles');}});
+assert.equal(rc.getRenderRangeBoundary([a],[]).length,4,'warm coverage changes only union cached perimeters');
 rc.renderRangeMode=4;
 assert.equal(rc.getRenderRangeBoundary([], [{...a,range:.1}]).length,4,'fractional unit ranges work');
 rc.renderRangeMode=3; rc.renderRangeAllTeam=true; rc.towers=[a,b,{...a,owner:1}];

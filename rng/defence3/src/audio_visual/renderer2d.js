@@ -11,21 +11,25 @@ let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 const _unitBodySprites = new Map();
 let _unitBodySpriteBuildsRemaining = 8;
 function drawCachedUnitBody(g, unit, stroke, lineWidth) {
-    // Keep long snake trails and close-up geometry live. Cache only the body:
+    // Keep animated snake trails live. Cache only the body:
     // health, selection, combat effects and worker status remain current.
-    if (unit.isSnake || unit.r * 2 * camera.zoom >= 24 || g.__drawImagesImmediately) {
+    if (unit.isSnake || g.__drawImagesImmediately) {
         drawUnitBodyGeometry(g, unit, stroke, lineWidth);
         return;
     }
-    let key = [unit.unitType, unit.vis, unit.r, unit.color, stroke, lineWidth, unit.carryingValue > 0].join('|');
+    // Resolution tiers avoid rebuilding at every wheel step, without ever
+    // enlarging a low-resolution body. Budget misses retain vector geometry.
+    let pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    let resolution = Math.pow(2, Math.ceil(Math.log2(Math.max(0.25, camera.zoom * pixelRatio))));
+    let key = [unit.unitType, unit.vis, unit.r, unit.color, stroke, lineWidth, unit.carryingValue > 0, resolution].join('|');
     let sprite = _unitBodySprites.get(key);
     if (!sprite && _unitBodySpriteBuildsRemaining > 0) {
         _unitBodySpriteBuildsRemaining--;
         let radius = Math.ceil(unit.r * 1.5 + 4);
         let image = document.createElement('canvas');
-        image.width = image.height = radius * 4;
+        image.width = image.height = radius * 2 * resolution;
         let c = image.getContext('2d');
-        c.setTransform(2, 0, 0, 2, radius * 2 - unit.x * 2, radius * 2 - unit.y * 2);
+        c.setTransform(resolution, 0, 0, resolution, (radius - unit.x) * resolution, (radius - unit.y) * resolution);
         drawUnitBodyGeometry(c, unit, stroke, lineWidth);
         sprite = { image, radius };
         if (_unitBodySprites.size >= 512) _unitBodySprites.delete(_unitBodySprites.keys().next().value);
@@ -33,7 +37,10 @@ function drawCachedUnitBody(g, unit, stroke, lineWidth) {
     }
     if (sprite) {
         // Immediate draw preserves the ordering of bodies and their live effects.
+        let smoothing = g.imageSmoothingEnabled;
+        g.imageSmoothingEnabled = true;
         g.drawImage(sprite.image, unit.x - sprite.radius, unit.y - sprite.radius, sprite.radius * 2, sprite.radius * 2);
+        g.imageSmoothingEnabled = smoothing;
     } else {
         drawUnitBodyGeometry(g, unit, stroke, lineWidth);
     }

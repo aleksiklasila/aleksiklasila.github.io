@@ -1716,6 +1716,20 @@
         }
 
         buildViewProjection(snapshot) {
+            if (snapshot.flat2d) {
+                // World X/Z map exactly to the existing 2D mouse/camera math.
+                const camera = snapshot.camera;
+                const m = this.tmpViewProjection;
+                m.fill(0);
+                m[0] = 2 / camera.visibleWidth;
+                m[9] = -2 / camera.visibleHeight;
+                m[6] = -0.001;
+                m[12] = -camera.centerX * m[0];
+                m[13] = -camera.centerZ * m[9];
+                m[15] = 1;
+                invertMatrix4(this.tmpInverseViewProjection, m);
+                return;
+            }
             let aspect = Math.max(1e-4, (snapshot.viewportWidth || 1) / (snapshot.viewportHeight || 1));
             let camera = snapshot.camera || {};
             let centerX = Number(camera.centerX) || 0;
@@ -2861,6 +2875,105 @@
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
+        drawFlatSprites(objects) {
+            const gl = this.gl;
+            if (!this.flatProgram) {
+                this.flatProgram = createProgram(gl, `#version 300 es
+                    precision highp float;
+                    layout(location=0) in vec4 rect;
+                    layout(location=1) in vec4 tint;
+                    layout(location=2) in float angle;
+                    uniform mat4 viewProjection;
+                    out vec2 uv;
+                    out vec4 color;
+                    void main() {
+                        vec2 p = vec2(float(gl_VertexID % 2), float(gl_VertexID / 2));
+                        uv = vec2(p.x, 1. - p.y);
+                        vec2 d = (p - .5) * rect.zw;
+                        float c = cos(angle), s = sin(angle);
+                        vec2 world = rect.xy + vec2(c*d.x-s*d.y,s*d.x+c*d.y);
+                        gl_Position = viewProjection * vec4(world.x, .1, world.y, 1.);
+                        color = tint;
+                    }`, `#version 300 es
+                    precision highp float;
+                    uniform sampler2D sprite;
+                    uniform bool textured;
+                    in vec2 uv;
+                    in vec4 color;
+                    layout(location=0) out vec4 outColor;
+                    void main() {
+                        outColor = (textured ? texture(sprite, uv) : vec4(1.)) * color;
+                    }`);
+                this.flatVao = gl.createVertexArray();
+                this.flatBuffer = gl.createBuffer();
+                this.flatUniforms = {
+                    matrix: gl.getUniformLocation(this.flatProgram, 'viewProjection'),
+                    textured: gl.getUniformLocation(this.flatProgram, 'textured'),
+                    sprite: gl.getUniformLocation(this.flatProgram, 'sprite')
+                };
+                gl.bindVertexArray(this.flatVao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
+                for (const [location, size, offset] of [[0,4,0], [1,4,16], [2,1,32]]) {
+                    gl.enableVertexAttribArray(location);
+                    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 36, offset);
+                    gl.vertexAttribDivisor(location, 1);
+                }
+            }
+            gl.useProgram(this.flatProgram);
+            gl.bindVertexArray(this.flatVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
+            if (!this.flatData || this.flatData.length < objects.length * 9) {
+                this.flatData = new Float32Array(Math.max(1024, objects.length * 18));
+                gl.bufferData(gl.ARRAY_BUFFER, this.flatData.byteLength, gl.DYNAMIC_DRAW);
+            }
+            gl.uniformMatrix4fv(this.flatUniforms.matrix, false, this.tmpViewProjection);
+            gl.uniform1i(this.flatUniforms.sprite, 0);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.disable(gl.DEPTH_TEST);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            // Consecutive runs preserve painter order, including translucent
+            // snake trails and overlapping labels. Never sort sprites by source.
+            for (let start = 0; start < objects.length;) {
+                const first = objects[start];
+                const texture = first.topTextureCanvas;
+                let end = start + 1;
+                while (end < objects.length && objects[end].topTextureCanvas === texture &&
+                    objects[end].topTextureKey === first.topTextureKey) end++;
+                let offset = 0;
+                for (let i = start; i < end; i++) {
+                    const o = objects[i], source = o.topTextureCanvas;
+                    const exact = source && source._flatWorldSize;
+                    const unit = o.modelKey.startsWith('unit_');
+                    const tile = o.modelKey !== 'snake_segment' && !unit &&
+                        !o.modelKey.startsWith('projectile_') && !o.modelKey.startsWith('particle') && !o.modelKey.startsWith('dropped_');
+                    const size = exact || (tile ? 1 : 0);
+                    const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
+                    const color = texture ? [light,light,light] : hexToRgb(o.tint);
+                    this.flatData[offset++] = o.x;
+                    this.flatData[offset++] = o.z + (exact ? source._flatOffsetZ || 0 : 0);
+                    this.flatData[offset++] = size || o.scaleX;
+                    this.flatData[offset++] = size || o.scaleZ;
+                    this.flatData[offset++] = color[0];
+                    this.flatData[offset++] = color[1];
+                    this.flatData[offset++] = color[2];
+                    this.flatData[offset++] = o.alpha;
+                    this.flatData[offset++] = exact || tile ? 0 : -(o.rotationY || 0);
+                }
+                gl.uniform1i(this.flatUniforms.textured, texture ? 1 : 0);
+                gl.bindTexture(gl.TEXTURE_2D, texture ? this.getTopTexture(first.topTextureKey, texture) : null);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.flatData.subarray(0, offset));
+                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, end-start);
+                start = end;
+            }
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            gl.enable(gl.DEPTH_TEST);
+        }
+
         render(snapshot) {
             if (!this.enabled || !this.supported || !snapshot) return;
             this.resize(snapshot.viewportWidth, snapshot.viewportHeight);
@@ -2876,6 +2989,14 @@
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             this.drawBackground(snapshot);
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
+            if (snapshot.flat2d) {
+                this.drawFlatSprites(objects);
+                this.drawGroundOverlays(snapshot.overlays);
+                this.resolveScene();
+                this.presentSceneToCanvas();
+                this.trimTopTextures();
+                return;
+            }
             // Retain the transforms/LOD actually drawn, without rebuilding the scene on clicks.
             this.pickObjects = [];
             this.pickInverseViewProjection = new Float32Array(this.tmpInverseViewProjection);
@@ -2975,6 +3096,14 @@
             this.presentSceneToCanvas();
             // Delete GPU resources as well as JS entries. Never evict a texture
             // used in this frame; amortize cleanup after camera sweeps/battles.
+            this.trimTopTextures();
+            gl.bindVertexArray(null);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        trimTopTextures() {
+            const gl = this.gl;
             if (this.topTextureCache.size > 1024) {
                 let remaining = 16;
                 for (let [key, entry] of this.topTextureCache) {
@@ -2984,9 +3113,6 @@
                     if (--remaining <= 0 || this.topTextureCache.size <= 1024) break;
                 }
             }
-            gl.bindVertexArray(null);
-            gl.bindTexture(gl.TEXTURE_2D, null);
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
         }
     }
 

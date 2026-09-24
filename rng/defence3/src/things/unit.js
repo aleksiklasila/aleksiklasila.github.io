@@ -13,6 +13,33 @@ function _isHostileThingVisibleToUnit(unit, target) {
     return isGameplayTargetVisibleToPlayer(unit.owner, gx, gy);
 }
 
+const hostileStructureIndexes = new WeakMap();
+
+function _getHostileStructureIndex(list) {
+    const tick = typeof gameTime === 'number' ? gameTime : 0;
+    const revision = typeof pathTopologyVersion === 'number' ? pathTopologyVersion : 0;
+    let index = hostileStructureIndexes.get(list);
+    if (index && index.tick === tick && index.revision === revision && index.length === list.length) return index;
+    const size = TILE * 8;
+    index = { tick, revision, length: list.length, size, buckets: new Map(), witnesses: new Map(), owners: new Map() };
+    for (let order = 0; order < list.length; order++) {
+        const target = list[order];
+        const gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
+        const gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
+        if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
+        const entry = { target, order, gx, gy };
+        let owned = index.owners.get(target.owner);
+        if (!owned) index.owners.set(target.owner, owned = []);
+        owned.push(target);
+        const key = Math.floor(target.y / size) * (Math.ceil(GRID_W / 8) + 1) + Math.floor(target.x / size);
+        let bucket = index.buckets.get(key);
+        if (!bucket) index.buckets.set(key, bucket = []);
+        bucket.push(entry);
+    }
+    hostileStructureIndexes.set(list, index);
+    return index;
+}
+
 // Preserve list order, strict distance ties and lazy visibility snapshot timing.
 // The raw grid is immutable for this tick; resolve it once per scan rather than
 // repeating player normalization and cache lookups for every building.
@@ -22,23 +49,47 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null)
     let vis = null;
     for (let pass = 0; pass < (secondList ? 2 : 1); pass++) {
         let list = pass === 0 ? firstList : secondList;
-        for (let target of list) {
+        let index = _getHostileStructureIndex(list);
+        // Materialize the lazy grid at the same point as the original scan,
+        // even when every hostile building is outside the search radius.
+        let witness = index.witnesses.get(unit.owner);
+        if (!witness || witness.owner === unit.owner || witness.energy <= 0) {
+            witness = null;
+            for (let [owner, owned] of index.owners) {
+                if (owner === unit.owner) continue;
+                for (let target of owned) {
+                    if (target.owner !== unit.owner && target.energy > 0) { witness = target; break; }
+                }
+                if (witness) break;
+            }
+            if (witness) index.witnesses.set(unit.owner, witness);
+        }
+        if (!vis && witness) {
+            let owner = Math.floor(Number(unit.owner));
+            if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
+            vis = getRawVisibilityGridForPlayer(owner);
+        }
+        if (!vis || vis.length !== GRID_H || !(bestDistance > 0)) continue;
+        let bestOrder = Infinity;
+        const stride = Math.ceil(GRID_W / 8) + 1;
+        const minX = Math.max(0, Math.floor((unit.x - bestDistance) / index.size));
+        const maxX = Math.min(Math.ceil(GRID_W / 8), Math.floor((unit.x + bestDistance) / index.size));
+        const minY = Math.max(0, Math.floor((unit.y - bestDistance) / index.size));
+        const maxY = Math.min(Math.ceil(GRID_H / 8), Math.floor((unit.y + bestDistance) / index.size));
+        for (let by = minY; by <= maxY; by++) for (let bx = minX; bx <= maxX; bx++) {
+          let bucket = index.buckets.get(by * stride + bx);
+          if (!bucket) continue;
+          for (let entry of bucket) {
+            let { target, gx, gy, order } = entry;
             if (target.owner === unit.owner || target.energy <= 0) continue;
             let dx = target.x - unit.x, dy = target.y - unit.y;
-            // Only prune after resolving the first valid tile's lazy snapshot.
-            if (vis && (Math.abs(dx) >= bestDistance || Math.abs(dy) >= bestDistance)) continue;
-            let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
-            let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
-            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
-            if (!vis) {
-                let owner = Math.floor(Number(unit.owner));
-                if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
-                vis = getRawVisibilityGridForPlayer(owner);
-            }
-            if (!vis || vis.length !== GRID_H) continue;
+            if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
             if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
             let distance = Math.hypot(dx, dy);
-            if (distance < bestDistance) { bestDistance = distance; closest = target; }
+            if (distance < bestDistance || (distance === bestDistance && bestOrder !== Infinity && order < bestOrder)) {
+                bestDistance = distance; closest = target; bestOrder = order;
+            }
+          }
         }
     }
     return closest;

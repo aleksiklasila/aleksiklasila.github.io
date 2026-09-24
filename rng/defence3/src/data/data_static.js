@@ -560,7 +560,7 @@ const BASE_UNIT_STATS = {
     water_resistant: { energy: 50, price: 500, speed: 3.2, atk: 5, attackRange: 0.2, visionRange: 1.0, atkCd: 1.5, astarCost: 10, upKeep: 0.4, color: '#4af', r: 8, vis: 'circle', waterResistant: true, attackStyle: 'water' },
     ice_resistant: { energy: 65, price: 650, speed: 2.2, atk: 6, attackRange: 0.2, visionRange: 0.8, atkCd: 1.75, astarCost: 10, upKeep: 0.4, color: '#afe', r: 9, vis: 'circle', iceResistant: true, attackStyle: 'ice' },
     laser_resistant: { energy: 55, price: 550, speed: 2.3, atk: 5, attackRange: 0.5, visionRange: 0.8, atkCd: 1.75, astarCost: 10, upKeep: 0.4, color: '#d0f', r: 9, vis: 'circle', laserResistant: true, attackStyle: 'laser' },
-    snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, upKeep: 0.4, color: '#0f0', r: 7, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
+    snake: { energy: 800, price: 8000, speed: 3.2, atk: 15, attackRange: 0.1, visionRange: 0.8, atkCd: 1.5, astarCost: 10, upKeep: 0.4, color: '#0f0', r: 7, collisionR: 9, vis: 'snake', isSnake: true, snakeMaxHistory: 20, attackStyle: 'ram' },
     scout: { energy: 14, price: 140, speed: 5.4, atk: 1, attackRange: 0.1, visionRange: 1.8, atkCd: 1.6, watchDuration: 5, astarCost: 10, upKeep: 0.4, color: '#9cf', r: 5.5, vis: 'triangle', isFlying: true, attackStyle: 'swoop' },
     ...RESOURCE_COLLECTOR_UNIT_STATS,
     salvager_unit: { energy: 20, price: 20, speed: 1.8, atk: 0, attackRange: 0, visionRange: 0.6, atkCd: 49.95, astarCost: 10, upKeep: 0.4, transferCooldown: 2.0, workerSearchDistance: 2.0, color: '#765', r: 6, vis: 'triangle_down', isWorker: true },
