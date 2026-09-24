@@ -1155,6 +1155,25 @@ function push3DRenderObject(target, object) {
         let visibilityHeight = Math.max(0.18, visionRange / 5);
         resolvedScaleY = Math.max(0.05, resolvedScaleY * visibilityHeight);
     }
+    if (object.overlapFade) {
+        let fade = object.overlapFade;
+        let key = `${object.modelKey}:${fade.gx},${fade.gy}`;
+        let targetHeight = fade.occupied ? Math.min(resolvedScaleY, 0.05) : resolvedScaleY;
+        let state = renderer3dOverlapFadeState.get(key);
+        if (!state) {
+            state = { value: resolvedScaleY, lastUpdateMs: fade.nowMs, lastSeenMs: fade.nowMs };
+            renderer3dOverlapFadeState.set(key, state);
+        } else {
+            let deltaMs = Math.max(0, fade.nowMs - state.lastUpdateMs);
+            let maxStep = deltaMs / RENDERER3D_OVERLAP_FADE_DURATION_MS * Math.max(0.01, resolvedScaleY - 0.05);
+            if (targetHeight > state.value) state.value = Math.min(targetHeight, state.value + maxStep);
+            else if (targetHeight < state.value) state.value = Math.max(targetHeight, state.value - maxStep);
+            state.lastUpdateMs = fade.nowMs;
+            state.lastSeenMs = fade.nowMs;
+        }
+        fade.activeKeys.add(key);
+        resolvedScaleY = state.value;
+    }
     let tint = _getCachedLitTint(object.tint || '#c8ced8', finalLightLevel);
     let sideTint = _getCachedLitTint(object.sideTint || object.tint || '#c8ced8', finalLightLevel);
     target.push({
@@ -1408,24 +1427,12 @@ function build3DFrameData(flat2d = false) {
     let unitOccupiedTileKeys = new Set();
     let overlapNowMs = (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
     let activeOverlapFadeKeys = new Set();
-    let getOverlapFlattenScaleForTile = (gx, gy) => {
-        let key = `${gx},${gy}`;
-        let targetScale = unitOccupiedTileKeys.has(gy * GRID_W + gx) ? 0.2 : 1;
-        let state = renderer3dOverlapFadeState.get(key);
-        if (!state) {
-            state = { value: targetScale, lastUpdateMs: overlapNowMs, lastSeenMs: overlapNowMs };
-            renderer3dOverlapFadeState.set(key, state);
-        } else {
-            let deltaMs = Math.max(0, overlapNowMs - (Number(state.lastUpdateMs) || overlapNowMs));
-            let maxStep = deltaMs / RENDERER3D_OVERLAP_FADE_DURATION_MS * 0.8;
-            if (targetScale > state.value) state.value = Math.min(targetScale, state.value + maxStep);
-            else if (targetScale < state.value) state.value = Math.max(targetScale, state.value - maxStep);
-            state.lastUpdateMs = overlapNowMs;
-            state.lastSeenMs = overlapNowMs;
-        }
-        activeOverlapFadeKeys.add(key);
-        return state.value;
-    };
+    // One height transition for every overlapping structure, including mines.
+    // The 0.05 world-unit floor is about half a builder's rendered height.
+    let getOverlapFadeForTile = (gx, gy) => ({
+        gx, gy, occupied: unitOccupiedTileKeys.has(gy * GRID_W + gx),
+        nowMs: overlapNowMs, activeKeys: activeOverlapFadeKeys
+    });
     let getUnitHeightOffset = (unit) => {
         let id = Number(unit && unit.id) || 0;
         let bucket = ((id * 1103515245) >>> 0) % 7;
@@ -1535,7 +1542,8 @@ function build3DFrameData(flat2d = false) {
             z: m.gy + 0.5 + reactiveOffsetY * audioMove,
             y: 0,
             scaleX: 0.9,
-            scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy) * (1 + audioHeight),
+            scaleY: 0.35 * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(m.gx, m.gy),
             scaleZ: 0.9,
             heightMode: 'mine',
             tint: '#f0c83a',
@@ -1563,7 +1571,8 @@ function build3DFrameData(flat2d = false) {
             z: m.gy + 0.5 + reactiveOffsetY * audioMove,
             y: 0,
             scaleX: 0.9,
-            scaleY: 0.35 * getOverlapFlattenScaleForTile(m.gx, m.gy) * (1 + audioHeight),
+            scaleY: 0.35 * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(m.gx, m.gy),
             scaleZ: 0.9,
             heightMode: 'mine',
             tint: '#d8d8e8',
@@ -1596,7 +1605,8 @@ function build3DFrameData(flat2d = false) {
                 y: get3DConstructionLift(cell.item),
                 z: y + 0.5 + reactiveOffsetY * audioMove,
                 scaleX: 0.84,
-                scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * getOverlapFlattenScaleForTile(x, y) * (1 + audioHeight),
+                scaleY: (cell.item.type === 'house' ? 0.82 : 0.14) * (1 + audioHeight),
+                overlapFade: getOverlapFadeForTile(x, y),
                 scaleZ: 0.84,
                 preserveModelHeight: cell.item.type === 'house',
                 visibilitySource: cell.item,
@@ -1627,7 +1637,8 @@ function build3DFrameData(flat2d = false) {
             y: get3DConstructionLift(t),
             z: t.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.82,
-            scaleY: 1.05 * getOverlapFlattenScaleForTile(t.gx, t.gy) * (1 + audioHeight),
+            scaleY: 1.05 * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(t.gx, t.gy),
             scaleZ: 0.82,
             visibilitySource: t,
             rotationY: Math.PI * 0.5 - (Number(t.angle) || 0),
@@ -1664,7 +1675,8 @@ function build3DFrameData(flat2d = false) {
             y: get3DConstructionLift(s),
             z: s.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.95,
-            scaleY: 0.9 * getOverlapFlattenScaleForTile(s.gx, s.gy) * (1 + audioHeight),
+            scaleY: 0.9 * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(s.gx, s.gy),
             scaleZ: 0.95,
             visibilitySource: s,
             tint: get3DDamageFlashTint(s, get3DRenderOwnerColor(s.owner)),
@@ -1705,7 +1717,8 @@ function build3DFrameData(flat2d = false) {
             y: get3DConstructionLift(b),
             z: b.y / TILE + reactiveOffsetY * audioMove,
             scaleX: 0.98,
-            scaleY: 0.86 * getOverlapFlattenScaleForTile(b.gx, b.gy) * (1 + audioHeight),
+            scaleY: 0.86 * (1 + audioHeight),
+            overlapFade: getOverlapFadeForTile(b.gx, b.gy),
             scaleZ: 0.98,
             visibilitySource: b,
             tint: get3DDamageFlashTint(b, get3DRenderOwnerColor(b.owner)),
@@ -1868,7 +1881,7 @@ function build3DFrameData(flat2d = false) {
     for (let [key, state] of renderer3dOverlapFadeState) {
         if (activeOverlapFadeKeys.has(key)) continue;
         let idleMs = overlapNowMs - (Number(state && state.lastSeenMs) || overlapNowMs);
-        if (idleMs > RENDERER3D_OVERLAP_FADE_DURATION_MS && Math.abs((Number(state && state.value) || 1) - 1) < 0.001) {
+        if (idleMs > RENDERER3D_OVERLAP_FADE_DURATION_MS) {
             renderer3dOverlapFadeState.delete(key);
         }
     }

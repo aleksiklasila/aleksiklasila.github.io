@@ -595,16 +595,12 @@
                 if (weapon === 'house') {
                     part(0,.22,0,.78,.50,.72,0,0,0,.92); // walls
                     part(0,.52,0,.92,.12,.84,2); // eaves
-                    part(0,.64,0,.72,.18,.69,0);
-                    part(0,.78,0,.49,.16,.55,2); // stepped roof ridge
-                    part(.25,.79,-.14,.13,.38,.15,1); // chimney
                     part(0,.20,.375,.25,.38,.035,1); // front door
-                    panel(0,.91,0,.86,.78,true,0,0,true);
+                    panel(0,.60,0,.86,.78,true,0,0,true);
                 } else {
                     part(0, .20, 0, .69, .47, .69, 0, 0, 0, .8);
                     panel(0, .85, 0, .96, .96, true, 0, 0, true);
                     for (let side of [-1, 1]) part(side * .40, .22, 0, .09, .62, .72, 2);
-                    if (variant.endsWith(':relay')) for (let side of [-1,1]) part(side*.32,.82,0,.12,.18,.12,3);
                 }
             } else {
                 part(0, .19, 0, .76, .52, .76, 0);
@@ -613,11 +609,6 @@
                 panel(0, .89, 0, .94, .94, true, 0, 0, true);
                 part(0, .20, .391, .28, .40, .02, 1);
                 part(0, .61, .405, .40, .045, .02, 3);
-                if (kind === 'spawner') {
-                    part(.30, .82, .24, .07, .18, .07, 2);
-                    part(.30, .94, .24, .14, .06, .14, 3);
-                }
-                if (variant.endsWith(':research')) for (let side of [-1,1]) part(side*.40,.82,.29,.08,.22,.08,3);
                 if (variant.endsWith(':healer')) {
                     part(0,.30,-.405,.09,.29,.025,3);
                     part(0,.40,-.42,.29,.09,.025,3);

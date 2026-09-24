@@ -43,7 +43,7 @@ function _getHostileStructureIndex(list) {
 // Preserve list order, strict distance ties and lazy visibility snapshot timing.
 // The raw grid is immutable for this tick; resolve it once per scan rather than
 // repeating player normalization and cache lookups for every building.
-function _findClosestHostileStructure(unit, firstList, range, secondList = null) {
+function _findClosestHostileStructure(unit, firstList, range, secondList = null, acceptsTarget = null) {
     let closest = null;
     let bestDistance = range;
     let vis = null;
@@ -82,6 +82,7 @@ function _findClosestHostileStructure(unit, firstList, range, secondList = null)
           for (let entry of bucket) {
             let { target, gx, gy, order } = entry;
             if (target.owner === unit.owner || target.energy <= 0) continue;
+            if (acceptsTarget && !acceptsTarget(target)) continue;
             let dx = target.x - unit.x, dy = target.y - unit.y;
             if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
             if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
@@ -915,14 +916,36 @@ class Unit {
     }
 
     doHolding() {
-        forEachUnitInAreaRange(this.x, this.y, this.preComputed.attackRangeArea, (u) => {
-            let ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE);
-            if (!isGameplayTargetVisibleToPlayer(this.owner, ugx, ugy)) return;
-            if (this.attackTimer <= 0) {
-                this._performAttackOnUnit(u);
-                return true;
+        if (this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
+        let closest = null, bestD2 = Infinity;
+        forEachUnitInAreaRange(this.x, this.y, _getUnitAttackRangeArea(this), (enemy) => {
+            if (!_isHostileThingVisibleToUnit(this, enemy) || !_isTargetWithinUnitAttackAreaRange(this, enemy)) return;
+            let dx = enemy.x - this.x, dy = enemy.y - this.y, d2 = dx * dx + dy * dy;
+            if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {
+                closest = enemy; bestD2 = d2;
             }
-        }, { enemyOfPlayer: this.owner });
+        }, { enemyOfPlayer: this.owner, areaOnly: true });
+        if (closest) { this._performAttackOnUnit(closest); return; }
+
+        // Hold uses the same attack area as combat, but never enters the
+        // chasing state. Keep structure priority consistent with attack move.
+        for (let list of [towers, barracks, collectorSpawners]) {
+            let target = _findClosestHostileStructure(this, list, this.preComputed.attackRange + 1, null,
+                building => !building.underConstruction && _isTargetWithinUnitAttackAreaRange(this, building));
+            if (target) { this._performAttackOnBuilding(target); return; }
+        }
+        let range = Math.ceil((Number(this.preComputed.attackRange) || 0) / TILE) + 1;
+        let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
+        for (let y = Math.max(0, gy - range); y <= Math.min(GRID_H - 1, gy + range); y++) {
+            for (let x = Math.max(0, gx - range); x <= Math.min(GRID_W - 1, gx + range); x++) {
+                let cell = grid[y][x], item = cell && cell.item;
+                if (!item || cell.owner === this.owner || item.energy <= 0 || item.underConstruction) continue;
+                if (_isHostileThingVisibleToUnit(this, item) && _isTargetWithinUnitAttackAreaRange(this, item)) {
+                    this._performAttackOnBuilding(item);
+                    return;
+                }
+            }
+        }
     }
 
     followPath(spd) {
@@ -1237,7 +1260,7 @@ function canUnitAutoRetaliate(unit) {
         unit &&
         !unit.dead &&
         !unit.workerState &&
-        (unit.commandState === CMD_IDLE || unit.commandState === CMD_HOLDING) &&
+        unit.commandState === CMD_IDLE &&
         Number(unit.preComputed && unit.preComputed.attackDamage) > 0 &&
         Number(unit.preComputed && unit.preComputed.attackRangeArea) > 0
     );

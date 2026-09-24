@@ -8,6 +8,10 @@ let candidates = [];
 const attacks = [];
 const context = {
     TILE: 32,
+    GRID_W: 1, GRID_H: 1, grid: [[{}]],
+    towers: [], barracks: [], collectorSpawners: [],
+    gameTime: 1, pathTopologyVersion: 1, localPlayerId: 0,
+    getRawVisibilityGridForPlayer: () => [[1]],
     getAreaIdAtWorld: () => 0,
     getAreaDistance: () => 0,
     isGameplayTargetVisibleToPlayer: (_owner, gx) => gx !== 9,
@@ -68,4 +72,25 @@ worker.workerState = 'MANUAL_MOVE';
 worker.tryDriveByAttack();
 assert.deepEqual(attacks, [3, 3, 3], 'working units do not attack');
 
-console.log('PASS: travelling attacks preserve routes, cooldowns, and deterministic target choice.');
+const holding = vm.runInContext('CMD_HOLDING', context);
+const sentry = makeUnit();
+sentry.commandState = holding;
+sentry.preComputed.attackRange = 32;
+const heldPath = sentry.path;
+sentry.doHolding();
+assert.deepEqual(attacks, [3, 3, 3, 3], 'holding units attack visible enemies in range');
+assert.equal(sentry.commandState, holding);
+assert.equal(sentry.path, heldPath, 'hold attacks never replace the movement order');
+assert.equal(vm.runInContext('canUnitAutoRetaliate', context)(sentry), false,
+    'damage cannot make a holding unit chase its attacker');
+
+candidates = [];
+const tower = { owner: 1, energy: 10, x: 4, y: 0, gx: 0, gy: 0 };
+context.towers.push(tower);
+sentry.attackTimer = 0;
+sentry._performAttackOnBuilding = target => { assert.equal(target, tower); attacks.push('tower'); };
+sentry.doHolding();
+assert.equal(attacks.at(-1), 'tower', 'holding units attack hostile structures in range');
+assert.equal(sentry.commandState, holding);
+
+console.log('PASS: travelling and holding attacks respect range, cooldowns, fixed positions, and deterministic targets.');
