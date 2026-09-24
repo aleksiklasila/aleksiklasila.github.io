@@ -125,7 +125,8 @@ assert.ok(resumed, 'partial cache makes progress under a small deterministic bud
 assert.equal(resumed.length, 216);
 assert.ok(deferred._isPathValidForScenario(resumed, 145, 85, 5, 10, false, null, 0, true));
 
-const unitContext = vm.createContext({ TILE: 32 });
+const unitGrid = Array.from({ length: 100 }, () => Array.from({ length: 160 }, () => ({ type: 0 })));
+const unitContext = vm.createContext({ TILE: 32, GRID_W: 160, GRID_H: 100, TYPE_WALL: 1, grid: unitGrid });
 vm.runInContext(read('src/things/unit.js'), unitContext);
 
 // Follow the real shared paths with 1000 units. Each reaches the target tile,
@@ -159,20 +160,47 @@ function shoved(x, y = 4, routePath = shovePath) {
         path: routePath, pathIndex: 1
     });
 }
+function setCorridor(walled) {
+    for (let x = 0; x < 12; x++) unitGrid[3][x].type = unitGrid[5][x].type = walled ? 1 : 0;
+}
+// Open terrain is a corridor: every node whose 3x3 block holds the unit
+// counts as reached, so a unit skirts beside the exact tiles.
+for (const [x, y, index] of [[2, 4, 4], [4, 4, 6], [7, 4, 8], [4, 5, 6], [4, 3, 6], [8, 4, 9]]) {
+    const u = shoved(x, y), before = chargedEdges;
+    u.followPath(4);
+    assert.equal(u.pathIndex, index, `open ${x},${y}`);
+    assert.ok(u.vx > 0, 'steer forward after displacement');
+    assert.equal(chargedEdges - before, index - 1, 'each consumed edge is charged once');
+    assert.equal(u.path, shovePath);
+    u.followPath(4);
+    assert.equal(chargedEdges - before, u.pathIndex - 1, 'subsequent ticks never recharge consumed nodes');
+}
+for (const [x, y] of [[4, 6], [4, 2], [0, 6]]) {
+    const u = shoved(x, y);
+    u.followPath(4);
+    assert.equal(u.pathIndex, 1, 'two tiles off the route is not on it');
+}
+// Inside a one-tile corridor only the exact tiles count, as before.
+setCorridor(true);
 for (const tile of [2, 4, 7]) {
     const u = shoved(tile), before = chargedEdges;
     u.followPath(4);
     assert.equal(u.pathIndex, tile + 1);
-    assert.ok(u.vx > 0, 'steer forward after displacement');
-    assert.equal(chargedEdges - before, tile, 'each consumed edge is charged once');
-    assert.equal(u.path, shovePath);
-    u.followPath(4);
-    assert.equal(chargedEdges - before, tile, 'subsequent ticks do not recharge skipped nodes');
+    assert.equal(chargedEdges - before, tile);
 }
-for (const [x, y] of [[0, 4], [4, 5], [8, 4]]) {
+for (const [x, y] of [[0, 4], [8, 4]]) {
     const u = shoved(x, y);
     u.followPath(4);
-    assert.equal(u.pathIndex, 1, 'previous, off-route and beyond-lookahead tiles do not skip');
+    assert.equal(u.pathIndex, 1, 'previous and beyond-lookahead tiles do not skip in a corridor');
+}
+setCorridor(false);
+// Keep the side offset in open terrain rather than converging on the center.
+{
+    const u = shoved(3, 4);
+    u.y += 20;
+    u.followPath(2);
+    assert.ok(u.y > 4 * 32 + 16 + 10, 'a unit beside the route stays beside it');
+    assert.ok(u.vx > 1.8, 'and keeps moving along it');
 }
 const shortPath = shovePath.slice(0, 5);
 const atEnd = shoved(4, 4, shortPath);
@@ -183,6 +211,47 @@ const acrossPortal = shoved(21, 4, portalPath);
 acrossPortal.followPath(4);
 assert.equal(acrossPortal.pathIndex, 1, 'local recovery never skips a nonlocal portal edge');
 assert.deepEqual(shovePath, Array.from({ length: 12 }, (_, x) => ({ x, y: 4 })));
+
+// A crowd sharing one diagonal route flows as a wide column instead of a
+// single-file staircase, and replays bit-for-bit.
+function crowdRun() {
+    const route = [{ x: 10, y: 60 }];
+    for (let x = 10, y = 60; x !== 70 || y !== 10;) {
+        if (70 - x >= y - 10 && x !== 70) x++; else y--;
+        route.push({ x, y });
+    }
+    unitContext.canUnitOccupyTile = (u, x, y) => x >= 0 && y >= 0 && x < 160 && y < 100 && unitGrid[y][x].type !== 1;
+    const separate = vm.runInContext('applyUnitSeparation', unitContext);
+    const crowd = Array.from({ length: 150 }, (_, i) => Object.assign(Object.create(Unit.prototype), {
+        id: i, owner: 0, r: 7, x: (2 + i % 15) * 32 + 16 + i % 5, y: (50 + Math.floor(i / 15)) * 32 + 16 + i % 3,
+        path: route, pathIndex: 1, getCollisionRadius: () => 9, done: false
+    }));
+    let done = 0, tick = 0;
+    for (; tick < 4000 && done < crowd.length; tick++) {
+        for (const u of crowd) {
+            if (u.done) continue;
+            u.followPath(3.2);
+            if (u.pathIndex >= route.length - 3) { u.done = true; done++; continue; }
+            let px = 0, py = 0, overlap = 0;
+            for (const o of crowd) {
+                if (o === u || o.done) continue;
+                const dx = u.x - o.x, dy = u.y - o.y, d2 = dx * dx + dy * dy;
+                if (d2 >= 324 || d2 < 1e-6) continue;
+                const d = Math.sqrt(d2);
+                px += dx / d * (18 - d) * .6; py += dy / d * (18 - d) * .6; overlap = Math.max(overlap, 18 - d);
+            }
+            if (px || py) separate(u, px, py, overlap);
+            u.x = Math.round(u.x * 8) / 8; u.y = Math.round(u.y * 8) / 8;
+        }
+    }
+    return { tick, done, state: JSON.stringify(crowd.map(u => [u.x, u.y, u.pathIndex])) };
+}
+const crowdA = crowdRun(), crowdB = crowdRun();
+assert.equal(crowdA.done, 150, 'the whole crowd passes along the route');
+// 110 route tiles at 3.2px/tick is ~1100 ticks for the lead; a single-file
+// column of 150 units took several times longer.
+assert.ok(crowdA.tick < 2600, `crowd throughput: ${crowdA.tick} ticks`);
+assert.deepEqual(crowdB, crowdA, 'crowd movement replays deterministically');
 
 // Report timing, assert deterministic work counts rather than machine speed.
 const benchmark = world();

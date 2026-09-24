@@ -363,6 +363,14 @@ function _ensureAstarLogPlayer(owner) {
     return astarUsageEventLogByPlayer[idx];
 }
 
+// Drop expired rows with one splice; repeated shift() is O(n) per row.
+function _pruneTickLogBucket(bucket, pruneBefore) {
+    if (!bucket.length || !(Number(bucket[0].tick) < pruneBefore)) return;
+    let drop = 1;
+    while (drop < bucket.length && Number(bucket[drop].tick) < pruneBefore) drop++;
+    bucket.splice(0, drop);
+}
+
 function _astarMetricKeyForUnitType(unitType) {
     if (unitType === 'king') return 'king';
     if (unitType === 'collector') return 'collector';
@@ -480,7 +488,7 @@ function recordEnergyDelta(owner, source, delta) {
     if (!bucket) return;
     bucket.push({ tick: gameTime, source: String(source || ''), delta: d });
     let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ENERGY_DELTA_LOG_MAX_SECONDS));
-    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+    _pruneTickLogBucket(bucket, pruneBefore);
 }
 
 function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
@@ -492,7 +500,7 @@ function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
     let cutoffTick = gameTime - windowTicks;
 
     let pruneBefore = gameTime - Math.max(windowTicks * 2, Math.floor(TICK_RATE * ENERGY_DELTA_LOG_MAX_SECONDS));
-    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+    _pruneTickLogBucket(bucket, pruneBefore);
 
     let sum = 0;
     for (let i = 0; i < bucket.length; i++) {
@@ -532,8 +540,7 @@ function recordAstarDelta(owner, delta, unit = null, sourceTag = null) {
         delta: d,
     });
 
-    let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
-    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+    _pruneTickLogBucket(bucket, gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
 }
 
 function buildInfoPanelEnergyDeltaHtml(owner) {
@@ -637,7 +644,7 @@ function _getPlayerAstarDeltaRate(owner, windowSeconds, matcherFn) {
     let windowTicks = Math.max(1, Math.floor(TICK_RATE * sec));
     let cutoffTick = gameTime - windowTicks;
     let pruneBefore = gameTime - Math.max(windowTicks * 2, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
-    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+    _pruneTickLogBucket(bucket, pruneBefore);
     let sum = 0;
     for (let i = 0; i < bucket.length; i++) {
         let ev = bucket[i];

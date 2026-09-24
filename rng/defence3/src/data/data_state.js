@@ -27,6 +27,7 @@ const TILE_ENTITY_ASTARMINE = 'astarmine';
 let tileEntityType = []; // 2D lookup [y][x] -> string type
 let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
 let _activeTileEntities = new Set();
+let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
 let _adjacencyDirtyTiles = new Set();
 let _adjacencyNeedsRecalc = true;
 let _adjacencyDirtyAll = true;
@@ -389,6 +390,7 @@ function initTileEntityLookup() {
     tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
     tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
     _activeTileEntities = new Set();
+    _tileEntityVersion++;
     requestAdjacencyRecalc();
 }
 
@@ -400,6 +402,7 @@ function setTileEntity(gx, gy, type, ref) {
     tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = ref || null;
     if (ref) _activeTileEntities.add(ref);
+    _tileEntityVersion++;
     _markAdjacencyDirtyAt(gx, gy, 1);
 }
 
@@ -409,6 +412,7 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     if (expectedRef && tileEntityRef[gy][gx] !== expectedRef) return;
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef) _activeTileEntities.delete(prevRef);
+    _tileEntityVersion++;
     tileEntityType[gy][gx] = TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = null;
     let tileIndex = gy * GRID_W + gx;

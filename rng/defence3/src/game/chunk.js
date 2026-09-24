@@ -171,6 +171,24 @@ function _removeUnitFromSpatialArray(arr, u) {
     return false;
 }
 
+// Area buckets also count members per owner, so enemy scans can skip areas
+// that hold only the scanning player's units (e.g. a large friendly army).
+function _addUnitToAreaBucket(bucket, u) {
+    if (!_addUnitToSpatialArray(bucket, u)) return;
+    let counts = bucket._ownerCounts || (bucket._ownerCounts = new Map());
+    counts.set(u.owner, (counts.get(u.owner) || 0) + 1);
+    u._spatialAreaOwner = u.owner;
+}
+
+function _removeUnitFromAreaBucket(bucket, u) {
+    if (!_removeUnitFromSpatialArray(bucket, u)) return;
+    let counts = bucket._ownerCounts;
+    if (!counts) return;
+    let n = (counts.get(u._spatialAreaOwner) || 0) - 1;
+    if (n > 0) counts.set(u._spatialAreaOwner, n);
+    else counts.delete(u._spatialAreaOwner);
+}
+
 function getSpatialKey(wx, wy) {
     let cx = Math.floor(wx / (CHUNK_SIZE * TILE));
     let cy = Math.floor(wy / (CHUNK_SIZE * TILE));
@@ -183,10 +201,10 @@ function updateUnitSpatial(u) {
     let newAreaId = getAreaIdAtWorld(u.x, u.y);
     let prevScaled = Number.isFinite(u._spatialLastVisScaled) ? (u._spatialLastVisScaled | 0) : _getSpatialUnitVisibilityScaled(u);
     let currentScaled = _getSpatialUnitVisibilityScaled(u);
-    if (u._spatialAreaId !== undefined && u._spatialAreaId !== newAreaId) {
+    if (u._spatialAreaId !== undefined && (u._spatialAreaId !== newAreaId || u._spatialAreaOwner !== u.owner)) {
         let oldAreaId = u._spatialAreaId;
         if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
-            _removeUnitFromSpatialArray(spatialUnitsByArea[oldAreaId], u);
+            _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
         }
     }
     if (u._spatialKey !== undefined && u._spatialKey !== newKey) {
@@ -214,7 +232,7 @@ function updateUnitSpatial(u) {
     }
     if (u._spatialKey === newKey) {
         _addUnitToSpatialArray(spatialUnits[newKey], u);
-        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToSpatialArray(spatialUnitsByArea[newAreaId], u);
+        if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
         let ownerSame = Math.floor(Number(u.owner));
         if (ownerSame >= 0 && ownerSame < spatialUnitsComplexPlayerCount) {
             _updateSpatialMaxUnitVisibilityForChunkPlayerWithPrevious(newKey, ownerSame, prevScaled, currentScaled);
@@ -225,7 +243,7 @@ function updateUnitSpatial(u) {
         return;
     }
     _addUnitToSpatialArray(spatialUnits[newKey], u);
-    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToSpatialArray(spatialUnitsByArea[newAreaId], u);
+    if (newAreaId >= 0 && newAreaId < spatialUnitsByArea.length) _addUnitToAreaBucket(spatialUnitsByArea[newAreaId], u);
     let owner = Math.floor(Number(u.owner));
     if (owner >= 0 && owner < spatialUnitsComplexPlayerCount) {
         let typeIdx = spatialUnitTypeToIndex[u.unitType];
@@ -273,7 +291,7 @@ function removeUnitSpatial(u) {
     if (u._spatialAreaId !== undefined) {
         let oldAreaId = u._spatialAreaId;
         if (oldAreaId >= 0 && oldAreaId < spatialUnitsByArea.length) {
-            _removeUnitFromSpatialArray(spatialUnitsByArea[oldAreaId], u);
+            _removeUnitFromAreaBucket(spatialUnitsByArea[oldAreaId], u);
         }
         u._spatialAreaId = undefined;
     }
@@ -300,6 +318,7 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
         let areaId = areaIds[i];
         let bucket = spatialUnitsByArea[areaId];
         if (!bucket || bucket.length <= 0) continue;
+        if (enemyFilter >= 0 && bucket._ownerCounts && bucket._ownerCounts.get(enemyFilter) === bucket.length) continue;
         for (let u of bucket) {
             if (!includeDead && u.dead) continue;
             if (playerFilter >= 0 && u.owner !== playerFilter) continue;

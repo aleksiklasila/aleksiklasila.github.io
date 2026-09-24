@@ -238,19 +238,29 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
     let unitId = (unit && Number.isFinite(Number(unit.id)))
         ? Math.floor(Number(unit.id))
         : (Number.isFinite(Number(_activePathfindUnitId)) ? Math.floor(Number(_activePathfindUnitId)) : null);
+    let source = String(sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED);
+    // Movement records one spend per unit step. Readers only sum by tick,
+    // type and source, so merge same-tick rows instead of logging each step.
+    for (let i = bucket.length - 1, seen = 0; i >= 0 && seen < 8; i--, seen++) {
+        let ev = bucket[i];
+        if (ev.tick !== gameTime) break;
+        if (ev.unitType !== unitType || ev.source !== source) continue;
+        ev.used += used;
+        ev.delta -= used;
+        return;
+    }
     bucket.push({
         tick: gameTime,
         owner: pid,
         unitType,
         unitMetric,
         unitId,
-        source: String(sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED),
+        source,
         used,
         delta: -used,
     });
 
-    let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
-    while (bucket.length > 0 && Number(bucket[0].tick) < pruneBefore) bucket.shift();
+    _pruneTickLogBucket(bucket, gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
 }
 
 function _withPathfindContext(source, owner, unit, fn) {

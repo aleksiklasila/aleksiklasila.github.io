@@ -26,20 +26,15 @@ for(let tick=0;tick<45;tick++) {
     for(const key of ['x','y','life','vx','vy','dmg','sourceOwner']) assert.equal(restored[key],original[key]);
 }
 const omit=vm.runInContext(source.match(/snapshotEntity\(u, (\[[\s\S]*?\])/)[1],c);
-const tail=[{x:4,y:8}];
-const unit={id:1,energy:20,snakeHistory:tail,snakeRecordTimer:2};
+const unit={id:1,energy:20,_spatialKey:7};
 const saved=c.snapshotEntity(unit,omit);
 assert.equal(saved.energy,20);
-assert.equal('snakeHistory' in saved,false);
-assert.equal('snakeRecordTimer' in saved,false);
-const restoreUnit=source.slice(source.indexOf('        if (u.isSnake) {',source.indexOf('function applyAuthoritativeStateSnapshot')),source.indexOf('        u.targetUnit = null;',source.indexOf('function applyAuthoritativeStateSnapshot')));
-c.u={id:1,isSnake:true};c.localSnakeVisuals=new Map([[1,{snakeHistory:tail,snakeRecordTimer:2}]]);
-vm.runInContext(restoreUnit,c);
-assert.equal(c.u.snakeHistory,tail,'resync reuses this client\'s tail samples');
+assert.equal('_spatialKey' in saved,false);
+assert.ok(!source.includes('snakeHistory'),'snakes keep no tail samples to preserve across resyncs');
 const applyWhole=source.slice(source.indexOf('function applyAuthoritativeStateSnapshot('),source.indexOf('\nfunction ',source.indexOf('function applyAuthoritativeStateSnapshot(')+1));
 assert.ok(!applyWhole.includes('visibilityHistoryState = null'));
 assert.ok(!applyWhole.includes('particles = []'));
 assert.ok(!source.includes('visualRngState'));
 const particle=vm.createContext({visualRng:null,rng:()=>{throw Error('visuals consumed gameplay RNG');}});
 vm.runInContext(read('src/things/particle.js')+'\nnew Particle(0,0,"red");',particle);
-console.log('PASS: gameplay projectiles survive snapshots; local history, snake trails, particles and visual RNG stay client-side.');
+console.log('PASS: gameplay projectiles survive snapshots; local history, particles and visual RNG stay client-side.');

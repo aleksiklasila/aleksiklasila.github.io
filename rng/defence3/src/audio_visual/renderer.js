@@ -25,6 +25,7 @@ let renderer3dLayerContexts = new Map();
 let renderer3dLayerStats = new Map();
 let visibilityGridRawByPlayerCache = new Map();
 let visibilityCacheTick = -1;
+const visibilityGridPoolByPlayer = new Map();
 const VISIBILITY_LIGHT_CELL_SIZE = 4;
 const VISIBILITY_LIGHT_NORMALIZATION_RANGE = 6;
 const VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
@@ -450,10 +451,10 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
         // Units are collected after buildings. Give them a separate raster
         // budget so a dense base cannot permanently starve every unit panel.
         if (useUnitBudget) {
-            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) return null;
+            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) return get3DExact2DFallbackTexture(entity, true);
             renderer3dExactUnitTextureBuildsRemaining--;
         } else {
-            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return null;
+            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) return get3DExact2DFallbackTexture(entity, false);
             renderer3dExactTextureBuildsRemaining--;
         }
         let canvas = document.createElement('canvas');
@@ -463,7 +464,10 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
         entry = { canvas, ctx: canvas.getContext('2d') };
         cache3DExact2DTexture(signature, entry);
     }
-    if (entry.canvas._textureVersion) return entry.canvas;
+    if (entry.canvas._textureVersion) {
+        renderer3dLastExactTextures.set(entity, entry.canvas);
+        return entry.canvas;
+    }
     let buildStarted = performance.now();
     let g = entry.ctx;
     if (!g) return null;
@@ -486,22 +490,67 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
     g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
     g.save();
     g.__drawImagesImmediately = true;
-    // The snake's moving tail is already rendered as world-space segments.
-    // It must not be rasterized into (or stale inside) the shared head panel.
-    g.__snakeHeadOnly = !!(useUnitBudget && entity.isSnake);
     g.setTransform(
         scale, 0, 0, scale,
         entry.canvas.width * 0.5 - capture.centerX * scale,
         entry.canvas.height * 0.5 - capture.centerY * scale
     );
     entity.draw(g);
-    g.__snakeHeadOnly = false;
     g.restore();
     g.__drawImagesImmediately = false;
     entry.canvas._textureVersion = 1;
+    renderer3dLastExactTextures.set(entity, entry.canvas);
     let buildTime = performance.now() - buildStarted;
     if (useUnitBudget) renderer3dExactUnitTextureTimeRemaining -= buildTime;
     else renderer3dExactTextureTimeRemaining -= buildTime;
+    return entry.canvas;
+}
+
+// While the raster budget is spent, keep showing the 2D look rather than a
+// generic boxed placeholder: first the entity's own previous panel (at most
+// a few frames stale), else for units the plain 2D body at the same framing,
+// shared by every unit of that type, owner and footprint.
+const renderer3dLastExactTextures = new WeakMap();
+
+function get3DExact2DFallbackTexture(entity, isUnit) {
+    let previous = renderer3dLastExactTextures.get(entity);
+    if (previous && previous._textureVersion) return previous;
+    if (!isUnit) return null;
+    let x = Number(entity.x) || 0, y = Number(entity.y) || 0;
+    let capture = get3DExact2DCapture(entity, x, y, true);
+    let signature = `body|${entity.unitType || ''}|${Number(entity.owner) || 0}|${entity.vis || ''}|${entity.color || ''}|`
+        + `${Math.round((Number(entity.r) || 0) * 10)}|${entity.carryingValue > 0 ? 1 : 0}|`
+        + `${Math.round(capture.extent * 4)}|${Math.round((capture.centerX - x) * 4)}|${Math.round((capture.centerY - y) * 4)}`;
+    let entry = getCached3DExact2DTexture(signature);
+    if (entry && entry.canvas._textureVersion) return entry.canvas;
+    if (!entry) {
+        let canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._renderer3DExactKey = `2d:${signature}`;
+        entry = { canvas, ctx: canvas.getContext('2d') };
+        cache3DExact2DTexture(signature, entry);
+    }
+    let g = entry.ctx;
+    if (!g) return null;
+    let scale = (entry.canvas.width - 8) / Math.max(1, capture.extent);
+    entry.canvas._flatWorldSize = entry.canvas.width / scale / TILE;
+    entry.canvas._flatOffsetZ = (capture.centerY - y) / TILE;
+    g.imageSmoothingEnabled = false;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(
+        scale, 0, 0, scale,
+        entry.canvas.width * 0.5 - capture.centerX * scale,
+        entry.canvas.height * 0.5 - capture.centerY * scale
+    );
+    let ownerId = Number(entity.owner);
+    drawUnitBodyGeometry(g, entity, ownerId >= 0 ? get2DRenderOwnerColor(ownerId) : '#000', 1);
+    g.restore();
+    g.__drawImagesImmediately = false;
+    entry.canvas._textureVersion = 1;
     return entry.canvas;
 }
 
@@ -808,43 +857,6 @@ function get3DUnitTopTexture(unitOrType, owner, statusOptions = null) {
         }
         draw3DTopTextureStatus(g, statusOptions);
     });
-}
-
-function get3DSnakeBodyTopTexture(owner, segmentIndex = 0) {
-    let ownerColor = get3DRenderOwnerColor(owner);
-    let shade = Math.max(0, Math.min(255, 120 - segmentIndex * 8));
-    let stripe = `rgb(${shade},${Math.max(40, shade - 30)},${Math.max(20, shade - 60)})`;
-    let key = `snake_body:${owner}:${segmentIndex}`;
-    return get3DTopTextureCanvas(key, (g) => {
-        let size = g.canvas.width;
-        let inset = Math.round(size * 0.12);
-        let innerSize = size - inset * 2;
-        g.fillStyle = 'rgba(0,0,0,0.45)';
-        g.fillRect(inset, inset, innerSize, innerSize);
-        g.strokeStyle = ownerColor;
-        g.lineWidth = 3;
-        g.strokeRect(inset + 0.5, inset + 0.5, innerSize - 1, innerSize - 1);
-        g.fillStyle = '#0f0';
-        g.fillRect(size * 0.28, size * 0.28, size * 0.44, size * 0.44);
-        g.fillStyle = stripe;
-        g.fillRect(size * 0.28, size * 0.34, size * 0.44, size * 0.1);
-        g.fillRect(size * 0.28, size * 0.56, size * 0.44, size * 0.08);
-    });
-}
-
-function getFlatSnakeBodyAtlas(owner) {
-    const key = `flat_snake_body:${owner}:${get3DRenderOwnerColor(owner)}`;
-    let canvas = renderer3dTopTextureCache.get(key);
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE * 6;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        const ctx = canvas.getContext('2d');
-        for (let i = 1; i <= 6; i++) ctx.drawImage(get3DSnakeBodyTopTexture(owner, i), (i - 1) * RENDERER3D_TOP_TEXTURE_SIZE, 0);
-        canvas._renderer3DExactKey = key;
-        renderer3dTopTextureCache.set(key, canvas);
-    }
-    return canvas;
 }
 
 function get3DBuildingTopTexture(kind, owner, options = {}) {
@@ -1438,62 +1450,18 @@ function build3DFrameData(flat2d = false) {
         let bucket = ((id * 1103515245) >>> 0) % 7;
         return 0.012 + bucket * 0.003;
     };
-    let getSnakePathPoints = (unit, headX, headY) => {
-        let points = [{ x: headX, y: headY }];
-        if (!unit || !Array.isArray(unit.snakeHistory) || unit.snakeHistory.length <= 0) return points;
-        let lastX = headX;
-        let lastY = headY;
-        let minSpacing = Math.max(6, (Number(unit.r) || 7) * 1.1);
-        for (let point of unit.snakeHistory) {
-            if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-            const dx = point.x - lastX, dy = point.y - lastY;
-            if (dx * dx + dy * dy < minSpacing * minSpacing) continue;
-            points.push(point);
-            lastX = point.x;
-            lastY = point.y;
-            if (points.length >= 7) break;
-        }
-        return points;
-    };
     let getTileLightLevel = (gx, gy) => {
         if (fullVisibility) return 1;
         let lighting = visibilityGrid;
         let raw = (lighting[gy] && lighting[gy][gx]) || 0;
         return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
     };
+    // Snakes render as their head only. The mounted panel is part of the
+    // model: uniform footprint scale keeps it square, and it turns with it.
     let pushSnakeRenderObjects = (target, unit, headX, headY, footprint) => {
-        let points = getSnakePathPoints(unit, headX, headY);
         let ownerTint = get3DDamageFlashTint(unit, get3DRenderOwnerColor(unit.owner));
         const sideTint = get3DDamageFlashTint(unit, '#3dff64');
         const heightOffset = getUnitHeightOffset(unit);
-        const tailAtlas = flat2d ? getFlatSnakeBodyAtlas(unit.owner) : null;
-        for (let i = points.length - 1; i >= 1; i--) {
-            let point = points[i];
-            let prev = points[i - 1];
-            let age = i / Math.max(1, points.length - 1);
-            let dx = prev.x - point.x;
-            let dy = prev.y - point.y;
-            let segmentLen = Math.max(0.18, Math.min(0.55, Math.hypot(dx, dy) / TILE * 0.9));
-            let width = Math.max(0.14, footprint * (0.55 - age * 0.2));
-            push3DRenderObject(target, {
-                modelKey: 'snake_segment',
-                pickSource: unit,
-                x: point.x / TILE,
-                y: heightOffset * (0.6 - age * 0.12),
-                z: point.y / TILE,
-                scaleX: width,
-                scaleY: Math.max(0.12, width * 0.42),
-                scaleZ: Math.max(width * 0.9, segmentLen),
-                rotationY: Math.atan2(dx, dy),
-                tint: ownerTint,
-                alpha: Math.max(0.35, 0.78 - age * 0.18),
-                renderShape: 'cylinder',
-                topTextureKey: tailAtlas ? tailAtlas._renderer3DExactKey : `snake_body:${unit.owner}:${i}`,
-                topTextureCanvas: tailAtlas || get3DSnakeBodyTopTexture(unit.owner, i),
-                topTextureUv: tailAtlas ? [(i - 1) / 6, 0, 1 / 6, 1] : null,
-                sideTint,
-            });
-        }
         let snake2DTexture = get3DExact2DTexture(unit, true);
         let unitStatus = snake2DTexture ? null : get3DUnitTextureStatus(unit);
         let snakeTextureKey = snake2DTexture ? snake2DTexture._renderer3DExactKey : `unit:${unit.unitType || 'snake'}:${unit.owner}:${unitStatus.keySuffix || ''}`;
@@ -1504,7 +1472,7 @@ function build3DFrameData(flat2d = false) {
             z: headY / TILE,
             scaleX: footprint,
             scaleY: Math.max(0.24, footprint * 0.52),
-            scaleZ: Math.max(0.34, footprint * 1.3),
+            scaleZ: footprint,
             visibilitySource: unit,
             rotationY: Math.atan2(Number(unit.vx) || 0, Number(unit.vy) || 1),
             tint: ownerTint,
@@ -2192,6 +2160,23 @@ function createEmptyVisibilityGrid() {
 }
 
 let visibilityIncludedTilesScratch = [];
+let _visibilityFloorItemCandidates = [];
+let _visibilityFloorItemCandidatesVersion = -1;
+let _visibilityFloorItemCandidatesSet = null;
+
+function _getVisibilityFloorItemCandidates() {
+    if (_visibilityFloorItemCandidatesVersion === _tileEntityVersion &&
+        _visibilityFloorItemCandidatesSet === _activeTileEntities) return _visibilityFloorItemCandidates;
+    let list = [];
+    for (let item of _activeTileEntities) {
+        let cell = grid[item.gy] && grid[item.gy][item.gx];
+        if (cell && cell.item === item) list.push(item);
+    }
+    _visibilityFloorItemCandidates = list;
+    _visibilityFloorItemCandidatesVersion = _tileEntityVersion;
+    _visibilityFloorItemCandidatesSet = _activeTileEntities;
+    return list;
+}
 
 function computeVisibilityGridForPlayer(playerId, vis) {
     for (let y = 0; y < GRID_H; y++) vis[y].fill(0);
@@ -2233,7 +2218,9 @@ function computeVisibilityGridForPlayer(playerId, vis) {
             }
         }
     };
+    let hasSource = false;
     let addWorldVisibilitySource = (wx, wy, rangeArea) => {
+        hasSource = true;
         let x = Number(wx);
         let y = Number(wy);
         let range = Math.max(0, Number(rangeArea) || 0);
@@ -2282,13 +2269,19 @@ function computeVisibilityGridForPlayer(playerId, vis) {
     if (typeof _activeTileEntities !== 'undefined') {
         // The live tile index includes floor items; avoid a world scan for
         // every player's visibility. Source stamping is an order-independent max.
-        for (let item of _activeTileEntities) {
+        // Most indexed entities are resource mines, which are never cell items;
+        // keep the floor-item subset per index version rather than per player.
+        for (let item of _getVisibilityFloorItemCandidates()) {
             let cell = grid[item.gy] && grid[item.gy][item.gx];
             if (cell && cell.item === item) revealFloorItem(cell, item.gx, item.gy);
         }
     } else {
         for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) revealFloorItem(grid[y][x], x, y);
     }
+
+    // Players without sources (empty slots, eliminated teams) see nothing;
+    // the grid is already cleared, so skip the union and both sweeps.
+    if (!hasSource) return;
 
     // The range caches contain whole areas. Union area ids first so hundreds
     // of overlapping sources do not repeatedly walk the same tile arrays.
@@ -2355,7 +2348,16 @@ function getRawVisibilityGridForPlayer(playerId) {
     }
     let cachedRaw = visibilityGridRawByPlayerCache.get(pid);
     if (cachedRaw) return cachedRaw;
-    let rawVis = createEmptyVisibilityGrid();
+    // Every player is recomputed each tick. Alternate two grids per player
+    // instead of allocating rows each time; the computation clears the grid,
+    // and a grid handed out last tick (e.g. the render grid) stays intact.
+    let pool = visibilityGridPoolByPlayer.get(pid);
+    if (!pool) visibilityGridPoolByPlayer.set(pid, pool = { grids: [null, null], next: 0 });
+    let rawVis = pool.grids[pool.next];
+    if (!rawVis || rawVis.length !== GRID_H || (GRID_H > 0 && rawVis[0].length !== GRID_W)) {
+        rawVis = pool.grids[pool.next] = createEmptyVisibilityGrid();
+    }
+    pool.next ^= 1;
     computeVisibilityGridForPlayer(pid, rawVis);
     visibilityGridRawByPlayerCache.set(pid, rawVis);
     return rawVis;

@@ -96,7 +96,6 @@ function freezeHistoryRecord(record) {
     // Cached labels are shared sprites; retaining a reference needs no raster copy.
     copy.textCanvas = source.textCanvas;
     copy._textCanvasScale = source._textCanvasScale;
-    copy.snakeHistory = source.snakeHistory ? source.snakeHistory.map(p => ({ x: p.x, y: p.y })) : [];
     copy.connectedLasers = [];
     copy.path = copy.targetUnit = copy.targetBuilding = copy.attackTarget = copy.workerTarget = null;
     copy.x = copy.prevX = record.x; copy.y = copy.prevY = record.y;
@@ -151,7 +150,8 @@ function updateLocalVisibilityHistory(h) {
         cell.type = liveCell.type; cell.owner = liveCell.owner; cell.item = e;
     };
     if (typeof _activeTileEntities !== 'undefined') {
-        for (const e of _activeTileEntities) {
+        // Most indexed entities are mines; only cell items are floor items.
+        for (const e of _getVisibilityFloorItemCandidates()) {
             const cell = grid[e.gy] && grid[e.gy][e.gx];
             if (cell && cell.item === e) observeFloor(e, e.gx, e.gy);
         }
