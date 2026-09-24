@@ -148,8 +148,29 @@ function _setPlayerResourceValue(playerId, resourceKey, value) {
     nextValue = _fromFixedResourceUnits(fixedMap[stockpileKey]);
     player[stockpileKey] = nextValue;
     let changedResources = _updatePlayerResourcePenaltyMultipliers(pid);
-    for (let changedResourceKey of changedResources) rebuildPrecomputedStatsMapPlayerResource(pid, changedResourceKey);
+    // A negative stockpile changes its penalty on every spend. Movement spends
+    // per tile, so rebuilding here costs a full stat table per unit step.
+    // During play, coalesce into one rebuild at fixed tick boundaries (see
+    // gameTick). The rebuild reads live values, so it is idempotent and every
+    // peer sees identical stats at the same simulation points.
+    for (let changedResourceKey of changedResources) {
+        if (typeof gameStarted !== 'undefined' && gameStarted) _pendingResourceStatRebuilds.add(pid + '|' + changedResourceKey);
+        else rebuildPrecomputedStatsMapPlayerResource(pid, changedResourceKey);
+    }
     return player[stockpileKey];
+}
+
+const _pendingResourceStatRebuilds = new Set();
+
+function flushPendingResourceStatRebuilds() {
+    if (_pendingResourceStatRebuilds.size === 0) return;
+    // Sort for a stable rebuild order regardless of which spend came first.
+    let pending = Array.from(_pendingResourceStatRebuilds).sort();
+    _pendingResourceStatRebuilds.clear();
+    for (let entry of pending) {
+        let split = entry.indexOf('|');
+        rebuildPrecomputedStatsMapPlayerResource(Number(entry.slice(0, split)), entry.slice(split + 1));
+    }
 }
 
 function addPlayerResource(playerId, resourceKey, delta) {

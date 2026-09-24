@@ -560,22 +560,18 @@
             for (let side of [-1,1]) part(side*.34,.025,.19,.19,.09,.40,2,side,.20);
             panel(0,.465,-.03,.48,.46,true);
         } else if (kind === 'serpent') {
-            // The snake reads as a linked fantasy train: low chassis, wheels,
-            // and a boiler/cab, while the head keeps the canonical info panel.
-            part(0,.10,0,.82,.24,.92,0);
-            for (let side of [-1,1]) for (let end of [-1,1]) part(side*.42,.04,end*.27,.16,.20,.25,1);
-            if (weapon === 'car') {
-                part(0,.34,0,.68,.42,.72,0,0,0,.72);
-                part(0,.58,0,.54,.10,.58,2);
-                part(0,.34,.38,.56,.08,.06,3);
-            } else {
-                part(0,.36,-.08,.68,.48,.66,0,0,0,.75);
-                part(0,.55,-.25,.52,.35,.34,2,0,0,.55); // cab
-                part(0,.53,.38,.34,.42,.28,0,0,0,.42); // boiler nose
-                part(0,.83,.30,.15,.34,.15,2); // chimney
-                part(0,.25,.53,.76,.10,.22,2); // cowcatcher
-                panel(0,.88,-.18,.58,.54,true,0,0,true);
-            }
+            // The snake head reads as a fantasy train engine: low chassis,
+            // wheels and a boiler/cab. Its 2D panel is part of the model: square
+            // (the head is scaled uniformly), turning with it, and every part
+            // stays below it so no trim covers the canonical 2D render.
+            part(0,.10,0,.82,.24,1.10,0);
+            for (let side of [-1,1]) for (let end of [-1,1]) part(side*.42,.04,end*.33,.16,.20,.30,1);
+            part(0,.34,-.06,.68,.46,.80,0,0,0,.75);
+            part(0,.52,-.28,.52,.30,.40,2,0,0,.55); // cab
+            part(0,.50,.45,.34,.30,.34,0,0,0,.42); // boiler nose
+            part(0,.64,.50,.14,.20,.14,2); // chimney
+            part(0,.25,.64,.76,.10,.26,2); // cowcatcher
+            panel(0,.88,-.06,.66,.66,true);
         } else {
             part(0, 0, 0, 1, .12, 1, 1);
             part(0, .12, 0, .84, .075, .84, 2);
@@ -687,7 +683,6 @@
     function proceduralKind(object) {
         if (object.modelCandidates && object.modelCandidates.length) return null;
         let key = object.modelKey || '';
-        if (key === 'snake_segment') return 'serpent:car';
         if (key === 'unit_snake') return 'serpent:engine';
         if (key.startsWith('unit_')) {
             let weapon = String(object.weaponType || '');
@@ -1348,7 +1343,7 @@
                 'figure:sword', 'figure:dual_blades', 'figure:fire_blade', 'figure:water_trident', 'figure:ice_spear', 'figure:poison_scythe', 'figure:laser_staff',
                 'heavy:king_sword', 'heavy:great_axe', 'heavy:warhammer',
                 'worker:hammer', 'worker:pickaxe', 'worker:cutter',
-                'bird:talons', 'bird:healer_staff', 'bird:research_orb', 'mole:claws', 'serpent:car', 'serpent:engine',
+                'bird:talons', 'bird:healer_staff', 'bird:research_orb', 'mole:claws', 'serpent:engine',
                 'tower', 'tower:twin', 'tower:sniper', 'tower:energy', 'barrack', 'spawner', 'spawner:research', 'spawner:healer', 'item', 'item:relay', 'item:house', 'mine'
             ]) {
                 for (let simplified of [false, true]) {
@@ -2854,7 +2849,7 @@
                 gl.uniform1f(uniforms.animationMode, Number(objects[0].animationMode) || 0);
                 gl.uniform1f(uniforms.spriteLodBias, String(objects[0].topTextureKey).startsWith('2d:') ? -.5 : 0);
                 let key = objects[0].modelKey || '';
-                gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') || key === 'snake_segment' ? 1 : 0);
+                gl.uniform1f(uniforms.isUnit, key.startsWith('unit_') ? 1 : 0);
             }
             gl.bindVertexArray(mesh.vao);
             gl.uniformMatrix4fv(uniforms.viewProjection, false, this.tmpViewProjection);
@@ -2928,8 +2923,8 @@
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
-            // Consecutive runs preserve painter order, including translucent
-            // snake trails and overlapping labels. Never sort sprites by source.
+            // Consecutive runs preserve painter order, including overlapping
+            // labels. Never sort sprites by source.
             for (let start = 0; start < objects.length;) {
                 const first = objects[start];
                 const texture = first.topTextureCanvas;
@@ -2941,7 +2936,7 @@
                     const o = objects[i], source = o.topTextureCanvas;
                     const exact = source && source._flatWorldSize;
                     const unit = o.modelKey.startsWith('unit_');
-                    const tile = o.modelKey !== 'snake_segment' && !unit &&
+                    const tile = !unit &&
                         !o.modelKey.startsWith('projectile_') && !o.modelKey.startsWith('particle') && !o.modelKey.startsWith('dropped_');
                     const size = exact || (tile ? 1 : 0);
                     const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;

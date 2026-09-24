@@ -473,7 +473,6 @@
                 drawRoyal(g, size, palette, rows, version);
                 break;
             case 'snake':
-            case 'snake_segment':
                 drawSerpent(g, size, palette, rows, version, seed);
                 break;
             case 'tower_watch':

@@ -29,7 +29,7 @@ for (const weapon of [
 assert.match(renderer, /if \(activity\.mode === 3\) return;/);
 assert.match(renderer, /u\.unitType === 'collector'[\s\S]*?'#f0a52b'/);
 assert.match(renderer, /cell\.item\.type === 'house' \? 0\.82 : 0\.14/);
-assert.match(renderer3d, /return 'serpent:car'/);
+assert.doesNotMatch(renderer3d, /serpent:car|snake_segment/, 'snakes render their head only');
 assert.match(renderer3d, /return 'serpent:engine'/);
 assert.match(renderer3d, /return 'item:house'/);
 assert.match(renderer3d, /Paired medical booms are mounted to the wing roots/);

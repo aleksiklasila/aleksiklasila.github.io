@@ -997,7 +997,7 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
                 '_collectorPinnedTarget', '_collectorNextSpawner', '_collectorLastDropoffSpawner', '_lastMineTarget',
                 '_astarPinnedTarget', '_astarNextSpawner', '_astarLastMineTarget',
                 '_healerPinnedQueueTarget', '_healerQueueCommitTarget', '_builderSpawnerTarget', '_healerSpawnerTarget', '_researchSpawnerTarget',
-                '_spatialKey', 'snakeHistory', 'snakeRecordTimer'
+                '_spatialKey'
             ]);
             if (!snap) return null;
             snap.snapshotRefs = {
@@ -1136,9 +1136,6 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
     let now = performance.now();
     let uiStateBeforeApply = _captureSnapshotApplyUiState();
-    // Tail samples are local presentation, never part of authoritative state.
-    const localSnakeVisuals = new Map(units.filter(u => u.isSnake).map(u => [u.id,
-        { snakeHistory: u.snakeHistory, snakeRecordTimer: u.snakeRecordTimer }]));
 
     let incomingConfigHash = String((snapshot && snapshot.configHash) || '');
     let localConfigHash = buildRuntimeConfigHashForSnapshot();
@@ -1323,11 +1320,6 @@ function applyAuthoritativeStateSnapshot(snapshot) {
         if (!us || !Number.isFinite(us.x) || !Number.isFinite(us.y)) continue;
         let u = new Unit(String(us.unitType || 'norm'), Math.floor(Number(us.owner) || 0), Number(us.x), Number(us.y));
         Object.assign(u, cloneSnapshotValue(us));
-        if (u.isSnake) {
-            const visual = localSnakeVisuals.get(u.id);
-            u.snakeHistory = visual ? visual.snakeHistory : [];
-            u.snakeRecordTimer = visual ? visual.snakeRecordTimer : 0;
-        }
         u.targetUnit = null;
         u.targetBuilding = null;
         u.attackTarget = null;

@@ -132,6 +132,8 @@ function _isPathNodeRoomy(path, i) {
     return true;
 }
 
+const _unitCollisionCandidates = [];
+
 function _findNearbyCombatEnemy(unit, range) {
     let closest = null, best = range * range;
     // This refresh is already staggered by the caller. Do not use the older
@@ -187,7 +189,6 @@ class Unit {
         this.collisionR = Number.isFinite(s.collisionR) ? s.collisionR : this.r;
         this.turretImmune = s.turretImmune || false;
         this.isSnake = s.isSnake || false;
-        this.snakeMaxHistory = s.snakeMaxHistory || 0;
         this.poisonResistant = s.poisonResistant || false;
         this.fireResistant = s.fireResistant || false;
         this.waterResistant = s.waterResistant || false;
@@ -222,9 +223,6 @@ class Unit {
         this.wet = 0; this.sandy = 0; this.watched = 0; this.watchedByTeam = -1;
         this.vx = 0; this.vy = 0;
         this.workerTransferCooldown = 0;
-
-        // Snake
-        if (this.isSnake) { this.snakeHistory = []; this.snakeRecordTimer = 0; }
 
         this._spatialKey = undefined;
         applyUnitLevelScaling(this, 1);
@@ -350,16 +348,6 @@ class Unit {
         if (this.sandy > 0) spd *= 0.5;
         spd *= _getUnitAstarSpeedMultiplier(this);
 
-        // Snake history
-        if (this.isSnake) {
-            this.snakeRecordTimer++;
-            if (this.snakeRecordTimer >= 3) {
-                this.snakeRecordTimer = 0;
-                this.snakeHistory.unshift({ x: this.x, y: this.y });
-                if (this.snakeHistory.length > this.snakeMaxHistory) this.snakeHistory.pop();
-            }
-        }
-
         // Attack timer
         if (this.attackTimer > 0) this.attackTimer--;
         if (this.attackFlash > 0) this.attackFlash--;
@@ -416,25 +404,30 @@ class Unit {
             let sepRange = selfCollisionR * 2 + crossTeamCollisionPadding;
             let pushX = 0, pushY = 0, maxOverlap = 0;
             let myLayer = this.getCollisionLayer();
-            let collisionCandidates = [];
+            // Pooled entries: this runs for every moving unit every tick.
+            let collisionCandidates = _unitCollisionCandidates;
+            let candidateCount = 0;
             forEachUnitInRange(this.x, this.y, sepRange, (other, d2, dx, dy) => {
                 if (other === this || other.dead) return;
                 if (other.getCollisionLayer() !== myLayer) return;
                 let collisionPadding = other.owner === this.owner ? 0 : crossTeamCollisionPadding;
                 let minDist = selfCollisionR + other.getCollisionRadius() + collisionPadding;
                 if (d2 >= minDist * minDist) return;
-                collisionCandidates.push({ other, d2, dx, dy, minDist });
-            });
-            collisionCandidates.sort((a, b) => {
-                let ai = Math.floor(Number(a.other && a.other.id) || 0);
-                let bi = Math.floor(Number(b.other && b.other.id) || 0);
-                if (ai !== bi) return ai - bi;
-                let ax = Number(a.other && a.other.x) || 0, bx = Number(b.other && b.other.x) || 0;
-                if (ax !== bx) return ax - bx;
-                let ay = Number(a.other && a.other.y) || 0, by = Number(b.other && b.other.y) || 0;
-                return ay - by;
-            });
-            for (let entry of collisionCandidates) {
+                let entry = collisionCandidates[candidateCount] || (collisionCandidates[candidateCount] = {});
+                entry.other = other; entry.d2 = d2; entry.dx = dx; entry.dy = dy; entry.minDist = minDist;
+                entry.order = Math.floor(Number(other.id) || 0);
+                // Insertion sort by unit id (unique), independent of bucket order.
+                let i = candidateCount++;
+                while (i > 0 && collisionCandidates[i - 1].order > entry.order) {
+                    collisionCandidates[i] = collisionCandidates[i - 1];
+                    i--;
+                }
+                collisionCandidates[i] = entry;
+            // Buckets hold unit centers per tile, so chunks overlapping the
+            // range circle already contain every candidate; no extra padding.
+            }, { pad: 0 });
+            for (let c = 0; c < candidateCount; c++) {
+                let entry = collisionCandidates[c];
                 let other = entry.other;
                 let dx = -entry.dx;
                 let dy = -entry.dy;
@@ -469,6 +462,7 @@ class Unit {
                     pushX += nx * force;
                     pushY += ny * force;
                 }
+                entry.other = null;
             }
             if (pushX !== 0 || pushY !== 0) {
                 applyUnitSeparation(this, pushX, pushY, maxOverlap);
@@ -1767,43 +1761,11 @@ function drawCachedUnitStar(ctx, x, y, radius, color, strokeColor = '#000', line
     ctx.stroke(path);
     ctx.restore();
 }
-// Stream one live path. Removing duplicate and exactly collinear forward points
-// preserves the polyline while avoiding redundant round joins on straight tails.
-function buildSnakeTrailPath(ctx, unit) {
-    ctx.beginPath(); ctx.moveTo(unit.x, unit.y);
-    let ax = unit.x, ay = unit.y, bx = ax, by = ay;
-    let hasLength = false;
-    for (let p of unit.snakeHistory) {
-        if (p.x === bx && p.y === by) continue;
-        hasLength = true;
-        let dx = bx - ax, dy = by - ay, nx = p.x - bx, ny = p.y - by;
-        if (dx * ny !== dy * nx || dx * nx + dy * ny < 0) {
-            ctx.lineTo(bx, by);
-            ax = bx; ay = by;
-        }
-        bx = p.x; by = p.y;
-    }
-    ctx.lineTo(bx, by);
-    return hasLength;
-}
-
 // Body geometry is shared by immediate drawing and the strategic sprite cache.
 function drawUnitBodyGeometry(ctx, unit, strokeColor, lw) {
-        if (unit.isSnake && (unit.snakeHistory.length > 0 || ctx.__snakeHeadOnly)) {
+        if (unit.isSnake) {
+            // Snakes render as their head only; the tail was removed.
             ctx.save();
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            if (!ctx.__snakeHeadOnly) {
-                // Reuse the same path for the outline and body.
-                ctx.lineWidth = unit.r * 2 + 3;
-                ctx.strokeStyle = strokeColor;
-                if (buildSnakeTrailPath(ctx, unit)) {
-                    ctx.stroke();
-                    ctx.lineWidth = unit.r * 2;
-                    ctx.strokeStyle = unit.color;
-                    ctx.stroke();
-                }
-            }
-            // Head
             ctx.fillStyle = strokeColor;
             ctx.beginPath(); ctx.arc(unit.x, unit.y, unit.r + 1.5, 0, 6.28); ctx.fill();
             ctx.fillStyle = unit.color;

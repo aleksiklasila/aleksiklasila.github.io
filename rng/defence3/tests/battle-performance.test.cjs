@@ -98,7 +98,9 @@ vm.runInContext(sourceAreas, refVc);
 vc._activeTileEntities = new Set(world.grid.map((row,i) => row[i].item).reverse());
 vc._activeTileEntities.add({gx:0,gy:0,energy:100});
 vc._activeTileEntities.add({gx:12,gy:13,energy:100});
-vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + visibility, vc);
+vc._tileEntityVersion = 0;
+vm.runInContext('let visibilityIncludedTilesScratch = [], _visibilityFloorItemCandidates = [], _visibilityFloorItemCandidatesVersion = -1, _visibilityFloorItemCandidatesSet = null;\n'
+    + functionSource(renderer, '_getVisibilityFloorItemCandidates') + visibility, vc);
 vm.runInContext('let visibilityIncludedTilesScratch = [];\n' + referenceVisibility, refVc);
 const grid = () => Array.from({ length: 64 }, () => new Float32Array(64));
 for (let step = 0; step < 18; step++) {
@@ -112,6 +114,13 @@ for (let step = 0; step < 18; step++) {
     world.towers[step].underConstruction = true;
     world.grid[step][step].item.underConstruction = true;
     world.grid[step + 20][step + 20].owner = step % 3;
+    // Placing a new cell item bumps the tile entity index version.
+    if (step === 9) {
+        const placed = { gx: 30, gy: 31, energy: 10, watched: 0 };
+        world.grid[31][30] = { owner: 1, item: placed };
+        vc._activeTileEntities.add(placed);
+        vc._tileEntityVersion++;
+    }
 }
 
 // A visible set above 1024 must settle, rather than continuously rasterize.

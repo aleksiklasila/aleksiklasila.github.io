@@ -12,9 +12,9 @@ let _combinedBgDirtyBounds = null; // {minGx,minGy,maxGx,maxGy}
 const _unitBodySprites = new Map();
 let _unitBodySpriteBuildsRemaining = 8;
 function drawCachedUnitBody(g, unit, stroke, lineWidth) {
-    // Keep animated snake trails live. Cache only the body:
-    // health, selection, combat effects and worker status remain current.
-    if (unit.isSnake || g.__drawImagesImmediately) {
+    // Cache only the body: health, selection, combat effects and worker
+    // status remain current.
+    if (g.__drawImagesImmediately) {
         drawUnitBodyGeometry(g, unit, stroke, lineWidth);
         return;
     }

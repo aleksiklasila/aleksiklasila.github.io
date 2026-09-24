@@ -296,6 +296,7 @@ function gameTick() {
         pendingPathResolveCursor = (start + checked) % orderedUnits.length;
     }
 
+    flushPendingResourceStatRebuilds();
     recalculateUnitEffectiveStats();
     recalculateThingPrecomputedStats();
 
@@ -436,6 +437,7 @@ function gameTick() {
             addPlayerResource(pid, 'energy', -totalPerSecond);
         }
     }
+    flushPendingResourceStatRebuilds();
 
     updateVisibility(localPlayerId);
     _finalizePathfindPerfTick(_countPendingPathBacklog());
