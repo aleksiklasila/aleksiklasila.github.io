@@ -969,6 +969,10 @@
         #info-panel .info-queue-toggle-btn,
         #info-panel .info-queue-toggle-group-btn,
         #info-panel .info-disabled-pill,
+        #info-panel .info-kill-group-btn,
+        #info-panel .info-hold-group-btn,
+        #info-panel .info-scale-group-btn,
+        #info-panel .info-btn-help-btn,
         #research-popup-info-panel .info-salvage-btn,
         #research-popup-info-panel .info-salvage-group-btn,
         #research-popup-info-panel .info-auto-upgrade-btn,
@@ -981,7 +985,11 @@
         #research-popup-info-panel .info-build-toggle-group-btn,
         #research-popup-info-panel .info-queue-toggle-btn,
         #research-popup-info-panel .info-queue-toggle-group-btn,
-        #research-popup-info-panel .info-disabled-pill {
+        #research-popup-info-panel .info-disabled-pill,
+        #research-popup-info-panel .info-kill-group-btn,
+        #research-popup-info-panel .info-hold-group-btn,
+        #research-popup-info-panel .info-scale-group-btn,
+        #research-popup-info-panel .info-btn-help-btn {
             padding: 1px 5px !important;
             font-size: 8px !important;
             line-height: 1.05 !important;

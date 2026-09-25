@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "defence3", "runtimeExecutable": "node", "runtimeArgs": [".smoke-server.cjs"], "port": 8123, "url": "http://localhost:8123" }
+    { "name": "defence3", "runtimeExecutable": "node", "runtimeArgs": [".smoke-server.cjs"], "port": 8123, "autoPort": true }
   ]
 }
