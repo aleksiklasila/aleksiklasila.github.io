@@ -1,5 +1,103 @@
 "use strict";
 
+// ============================================================
+// DETERMINISTIC MATH
+// Lockstep peers may run different browsers. JavaScript fixes the result of
+// + - * / and Math.sqrt exactly (IEEE 754, no fused operations), but not of
+// Math.pow, hypot, exp, log, sin, cos or atan2, which can differ in the last
+// bit between engines. Simulation code uses these helpers, built only from
+// exact operations, so every peer computes identical values.
+// ============================================================
+const _detView = new DataView(new ArrayBuffer(8));
+const _DET_LN2_HI = 6.93147180369123816490e-01;
+const _DET_LN2_LO = 1.90821492927058770002e-10;
+const _DET_LN2 = 0.6931471805599453;
+
+function detHypot(x, y) {
+    return Math.sqrt(x * x + y * y);
+}
+
+// x * 2^k, exactly (up to overflow/underflow).
+function _detLdexp(v, k) {
+    while (k > 1023) { v *= 8.98846567431158e307; k -= 1023; }
+    while (k < -1022) { v *= 2.2250738585072014e-308; k += 1022; }
+    _detView.setUint32(0, (k + 1023) << 20);
+    _detView.setUint32(4, 0);
+    return v * _detView.getFloat64(0);
+}
+
+function detLog(x) {
+    x = +x;
+    if (!(x > 0)) return x === 0 ? -Infinity : NaN;
+    if (x === Infinity) return Infinity;
+    let e = 0;
+    if (x < 2.2250738585072014e-308) { x *= 18014398509481984; e = -54; }
+    // x = m * 2^e with m in [sqrt(1/2), sqrt(2)).
+    _detView.setFloat64(0, x);
+    let hi = _detView.getUint32(0);
+    e += ((hi >>> 20) & 0x7ff) - 1023;
+    _detView.setUint32(0, (hi & 0x800fffff) | (1023 << 20));
+    let m = _detView.getFloat64(0);
+    if (m > Math.SQRT2) { m *= 0.5; e += 1; }
+    // log(m) = 2 atanh(s), s = (m - 1) / (m + 1), |s| < 0.172.
+    let s = (m - 1) / (m + 1);
+    let s2 = s * s;
+    let term = s;
+    let sum = s;
+    for (let k = 3; k <= 41; k += 2) {
+        term *= s2;
+        sum += term / k;
+    }
+    return (e * _DET_LN2_HI) + (2 * sum + e * _DET_LN2_LO);
+}
+
+function detExp(y) {
+    y = +y;
+    if (y !== y) return NaN;
+    if (y > 709.782712893384) return Infinity;
+    if (y < -745.1332191019411) return 0;
+    let k = Math.round(y / _DET_LN2);
+    let r = (y - k * _DET_LN2_HI) - k * _DET_LN2_LO;
+    let term = 1;
+    let sum = 1;
+    for (let i = 1; i <= 20; i++) {
+        term *= r / i;
+        sum += term;
+    }
+    return _detLdexp(sum, k);
+}
+
+function detPow(base, exponent) {
+    let b = +base, e = +exponent;
+    if (e === 0) return 1;
+    if (b !== b || e !== e) return NaN;
+    if (Number.isInteger(e) && Math.abs(e) <= 4096) {
+        // Square-and-multiply: a fixed sequence of exact multiplications.
+        let n = Math.abs(e);
+        let result = 1;
+        let p = b;
+        while (n > 0) {
+            if (n % 2 === 1) result *= p;
+            p *= p;
+            n = Math.floor(n / 2);
+        }
+        return e < 0 ? 1 / result : result;
+    }
+    if (b === 1) return 1;
+    if (b === 0) return e > 0 ? 0 : Infinity;
+    if (b < 0) return NaN;
+    if (b === Infinity) return e > 0 ? Infinity : 0;
+    return detExp(e * detLog(b));
+}
+
+// floor(log2(n)) for n >= 1.
+function detFloorLog2(n) {
+    let v = Math.floor(Math.max(1, Number(n) || 1));
+    let k = 0;
+    while (v >= 2) { v = Math.floor(v / 2); k++; }
+    return k;
+}
+
 let activeFormatBigNumberSuffixStart = null;
 
 function formatBigNumber(n, d = 1, suffixStart = undefined) {

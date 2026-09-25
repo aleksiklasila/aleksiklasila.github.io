@@ -56,6 +56,7 @@ assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([0, 1], 0)], [0, 1]);
 assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([1, 0], 1)], [0, 1, 2, 5, 4], 'union keeps first-source order, each area once');
 
 // Unit structure priority within attack range.
+vm.runInContext(read('src/utils/utils_common.js'), ctx);
 vm.runInContext(read('src/things/unit.js'), ctx);
 const Unit = vm.runInContext('Unit', ctx);
 const place = (x, y, props) => {
@@ -91,6 +92,7 @@ const pc = vm.createContext({ TILE, towers: [], barracks: [], collectorSpawners:
     getFloorItemAtTile: (x, y) => grid[y] && grid[y][x] && grid[y][x].item, createExplosion() {}, playSound() {},
     pushHostileDamageAlert() {}, recordDamageVisual() {}, applyStatusEffect() {}, isEffectImmune: () => false,
     destroyed: [], destroyBuilding(b) { pc.destroyed.push(b); } });
+vm.runInContext(read('src/utils/utils_common.js'), pc);
 vm.runInContext(read('src/things/projectile.js') + '\nthis.Projectile = Projectile;', pc);
 const shot = new pc.Projectile(0.5 * TILE, 1.5 * TILE, lavaOn, 'pistol', 25, 1, { owner: 0, gx: 0, gy: 1 }, 999);
 let flying = 0;

@@ -111,7 +111,7 @@ function generateResourceMinesMixed() {
 
     let nearAnySpawn = (gx, gy) => {
         if (!spawnTiles || spawnTiles.length === 0) return false;
-        return spawnTiles.some(s => Math.hypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
+        return spawnTiles.some(s => detHypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
     };
 
     let isAllowedByShape = (gx, gy) => {
@@ -188,11 +188,11 @@ function generateResourceMinesMixed() {
         addCandidatesFromList(buildArenaEdgeSpiralCandidates(ringWidth), false);
     } else if (MAP_TYPE === 'island') {
         let islandRadius = Math.max(4, Math.floor(mapMin * 0.19));
-        shapeMask = (gx, gy) => Math.hypot(gx - centerX, gy - centerY) <= islandRadius;
+        shapeMask = (gx, gy) => detHypot(gx - centerX, gy - centerY) <= islandRadius;
         let list = [];
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
-                let d = Math.hypot(gx - centerX, gy - centerY);
+                let d = detHypot(gx - centerX, gy - centerY);
                 if (d <= islandRadius) list.push({ gx, gy, d });
             }
         }
@@ -207,14 +207,14 @@ function generateResourceMinesMixed() {
             cy: s.gy + (centerY - s.gy) * centerPull
         }));
 
-        shapeMask = (gx, gy) => islandCenters.some(c => Math.hypot(gx - c.cx, gy - c.cy) <= islandRadius);
+        shapeMask = (gx, gy) => islandCenters.some(c => detHypot(gx - c.cx, gy - c.cy) <= islandRadius);
 
         let list = [];
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
                 let best = Infinity;
                 for (let c of islandCenters) {
-                    let d = Math.hypot(gx - c.cx, gy - c.cy);
+                    let d = detHypot(gx - c.cx, gy - c.cy);
                     if (d < best) best = d;
                 }
                 if (best <= islandRadius) list.push({ gx, gy, d: best });
@@ -224,18 +224,18 @@ function generateResourceMinesMixed() {
         addCandidatesFromList(list, false);
     } else if (MAP_TYPE === 'solar_system') {
         shapeMask = (gx, gy) => {
-            let d = Math.hypot(gx - centerX, gy - centerY);
-            let maxDist = Math.hypot(centerX - margin, centerY - margin);
+            let d = detHypot(gx - centerX, gy - centerY);
+            let maxDist = detHypot(centerX - margin, centerY - margin);
             let norm = Math.min(1, d / Math.max(1, maxDist));
             return norm <= 0.98;
         };
         let list = [];
-        let maxDist = Math.hypot(centerX - margin, centerY - margin);
+        let maxDist = detHypot(centerX - margin, centerY - margin);
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
-                let d = Math.hypot(gx - centerX, gy - centerY);
+                let d = detHypot(gx - centerX, gy - centerY);
                 let norm = Math.min(1, d / Math.max(1, maxDist));
-                let p = Math.pow(Math.max(0, 1 - norm), 6.5);
+                let p = detPow(Math.max(0, 1 - norm), 6.5);
                 if (norm <= 0.12 || rng() < p) list.push({ gx, gy });
             }
         }
@@ -350,7 +350,7 @@ function generateGoldMines() {
 
     let nearAnySpawn = (gx, gy) => {
         if (!spawnTiles || spawnTiles.length === 0) return false;
-        return spawnTiles.some(s => Math.hypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
+        return spawnTiles.some(s => detHypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
     };
 
     let isAllowedByShape = (gx, gy) => {
@@ -472,11 +472,11 @@ function generateGoldMines() {
         addMinesFromCandidates(candidates, false);
     } else if (MAP_TYPE === 'island') {
         let islandRadius = Math.max(4, Math.floor(mapMin * 0.19));
-        shapeMask = (gx, gy) => Math.hypot(gx - centerX, gy - centerY) <= islandRadius;
+        shapeMask = (gx, gy) => detHypot(gx - centerX, gy - centerY) <= islandRadius;
         let candidates = [];
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
-                let d = Math.hypot(gx - centerX, gy - centerY);
+                let d = detHypot(gx - centerX, gy - centerY);
                 if (d <= islandRadius) candidates.push({ gx, gy, d });
             }
         }
@@ -491,14 +491,14 @@ function generateGoldMines() {
             cy: s.gy + (centerY - s.gy) * centerPull
         }));
 
-        shapeMask = (gx, gy) => islandCenters.some(c => Math.hypot(gx - c.cx, gy - c.cy) <= islandRadius);
+        shapeMask = (gx, gy) => islandCenters.some(c => detHypot(gx - c.cx, gy - c.cy) <= islandRadius);
 
         let candidates = [];
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
                 let best = Infinity;
                 for (let c of islandCenters) {
-                    let d = Math.hypot(gx - c.cx, gy - c.cy);
+                    let d = detHypot(gx - c.cx, gy - c.cy);
                     if (d < best) best = d;
                 }
                 if (best <= islandRadius) candidates.push({ gx, gy, d: best });
@@ -508,18 +508,18 @@ function generateGoldMines() {
         addMinesFromCandidates(candidates, false);
     } else if (MAP_TYPE === 'solar_system') {
         shapeMask = (gx, gy) => {
-            let d = Math.hypot(gx - centerX, gy - centerY);
-            let maxDist = Math.hypot(centerX - margin, centerY - margin);
+            let d = detHypot(gx - centerX, gy - centerY);
+            let maxDist = detHypot(centerX - margin, centerY - margin);
             let norm = Math.min(1, d / Math.max(1, maxDist));
             return norm <= 0.98;
         };
         let candidates = [];
-        let maxDist = Math.hypot(centerX - margin, centerY - margin);
+        let maxDist = detHypot(centerX - margin, centerY - margin);
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
-                let d = Math.hypot(gx - centerX, gy - centerY);
+                let d = detHypot(gx - centerX, gy - centerY);
                 let norm = Math.min(1, d / Math.max(1, maxDist));
-                let p = Math.pow(Math.max(0, 1 - norm), 6.5);
+                let p = detPow(Math.max(0, 1 - norm), 6.5);
                 if (norm <= 0.12 || rng() < p) candidates.push({ gx, gy });
             }
         }
@@ -560,7 +560,7 @@ function generateAstarMines() {
 
     let nearAnySpawn = (gx, gy) => {
         if (!spawnTiles || spawnTiles.length === 0) return false;
-        return spawnTiles.some(s => Math.hypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
+        return spawnTiles.some(s => detHypot(gx - s.gx, gy - s.gy) <= spawnSafeRadius);
     };
 
     let addMine = (gx, gy) => {
@@ -648,7 +648,7 @@ function pickEdgePlayerSpawns(teamCount = 2) {
             if (picks.some(p => p.gx === c.gx && p.gy === c.gy)) continue;
             let nearest = Infinity;
             for (let p of picks) {
-                let d = Math.hypot(c.gx - p.gx, c.gy - p.gy);
+                let d = detHypot(c.gx - p.gx, c.gy - p.gy);
                 if (d < nearest) nearest = d;
             }
             if (nearest > bestScore) {
@@ -708,7 +708,7 @@ function pickIslandsPlayerSpawns(teamCount = 2) {
             if (picks.some(p => p.gx === c.gx && p.gy === c.gy)) continue;
             let nearest = Infinity;
             for (let p of picks) {
-                let d = Math.hypot(c.gx - p.gx, c.gy - p.gy);
+                let d = detHypot(c.gx - p.gx, c.gy - p.gy);
                 if (d < nearest) nearest = d;
             }
             if (nearest > bestScore) {
@@ -761,7 +761,7 @@ function pickArenaPlayerSpawns(teamCount = 2) {
             if (picks.some(p => p.gx === c.gx && p.gy === c.gy)) continue;
             let nearest = Infinity;
             for (let p of picks) {
-                let d = Math.hypot(c.gx - p.gx, c.gy - p.gy);
+                let d = detHypot(c.gx - p.gx, c.gy - p.gy);
                 if (d < nearest) nearest = d;
             }
             if (nearest > bestScore) {

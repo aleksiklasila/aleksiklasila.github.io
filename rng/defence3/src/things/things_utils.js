@@ -229,7 +229,7 @@ function _runAdjacencyRecalculation() {
             if (areaSig !== rootSig.sigKey) continue;
             let power = (area.multiplierLevel || 0) + 1;
             let areaCellCount = _getCanonicalAreaCellsById(aId, area).length;
-            areaMult *= Math.pow(Math.max(1, areaCellCount), power);
+            areaMult *= detPow(Math.max(1, areaCellCount), power);
         }
 
         let groupSize = group.length;
@@ -378,6 +378,25 @@ function _seedThingStatsRecalcCounter(item, intervalTicks, fallbackSeed = 0) {
     else if (item && Number.isFinite(item.gx) && Number.isFinite(item.gy)) seed = (((Math.floor(item.gx) + 1) * 73856093) ^ ((Math.floor(item.gy) + 1) * 19349663)) >>> 0;
     else seed = (Math.floor(fallbackSeed) * 83492791) >>> 0;
     return intervalTicks > 1 ? (seed % intervalTicks) : 0;
+}
+
+// Rebuild a building's derived stat tables from its level and owner, without
+// the energy adjustments of a periodic refresh. Snapshots leave the tables
+// out (they are most of a snapshot's size) and restore them with this.
+function restoreDerivedThingStats(item) {
+    if (!item || item.unitType && !(item instanceof Barrack)) return;
+    let statsType = (item.type === 'barrack' && item.unitType) ? ('barrack_' + item.unitType) : item.type;
+    if (!statsType || !BASE_CARD_TYPES[statsType]) return;
+    let baseLevel = getThingBaseLevel(item);
+    let effectiveLevel = getThingEffectiveLevel(item, baseLevel);
+    let potentialLevel = getThingPotentialLevel(item, effectiveLevel);
+    let base = calculateItemStats(statsType, baseLevel, item.owner);
+    if (!(item instanceof Tower)) {
+        item.preComputedBase = base;
+        item.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(base, calculateItemStats(statsType, effectiveLevel, item.owner), false);
+        item.preComputed = item.preComputedBase;
+    }
+    item.preComputedPotential = clonePrecomputedWithBaseMaxEnergy(base, calculateItemStats(statsType, potentialLevel, item.owner), false);
 }
 
 function _refreshThingPrecomputedStats(item) {
@@ -701,14 +720,7 @@ function _isBuildAreaContested(gx, gy, playerId) {
 
 function canBuildAt(gx, gy, playerId) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
-    let isVisible = isTileActuallyVisibleToPlayer(playerId, gx, gy);
-    if (!isVisible) {
-        // Diagnostic log to help identify why visibility check is failing for this player
-        if (gameTime % 20 === 0) {
-            console.warn(`canBuildAt: visibility check failed for player ${playerId} at ${gx},${gy}. isMultiplayer: ${isMultiplayer}, isHost: ${isHost}`);
-        }
-        return false;
-    }
+    if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
     if (!(isMultiplayer && gameStarted) && _isBuildAreaContested(gx, gy, playerId)) return false;
     if (grid[gy][gx].type === TYPE_WALL) return false;
     if (grid[gy][gx].item) return false;
@@ -778,7 +790,7 @@ const AREA_LEVEL_COLORS = ['#888', '#4f4', '#4af', '#c4f', '#f90', '#fd0'];
 const AREA_LEVEL_NAMES = ['Gray', 'Green', 'Blue', 'Purple', 'Orange', 'Gold'];
 
 function getAreaUpgradeCost(currentLevel) {
-    return Math.floor(100 * Math.pow(3, currentLevel));
+    return Math.floor(100 * detPow(3, currentLevel));
 }
 
 function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
@@ -787,8 +799,10 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     let placedNewStructure = false;
     let placedNewWallStructure = false;
 
-    let useDefaultAutoUpgrade = defaultAutoUpgradeEnabled;
-    let useDefaultBuild = defaultAutoBuildEnabled;
+    // Simulation code must not read this client's UI toggles (they differ
+    // between players); the placing player's choice travels in the action.
+    let useDefaultAutoUpgrade = true;
+    let useDefaultBuild = true;
     let silentPlace = false;
     let ignorePlacementRules = false;
     if (defaults && typeof defaults === 'object') {
@@ -1123,7 +1137,7 @@ function getDisplayLevel(item) {
 
 function getRequiredStacksForLevel(level) {
     let lvl = Math.max(1, clampThingLevel(Math.floor(Number(level) || 1)));
-    return Math.max(1, Math.round(Math.pow(2, lvl - 1)));
+    return Math.max(1, Math.round(detPow(2, lvl - 1)));
 }
 
 function getThingStackedStacks(item) {
@@ -1273,7 +1287,7 @@ function getHousePopCapContribution(ownerId, level) {
     let lvl = Math.max(1, clampThingLevel(Math.floor(Number(level) || 1)));
     let mapped = getBuildingStatForOwner(ownerId, 'house', lvl, 'popCap');
     if (Number.isFinite(mapped)) return Math.max(1, Math.floor(mapped));
-    return Math.max(1, Math.floor(Math.pow(1.6, lvl)));
+    return Math.max(1, Math.floor(detPow(1.6, lvl)));
 }
 
 function recomputePlayerPopCaps() {

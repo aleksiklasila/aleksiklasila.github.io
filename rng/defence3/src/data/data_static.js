@@ -56,7 +56,18 @@ let LOCKSTEP_BUNDLE_RESEND_MS = Math.max(40, Math.floor(TICK_MS * 2));
 let LOCKSTEP_RESEND_REQUEST_MS = getLockstepResendRequestMs();
 let LOCKSTEP_HARD_RESYNC_MS = getLockstepHardResyncMs();
 let LOCKSTEP_STATE_CHECK_INTERVAL = 10;
-let LOCKSTEP_DEBUG_HASH_DETAILS = true;
+// Full per-entity digests travel with every state hash only in exact-lockstep
+// debug mode; normal matches send per-subsystem hashes, which are enough to
+// tell which part of the state diverged.
+let LOCKSTEP_DEBUG_HASH_DETAILS = false;
+// Ticks the host seals ahead of its own clock. Guests' commands arrive early
+// enough on their own; a small window gives them jitter headroom without
+// delaying the host's commands.
+let LOCKSTEP_HOST_PREBUILD_TICKS = 1;
+// Sealed ticks the host keeps for resends and reconnecting guests.
+function getLockstepHistoryKeepTicks() {
+    return Math.max(600, Math.floor(TICK_RATE * 90));
+}
 let tickAlpha = 0; // 0..1 interpolation between ticks for smooth rendering
 
 function secondsToTicks(seconds) {
@@ -331,7 +342,9 @@ let RESEARCH_BUILDING_EFFICIENCY_LEVEL_EXP = 1.05;
 let RESEARCH_BUILDING_EFFICIENCY_CAP = 3;
 let UNIT_COLLECTOR_GATHER_LEVEL_EXP = 1;
 let UNIT_WORKER_SPECIALIST_BASE_RATE = 5;
-let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.22;
+// Same value as UNIT_FORMULA_CONFIG.workerSpecialistLevelExp, which the
+// stat formulas read; applying a config copies one into the other.
+let UNIT_WORKER_SPECIALIST_LEVEL_EXP = 1.46;
 let BUILDING_UPKEEP_EXP = 1.85;
 let UNIT_UPKEEP_EXP = 1.45;
 
@@ -701,12 +714,12 @@ const PRECOMPUTED_SOFT_CAP_MAP = {
         cd: ({ baseAtLevel1 }) => {
             let baseCd = Number(baseAtLevel1 && baseAtLevel1.cd);
             if (!Number.isFinite(baseCd) || baseCd <= 0) return 0.5;
-            return Math.log(baseCd) / Math.log(3);
+            return detLog(baseCd) / detLog(3);
         },
         spawnCd: ({ baseAtLevel1 }) => {
             let baseSpawnCd = Number(baseAtLevel1 && baseAtLevel1.spawnCd);
             if (!Number.isFinite(baseSpawnCd) || baseSpawnCd <= 0) return 0.5;
-            return Math.log(baseSpawnCd) / Math.log(15);
+            return detLog(baseSpawnCd) / detLog(15);
         },
         visionRange: ({ baseAtLevel1 }) => {
             let baseVision = Number(baseAtLevel1 && baseAtLevel1.visionRange);

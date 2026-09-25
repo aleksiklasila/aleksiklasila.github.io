@@ -5,6 +5,10 @@ let visibilityGrid = [];
 let visibilityGridByPlayer = Array.from({ length: 8 }, () => []);
 let visibilityVersion = 0;
 let fullVisibility = false;
+// The match's visibility setting, fixed at match start. `fullVisibility` is
+// this client's view and turns on locally for spectators, so simulation code
+// must use this instead.
+let matchFullVisibility = false;
 
 let grid = []; // 2D array [y][x] = {type, item, owner, areaId}
 let areas = [];
@@ -1092,7 +1096,7 @@ function _getOverlayLineSprite(lineType, strokeColor, lineWidth = 1) {
 function _drawOverlayLineSprite(ctx, x1, y1, x2, y2, lineType, strokeColor, lineWidth = 1) {
     let dx = x2 - x1;
     let dy = y2 - y1;
-    let len = Math.hypot(dx, dy);
+    let len = detHypot(dx, dy);
     if (len < 1) return;
     let sprite = _getOverlayLineSprite(lineType, strokeColor, lineWidth);
     let cx = (x1 + x2) * 0.5;
@@ -1226,6 +1230,17 @@ let lockstepExpectedStateDigestByTick = {};
 let lockstepLocalStateDigestByTick = {};
 let lockstepDesyncDetected = false;
 let lockstepHashGraceUntilTick = -1;
+// Highest tick whose local packet a guest has sent. Commands are never added
+// to a sent tick, so they cannot be lost when the host already sealed it.
+let lockstepHighestSentLocalTick = -1;
+let lockstepResyncRequestedAt = 0;
+let lockstepResyncDeadlineAt = 0;
+let lockstepReceivedResyncSessionId = '';
+let lockstepAppliedResyncSessionId = '';
+let lockstepPendingResumeSessionId = '';
+let lockstepLastWarnAtByKey = {};
+let lockstepHostWaitRequestByPeer = {};
+let lockstepGuestWaitRequest = null;
 const LS_PLAYER_UID_KEY = 'defence3_player_uid';
 const LS_PLAYER_NAME_KEY = 'defence3_player_name';
 const LS_UI_SETTINGS_KEY = 'defence3_ui_settings_v1';

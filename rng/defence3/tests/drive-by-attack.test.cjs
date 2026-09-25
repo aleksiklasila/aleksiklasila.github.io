@@ -28,6 +28,7 @@ const context = {
     }
 };
 vm.createContext(context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src/utils/utils_common.js'), 'utf8'), context);
 vm.runInContext(source, context);
 const Unit = vm.runInContext('Unit', context);
 const moving = vm.runInContext('CMD_MOVING', context);

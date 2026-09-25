@@ -25,6 +25,7 @@ const ctx = {
     getRawVisibilityGridForPlayer(owner) { lookups.push(owner); return grids[owner]; }
 };
 vm.createContext(ctx);
+vm.runInContext(read('src/utils/utils_common.js'), ctx);
 vm.runInContext(read('src/things/unit.js'), ctx);
 function visible(owner, target) {
     const gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / 32);

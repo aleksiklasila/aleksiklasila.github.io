@@ -32,6 +32,7 @@ function world(resource, localPlayerId = 0) {
         BASE_UNIT_STATS: { [cfg.collectorUnitKey]: { transferCooldown: 1 } },
         getUnitEffectiveLevel: () => 1,
     });
+    vm.runInContext(read('src/utils/utils_common.js'), c);
     vm.runInContext(read('src/things/worker.js'), c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType', 'processActions']) {
         vm.runInContext(mainFunction(name), c);
