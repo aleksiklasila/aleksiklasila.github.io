@@ -2592,6 +2592,22 @@ function getActiveUnits() {
     return selectedUnits.filter(u => !u.dead && activeSubGroups[getUnitGroupKey(u)] !== false);
 }
 
+// getActiveUnits() for renderers, shared between the frames of a tick while
+// the selection and its subgroup toggles are unchanged (deaths and levels
+// change only on ticks). Read-only: callers must not modify the array.
+let _renderActiveUnits = { tick: -1, selected: null, length: -1, ignore: null, disabled: '', result: [] };
+function getActiveUnitsForRender() {
+    if (selectedUnits.length === 0) return [];
+    let disabled = '';
+    for (let key in activeSubGroups) if (activeSubGroups[key] === false) disabled += key + ';';
+    let c = _renderActiveUnits;
+    if (c.tick === gameTime && c.selected === selectedUnits && c.length === selectedUnits.length
+        && c.ignore === ignoreLevelSubgroups && c.disabled === disabled) return c.result;
+    _renderActiveUnits = { tick: gameTime, selected: selectedUnits, length: selectedUnits.length,
+        ignore: ignoreLevelSubgroups, disabled, result: getActiveUnits() };
+    return _renderActiveUnits.result;
+}
+
 // Returns selected entities filtered by active sub-group toggles
 function getActiveEntities() {
     if (selectedEntities.length === 0) return [];

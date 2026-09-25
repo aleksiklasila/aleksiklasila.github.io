@@ -6,6 +6,7 @@ const selectionCircleDirections = Array.from({ length: 16 }, (_, i) => [Math.cos
 const selectionCanvasPaths = new WeakMap();
 const selectionPresentationPositions = new WeakMap();
 const selectionCellValues = [0, 0, 0, 0];
+const SELECTION_TICK_POSITIONS_MIN = 100;
 const selectionCellCornerX = [0, 1, 1, 0], selectionCellCornerY = [0, 0, 1, 1];
 
 function stabilizeSelectionPosition(entity, x, y, now) {
@@ -190,7 +191,33 @@ function buildSelectionContours(footprints) {
     return groups;
 }
 
+// Large selections outline tick positions, so their result only changes on
+// ticks (every other tick from SELECTION_SLOW_REBUILD_MIN units): reuse it
+// for the same members, styles and tick without rebuilding any footprint.
+const SELECTION_SLOW_REBUILD_MIN = 300;
+let selectionContourResult = { key: null, groups: null };
+
+function _selectionContourResultKey(entities, selected, ownerColor) {
+    if (selected.length < SELECTION_TICK_POSITIONS_MIN || typeof gameTime !== 'number') return null;
+    let hash = 0, alive = 0;
+    for (let u of selected) if (u && !u.dead) { hash = (Math.imul(hash, 31) + (Number(u.id) | 0)) | 0; alive++; }
+    for (let e of entities) if (e) hash = (Math.imul(hash, 31) + ((Number(e.gx) | 0) * 4099 + (Number(e.gy) | 0))) | 0;
+    let bucket = selected.length >= SELECTION_SLOW_REBUILD_MIN ? Math.floor(gameTime / 2) : gameTime;
+    let colors = '';
+    let playerCount = typeof players !== 'undefined' && Array.isArray(players) ? players.length : 2;
+    for (let owner = 0; owner < playerCount; owner++) colors += ownerColor(owner) + ',';
+    return `${bucket}|${alive}|${entities.length}|${hash}|${showSelectionOutlinesForUnits()}|${showSelectionOutlinesForBuildings()}|${colors}`;
+}
+
 function getSelectionContours(entities, selected, alpha, ownerColor) {
+    let resultKey = _selectionContourResultKey(entities, selected, ownerColor);
+    if (resultKey !== null && selectionContourResult.key === resultKey) return selectionContourResult.groups;
+    let groups = _computeSelectionContours(entities, selected, alpha, ownerColor);
+    selectionContourResult = { key: resultKey, groups };
+    return groups;
+}
+
+function _computeSelectionContours(entities, selected, alpha, ownerColor) {
     let footprints = [];
     let now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (showSelectionOutlinesForBuildings()) for (let e of entities) {
@@ -199,8 +226,16 @@ function getSelectionContours(entities, selected, alpha, ownerColor) {
             y: Number.isFinite(e.y) ? e.y : e.gy * TILE + TILE / 2,
             radius: 20, box: 15, color: ownerColor(e.owner) });
     }
+    // A large selection outlines tick positions: the union is then rebuilt
+    // once per simulation tick instead of every frame (it trails its units
+    // by less than one tick of movement).
+    let tickPositions = selected.length >= SELECTION_TICK_POSITIONS_MIN;
     if (showSelectionOutlinesForUnits()) for (let u of selected) {
         if (!u || u.dead) continue;
+        if (tickPositions) {
+            footprints.push({ x: u.x, y: u.y, radius: (Number(u.r) || 8) + 6, color: ownerColor(u.owner) });
+            continue;
+        }
         let p = stabilizeSelectionPosition(u,
             Number.isFinite(u.prevX) ? u.prevX + (u.x - u.prevX) * alpha : u.x,
             Number.isFinite(u.prevY) ? u.prevY + (u.y - u.prevY) * alpha : u.y, now);

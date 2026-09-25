@@ -1713,7 +1713,7 @@ function draw() {
     }
 
     let activeSelectedEntities = getActiveEntities();
-    let activeSelectedUnits = getActiveUnits();
+    let activeSelectedUnits = getActiveUnitsForRender();
     let localOwnerIndex = players.findIndex(p => p.id === myPeerId);
     let overlayViewMinX = camera.x;
     let overlayViewMinY = camera.y;

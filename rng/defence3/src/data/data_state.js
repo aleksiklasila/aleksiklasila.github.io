@@ -535,6 +535,48 @@ function getStructuresByArea() {
     return byArea;
 }
 
+// Per player, a summed-area table of structures that are hostile to it
+// (towers and cell items, never mines; a cell item is the player's own only
+// when both it and its tile are). Rebuilt when the tile entity index
+// changes, it answers "any hostile structure in this tile rectangle?" in
+// four reads, so idle armies skip structure scans with nothing around.
+let _hostileStructureSats = [];
+
+// The table for one player, rebuilt on its first query after a change.
+function _getHostileStructureSat(owner) {
+    let entry = _hostileStructureSats[owner];
+    if (entry && entry.version === _tileEntityVersion && entry.set === _activeTileEntities
+        && entry.width === GRID_W && entry.height === GRID_H) return entry.sat;
+    let stride = GRID_W + 1;
+    let sat = entry && entry.sat.length === stride * (GRID_H + 1) ? entry.sat.fill(0) : new Int32Array(stride * (GRID_H + 1));
+    for (let e of _activeTileEntities) {
+        let gx = e.gx, gy = e.gy, refs = tileEntityRef[gy];
+        if (!refs || refs[gx] !== e) continue;
+        let type = tileEntityType[gy][gx];
+        if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) continue;
+        let cell = grid[gy] && grid[gy][gx];
+        let cellOwner = cell && cell.item === e ? cell.owner : e.owner;
+        if (!(e.owner === owner && cellOwner === owner)) sat[(gy + 1) * stride + gx + 1]++;
+    }
+    for (let y = 1; y <= GRID_H; y++) {
+        let row = y * stride, above = row - stride, run = 0;
+        for (let x = 1; x <= GRID_W; x++) { run += sat[row + x]; sat[row + x] = sat[above + x] + run; }
+    }
+    _hostileStructureSats[owner] = { sat, version: _tileEntityVersion, set: _activeTileEntities, width: GRID_W, height: GRID_H };
+    return sat;
+}
+
+// Whether a structure hostile to `owner` stands in tiles [x0..x1] x [y0..y1]
+// (clamped to the map). Unknown owners answer true.
+function hasHostileStructureInTileRect(owner, x0, y0, x1, y1) {
+    let playerCount = typeof players !== 'undefined' && Array.isArray(players) ? players.length : 0;
+    if (!Number.isInteger(owner) || owner < 0 || owner >= playerCount) return true;
+    x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(GRID_W - 1, x1); y1 = Math.min(GRID_H - 1, y1);
+    if (x0 > x1 || y0 > y1) return false;
+    let sat = _getHostileStructureSat(owner), stride = GRID_W + 1;
+    return sat[(y1 + 1) * stride + x1 + 1] - sat[y0 * stride + x1 + 1] - sat[(y1 + 1) * stride + x0] + sat[y0 * stride + x0] > 0;
+}
+
 // Index of the first row-major cell item at or after row gy.
 function findCellItemRowStart(list, gy) {
     let lo = 0, hi = list.length;
