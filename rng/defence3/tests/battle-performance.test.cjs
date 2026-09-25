@@ -21,7 +21,19 @@ const wc = vm.createContext({
 });
 vm.runInContext(worker, wc);
 const referencePick = vm.runInContext('(' + functionSource(worker, '_pickDistributedWorkerCandidate')
-    .replace('_canAssignWorkerTargetExclusive(u, c.target, targetType, conflictCache)', '_canAssignWorkerTargetExclusive(u, c.target, targetType)') + ')', wc);
+    .replace('_canAssignWorkerTargetExclusive(u, c.target, targetType, conflictCache)', 'referenceExclusive(u, c.target, targetType)') + ')', wc);
+wc.referenceExclusive = (u, target, type) => {
+    if (u.workerTarget === target && (type === null || u.workerTargetType === type)) return true;
+    const reserved = wc._getReservedWorkerForTarget(target, u.workerType);
+    if (reserved) return reserved === u || reserved.owner !== u.owner || reserved.workerType !== u.workerType;
+    const tile = wc._getWorkerTargetTileIndex(target);
+    if (tile < 0) return true;
+    for (const other of wc.units) {
+        if (other !== u && !other.dead && other.owner === u.owner && other.workerType === u.workerType
+            && other.workerTarget && wc._getWorkerTargetTileIndex(other.workerTarget) === tile) return false;
+    }
+    return true;
+};
 const candidates = Array.from({ length: 600 }, (_, i) => ({
     target: { gx: i % 80, gy: Math.floor(i / 80), id: i, x: i % 80 * 32, y: Math.floor(i / 80) * 32 },
     targetType: i % 3 ? null : 'queue', dist: (i * 23) % 700
@@ -38,6 +50,9 @@ visits = 0;
 assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), expected);
 assert.equal(visits, 1200, 'only one unit-list traversal per candidate search');
 assert.ok(oldVisits > 1200 * 100, 'fixture exercises the original nested scans');
+visits = 0;
+for (let i = 0; i < 20; i++) assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), expected);
+assert.equal(visits, 0, 'subsequent searches reuse the live tile index');
 for (let i = 0; i < 40; i++) {
     searching.owner = i % 3;
     searching.workerType = ['builder', 'healer', 'researcher'][i % 3];
