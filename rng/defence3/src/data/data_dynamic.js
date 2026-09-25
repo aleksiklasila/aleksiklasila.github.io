@@ -418,6 +418,8 @@ function createEditableRuntimeConfigSnapshot() {
             STARTING_MONEY,
             STARTING_ASTAR,
             MAP_TYPE,
+            GAME_MODE: gameMode,
+            MAP_VISIBILITY: fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team',
             TYPE_FLOOR,
             TYPE_WALL,
             CONFIG_MAX_POP,
@@ -503,6 +505,8 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-starting-energy', STARTING_MONEY);
     setValue('cfg-starting-astar', STARTING_ASTAR);
     setValue('cfg-map-type', MAP_TYPE);
+    setValue('cfg-gamemode', gameMode);
+    setValue('cfg-full-vis', fullVisibility ? 'full' : teamVisibilityHistory ? 'history' : 'team');
     setValue('cfg-tick-rate', TICK_RATE);
     setValue('cfg-pipeline-delay', LOCKSTEP_PIPELINE_MIN);
     setValue('cfg-thing-stats-seconds', THING_STATS_RECALC_INTERVAL_SECONDS);
@@ -552,6 +556,11 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
     if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
     if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
+    if (['destroy', 'killking'].includes(cfg.GAME_MODE)) gameMode = cfg.GAME_MODE;
+    if (['full', 'team', 'history'].includes(cfg.MAP_VISIBILITY)) {
+        fullVisibility = cfg.MAP_VISIBILITY === 'full';
+        teamVisibilityHistory = cfg.MAP_VISIBILITY === 'history';
+    }
     if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
 
     let nextTickRate = Number(cfg.TICK_RATE);
@@ -621,7 +630,6 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
 
     if (tables.BASE_CARD_TYPES) replaceObjectContents(BASE_CARD_TYPES, makeRuntimeCardTypesTableFromEditor(tables.BASE_CARD_TYPES));
     if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
-    if (tables.BASE_CARD_DEFAULT_ENERGY) replaceObjectContents(BASE_CARD_DEFAULT_ENERGY, tables.BASE_CARD_DEFAULT_ENERGY);
     if (tables.DESCRIPTIONS) replaceObjectContents(DESCRIPTIONS, tables.DESCRIPTIONS);
     if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
     if (tables.BARRACK_SPAWN_CONFIG) replaceObjectContents(BARRACK_SPAWN_CONFIG, tables.BARRACK_SPAWN_CONFIG);
@@ -658,8 +666,25 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     syncMainMenuFromRuntimeConfig();
 }
 
+function normalizeBaseCardDefinitions() {
+    for (let cardKey in BASE_CARD_TYPES) {
+        let def = BASE_CARD_TYPES[cardKey];
+        if (!def || typeof def !== 'object') continue;
+
+        if (!Number.isFinite(def.energy)) {
+            if (Number.isFinite(def.towerEnergy)) def.energy = def.towerEnergy;
+            else if (Number.isFinite(BASE_CARD_DEFAULT_ENERGY[cardKey])) def.energy = BASE_CARD_DEFAULT_ENERGY[cardKey];
+            else def.energy = 100;
+        }
+
+        if (def.target === 'wall' && !Number.isFinite(def.towerEnergy)) {
+            def.towerEnergy = def.energy;
+        }
+    }
+}
+
 function makeConfigEditorTextFromCurrentConfig() {
-    return stringifyJsLike(createEditableRuntimeConfigSnapshot());
+    return stringifyJsLike(gameStarted ? createEditableRuntimeConfigSnapshot() : createEditableRuntimeConfigSnapshotFromMainMenu());
 }
 
 function setConfigPopupOpen(open) {
@@ -731,6 +756,8 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
     cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
     cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
+    cfg.GAME_MODE = getString('cfg-gamemode', cfg.GAME_MODE);
+    cfg.MAP_VISIBILITY = getString('cfg-full-vis', cfg.MAP_VISIBILITY);
     cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
