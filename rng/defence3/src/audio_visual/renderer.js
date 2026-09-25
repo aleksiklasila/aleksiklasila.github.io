@@ -339,15 +339,28 @@ let renderer3dExactTextureTimeRemaining = 2;
 let renderer3dExactUnitTextureBuildsRemaining = 12;
 let renderer3dExactUnitTextureTimeRemaining = 2;
 
-function cache3DExact2DTexture(signature, entry) {
-    entry.lastUsedFrame = renderer3dExactTextureFrame;
-    renderer3dExact2DTextureCache.set(signature, entry);
+// Evicted panel canvases are redrawn for new signatures: creating a canvas
+// and its context cost several times the drawing. Every drawing gets a new
+// _textureVersion, so holders of a recycled canvas (GPU caches, cached
+// scene objects) see that it changed. Holders that keep a panel across
+// frames without looking it up mark it used (_touch3DPanel).
+const renderer3dPanelPool = [];
+const RENDERER3D_PANEL_POOL_MAX = 256;
+let renderer3dPanelSerial = 0;
+
+function _touch3DPanel(panel) {
+    if (panel && panel._panelCtx) panel._usedFrame = renderer3dExactTextureFrame;
+}
+
+function cache3DExact2DTexture(signature, panel) {
+    panel._usedFrame = renderer3dExactTextureFrame;
+    renderer3dExact2DTextureCache.set(signature, panel);
 }
 
 function getCached3DExact2DTexture(signature) {
-    let entry = renderer3dExact2DTextureCache.get(signature);
-    if (entry) entry.lastUsedFrame = renderer3dExactTextureFrame;
-    return entry;
+    let panel = renderer3dExact2DTextureCache.get(signature);
+    if (panel) panel._usedFrame = renderer3dExactTextureFrame;
+    return panel;
 }
 
 function begin3DTextureFrame() {
@@ -356,9 +369,10 @@ function begin3DTextureFrame() {
     // Evict only unused entries, once per frame, rather than evicting panels
     // that an earlier entity just used and rebuilding them on the next frame.
     if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) return;
-    for (let [key, entry] of renderer3dExact2DTextureCache) {
-        if (entry.lastUsedFrame >= renderer3dExactTextureFrame - 2) continue;
+    for (let [key, panel] of renderer3dExact2DTextureCache) {
+        if (panel._usedFrame >= renderer3dExactTextureFrame - 2) continue;
         renderer3dExact2DTextureCache.delete(key);
+        if (panel._panelCtx && renderer3dPanelPool.length < RENDERER3D_PANEL_POOL_MAX) renderer3dPanelPool.push(panel);
         if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) break;
     }
 }
@@ -465,43 +479,60 @@ function get3DExact2DCapture(entity, x, y, isUnit) {
 // frame's raster budget was spent (cached scene objects must not keep it).
 let renderer3dExactTextureFallback = false;
 
+function _rasterize3DPanel(signature, scale, offsetX, offsetY, drawFn) {
+    let canvas = renderer3dPanelPool.pop();
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+        canvas._panelCtx = canvas.getContext('2d');
+        if (!canvas._panelCtx) return null;
+    }
+    let g = canvas._panelCtx, size = RENDERER3D_TOP_TEXTURE_SIZE;
+    g.imageSmoothingEnabled = false;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.clearRect(0, 0, size, size);
+    g.save();
+    g.__drawImagesImmediately = true;
+    g.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+    drawFn(g);
+    g.restore();
+    g.__drawImagesImmediately = false;
+    canvas._renderer3DExactKey = `2d:${signature}`;
+    canvas._textureVersion = ++renderer3dPanelSerial;
+    canvas._flatWorldSize = undefined;
+    canvas._flatOffsetZ = undefined;
+    return canvas;
+}
+
 function get3DExact2DTexture(entity, useUnitBudget = false) {
     renderer3dExactTextureFallback = false;
     if (!entity || typeof entity.draw !== 'function') return null;
     let signature = get3DExact2DVisualSignature(entity, useUnitBudget);
-    let entry = getCached3DExact2DTexture(signature);
-    if (!entry) {
-        // A camera jump must not rasterize hundreds of status panels at once.
-        // Callers already have a shared type/owner sprite as a fallback.
-        // Units are collected after buildings. Give them a separate raster
-        // budget so a dense base cannot permanently starve every unit panel.
-        if (useUnitBudget) {
-            if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) {
-                renderer3dExactTextureFallback = true;
-                return get3DExact2DFallbackTexture(entity, true);
-            }
-            renderer3dExactUnitTextureBuildsRemaining--;
-        } else {
-            if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) {
-                renderer3dExactTextureFallback = true;
-                return get3DExact2DFallbackTexture(entity, false);
-            }
-            renderer3dExactTextureBuildsRemaining--;
-        }
-        let canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas._renderer3DExactKey = `2d:${signature}`;
-        entry = { canvas, ctx: canvas.getContext('2d') };
-        cache3DExact2DTexture(signature, entry);
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) {
+        _rememberExact2DTexture(entity, cached);
+        return cached;
     }
-    if (entry.canvas._textureVersion) {
-        renderer3dLastExactTextures.set(entity, entry.canvas);
-        return entry.canvas;
+    // A camera jump must not rasterize hundreds of status panels at once.
+    // Callers already have a shared type/owner sprite as a fallback.
+    // Units are collected after buildings. Give them a separate raster
+    // budget so a dense base cannot permanently starve every unit panel.
+    if (useUnitBudget) {
+        if (renderer3dExactUnitTextureBuildsRemaining <= 0 || renderer3dExactUnitTextureTimeRemaining <= 0) {
+            renderer3dExactTextureFallback = true;
+            return get3DExact2DFallbackTexture(entity, true);
+        }
+        renderer3dExactUnitTextureBuildsRemaining--;
+    } else {
+        if (renderer3dExactTextureBuildsRemaining <= 0 || renderer3dExactTextureTimeRemaining <= 0) {
+            renderer3dExactTextureFallback = true;
+            return get3DExact2DFallbackTexture(entity, false);
+        }
+        renderer3dExactTextureBuildsRemaining--;
     }
     let buildStarted = performance.now();
-    let g = entry.ctx;
-    if (!g) return null;
     let x = Number(entity.x);
     let y = Number(entity.y);
     if (!Number.isFinite(x)) x = (Number(entity.gx) || 0) * TILE + TILE * 0.5;
@@ -510,147 +541,96 @@ function get3DExact2DTexture(entity, useUnitBudget = false) {
     // capture on that complete footprint instead of on the body alone; the
     // old tile-centered crop cut level labels off the mounted panel.
     let capture = get3DExact2DCapture(entity, x, y, useUnitBudget);
-    let scale = (entry.canvas.width - 8) / Math.max(1, capture.extent);
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / Math.max(1, capture.extent);
+    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
+        g => entity.draw(g));
+    if (!panel) return null;
     // Flat sprites include the capture padding and the label's offset above
     // the entity. Model footprints are deliberately unrelated to these sizes.
-    entry.canvas._flatWorldSize = entry.canvas.width / scale / TILE;
-    entry.canvas._flatOffsetZ = (capture.centerY - y) / TILE;
-    g.imageSmoothingEnabled = false;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.globalAlpha = 1;
-    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-    g.save();
-    g.__drawImagesImmediately = true;
-    g.setTransform(
-        scale, 0, 0, scale,
-        entry.canvas.width * 0.5 - capture.centerX * scale,
-        entry.canvas.height * 0.5 - capture.centerY * scale
-    );
-    entity.draw(g);
-    g.restore();
-    g.__drawImagesImmediately = false;
-    entry.canvas._textureVersion = 1;
-    renderer3dLastExactTextures.set(entity, entry.canvas);
+    panel._flatWorldSize = size / scale / TILE;
+    panel._flatOffsetZ = (capture.centerY - y) / TILE;
+    cache3DExact2DTexture(signature, panel);
+    _rememberExact2DTexture(entity, panel);
     let buildTime = performance.now() - buildStarted;
     if (useUnitBudget) renderer3dExactUnitTextureTimeRemaining -= buildTime;
     else renderer3dExactTextureTimeRemaining -= buildTime;
-    return entry.canvas;
+    return panel;
 }
 
 // While the raster budget is spent, keep showing the 2D look rather than a
 // generic boxed placeholder: first the entity's own previous panel (at most
 // a few frames stale), else for units the plain 2D body at the same framing,
-// shared by every unit of that type, owner and footprint.
+// shared by every unit of that type, owner and footprint. The version tells
+// whether the previous panel's canvas was since recycled for another.
 const renderer3dLastExactTextures = new WeakMap();
+
+function _rememberExact2DTexture(entity, panel) {
+    let last = renderer3dLastExactTextures.get(entity);
+    if (!last) renderer3dLastExactTextures.set(entity, last = {});
+    last.panel = panel;
+    last.version = panel._textureVersion;
+}
 
 function get3DExact2DFallbackTexture(entity, isUnit) {
     let previous = renderer3dLastExactTextures.get(entity);
-    if (previous && previous._textureVersion) return previous;
+    if (previous && previous.panel._textureVersion === previous.version) {
+        _touch3DPanel(previous.panel);
+        return previous.panel;
+    }
     if (!isUnit) return null;
     let x = Number(entity.x) || 0, y = Number(entity.y) || 0;
     let capture = get3DExact2DCapture(entity, x, y, true);
     let signature = `body|${entity.unitType || ''}|${Number(entity.owner) || 0}|${entity.vis || ''}|${entity.color || ''}|`
         + `${Math.round((Number(entity.r) || 0) * 10)}|${entity.carryingValue > 0 ? 1 : 0}|`
         + `${Math.round(capture.extent * 4)}|${Math.round((capture.centerX - x) * 4)}|${Math.round((capture.centerY - y) * 4)}`;
-    let entry = getCached3DExact2DTexture(signature);
-    if (entry && entry.canvas._textureVersion) return entry.canvas;
-    if (!entry) {
-        let canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas._renderer3DExactKey = `2d:${signature}`;
-        entry = { canvas, ctx: canvas.getContext('2d') };
-        cache3DExact2DTexture(signature, entry);
-    }
-    let g = entry.ctx;
-    if (!g) return null;
-    let scale = (entry.canvas.width - 8) / Math.max(1, capture.extent);
-    entry.canvas._flatWorldSize = entry.canvas.width / scale / TILE;
-    entry.canvas._flatOffsetZ = (capture.centerY - y) / TILE;
-    g.imageSmoothingEnabled = false;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-    g.save();
-    g.__drawImagesImmediately = true;
-    g.setTransform(
-        scale, 0, 0, scale,
-        entry.canvas.width * 0.5 - capture.centerX * scale,
-        entry.canvas.height * 0.5 - capture.centerY * scale
-    );
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) return cached;
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / Math.max(1, capture.extent);
     let ownerId = Number(entity.owner);
-    drawUnitBodyGeometry(g, entity, ownerId >= 0 ? get2DRenderOwnerColor(ownerId) : '#000', 1);
-    g.restore();
-    g.__drawImagesImmediately = false;
-    entry.canvas._textureVersion = 1;
-    return entry.canvas;
+    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - capture.centerX * scale, size * 0.5 - capture.centerY * scale,
+        g => drawUnitBodyGeometry(g, entity, ownerId >= 0 ? get2DRenderOwnerColor(ownerId) : '#000', 1));
+    if (!panel) return null;
+    panel._flatWorldSize = size / scale / TILE;
+    panel._flatOffsetZ = (capture.centerY - y) / TILE;
+    cache3DExact2DTexture(signature, panel);
+    return panel;
+}
+
+// A tile-sized panel (floor items, mines), cached by signature.
+function _get3DExact2DTilePanel(signature, drawFn) {
+    let cached = getCached3DExact2DTexture(signature);
+    if (cached) return cached;
+    let size = RENDERER3D_TOP_TEXTURE_SIZE;
+    let scale = (size - 8) / TILE;
+    let panel = _rasterize3DPanel(signature, scale, size * 0.5 - TILE * 0.5 * scale, size * 0.5 - TILE * 0.5 * scale, drawFn);
+    if (panel) cache3DExact2DTexture(signature, panel);
+    return panel;
 }
 
 function get3DExact2DFloorTexture(item, owner) {
     if (!item) return null;
     let signature = `floor|${Number(owner) || 0}|${get3DExact2DVisualSignature(item)}|${_getFloorItemEnergyBucket(item)}`;
-    let entry = getCached3DExact2DTexture(signature);
-    if (entry && entry.canvas._textureVersion) return entry.canvas;
-    if (!entry) {
-        let canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas._renderer3DExactKey = `2d:${signature}`;
-        entry = { canvas, ctx: canvas.getContext('2d') };
-        cache3DExact2DTexture(signature, entry);
-    }
-    let g = entry.ctx;
-    if (!g) return null;
-    let scale = (entry.canvas.width - 8) / TILE;
-    g.imageSmoothingEnabled = false;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-    g.save();
-    g.__drawImagesImmediately = true;
-    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - TILE * 0.5 * scale, entry.canvas.height * 0.5 - TILE * 0.5 * scale);
-    drawFloorItem(g, { item, owner }, 0, 0);
-    g.restore();
-    g.__drawImagesImmediately = false;
-    entry.canvas._textureVersion = 1;
-    return entry.canvas;
+    return _get3DExact2DTilePanel(signature, g => drawFloorItem(g, { item, owner }, 0, 0));
 }
 
 function get3DExact2DMineTexture(kind, amount) {
     let active = Number(amount) > 0;
     let label = showGoldMineAmountText ? formatBigNumber(Math.max(0, Number(amount) || 0), 0) : '';
     let signature = `mine|${kind}|${active ? 1 : 0}|${label}`;
-    let entry = getCached3DExact2DTexture(signature);
-    if (entry && entry.canvas._textureVersion) return entry.canvas;
-    if (!entry) {
-        let canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas._renderer3DExactKey = `2d:${signature}`;
-        entry = { canvas, ctx: canvas.getContext('2d') };
-        cache3DExact2DTexture(signature, entry);
-    }
-    let g = entry.ctx;
-    if (!g) return null;
-    let scale = (entry.canvas.width - 8) / TILE;
-    g.imageSmoothingEnabled = false;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
-    g.save();
-    g.__drawImagesImmediately = true;
-    g.setTransform(scale, 0, 0, scale, entry.canvas.width * 0.5 - TILE * 0.5 * scale, entry.canvas.height * 0.5 - TILE * 0.5 * scale);
-    queueDrawImage(g, kind === 'astar' ? _getAstarMineTileSprite(active) : _getGoldMineTileSprite(active), 0, 0, TILE, TILE);
-    if (label) {
-        g.font = 'bold 8px Arial';
-        g.textAlign = 'center';
-        g.textBaseline = 'middle';
-        g.shadowColor = 'rgba(0,0,0,0.9)';
-        g.shadowBlur = 2;
-        g.fillStyle = kind === 'astar' ? (active ? '#f0f0f0' : '#999') : (active ? '#fffbe8' : '#bbb');
-        g.fillText(label, TILE * 0.5, TILE * 0.5);
-    }
-    g.restore();
-    g.__drawImagesImmediately = false;
-    entry.canvas._textureVersion = 1;
-    return entry.canvas;
+    return _get3DExact2DTilePanel(signature, g => {
+        queueDrawImage(g, kind === 'astar' ? _getAstarMineTileSprite(active) : _getGoldMineTileSprite(active), 0, 0, TILE, TILE);
+        if (label) {
+            g.font = 'bold 8px Arial';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.shadowColor = 'rgba(0,0,0,0.9)';
+            g.shadowBlur = 2;
+            g.fillStyle = kind === 'astar' ? (active ? '#f0f0f0' : '#999') : (active ? '#fffbe8' : '#bbb');
+            g.fillText(label, TILE * 0.5, TILE * 0.5);
+        }
+    });
 }
 
 function get3DSharedAudioTextureKeyForPlayer(owner, variant = 'default') {
@@ -1500,6 +1480,9 @@ function _reuseStatic3DObject(target, entity, gx, gy, audioMove, audioHeight) {
         || getDamageFlashState(entity)) return false;
     // Structures do not move: their light changes only with the grid.
     let object = entry.object;
+    let panel = object.topTextureCanvas;
+    if (panel && panel._textureVersion !== entry.textureVersion) return false; // recycled
+    _touch3DPanel(panel);
     if (entry.litVersion !== visibilityVersion || entry.litGrid !== visibilityGrid) {
         _relight3DObject(object, entity, object.baseTint, object.baseSideTint, renderer3dStaticFrame.flat2d);
         entry.litVersion = visibilityVersion;
@@ -1514,12 +1497,115 @@ function _rememberStatic3DObject(target, entity, gx, gy, audioMove, audioHeight,
     let entry = renderer3dStaticObjects.get(entity);
     let easing = !!(entry && entry.object.scaleY !== object.scaleY);
     renderer3dStaticObjects.set(entity, { object, tick: gameTime, audioMove, audioHeight, angle: entity.angle,
+        textureVersion: object.topTextureCanvas ? object.topTextureCanvas._textureVersion : undefined,
         litVersion: visibilityVersion, litGrid: visibilityGrid,
         // Panels (health, progress) refresh every 1-4 ticks, spread by tile.
         maxAge: 1 + ((gx * 7 + gy * 13) & 3),
         view: renderer3dStaticFrame.view,
         occupied: renderer3dStaticFrame.occupied.has(gy * GRID_W + gx),
         dynamic: fallbackTexture || easing || !!getDamageFlashState(entity) });
+}
+
+// ---- Flat (2D view) sprites -------------------------------------------
+// The 2D view needs only a position, footprint, light and panel per sprite.
+// Units, projectiles and particles write those straight into the renderer's
+// typed instance batch instead of building scene objects; structures reuse
+// their cached scene objects (pushObject).
+let renderer3dFlatBatch = null;
+let renderer3dFlatGeneration = 0;
+// Per unit: the panel and own light source of the current tick.
+const renderer3dFlatUnits = new WeakMap();
+
+function _getRenderer3DFlatBatch() {
+    if (!renderer3dFlatBatch) renderer3dFlatBatch = new window.Defence3Renderer3D.FlatSpriteBatch();
+    renderer3dFlatBatch.reset();
+    return renderer3dFlatBatch;
+}
+
+// push3DRenderObject's light level for a sprite at (x, z) in tiles.
+function _flatLightAt(x, z, sourceLight, remembered) {
+    if (fullVisibility) return 1;
+    let gx = Math.floor(x), gy = Math.floor(z);
+    let lightGrid = remembered ? getRenderVisibilityGrid() : visibilityGrid;
+    let row = lightGrid[gy];
+    let raw = (row && row[gx]) || 0;
+    if (sourceLight > raw) raw = sourceLight;
+    return Math.max(0, Math.min(1, raw / VISIBILITY_LIGHT_NORMALIZATION_RANGE));
+}
+
+// Returns false when the unit has no exact panel (the caller then builds a
+// scene object). Like the 3D cache, tick data may be one tick old for half
+// of the units, which halves panel lookups on tick frames.
+function _pushFlatUnit(batch, u, x, z, view) {
+    let state = renderer3dFlatUnits.get(u);
+    let age = state ? gameTime - state.tick : -1;
+    if (!state || state.view !== view || state.generation !== renderer3dFlatGeneration || state.fallback
+        || state.panel._textureVersion !== state.version
+        || !(age === 0 || (age === 1 && ((u.id + gameTime) & 1) === 1))) {
+        let panel = get3DExact2DTexture(u, true);
+        if (!panel || !panel._flatWorldSize) return false;
+        if (!state) renderer3dFlatUnits.set(u, state = {});
+        state.tick = gameTime;
+        state.view = view;
+        state.generation = renderer3dFlatGeneration;
+        state.panel = panel;
+        state.version = panel._textureVersion;
+        state.fallback = renderer3dExactTextureFallback;
+        state.sourceLight = fullVisibility ? 0 : getVisualUnitSourceLight(u);
+    }
+    let panel = state.panel, size = panel._flatWorldSize;
+    _touch3DPanel(panel);
+    let remembered = !!u._historyGhost;
+    let light = _flatLightAt(x, z, state.sourceLight, remembered);
+    if (remembered) light *= 0.65;
+    batch.push(x, z + (panel._flatOffsetZ || 0), size, size, light, light, light, 1, 0, panel);
+    return true;
+}
+
+const renderer3dFlatProjectileSprites = new Map();
+
+function _pushFlatProjectile(batch, p, x, z) {
+    let sprite = renderer3dFlatProjectileSprites.get(p.type);
+    if (!sprite) {
+        let color = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
+        let key = `projectile:${p.type}:${color}`;
+        sprite = { key, texture: get3DTopTextureCanvas(key, (g) => {
+            let size = g.canvas.width;
+            g.fillStyle = color;
+            g.beginPath();
+            g.arc(size * 0.5, size * 0.5, size * 0.18, 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = '#fff';
+            g.lineWidth = Math.max(2, Math.round(size * 0.035));
+            g.stroke();
+        }) };
+        renderer3dFlatProjectileSprites.set(p.type, sprite);
+    }
+    let light = _flatLightAt(x, z, 0, false);
+    batch.push(x, z, 0.12, 0.2, light, light, light, 0.95, -Math.atan2(Number(p.vx) || 0, Number(p.vy) || 1), sprite.texture);
+}
+
+// The lit tint as 0..1 rgb, as the GPU renderer parses _getCachedLitTint.
+const renderer3dFlatTintRgb = new Map();
+const RENDERER3D_FLAT_DEFAULT_RGB = [0.78, 0.81, 0.85];
+
+function _getFlatLitRgb(tint, light) {
+    let lit = _getCachedLitTint(tint, light);
+    let rgb = renderer3dFlatTintRgb.get(lit);
+    if (rgb) return rgb;
+    let match = String(lit).trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!match) return RENDERER3D_FLAT_DEFAULT_RGB;
+    let hex = match[1].length === 3 ? match[1].replace(/./g, ch => ch + ch) : match[1];
+    rgb = [parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255];
+    if (renderer3dFlatTintRgb.size >= 2048) renderer3dFlatTintRgb.clear();
+    renderer3dFlatTintRgb.set(lit, rgb);
+    return rgb;
+}
+
+function _pushFlatParticle(batch, p, x, z) {
+    let rgb = _getFlatLitRgb(p.color || '#fff', _flatLightAt(x, z, 0, false));
+    let alpha = Math.max(0.1, Math.min(1, (Number(p.life) || 0) / 35));
+    batch.push(x, z, 0.06, 0.06, rgb[0], rgb[1], rgb[2], alpha, 0, null);
 }
 
 function build3DFrameData(flat2d = false) {
@@ -1536,6 +1622,13 @@ function build3DFrameData(flat2d = false) {
     // panel and side tint, never the legacy animated side texture.
     let objects = [];
     objects.flat2d = flat2d;
+    // 2D: scene objects (structures, units without a panel) move into the
+    // sprite batch in order, between directly written sprites.
+    let flatBatch = flat2d ? _getRenderer3DFlatBatch() : null;
+    let flatDrained = 0;
+    let drainFlatObjects = () => {
+        while (flatDrained < objects.length) flatBatch.pushObject(objects[flatDrained++]);
+    };
     let buildPreview = getCurrentBuildPreviewData();
     let centerX = camera.x + bounds.vw * 0.5;
     let centerY = camera.y + bounds.vh * 0.5;
@@ -1562,7 +1655,8 @@ function build3DFrameData(flat2d = false) {
     let activeOverlapFadeKeys = new Set();
     // One height transition for every overlapping structure, including mines.
     // The 0.05 world-unit floor is about half a builder's rendered height.
-    let getOverlapFadeForTile = (gx, gy) => ({
+    // Flat sprites have no height.
+    let getOverlapFadeForTile = (gx, gy) => flat2d ? null : ({
         gx, gy, occupied: unitOccupiedTileKeys.has(gy * GRID_W + gx),
         nowMs: overlapNowMs, activeKeys: activeOverlapFadeKeys
     });
@@ -1604,7 +1698,8 @@ function build3DFrameData(flat2d = false) {
         });
     };
 
-    for (let u of units) {
+    // Occupied tiles lower structures in 3D; flat sprites do not overlap-fade.
+    if (!flat2d) for (let u of units) {
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
         let uy = u.prevY + (u.y - u.prevY) * alpha;
@@ -1859,7 +1954,9 @@ function build3DFrameData(flat2d = false) {
         });
     }
 
+    if (flat2d) drainFlatObjects();
     for (let u of units) {
+        if (flat2d) drainFlatObjects();
         if (u.dead) continue;
         let ux = u.prevX + (u.x - u.prevX) * alpha;
         let uy = u.prevY + (u.y - u.prevY) * alpha;
@@ -1871,6 +1968,7 @@ function build3DFrameData(flat2d = false) {
         let bgLevel = bgSoundRow ? bgSoundRow[ugx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[ugx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE + reactiveOffsetX * audioMove, uy / TILE + reactiveOffsetY * audioMove, view3DKey)) continue;
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
         let modelScale = u.isFlying ? (u.isWorker ? 0.65 : 0.8) : 1;
@@ -1890,8 +1988,10 @@ function build3DFrameData(flat2d = false) {
             // which halves the rebuild on tick frames.
             let cachedAge = cached ? gameTime - cached.tick : -1;
             if (cached && (cachedAge === 0 || (cachedAge === 1 && ((u.id + gameTime) & 1) === 1))
-                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)) {
+                && cached.view === view3DKey && !cached.dynamic && !getDamageFlashState(u)
+                && (cached.object.topTextureCanvas || {})._textureVersion === cached.textureVersion) {
                 let o = cached.object;
+                _touch3DPanel(o.topTextureCanvas);
                 o.x = ux / TILE + reactiveOffsetX * audioMove;
                 o.z = uy / TILE + reactiveOffsetY * audioMove;
                 o.walkPhase = _unit3DWalkPhase(u, cached.activity);
@@ -1933,11 +2033,13 @@ function build3DFrameData(flat2d = false) {
                 sideTint: unitSideTint,
             });
             renderer3dUnitObjects.set(u, { object: objects[objects.length - 1], tick: gameTime, view: view3DKey, activity,
+                textureVersion: objects[objects.length - 1].topTextureCanvas && objects[objects.length - 1].topTextureCanvas._textureVersion,
                 tint: unitTint, sideTint: unitSideTint, dynamic: !unit2DTexture || unitTextureFallback || !!getDamageFlashState(u) });
             if (!flat2d) pushUnit3DActivityEffects(objects, u, activity, ux / TILE, uy / TILE, footprint);
         }
     }
 
+    if (flat2d) drainFlatObjects();
     for (let p of projectiles) {
         let px = Number.isFinite(p.prevX) ? (p.prevX + (p.x - p.prevX) * alpha) : p.x;
         let py = Number.isFinite(p.prevY) ? (p.prevY + (p.y - p.prevY) * alpha) : p.y;
@@ -1949,6 +2051,10 @@ function build3DFrameData(flat2d = false) {
         let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        if (flat2d) {
+            _pushFlatProjectile(flatBatch, p, px / TILE + reactiveOffsetX * audioMove, py / TILE + reactiveOffsetY * audioMove);
+            continue;
+        }
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         let projectileColor = (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
         let projectileKey = `projectile:${p.type}:${projectileColor}`;
@@ -1988,6 +2094,10 @@ function build3DFrameData(flat2d = false) {
         let bgLevel = bgSoundRow ? bgSoundRow[pgx] || 0 : 0;
         let fxLevel = fxSoundRow ? fxSoundRow[pgx] || 0 : 0;
         let audioMove = bgLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_POSITION_FROM_SFX;
+        if (flat2d) {
+            _pushFlatParticle(flatBatch, p, px / TILE + reactiveOffsetX * audioMove, py / TILE + reactiveOffsetY * audioMove);
+            continue;
+        }
         let audioHeight = bgLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_BG + fxLevel * AUDIO_REACTIVE_RENDER_3D_HEIGHT_FROM_SFX;
         push3DRenderObject(objects, {
             modelKey: 'particle',
@@ -2035,7 +2145,8 @@ function build3DFrameData(flat2d = false) {
             zoom: camera.zoom
         },
         buildPreview,
-        objects
+        objects,
+        flatBatch
     };
 }
 
@@ -3231,6 +3342,8 @@ function clearRendererTransientVisualCaches(options = null) {
         UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
         renderer3dTopTextureCache.clear();
         renderer3dExact2DTextureCache.clear();
+        renderer3dFlatProjectileSprites.clear();
+        renderer3dFlatGeneration++;
         if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {
             for (let entry of renderer3dInstance.topTextureCache.values()) renderer3dInstance.gl.deleteTexture(entry.texture);
             renderer3dInstance.topTextureCache.clear();

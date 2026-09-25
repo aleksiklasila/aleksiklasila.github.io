@@ -78,6 +78,198 @@
         return rgb;
     }
 
+    // Flat (2D view) sprite instances, FLAT_STRIDE floats each: center x/z,
+    // width, height, r, g, b, alpha, angle and the texture layer. The frame
+    // builder writes them directly; layers are resolved when drawn.
+    const FLAT_STRIDE = 10;
+    const FLAT_LAYER = 9;
+    const FLAT_SINGLE = -1;      // textured, but not in the texture array
+    const FLAT_UNTEXTURED = -2;
+    const FLAT_ATLAS_SIZE = 96;  // RENDERER3D_TOP_TEXTURE_SIZE panels
+    const FLAT_ATLAS_LEVELS = 7; // 96 48 24 12 6 3 1
+
+    class FlatSpriteBatch {
+        constructor(capacity = 1024) {
+            this.data = new Float32Array(capacity * FLAT_STRIDE);
+            this.textures = new Array(capacity).fill(null);
+            this.count = 0;
+        }
+
+        reset() {
+            this.count = 0;
+        }
+
+        push(x, z, width, height, r, g, b, alpha, angle, texture) {
+            const i = this.count;
+            if (i >= this.textures.length) {
+                const data = new Float32Array(this.data.length * 2);
+                data.set(this.data);
+                this.data = data;
+                this.textures.length = i * 2;
+                this.textures.fill(null, i);
+            }
+            const d = this.data, o = i * FLAT_STRIDE;
+            d[o] = x; d[o + 1] = z; d[o + 2] = width; d[o + 3] = height;
+            d[o + 4] = r; d[o + 5] = g; d[o + 6] = b; d[o + 7] = alpha;
+            d[o + 8] = angle; d[o + 9] = 0;
+            this.textures[i] = texture || null;
+            this.count = i + 1;
+        }
+
+        // A 3D scene object: exact 2D panels carry their own footprint and
+        // label offset, structures fill their tile, the rest use the model
+        // scale and turn with it. Textures are lit; plain sprites use the
+        // (already lit) tint.
+        pushObject(o) {
+            const source = o.topTextureCanvas || null;
+            const exact = source && source._flatWorldSize;
+            const key = o.modelKey || '';
+            const tile = !key.startsWith('unit_') && !key.startsWith('projectile_')
+                && !key.startsWith('particle') && !key.startsWith('dropped_');
+            const size = exact || (tile ? 1 : 0);
+            const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
+            const color = source ? null : hexToRgb(o.tint);
+            this.push(o.x, o.z + (exact ? source._flatOffsetZ || 0 : 0), size || o.scaleX, size || o.scaleZ,
+                source ? light : color[0], source ? light : color[1], source ? light : color[2], o.alpha,
+                exact || tile ? 0 : -(o.rotationY || 0), source);
+        }
+    }
+
+    let flatTextureSerial = 0;
+    function flatTextureKey(source) {
+        return source._renderer3DExactKey || source._flatTextureKey || (source._flatTextureKey = `flat:${++flatTextureSerial}`);
+    }
+
+    // Every 96px sprite in one texture array, so a frame's sprites share a
+    // draw. A layer stays bound to its source until that source goes unused
+    // for a few frames (clock eviction); the array doubles when the visible
+    // set outgrows it. Uploads stay on the GPU: the source goes into a small
+    // staging texture, is mipmapped there (generateMipmap on the array would
+    // rebuild every layer) and each level is copied into the layer. Reading
+    // canvas pixels back instead stalls on the GPU process.
+    class FlatSpriteAtlas {
+        constructor(gl) {
+            this.gl = gl;
+            const maxLayers = Number(gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS));
+            this.maxLayers = Math.max(64, Math.min(2048, Number.isFinite(maxLayers) ? maxLayers : 256));
+            this.capacity = 0;
+            this.texture = null;
+            this.sources = [];
+            this.versions = new Float64Array(0);
+            this.lastUsed = new Int32Array(0);
+            this.free = [];
+            this.hand = 0;
+            this.frame = 0;
+            this.exhaustedFrame = -1;
+            this.staging = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, this.staging);
+            gl.texStorage2D(gl.TEXTURE_2D, FLAT_ATLAS_LEVELS, gl.RGBA8, FLAT_ATLAS_SIZE, FLAT_ATLAS_SIZE);
+            this.copyFramebuffer = gl.createFramebuffer();
+            this.savedReadFramebuffer = undefined;
+            this.allocate(Math.min(256, this.maxLayers));
+        }
+
+        beginFrame(frame) {
+            this.frame = frame;
+        }
+
+        // Uploads borrow the read framebuffer; give it back.
+        endFrame() {
+            if (this.savedReadFramebuffer === undefined) return;
+            this.gl.bindFramebuffer(this.gl.READ_FRAMEBUFFER, this.savedReadFramebuffer);
+            this.savedReadFramebuffer = undefined;
+        }
+
+        allocate(capacity) {
+            const gl = this.gl, previous = this.sources, previousUsed = this.lastUsed;
+            if (this.texture) gl.deleteTexture(this.texture);
+            this.texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, FLAT_ATLAS_LEVELS, gl.RGBA8, FLAT_ATLAS_SIZE, FLAT_ATLAS_SIZE, capacity);
+            this.capacity = capacity;
+            this.sources = new Array(capacity).fill(null);
+            this.versions = new Float64Array(capacity).fill(NaN);
+            this.lastUsed = new Int32Array(capacity).fill(-1e9);
+            this.free = [];
+            // Keep recently used layers at their index (this frame's batch
+            // already refers to them); release the rest.
+            for (let slot = capacity - 1; slot >= 0; slot--) {
+                const source = slot < previous.length ? previous[slot] : null;
+                if (source && previousUsed[slot] >= this.frame - 2 && this.upload(slot, source)) {
+                    this.sources[slot] = source;
+                    this.versions[slot] = Number(source._textureVersion) || 0;
+                    this.lastUsed[slot] = previousUsed[slot];
+                } else {
+                    this.free.push(slot);
+                }
+            }
+            this.hand = 0;
+        }
+
+        acquire() {
+            if (this.free.length) return this.free.pop();
+            if (this.exhaustedFrame === this.frame) return -1;
+            for (let n = 0; n < this.capacity; n++) {
+                const slot = this.hand;
+                this.hand = (slot + 1) % this.capacity;
+                if (this.lastUsed[slot] < this.frame - 2) return slot;
+            }
+            if (this.capacity < this.maxLayers) {
+                this.allocate(Math.min(this.maxLayers, this.capacity * 2));
+                if (this.free.length) return this.free.pop();
+            }
+            this.exhaustedFrame = this.frame;
+            return -1;
+        }
+
+        layerFor(source) {
+            if (source.width !== FLAT_ATLAS_SIZE || source.height !== FLAT_ATLAS_SIZE) return FLAT_SINGLE;
+            let slot = source._flatAtlasSlot;
+            if (slot === undefined || this.sources[slot] !== source) {
+                slot = this.acquire();
+                if (slot < 0) return FLAT_SINGLE;
+                const evicted = this.sources[slot];
+                if (evicted && evicted._flatAtlasSlot === slot) evicted._flatAtlasSlot = undefined;
+                this.sources[slot] = source;
+                this.versions[slot] = NaN;
+                source._flatAtlasSlot = slot;
+            }
+            const version = Number(source._textureVersion) || 0;
+            if (this.versions[slot] !== version) {
+                if (!this.upload(slot, source)) {
+                    this.sources[slot] = null;
+                    this.free.push(slot);
+                    source._flatAtlasSlot = undefined;
+                    return FLAT_SINGLE;
+                }
+                this.versions[slot] = version;
+            }
+            this.lastUsed[slot] = this.frame;
+            return slot;
+        }
+
+        upload(slot, source) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.staging);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            gl.generateMipmap(gl.TEXTURE_2D);
+            if (this.savedReadFramebuffer === undefined) this.savedReadFramebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.copyFramebuffer);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            for (let level = 0, size = FLAT_ATLAS_SIZE; level < FLAT_ATLAS_LEVELS; level++, size = Math.max(1, size >> 1)) {
+                gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.staging, level);
+                gl.copyTexSubImage3D(gl.TEXTURE_2D_ARRAY, level, 0, 0, slot, 0, 0, size, size);
+            }
+            return true;
+        }
+    }
+
     const SHADOW_LIGHT_DIRECTION = (() => {
         let x = -0.42;
         let y = 0.86;
@@ -2885,105 +3077,130 @@
             gl.drawElementsInstanced(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0, objects.length);
         }
 
+        // Scene objects (3D-style) for the flat view: converted into a batch.
         drawFlatSprites(objects) {
+            const batch = this.flatObjectBatch || (this.flatObjectBatch = new FlatSpriteBatch());
+            batch.reset();
+            for (let i = 0; i < objects.length; i++) batch.pushObject(objects[i]);
+            this.drawFlatBatch(batch);
+        }
+
+        getFlatAtlas() {
+            return this.flatAtlas || (this.flatAtlas = new FlatSpriteAtlas(this.gl));
+        }
+
+        // One upload of the whole instance buffer, then one draw per run.
+        // Panels, tiles and untextured sprites share a run through the
+        // texture array; only other textures split runs. Runs keep painter
+        // order: sprites are never sorted.
+        drawFlatBatch(batch) {
             const gl = this.gl;
+            const count = batch.count;
             if (!this.flatProgram) {
                 this.flatProgram = createProgram(gl, `#version 300 es
                     precision highp float;
                     layout(location=0) in vec4 rect;
                     layout(location=1) in vec4 tint;
                     layout(location=2) in float angle;
-                    layout(location=3) in vec4 uvRect;
+                    layout(location=3) in float layer;
                     uniform mat4 viewProjection;
                     out vec2 uv;
                     out vec4 color;
+                    flat out float spriteLayer;
                     void main() {
                         vec2 p = vec2(float(gl_VertexID % 2), float(gl_VertexID / 2));
-                        uv = uvRect.xy + vec2(p.x, 1. - p.y) * uvRect.zw;
+                        uv = vec2(p.x, 1. - p.y);
                         vec2 d = (p - .5) * rect.zw;
                         float c = cos(angle), s = sin(angle);
                         vec2 world = rect.xy + vec2(c*d.x-s*d.y,s*d.x+c*d.y);
                         gl_Position = viewProjection * vec4(world.x, .1, world.y, 1.);
                         color = tint;
+                        spriteLayer = layer;
                     }`, `#version 300 es
                     precision highp float;
+                    precision highp sampler2DArray;
                     uniform sampler2D sprite;
-                    uniform bool textured;
+                    uniform sampler2DArray atlas;
                     in vec2 uv;
                     in vec4 color;
+                    flat in float spriteLayer;
                     layout(location=0) out vec4 outColor;
                     void main() {
-                        outColor = (textured ? texture(sprite, uv) : vec4(1.)) * color;
+                        // Sampled unconditionally: mip selection needs
+                        // derivatives from uniform control flow.
+                        vec4 layered = texture(atlas, vec3(uv, max(spriteLayer, 0.)));
+                        vec4 single = texture(sprite, uv);
+                        vec4 texel = spriteLayer >= 0. ? layered : spriteLayer > -1.5 ? single : vec4(1.);
+                        outColor = texel * color;
                     }`);
                 this.flatVao = gl.createVertexArray();
                 this.flatBuffer = gl.createBuffer();
+                this.flatBufferBytes = 0;
                 this.flatUniforms = {
                     matrix: gl.getUniformLocation(this.flatProgram, 'viewProjection'),
-                    textured: gl.getUniformLocation(this.flatProgram, 'textured'),
-                    sprite: gl.getUniformLocation(this.flatProgram, 'sprite')
+                    sprite: gl.getUniformLocation(this.flatProgram, 'sprite'),
+                    atlas: gl.getUniformLocation(this.flatProgram, 'atlas')
                 };
                 gl.bindVertexArray(this.flatVao);
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
-                for (const [location, size, offset] of [[0,4,0], [1,4,16], [2,1,32], [3,4,36]]) {
+                for (let location = 0; location < 4; location++) {
                     gl.enableVertexAttribArray(location);
-                    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 52, offset);
                     gl.vertexAttribDivisor(location, 1);
                 }
             }
+            if (!count) return;
+            const data = batch.data, textures = batch.textures;
+            const atlas = this.getFlatAtlas();
+            atlas.beginFrame(this.textureFrame);
+            for (let i = 0, o = FLAT_LAYER; i < count; i++, o += FLAT_STRIDE) {
+                const texture = textures[i];
+                data[o] = texture ? atlas.layerFor(texture) : FLAT_UNTEXTURED;
+            }
+            atlas.endFrame();
+            this.flatData = data;
             gl.useProgram(this.flatProgram);
             gl.bindVertexArray(this.flatVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.flatBuffer);
-            if (!this.flatData || this.flatData.length < objects.length * 13) {
-                this.flatData = new Float32Array(Math.max(1024, objects.length * 26));
-                gl.bufferData(gl.ARRAY_BUFFER, this.flatData.byteLength, gl.DYNAMIC_DRAW);
+            const bytes = count * FLAT_STRIDE * 4;
+            if (this.flatBufferBytes < bytes) {
+                this.flatBufferBytes = Math.max(64 * 1024, bytes * 2);
+                gl.bufferData(gl.ARRAY_BUFFER, this.flatBufferBytes, gl.DYNAMIC_DRAW);
             }
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, count * FLAT_STRIDE);
             gl.uniformMatrix4fv(this.flatUniforms.matrix, false, this.tmpViewProjection);
             gl.uniform1i(this.flatUniforms.sprite, 0);
+            gl.uniform1i(this.flatUniforms.atlas, 1);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, atlas.texture);
             gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, null);
             gl.disable(gl.DEPTH_TEST);
             gl.depthMask(false);
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
-            // Consecutive runs preserve painter order, including overlapping
-            // labels. Never sort sprites by source.
-            for (let start = 0; start < objects.length;) {
-                const first = objects[start];
-                const texture = first.topTextureCanvas;
+            for (let start = 0; start < count;) {
                 let end = start + 1;
-                while (end < objects.length && objects[end].topTextureCanvas === texture &&
-                    objects[end].topTextureKey === first.topTextureKey) end++;
-                let offset = 0;
-                for (let i = start; i < end; i++) {
-                    const o = objects[i], source = o.topTextureCanvas;
-                    const exact = source && source._flatWorldSize;
-                    const unit = o.modelKey.startsWith('unit_');
-                    const tile = !unit &&
-                        !o.modelKey.startsWith('projectile_') && !o.modelKey.startsWith('particle') && !o.modelKey.startsWith('dropped_');
-                    const size = exact || (tile ? 1 : 0);
-                    const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
-                    const color = texture ? null : hexToRgb(o.tint);
-                    this.flatData[offset++] = o.x;
-                    this.flatData[offset++] = o.z + (exact ? source._flatOffsetZ || 0 : 0);
-                    this.flatData[offset++] = size || o.scaleX;
-                    this.flatData[offset++] = size || o.scaleZ;
-                    this.flatData[offset++] = texture ? light : color[0];
-                    this.flatData[offset++] = texture ? light : color[1];
-                    this.flatData[offset++] = texture ? light : color[2];
-                    this.flatData[offset++] = o.alpha;
-                    this.flatData[offset++] = exact || tile ? 0 : -(o.rotationY || 0);
-                    const uv = o.topTextureUv;
-                    this.flatData[offset++] = uv ? uv[0] : 0;
-                    this.flatData[offset++] = uv ? uv[1] : 0;
-                    this.flatData[offset++] = uv ? uv[2] : 1;
-                    this.flatData[offset++] = uv ? uv[3] : 1;
+                let texture = null;
+                if (data[start * FLAT_STRIDE + FLAT_LAYER] === FLAT_SINGLE) {
+                    texture = textures[start];
+                    while (end < count && data[end * FLAT_STRIDE + FLAT_LAYER] === FLAT_SINGLE && textures[end] === texture) end++;
+                    gl.bindTexture(gl.TEXTURE_2D, this.getTopTexture(flatTextureKey(texture), texture));
+                } else {
+                    while (end < count && data[end * FLAT_STRIDE + FLAT_LAYER] !== FLAT_SINGLE) end++;
                 }
-                gl.uniform1i(this.flatUniforms.textured, texture ? 1 : 0);
-                gl.bindTexture(gl.TEXTURE_2D, texture ? this.getTopTexture(first.topTextureKey, texture) : null);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.flatData.subarray(0, offset));
-                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, end-start);
+                // No base instance in WebGL2: offset the attributes instead.
+                const base = start * FLAT_STRIDE * 4;
+                gl.vertexAttribPointer(0, 4, gl.FLOAT, false, FLAT_STRIDE * 4, base);
+                gl.vertexAttribPointer(1, 4, gl.FLOAT, false, FLAT_STRIDE * 4, base + 16);
+                gl.vertexAttribPointer(2, 1, gl.FLOAT, false, FLAT_STRIDE * 4, base + 32);
+                gl.vertexAttribPointer(3, 1, gl.FLOAT, false, FLAT_STRIDE * 4, base + 36);
+                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, end - start);
                 start = end;
             }
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            gl.activeTexture(gl.TEXTURE0);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
             gl.disable(gl.BLEND);
             gl.depthMask(true);
@@ -3006,7 +3223,8 @@
             this.drawBackground(snapshot);
             let objects = Array.isArray(snapshot.objects) ? snapshot.objects : [];
             if (snapshot.flat2d) {
-                this.drawFlatSprites(objects);
+                if (snapshot.flatBatch) this.drawFlatBatch(snapshot.flatBatch);
+                else this.drawFlatSprites(objects);
                 this.drawGroundOverlays(snapshot.overlays);
                 this.resolveScene();
                 this.presentSceneToCanvas();
@@ -3139,5 +3357,6 @@
         }
     }
 
+    Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
     window.Defence3Renderer3D = Defence3Renderer3D;
 })();

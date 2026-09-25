@@ -21,41 +21,69 @@ r.gl=new Proxy({}, {get(_,name){
     if(/^[A-Z_0-9]+$/.test(name))return name;
     return (...args)=>{calls.push([name,...args]);
         if(name==='getShaderParameter'||name==='getProgramParameter')return true;
+        if(name==='getParameter'&&args[0]==='MAX_ARRAY_TEXTURE_LAYERS')return 1024;
         return {};
     };
 }});
 r.topTextureCache=new Map();r.textureFrame=1;
-const texture={width:128,height:128,_textureVersion:1,_flatWorldSize:1.5,_flatOffsetZ:-.25};
+const count=name=>calls.filter(c=>c[0]===name).length;
+// 96px panels live in one texture array; each layer upload copies 7 mips.
+const panel=(extra={})=>({width:96,height:96,_textureVersion:1,_flatWorldSize:1.5,_flatOffsetZ:-.25,...extra});
+const texture=panel();
 const object={modelKey:'unit_norm',x:10,z:8,scaleX:.5,scaleZ:.5,alpha:1,lightLevel:.8,
     topTextureKey:'2d:unit',topTextureCanvas:texture};
 r.drawFlatSprites(Array.from({length:1500},()=>({...object})));
-assert.equal(calls.filter(c=>c[0]==='drawArraysInstanced').length,1,'1500 shared sprites in one GPU draw');
+assert.equal(count('drawArraysInstanced'),1,'1500 shared sprites in one GPU draw');
 assert.equal(calls.find(c=>c[0]==='drawArraysInstanced')[4],1500);
+assert.equal(count('bufferSubData'),1,'instance data uploaded once per frame');
 assert.deepEqual(Array.from(r.flatData.slice(0,4)),[10,7.75,1.5,1.5],'capture footprint and label offset survive');
-assert.equal(calls.filter(c=>c[0]==='texImage2D').length,1);
+assert.equal(count('copyTexSubImage3D'),7,'one layer (all mips) for a shared panel');
 const buffer=r.flatData;
 r.textureFrame++;
 r.drawFlatSprites([object]);
 assert.equal(r.flatData,buffer,'instance allocation reused');
-assert.equal(calls.filter(c=>c[0]==='texImage2D').length,1,'stable texture never reuploaded');
+assert.equal(count('copyTexSubImage3D'),7,'stable texture never reuploaded');
 texture._textureVersion++;
 r.drawFlatSprites([object]);
-assert.equal(calls.filter(c=>c[0]==='texSubImage2D').length,1,'changed pixels uploaded');
-const alternate={...object,topTextureKey:'2d:other',topTextureCanvas:{...texture}};
-calls.length=0;
-r.drawFlatSprites([object,alternate,object]);
-assert.equal(calls.filter(c=>c[0]==='drawArraysInstanced').length,3,'overlapping transparency retains painter order');
-assert.equal(calls.filter(c=>c[0]==='readPixels'||c[0]==='drawImage').length,0);
+assert.equal(count('copyTexSubImage3D'),14,'changed pixels uploaded into the same layer');
+assert.equal(count('texImage2D')+count('readPixels')+count('drawImage')+count('getImageData'),0,'panel uploads stay on the GPU');
 
-const atlas={width:768,height:128};
-calls.length=0;
-r.drawFlatSprites(Array.from({length:6},(_,i)=>({...object, modelKey:'snake_segment',
-    topTextureCanvas:atlas,topTextureKey:'flat_snake_body:0',topTextureUv:[i/6,0,1/6,1]})));
-assert.equal(calls.filter(c=>c[0]==='drawArraysInstanced').length,1,'six distinct tail panels batch without sorting');
-for(let i=0;i<6;i++) {
-    assert.ok(Math.abs(r.flatData[i*13+9]-i/6)<1e-7);
-    assert.ok(Math.abs(r.flatData[i*13+11]-1/6)<1e-7);
+// Distinct panels, interleaved with plain sprites, still share one draw.
+calls.length=0;r.textureFrame++;
+const mixed=[];
+for(let i=0;i<200;i++) {
+    mixed.push({...object,topTextureCanvas:panel(),topTextureKey:'2d:'+i});
+    mixed.push({modelKey:'particle',x:i,z:1,scaleX:.06,scaleZ:.06,alpha:.5,lightLevel:1,tint:'#ff0000',topTextureCanvas:null});
 }
+r.drawFlatSprites(mixed);
+assert.equal(count('drawArraysInstanced'),1,'200 distinct panels and 200 particles in one draw');
+assert.equal(count('copyTexSubImage3D'),200*7);
+assert.deepEqual(Array.from(r.flatData.slice(10,20),v=>+v.toFixed(5)+0),[0,1,.06,.06,1,0,0,.5,0,-2],'plain sprites use their tint, untextured layer');
+assert.equal(r.flatData[9],r.flatAtlas.sources.indexOf(mixed[0].topTextureCanvas),'panel instance addresses its layer');
+
+// Other textures keep painter order between runs.
+const big={width:128,height:128,_textureVersion:1};
+const other={...object,topTextureCanvas:big,topTextureKey:'big'};
+const alternate={...object,topTextureCanvas:{...big},topTextureKey:'big2'};
+calls.length=0;r.textureFrame++;
+r.drawFlatSprites([other,alternate,other,object]);
+assert.equal(count('drawArraysInstanced'),4,'overlapping transparency retains painter order');
+calls.length=0;r.textureFrame++;
+r.drawFlatSprites([other,alternate,other,object]);
+assert.equal(count('texImage2D'),0,'textures outside the array are cached too');
+
+// A full array evicts layers unused for a few frames, else grows.
+const atlas=r.flatAtlas;
+const before=atlas.capacity;
+for(let frame=0;frame<3;frame++) {
+    r.textureFrame++;
+    r.drawFlatSprites(Array.from({length:before+10},(_,i)=>({...object,topTextureCanvas:panel(),topTextureKey:'grow'+frame+':'+i})));
+}
+assert.ok(atlas.capacity>before,'visible set larger than the array grows it');
+const grownCapacity=atlas.capacity;
+r.textureFrame+=5;
+r.drawFlatSprites(Array.from({length:50},(_,i)=>({...object,topTextureCanvas:panel(),topTextureKey:'late'+i})));
+assert.equal(atlas.capacity,grownCapacity,'stale layers are reused before growing again');
 
 r.enabled=r.supported=true;r.overlayDepthCache=new Map();
 for(const method of ['resize','drawBackground','drawGroundOverlays','resolveScene','presentSceneToCanvas'])r[method]=()=>calls.push([method]);
@@ -93,4 +121,4 @@ pipeline.renderDimensionMode='3d';pipeline.processRenderFrame(1);
 assert.equal(received.flat2d,false,'3D retains models');
 pipeline.ensure3DRendererInitialized=()=>null;pipeline.processRenderFrame(2);
 assert.equal(worldDraws,1,'unsupported WebGL retains fallback');
-console.log('PASS: flat projection/input mapping; 1500 sprites in one GPU draw; texture reuse, painter order, direct GPU presentation and Canvas fallback.');
+console.log('PASS: flat projection/input mapping; 1500 sprites and 400 distinct panels/particles in one GPU draw; layer reuse, GPU-only uploads, painter order, direct GPU presentation and Canvas fallback.');
